@@ -96,6 +96,33 @@ W_VEC, W_TAG, W_TOK = 0.55, 0.30, 0.15
 RELATED_FLOOR = 0.34       # "worth showing at dispatch"
 DUP_FLOOR = 0.62           # "you may already have had this idea"
 
+# THE BLOCKING GATE NEEDS AN ABSOLUTE CONDITION AS WELL AS A RELATIVE ONE.
+# `_cos_rel` maps this corpus's MEDIAN pair to 0 and its 99th percentile to
+# 1, which is right for RANKING and wrong for REFUSING: on a backlog whose
+# items are all "a feature idea for one person's own systems", the nearest
+# neighbour of ANY new idea sits near p99 by construction, so rel saturates
+# at 1.0 and `0.55*1.0 / (W_VEC + W_TOK) = 0.786` clears DUP_FLOOR before
+# token overlap is consulted at all. Measured 2026-08-26 on the live
+# 186-idea backlog: eight genuinely new proposals were refused with rel
+# 0.996-1.000, raw cosine 0.771-0.814 - including a backup restore-drill
+# matched to "Daily Brief lane trust contracts" and a Murmur word-error-rate
+# loop matched to the Murmur proper-noun lexicon.
+#
+# So a refusal now needs BOTH "closest thing in the corpus" AND "actually
+# close". 0.86 is the corpus's own break, not a guess: the same measurement
+# put every wrongly-refused candidate at or below 0.814, while the backlog's
+# genuine restatement family - one test_jobrescore bug filed six times by
+# six sessions - runs 0.860 to 0.935. The floor sits in that gap.
+#
+# It is deliberately set at the RESTATEMENT end rather than the midpoint,
+# because the costs are asymmetric and this module already says so in
+# `viratools._near_duplicate`: missing a repeat costs one card in a queue
+# the owner reviews anyway, while swallowing a good idea is invisible.
+# APPLIED ONLY IN `check_candidate` - the one path that BLOCKS. The
+# duplicate nudge and the Queue's Similar panel are advisory and dismissible,
+# so they keep the permissive relative score.
+DUP_COS_ABS = 0.86
+
 _STOP = frozenset("""
 the a an and or but if then than that this these those there here it its
 is are was were be been being do does did done have has had of in on at to
@@ -387,6 +414,11 @@ def _space(items, s):
 # percentile is 1. That self-calibrates to any backlog — a corpus of
 # genuinely unrelated ideas spreads out and the same floors still mean
 # "unusually close for this set".
+#
+# THAT REASONING IS SOUND FOR RANKING AND INSUFFICIENT FOR REFUSING. The
+# same self-calibration guarantees SOMETHING always scores near 1.0, which
+# is fine for a list and wrong for a gate. See DUP_COS_ABS above: the one
+# path that BLOCKS pairs this relative score with an absolute cosine floor.
 BASE_PCT, TOP_PCT = 50, 99
 _SAMPLE = 600              # rows sampled for the baseline on a big corpus
 _base_cache = {}
@@ -621,7 +653,7 @@ def _candidate_vector(target, timeout):
 
 
 def check_candidate(text, project="", items=None, floor=DUP_FLOOR, limit=5,
-                    timeout=FOREGROUND_EMBED_S):
+                    timeout=FOREGROUND_EMBED_S, cos_floor=DUP_COS_ABS):
     """Near-duplicates of an idea that is NOT on the backlog yet.
 
     related() and duplicates() both address an idea BY ID, which is no help
@@ -629,6 +661,12 @@ def check_candidate(text, project="", items=None, floor=DUP_FLOOR, limit=5,
     So the candidate is scored as a first-class target without ever being
     written anywhere — its vector is appended to the pool's space in
     memory, and nothing has to be cleaned up if the caller declines.
+
+    A match must clear BOTH `floor` (corpus-relative fusion) and
+    `cos_floor` (raw cosine) — see DUP_COS_ABS for why the relative score
+    alone refuses everything on a single-subject backlog. Where no vector
+    exists the cosine condition is skipped rather than failed: the score is
+    then tag and token overlap, which already demands real shared wording.
 
     Degrades honestly and never raises. `basis` says which answer the
     caller got, so a thinner comparison never passes itself off as
@@ -652,7 +690,8 @@ def check_candidate(text, project="", items=None, floor=DUP_FLOOR, limit=5,
             ids, M = space
             space = (list(ids) + [_CANDIDATE_ID], np.vstack([M, vec]))
     rows = [r for r in score_pairs(target, live, s, space=space)
-            if r["score"] >= floor]
+            if r["score"] >= floor
+            and (r["cos"] is None or r["cos"] >= cos_floor)]
     return {"text": text, "matches": rows[:limit],
             "basis": "vector" if space else "text"}
 
