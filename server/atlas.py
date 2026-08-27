@@ -649,7 +649,15 @@ def narrate_edges(graph, c=None, top_n=NARRATE_TOP):
                 bits.append(f"{k}: {master[k]}")
         if isinstance(prof.get("relationship_summary"), str):
             bits.append(prof["relationship_summary"][:200])
-        return " | ".join(bits)[:320]
+        try:  # rhythm: who reaches for whom — narration-grade signal
+            from . import threadread
+            cad = threadread.enrich_person(pid)
+            if cad:
+                bits.append(f"owner starts {cad['recent'].get('my_initiation_pct')}% "
+                            f"of their conversations")
+        except Exception:  # noqa: BLE001 — garnish, never a gate
+            pass
+        return " | ".join(bits)[:400]
 
     blocks = []
     for e in todo:

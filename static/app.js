@@ -1499,6 +1499,30 @@ async function openPerson(pid) {
     colA.appendChild(s);
   }
 
+  // Rhythm — computed from chat.db, no model: how fast you answer, how
+  // often you start, and what is actually still being asked of you
+  if (d.cadence) {
+    const c = d.cadence, rs = el("div", "p-section");
+    rs.appendChild(el("h4", null, "Rhythm"));
+    const bits = [];
+    if (c.recent.median_reply_min != null)
+      bits.push(`answers in ~${c.recent.median_reply_min} min`);
+    if (c.recent.my_initiation_pct != null)
+      bits.push(`starts ${c.recent.my_initiation_pct}% of conversations` +
+        (c.baseline.my_initiation_pct != null
+          ? ` (year: ${c.baseline.my_initiation_pct}%)` : ""));
+    rs.appendChild(el("div", "p-summary", bits.join(" · ")));
+    const a = c.asks || {};
+    if (a.pending || a.released) {
+      const asks = [];
+      if (a.pending) asks.push(`${a.pending} real ask${a.pending > 1 ? "s" : ""} waiting`);
+      if (a.released) asks.push(`${a.released} self-released (their wording says no reply needed)`);
+      rs.appendChild(el("div", "p-summary", asks.join(" · ")));
+    }
+    if (c.caveat) rs.appendChild(el("div", "p-summary dim", c.caveat));
+    colA.appendChild(rs);
+  }
+
   colA.appendChild(loopsSection(pid, prof?.open_loops));
   colA.appendChild(hooksSection(pid, prof?.hooks, draftFromHook));
 
@@ -9866,6 +9890,8 @@ function renderBrief(b) {
   const wait = briefSection(body, "Waiting on you");
   (b.waiting?.imessage || []).forEach((w) => briefRow(wait, {
     time: briefAge(w.hours), title: w.person_name, sub: w.preview,
+    // "1 real ask · 2 self-released": N messages waiting is not N obligations
+    tag: w.asks?.note || null,
     personId: w.person_id, dismissKey: w.dismiss_key,
   }));
   (b.waiting?.email || []).forEach((w) => briefRow(wait, {

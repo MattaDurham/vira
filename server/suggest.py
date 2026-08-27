@@ -78,9 +78,14 @@ Contact dossier (from {owner}'s CRM; may be partial):
 Recent conversation (chronological; "me" = {owner}):
 {thread}
 
+{facts}
+
 {extra}
 
-Write 3 candidate replies {owner} could send next on this channel. Match
+Write 3 candidate replies {owner} could send next on this channel. Prefer
+replies that close the pending asks named in the facts; never re-answer an
+ask marked released. Make the "forward" reply the single message that
+closes the most open asks at once. Match
 {owner}'s own voice as evidenced in the thread (their texts are the "me"
 lines) — length, warmth, punctuation habits. Vary the three: one direct/minimal, one warmer,
 one that moves the relationship or open loop forward. Never invent facts not
@@ -98,8 +103,13 @@ Contact dossier (from {owner}'s CRM; may be partial):
 Recent conversation (chronological; "me" = {owner}):
 {thread}
 
+{facts}
+
 The opener should act on this conversation hook:
 {extra}
+
+If the facts show {owner} rarely starts conversations, this opener is the
+point: it should read as {owner} reaching out unprompted, not as a reply.
 
 Write ONE message {owner} could send to open this thread of conversation. Match
 {owner}'s own voice as evidenced in the thread (their texts are the "me" lines) —
@@ -322,13 +332,19 @@ def suggest(person_id, channel="imessage", extra="", mode="replies"):
         for m in msgs) or "(no recent iMessage thread on file)"
 
     owner = config().get("owner_name") or "the user"
+    # the arithmetic first: computed cadence and the open-ask ledger, so the
+    # drafts close loops instead of adding tone variations to guess between
+    from . import threadread
+    facts = threadread.facts_block(person_id)
     if mode == "hook":
         prompt = HOOK_PROMPT.format(owner=owner, profile=profile_txt,
-                                    thread=thread_txt[:12000], extra=extra)
+                                    thread=thread_txt[:12000], extra=extra,
+                                    facts=facts)
     else:
         prompt = PROMPT.format(owner=owner, channel=channel, profile=profile_txt,
                                thread=thread_txt[:12000],
-                               extra=f"Guidance from {owner}: {extra}" if extra else "")
+                               extra=f"Guidance from {owner}: {extra}" if extra else "",
+                               facts=facts)
 
     text, backend = _run(prompt, cfg)
 

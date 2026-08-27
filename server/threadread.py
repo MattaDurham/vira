@@ -346,37 +346,115 @@ def brief(pid, window_days=DEFAULT_WINDOW_D, extra=""):
     return out
 
 
-# ---------- HTTP surface -------------------------------------------------
-# Two endpoints, deliberately split. /analyze is pure arithmetic and always
-# safe to call: no model, no egress, no cost. /brief adds the reasoning layer
-# and inherits suggest.py's configured backend, so it obeys the same
-# "no backend configured, no model egress" contract as everything else.
 
-from fastapi import APIRouter, HTTPException          # noqa: E402
-from pydantic import BaseModel                        # noqa: E402
+# ---------- connectors into the existing surfaces ------------------------
+# Nothing below is a new surface. These feed the dossier (/api/person), the
+# Daily Brief's waiting list, the reply/opener prompts in suggest.py, and the
+# narration dossiers in atlas.py and reconnect.py — the same connection,
+# reused, the way one measurement should light up every view that touches
+# the person.
 
-router = APIRouter(prefix="/api/threadread", tags=["threadread"])
+import re as _re
+import time as _time
+
+# Mirrors atlas._is_family: the person you live with is the person whose
+# in-person replies the log cannot see, so their silences must never be
+# scored as neglect.
+_FAMILY = _re.compile(
+    r"\b(family|wife|husband|spouse|partner|daughter|son|mother|father|"
+    r"mom|dad|sister|brother|sibling)\b", _re.I)
+
+_CACHE = {}
+_TTL = 600
 
 
-class BriefReq(BaseModel):
-    person_id: str
-    window_days: int = DEFAULT_WINDOW_D
-    extra: str = ""
+def _colocated(pid):
+    c = crm._load()
+    prof = c.get("profiles", {}).get(pid) or {}
+    if (prof.get("relationship_class") or "").lower() == "family":
+        return True
+    master = c.get("master", {}).get(pid) or {}
+    return bool(_FAMILY.search(str(master.get("relationship") or "")))
 
 
-@router.get("/analyze/{person_id}")
-def api_analyze(person_id: str, window_days: int = DEFAULT_WINDOW_D):
-    """Computed picture only. No model call."""
+def enrich_person(pid):
+    """The dossier's rhythm block: cached, cheap to fail, never a gate."""
+    hit = _CACHE.get(pid)
+    if hit and _time.time() - hit[0] < _TTL:
+        return hit[1]
+    a = analyze(pid, window_days=DEFAULT_WINDOW_D)
+    if a.get("empty"):
+        _CACHE[pid] = (_time.time(), None)
+        return None
+    ak = a["asks"]
+    out = {
+        "recent": a["recent"],
+        "baseline": {k: a["baseline"].get(k) for k in
+                     ("my_share_pct", "median_reply_min",
+                      "my_initiation_pct")},
+        "asks": {
+            "pending": len(ak["pending"]),
+            "released": len(ak["released"]),
+            "stale": len(ak["stale"]),
+            "pending_items": [
+                {"when": x["when"][:16], "text": x["text"][:140]}
+                for x in ak["pending"][:4]],
+        },
+        "burst_peak": a["bursts"]["peak"],
+        "colocated": _colocated(pid),
+    }
+    if out["colocated"]:
+        out["caveat"] = a["colocation_caveat"]
+    _CACHE[pid] = (_time.time(), out)
+    return out
+
+
+def brief_asks(pid):
+    """The waiting row's honest count: N messages is not N obligations.
+    14-day window only — the brief must stay fast across a dozen rows."""
+    hist = messages(pid, days=DEFAULT_WINDOW_D)
+    if not hist:
+        return None
+    ak = open_asks(hist, DEFAULT_WINDOW_D)
+    pend, rel = len(ak["pending"]), len(ak["released"])
+    if not pend and not rel:
+        return None
+    bits = []
+    if pend:
+        bits.append(f"{pend} real ask{'s' if pend != 1 else ''}")
+    if rel:
+        bits.append(f"{rel} self-released")
+    return {"pending": pend, "released": rel,
+            "note": " · ".join(bits),
+            "colocated": _colocated(pid)}
+
+
+def facts_block(pid):
+    """Computed facts for the reply/opener prompts: the arithmetic the model
+    reasons over instead of guessing at. Plain text, small, never raises."""
     try:
-        return analyze(person_id, window_days)
-    except KeyError:
-        raise HTTPException(404, "unknown person")
-
-
-@router.post("/brief")
-def api_brief(req: BriefReq):
-    """Computed picture plus the decision brief."""
-    try:
-        return brief(req.person_id, req.window_days, req.extra)
-    except KeyError:
-        raise HTTPException(404, "unknown person")
+        a = analyze(pid, window_days=DEFAULT_WINDOW_D)
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        return ""
+    if a.get("empty"):
+        return ""
+    R, B, ak = a["recent"], a["baseline"], a["asks"]
+    lines = ["Computed from the full message history (facts, not "
+             "impressions — do not contradict them):"]
+    if R.get("median_reply_min") is not None:
+        lines.append(
+            f"- Owner answers in median {R['median_reply_min']} min "
+            f"(baseline {B.get('median_reply_min')}); owner starts "
+            f"{R.get('my_initiation_pct')}% of conversations "
+            f"(baseline {B.get('my_initiation_pct')}%).")
+    pend, rel = ak["pending"], ak["released"]
+    lines.append(f"- Open asks awaiting the owner: {len(pend)}. "
+                 f"Asks whose own wording says no reply is needed: {len(rel)}.")
+    for x in pend[:4]:
+        lines.append(f"  - [pending {x['when'][5:16]}] {x['text'][:120]}")
+    for x in rel[:2]:
+        lines.append(f"  - [released {x['when'][5:16]}] {x['text'][:100]}")
+    if _colocated(pid):
+        lines.append("- They live together: in-person replies are invisible "
+                     "here, so log silence is not evidence of neglect.")
+    return "\n".join(lines)

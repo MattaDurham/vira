@@ -213,6 +213,12 @@ def api_person(pid: str):
     # the contact card rides the first load — the profile's top pane must
     # never paint a derived name and then flicker to the owner's own
     detail["card"] = contactcard.compose(pid, detail)
+    # rhythm: computed cadence/initiation/open-ask arithmetic from chat.db.
+    # Enrichment, never a gate — a person with no thread simply has none.
+    try:
+        detail["cadence"] = threadread.enrich_person(pid)
+    except Exception:  # noqa: BLE001
+        detail["cadence"] = None
     return detail
 
 
@@ -4030,13 +4036,6 @@ app.include_router(genreroutes.router)
 # Dormant (honest 404/503s) when chaska is absent or no vault is configured.
 app.include_router(imageatlasroutes.router)
 app.include_router(resumeviewroutes.router)
-
-# ---------- Thread read (the arithmetic before the advice) ----------------
-# /api/threadread/analyze is deterministic: volume, latency, who initiates,
-# burst density, and which asks are still open (including the ones whose own
-# wording releases you). /api/threadread/brief adds the model layer on top of
-# those computed facts and returns one move rather than a menu of drafts.
-app.include_router(threadread.router)
 
 # ---------- Session walkthroughs (the build films, served in place) --------
 # <lab_root>/walkthroughs/ at /walkthroughs/ — the /design precedent. Served

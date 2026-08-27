@@ -310,6 +310,15 @@ def _dossier(cd, prof):
     summ = prof.get("relationship_summary")
     if isinstance(summ, str) and summ:
         bits.append(summ[:200])
+    try:  # who was reaching for whom before it went quiet
+        from . import threadread
+        cad = threadread.enrich_person(cd["pid"])
+        if cad and cad["baseline"].get("my_initiation_pct") is not None:
+            bits.append(f"owner historically started "
+                        f"{cad['baseline']['my_initiation_pct']}% of their "
+                        f"conversations")
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        pass
     return " | ".join(bits)
 
 

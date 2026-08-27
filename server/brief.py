@@ -24,6 +24,7 @@ from . import imessage
 from . import journal
 from . import settings
 from . import suggest
+from . import threadread
 from . import triage
 
 APPLE_EPOCH = 978307200  # 2001-01-01 in unix seconds
@@ -417,6 +418,12 @@ def _unreplied_imessages():
             # re-arms: a newer inbound message mints a new key
             "dismiss_key": f'wait-im:{pid}:{(when_iso or "")[:16]}',
         })
+        # N messages waiting is not N obligations: split the asks so the row
+        # says "1 real ask · 2 self-released" instead of a bare count.
+        try:
+            out[-1]["asks"] = threadread.brief_asks(pid)
+        except Exception:  # noqa: BLE001 — enrichment, never a gate
+            out[-1]["asks"] = None
     out.sort(key=lambda x: x["when"] or "", reverse=True)
     return out[:12]
 
