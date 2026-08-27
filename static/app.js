@@ -9720,6 +9720,17 @@ function reviewRow(sec, it, after) {
     tag: it.ref || null,
     actions,
   });
+  // A row carrying `open` is a POINTER at the surface where the ruling
+  // happens (today: the Morning Picker's #subs-visuals deep link). The
+  // server decides which rows point; this only routes the hash — setting
+  // an already-current hash fires no hashchange, so route directly then.
+  if (it.open) {
+    row.classList.add("click");
+    row.addEventListener("click", () => {
+      if (location.hash === it.open) routeHash();
+      else location.hash = it.open;
+    });
+  }
   // A caveat that changes what a button DOES is shown on the row, never
   // hidden in a tooltip: today that is a proposal whose id is shared with
   // other pending rows, where approve promotes this exact text rather than

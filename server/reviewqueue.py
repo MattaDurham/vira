@@ -12,7 +12,10 @@ Vira's own `proposed` ideas.
 So this is an AGGREGATOR, not a lessons panel. Each contributing store is a
 SOURCE registered here with one reader and (optionally) one actor; the queue
 knows nothing about any store's file format beyond what its reader returns.
-Adding a fifth source is adding a `register(Source(...))` call.
+Adding a source is adding a `register(Source(...))` call. Seven today:
+lesson proposals, the self-record inbox, open adjudication flags, proposed
+ideas, un-staged journal instructions, contact-worthy unknown senders, and
+a pending Morning Picker batch.
 
 FOUR RULES THIS MODULE IS BENT AROUND:
 
@@ -126,9 +129,31 @@ def history_path():
                  self_record() / "canon" / "MASTER_HISTORY.md")
 
 
+def journal_store():
+    """The brief journal's store - the journal source reads it through
+    journal's own loaders, so the root is journal.STORE (tests repoint
+    that attribute, the ideas.STORE pattern)."""
+    from . import journal
+    return journal.STORE
+
+
+def picker_state():
+    """TC-IL's subs-visuals state file - the picker source reads it through
+    subs_visuals, so the root is subs_visuals.STATE_FILE (a module
+    attribute; tests repoint it)."""
+    from . import subs_visuals
+    return subs_visuals.STATE_FILE
+
+
 def roots():
     """Every filesystem root this module reads. Tests iterate this to assert
-    the whole set points into the fixture."""
+    the whole set points into the fixture.
+
+    The senders source is the one reader with no path here: it reads
+    through the `triage.candidates` FUNCTION seam (CRM registry + chat.db
+    + the dismissal store), which a path set cannot express - tests pin
+    that function in their base fixture instead (the test_attention.py
+    source-pinning pattern)."""
     return {
         "lessons_script": lessons_script(),
         "lessons_proposed": lessons_proposed(),
@@ -136,6 +161,8 @@ def roots():
         "local_decisions": DECISIONS,
         "inbox_notes": inbox_notes_dir(),
         "history": history_path(),
+        "journal_store": journal_store(),
+        "picker_state": picker_state(),
     }
 
 
@@ -172,7 +199,7 @@ def _record_decision(source, key, action, mode):
 
 
 def item(source, raw_id, title, why="", stamp="", actions=(), ref="",
-         note=""):
+         note="", open=""):
     """The one shape every source contributes. `id` is namespaced by source
     so one flat list can be acted on without a second lookup key."""
     return {
@@ -189,6 +216,11 @@ def item(source, raw_id, title, why="", stamp="", actions=(), ref="",
         # A caveat the owner must see BEFORE acting on the row (today: a
         # proposal whose id is shared, which changes what approve does).
         "note": _clip(note, WHY_MAX),
+        # Where the ruling actually happens, as an app deep link ("#...").
+        # A row carrying `open` is a POINTER: the frontend makes the row
+        # clickable and routes the hash, nothing more. Today only the
+        # Morning Picker uses it - its visuals live in the picker window.
+        "open": str(open or ""),
     }
 
 
@@ -568,6 +600,198 @@ register(Source(
     "ideas", "Proposed work",
     "ideas Vira staged for you — nothing proposed ever runs unapproved",
     _ideas_read, _ideas_act, ("approve", "drop")))
+
+
+# --------------------------------------------- source: journal instructions
+
+def _journal_read():
+    """Unapplied journal instructions that are neither resolved nor staged.
+
+    Since the 2026-08-04 auto-dispatch most instructions are STAGED as
+    Queue ideas the moment integration runs (`u.staged` set) and the idea
+    is their queue row; what remains un-staged and un-resolved is exactly
+    a pending owner decision - instructions staging could not place, plus
+    every entry written before staging existed. Instructions carry no id,
+    so a row is addressed by entry id + a text key (the
+    `resolve_unapplied` key-by-content discipline)."""
+    from . import journal
+    rows = []
+    for e in journal._load()["entries"]:
+        for u in (e.get("result") or {}).get("unapplied") or []:
+            if u.get("resolved") or u.get("staged"):
+                continue
+            instr = str(u.get("instruction") or "").strip()
+            if not instr:
+                continue
+            rows.append(item(
+                "journal", f'{e["id"]}:{_text_key(instr)}',
+                instr,
+                why=e.get("text") or "",
+                stamp=(e.get("created") or "")[:10],
+                actions=("approve", "drop"),
+                ref=f'journal entry {e["id"]}'))
+    rows.sort(key=lambda x: x["date"])
+    return rows
+
+
+def _journal_find(raw_id):
+    from . import journal
+    eid, _, tkey = str(raw_id).partition(":")
+    entry = next((e for e in journal._load()["entries"] if e["id"] == eid),
+                 None)
+    if not entry:
+        return None, None
+    u = next((u for u in (entry.get("result") or {}).get("unapplied") or []
+              if not u.get("resolved") and not u.get("staged")
+              and _text_key(u.get("instruction")) == tkey), None)
+    return entry, u
+
+
+def _journal_act(raw_id, action):
+    """Rule on one unapplied instruction - always through journal's OWN
+    machinery, never a second implementation (rule 2's spirit: the journal
+    store belongs to journal.py, and both writes here go through it).
+
+    - **approve** - `journal.stage_instruction`: the instruction becomes a
+      Queue idea via the same `_stage_one` the integration pass uses, so
+      it inherits the dedup, the blast-radius split (an `app`/`config`/
+      `contacts`/`data` instruction dispatches; anything else stages
+      `proposed` behind the approval bar), and the passive seam. If
+      staging declines to place it, the result SAYS so rather than
+      pretending - the row stays in the queue.
+    - **drop** - `journal.resolve_unapplied`: stamped resolved, which
+      removes it from the Queue lane and this queue while the Journal
+      window keeps chronicling it.
+    """
+    from . import journal
+    entry, u = _journal_find(raw_id)
+    if not u:
+        raise KeyError(f"no pending journal instruction {raw_id}")
+    instr = str(u.get("instruction") or "")
+    out = {"ok": True, "action": action, "id": str(raw_id),
+           "entry": entry["id"]}
+    if action == "drop":
+        if not journal.resolve_unapplied(entry["id"], instr):
+            raise KeyError(f"instruction already resolved or gone: {raw_id}")
+        out["output"] = ("marked done — the Journal window still "
+                         "chronicles it")
+        return out
+    staged = journal.stage_instruction(entry["id"], instr)
+    if not staged or not staged.get("staged"):
+        out["ok"] = False
+        out["output"] = ("staging could not place this instruction — "
+                         "it stays in the queue")
+        return out
+    out["idea_id"] = staged.get("idea_id", "")
+    if staged.get("job_id"):
+        out["job_id"] = staged["job_id"]
+        out["output"] = (f'staged as idea {out["idea_id"]} and dispatched '
+                         f'(job {staged["job_id"][:8]})')
+    else:
+        out["output"] = (f'staged as idea {out["idea_id"]} — it waits on '
+                         "the Queue's approval bar")
+    return out
+
+
+register(Source(
+    "journal", "Journal instructions",
+    "things you told Vira that need a session — approve stages the work",
+    _journal_read, _journal_act, ("approve", "drop")))
+
+
+# --------------------------------------------- source: unknown senders
+
+SENDERS_TOP = 5
+# triage.candidates() probes chat.db per candidate, so at the attention
+# poll cadence (60s-cached items()) the read is cached briefly in-process.
+SENDERS_CACHE_S = 300
+_SENDERS_CACHE = {"at": 0.0, "rows": None}
+
+
+def _sender_candidates():
+    import time
+    from . import triage
+    now = time.monotonic()
+    if (_SENDERS_CACHE["rows"] is not None
+            and now - _SENDERS_CACHE["at"] < SENDERS_CACHE_S):
+        return _SENDERS_CACHE["rows"]
+    rows = triage.candidates()
+    _SENDERS_CACHE.update({"at": now, "rows": rows})
+    return rows
+
+
+def _senders_read():
+    """The top few contact-worthy unknown senders. "Who is this person?"
+    is a pending decision, but ruling on it needs the evidence (the
+    thread, the referral chain) in view - so per rule 3 this source is
+    READ-ONLY and the row points at People > Triage, where the add sheet
+    and the resolver live. The "Likely businesses" band is skipped:
+    those are not people decisions."""
+    rows = []
+    for c in _sender_candidates():
+        if c.get("business") or c.get("contact_worthy") != "yes":
+            continue
+        name = (c.get("name") or "").strip()
+        handle = str(c.get("handle") or "")
+        title = f"{name} — {handle}" if name else handle
+        rows.append(item(
+            "senders", c.get("person_id") or handle, title,
+            why=c.get("evidence") or c.get("relationship") or "",
+            ref="People > Triage"))
+        if len(rows) >= SENDERS_TOP:
+            break
+    return rows
+
+
+register(Source(
+    "senders", "Unknown senders",
+    "contact-worthy people texting you who are not in the CRM yet — "
+    "rule on them in People > Triage",
+    _senders_read))
+
+
+# --------------------------------------------- source: Morning Picker
+
+def _picker_read():
+    """One row when a keyframe batch is pending - the decision that today
+    only announces itself by a 06:00 iMessage.
+
+    READ-ONLY (`actions: []`), deliberately: there is NO free
+    mark-reviewed path. `subs_visuals.apply` writes picks.json and
+    dispatches a headless agent session unconditionally - the empty `{}`
+    submission takes the command's empty-selection path but still costs
+    that session (verified against the code: `_jobs.launch` runs on every
+    apply). A review-row drop that silently spends a session is exactly
+    what rule 3 forbids, so the picker window owns the ruling and this
+    row is the pointer (`open` carries the #subs-visuals deep link).
+
+    A missing state file is a source with nothing to say (every non-owner
+    install); a batch whose apply job is currently RUNNING is a decision
+    being executed, not one waiting."""
+    from . import subs_visuals
+    p = subs_visuals._pending()
+    if not p:
+        return []
+    job = subs_visuals._job_for(p["batch_dir"])
+    if job and job.get("status") == "running":
+        return []
+    batch = Path(p["batch_dir"])
+    n = len(p.get("videos") or [])
+    built = str(p.get("built") or "")
+    why = " — ".join(x for x in (built[:16], batch.name) if x)
+    if not (batch / "picker.html").is_file():
+        why = (why + " — picker not built yet").strip(" —")
+    return [item(
+        "picker", batch.name or "batch",
+        f"Morning Picker — batch of {n} video{'s' if n != 1 else ''} waiting",
+        why=why, stamp=built[:10],
+        ref="#subs-visuals", open="#subs-visuals")]
+
+
+register(Source(
+    "picker", "Morning Picker",
+    "a keyframe batch is waiting for your picks — open the picker to rule",
+    _picker_read))
 
 
 # ------------------------------------------------------------------ reads
