@@ -9,7 +9,7 @@ agents at your own backlog.
 
 > **An AI agent installing this?** [AGENTS.md](AGENTS.md) is your whole
 > job: `bash scripts/agent-install.sh`, connect an AI (yourself, if you
-> can), stop. Do not audit the codebase first.
+> can).
 
 Local-first by design, with every egress path named and opt-in:
 
