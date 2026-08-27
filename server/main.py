@@ -74,7 +74,7 @@ from . import (actions, admission, agentbackend, aihealth, applecontacts,
                genreroutes,
                skins,
                subs_visuals,
-               subscriptions, suggest, triage, uistate, update, vault,
+               subscriptions, suggest, threadread, triage, uistate, update, vault,
                doctags, walkthroughs,
                whatsapp)
 
@@ -4030,6 +4030,13 @@ app.include_router(genreroutes.router)
 # Dormant (honest 404/503s) when chaska is absent or no vault is configured.
 app.include_router(imageatlasroutes.router)
 app.include_router(resumeviewroutes.router)
+
+# ---------- Thread read (the arithmetic before the advice) ----------------
+# /api/threadread/analyze is deterministic: volume, latency, who initiates,
+# burst density, and which asks are still open (including the ones whose own
+# wording releases you). /api/threadread/brief adds the model layer on top of
+# those computed facts and returns one move rather than a menu of drafts.
+app.include_router(threadread.router)
 
 # ---------- Session walkthroughs (the build films, served in place) --------
 # <lab_root>/walkthroughs/ at /walkthroughs/ — the /design precedent. Served
