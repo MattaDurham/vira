@@ -732,6 +732,49 @@ def _passive():
     return bool(os.environ.get("VIRA_PASSIVE"))
 
 
+def stage_instruction(entry_id, instruction):
+    """Stage ONE stored unapplied instruction as Queue work, on demand -
+    the review queue's approve path. `_stage_one` is the machinery (the
+    idea, the dedup, the blast-radius dispatch); what it does NOT do is
+    persist, because inside `_integrate` the store write happens
+    afterwards. This wraps it with that persistence, addressed by entry
+    id + exact instruction text - the same key-by-content
+    `resolve_unapplied` uses, since instructions carry no id.
+
+    Returns the stamped instruction dict (carrying `staged`/`idea_id`,
+    and `job_id` when the area allowed a dispatch), or None when no
+    matching open, un-staged instruction exists. `_stage_one` runs
+    OUTSIDE the store lock (it may launch a session); the stamps are
+    copied onto the stored copy under the lock afterwards."""
+    entry = next((e for e in _load()["entries"] if e["id"] == entry_id), None)
+    if not entry:
+        return None
+    target = next(
+        (u for u in (entry.get("result") or {}).get("unapplied") or []
+         if u.get("instruction") == instruction
+         and not u.get("resolved") and not u.get("staged")), None)
+    if not target:
+        return None
+    _stage_one(entry, target)
+    if not target.get("staged"):
+        return target  # staging declined - nothing to persist
+    with locked(STORE):
+        s = _load()
+        for e in s["entries"]:
+            if e["id"] != entry_id:
+                continue
+            for u in (e.get("result") or {}).get("unapplied") or []:
+                if (u.get("instruction") == instruction
+                        and not u.get("resolved") and not u.get("staged")):
+                    u.update({k: target[k] for k in
+                              ("idea_id", "staged", "job_id")
+                              if target.get(k)})
+                    _save(s)
+                    break
+            break
+    return target
+
+
 # ---------- export: un-integrable knowledge as a copyable prompt ----------
 # Kept for the instruction that did NOT auto-dispatch and for a session the
 # owner would rather run elsewhere. It is composed from the same

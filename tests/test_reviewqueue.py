@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import ideas, reviewqueue
+from server import ideas, journal, reviewqueue, subs_visuals, triage
 
 
 PROPOSAL_A = "Never merge a branch without running the suite in the live tree."
@@ -95,6 +95,36 @@ class _Case(unittest.TestCase):
         p4 = mock.patch.object(ideas, "STORE", self.root / "ideas.json")
         p4.start()
         self.addCleanup(p4.stop)
+        # The journal and picker sources read module-attribute roots
+        # (journal.STORE / subs_visuals.STATE_FILE); repointed here so
+        # roots() reports them inside the fixture too.
+        p5 = mock.patch.object(journal, "STORE",
+                               self.root / "brief-journal.json")
+        p5.start()
+        self.addCleanup(p5.stop)
+        p6 = mock.patch.object(subs_visuals, "STATE_FILE",
+                               self.root / "subs-visuals-state.json")
+        p6.start()
+        self.addCleanup(p6.stop)
+        # The senders source reads through the triage FUNCTION seam (CRM
+        # registry + chat.db + the dismissal store) - no path roots() can
+        # declare - so the seam itself is pinned in the base fixture, the
+        # test_attention.py source-pinning pattern. Tests set self.cands;
+        # the stub reads it live.
+        self.cands = []
+        p7 = mock.patch.object(triage, "candidates",
+                               lambda: list(self.cands))
+        p7.start()
+        self.addCleanup(p7.stop)
+        # the in-process senders cache must not leak between tests
+        reviewqueue._SENDERS_CACHE.update({"at": 0.0, "rows": None})
+        # A journal approve can DISPATCH a session inside the blast
+        # radius; pinned passive so no test ever spawns one (the
+        # JournalBase isolation lesson). The dispatch test overrides this
+        # and stubs the launch.
+        p8 = mock.patch.object(journal, "_passive", lambda: True)
+        p8.start()
+        self.addCleanup(p8.stop)
 
     # ---------------------------------------------------------- helpers
 
@@ -112,12 +142,61 @@ class _Case(unittest.TestCase):
     def run_ok(self, stdout="done"):
         return mock.Mock(returncode=0, stdout=stdout, stderr="")
 
+    def write_journal(self, entries):
+        (self.root / "brief-journal.json").write_text(
+            json.dumps({"entries": entries}), encoding="utf-8")
+
+    def read_journal(self):
+        return json.loads((self.root / "brief-journal.json")
+                          .read_text(encoding="utf-8"))
+
+    def write_picker_state(self, videos=2, built="2026-08-27 06:00",
+                           ready=True, batch_dir=None):
+        batch = Path(batch_dir) if batch_dir else self.root / "batch-0627"
+        batch.mkdir(parents=True, exist_ok=True)
+        if ready:
+            (batch / "picker.html").write_text("<html></html>",
+                                               encoding="utf-8")
+        (self.root / "subs-visuals-state.json").write_text(json.dumps({
+            "pending": {
+                "batch_dir": str(batch), "built": built,
+                "videos": [{"slug": f"v{i}", "title": f"Video {i}",
+                            "channel": "ch", "url": "", "video_id": str(i)}
+                           for i in range(videos)],
+            }}), encoding="utf-8")
+        return batch
+
+
+def jentry(eid, instr, staged=False, resolved=False,
+           created="2026-08-10T09:00:00", area="app",
+           text="the owner's own note"):
+    u = {"instruction": instr, "area": area, "pid_check": "none"}
+    if staged:
+        u["staged"] = "2026-08-10T09:05:00"
+        u["idea_id"] = "idea_deadbeef00"
+    if resolved:
+        u["resolved"] = "2026-08-11T08:00:00"
+    return {"id": eid, "text": text, "person_id": None, "person_name": None,
+            "context": None, "created": created, "status": "integrated",
+            "result": {"summary": "read", "actions": [], "unapplied": [u]}}
+
+
+def cand(handle, name="", worthy="yes", business=False, evidence="",
+         relationship="", pid=None, msgs=5):
+    return {"handle": handle, "person_id": pid, "name": name,
+            "relationship": relationship, "evidence": evidence,
+            "contact_worthy": worthy, "confidence": "high",
+            "action": "needs_name", "tier": None, "msgs": msgs,
+            "business": business, "business_signals": [], "company_guess": "",
+            "referral_hint": ""}
+
 
 class RegistryTests(_Case):
 
-    def test_the_four_sources_are_registered(self):
+    def test_the_seven_sources_are_registered(self):
         self.assertEqual(set(reviewqueue.SOURCES),
-                         {"lessons", "inbox", "flags", "ideas"})
+                         {"lessons", "inbox", "flags", "ideas",
+                          "journal", "senders", "picker"})
 
     def test_every_root_points_into_the_fixture(self):
         for name, path in reviewqueue.roots().items():
@@ -378,6 +457,170 @@ class IdeaSourceTests(_Case):
         got = [i for i in ideas.list_items() if i["id"] == prop["id"]][0]
         self.assertEqual(got["status"], "dropped")
         self.assertIn("declined by the owner", got["note"])
+
+
+class JournalSourceTests(_Case):
+
+    def test_only_unstaged_unresolved_instructions_surface(self):
+        self.write_journal([
+            jentry("note_aaaaaaaaaa", "Fix the calendar overlap judgment."),
+            jentry("note_bbbbbbbbbb", "Already staged elsewhere.",
+                   staged=True),
+            jentry("note_cccccccccc", "Already resolved.", resolved=True),
+        ])
+        rows = self.by_source("journal")
+        self.assertEqual([r["title"] for r in rows],
+                         ["Fix the calendar overlap judgment."])
+        self.assertEqual(rows[0]["why"], "the owner's own note")
+        self.assertEqual(rows[0]["date"], "2026-08-10")
+        self.assertIn("note_aaaaaaaaaa", rows[0]["ref"])
+        self.assertEqual(rows[0]["actions"], ["approve", "drop"])
+
+    def test_a_missing_journal_store_is_an_empty_store(self):
+        self.assertEqual(self.by_source("journal"), [])
+        self.assertEqual(reviewqueue.items()["errors"], {})
+
+    def test_dropping_resolves_it_and_the_journal_keeps_the_record(self):
+        self.write_journal([jentry("note_aaaaaaaaaa", "Do the thing.")])
+        row = self.by_source("journal")[0]
+        out = reviewqueue.act(row["id"], "drop")
+        self.assertTrue(out["ok"])
+        self.assertEqual(self.by_source("journal"), [])
+        u = self.read_journal()["entries"][0]["result"]["unapplied"][0]
+        self.assertEqual(u["instruction"], "Do the thing.")
+        self.assertTrue(u.get("resolved"))
+
+    def test_approving_stages_through_journals_own_machinery(self):
+        # _passive is pinned True in the base fixture, so staging takes
+        # the proposed path and no session can be dispatched.
+        self.write_journal([jentry("note_aaaaaaaaaa", "Do the thing.")])
+        row = self.by_source("journal")[0]
+        out = reviewqueue.act(row["id"], "approve")
+        self.assertTrue(out["ok"])
+        self.assertIn("approval bar", out["output"])
+        staged = [i for i in ideas.list_items()
+                  if i["text"] == "Do the thing."]
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(staged[0]["status"], "proposed")
+        # the stamp is persisted, so the row leaves the queue for good
+        self.assertEqual(self.by_source("journal"), [])
+        u = self.read_journal()["entries"][0]["result"]["unapplied"][0]
+        self.assertTrue(u.get("staged"))
+        self.assertEqual(u.get("idea_id"), staged[0]["id"])
+
+    def test_approving_dispatches_inside_the_blast_radius(self):
+        self.write_journal([jentry("note_aaaaaaaaaa", "Do the thing.",
+                                   area="app")])
+        row = self.by_source("journal")[0]
+        from server import session
+        with mock.patch.object(journal, "_passive", lambda: False), \
+             mock.patch.object(session.sessions, "launch",
+                               return_value="jobabc123def") as launch:
+            out = reviewqueue.act(row["id"], "approve")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["job_id"], "jobabc123def")
+        launch.assert_called_once()
+        got = [i for i in ideas.list_items()
+               if i["text"] == "Do the thing."][0]
+        self.assertEqual(got["status"], "open")
+        u = self.read_journal()["entries"][0]["result"]["unapplied"][0]
+        self.assertEqual(u.get("job_id"), "jobabc123def")
+
+    def test_staging_that_cannot_place_reports_honestly(self):
+        self.write_journal([jentry("note_aaaaaaaaaa", "Do the thing.")])
+        row = self.by_source("journal")[0]
+        with mock.patch.object(journal, "_stage_one", lambda e, u: None):
+            out = reviewqueue.act(row["id"], "approve")
+        self.assertFalse(out["ok"])
+        self.assertIn("could not place", out["output"])
+        # nothing was stamped, so the row is still in the queue
+        self.assertEqual(len(self.by_source("journal")), 1)
+
+    def test_a_stale_journal_id_raises_rather_than_guessing(self):
+        self.write_journal([jentry("note_aaaaaaaaaa", "Do the thing.")])
+        with self.assertRaises(KeyError):
+            reviewqueue.act("journal:note_aaaaaaaaaa:000000000000", "drop")
+
+
+class SenderSourceTests(_Case):
+
+    def test_contact_worthy_people_surface_read_only(self):
+        self.cands = [
+            cand("+12125550142", name="Casey", evidence="intro'd by Eric"),
+            cand("+18005550177", business=True),
+            cand("+13475550163", worthy="unsure"),
+            cand("dana@example.com", evidence="emailed about the boat"),
+        ]
+        rows = self.by_source("senders")
+        self.assertEqual([r["title"] for r in rows],
+                         ["Casey — +12125550142", "dana@example.com"])
+        self.assertEqual(rows[0]["why"], "intro'd by Eric")
+        self.assertEqual(rows[0]["actions"], [])
+        self.assertEqual(rows[0]["ref"], "People > Triage")
+
+    def test_the_cap_holds(self):
+        self.cands = [cand(f"+121255501{i:02d}") for i in range(9)]
+        self.assertEqual(len(self.by_source("senders")),
+                         reviewqueue.SENDERS_TOP)
+
+    def test_the_read_is_cached_briefly(self):
+        counted = mock.Mock(return_value=[cand("+12125550142")])
+        with mock.patch.object(triage, "candidates", counted):
+            reviewqueue.items()
+            reviewqueue.items()
+        self.assertEqual(counted.call_count, 1)
+
+    def test_a_broken_triage_costs_only_its_own_rows(self):
+        self.write_proposals([proposal("L1", PROPOSAL_A)])
+        boom = mock.Mock(side_effect=OSError("chat.db unreadable"))
+        with mock.patch.object(triage, "candidates", boom):
+            q = reviewqueue.items()
+        self.assertEqual(q["counts"]["lessons"], 1)
+        self.assertIn("senders", q["errors"])
+
+
+class PickerSourceTests(_Case):
+
+    def test_a_missing_state_file_is_dormant(self):
+        self.assertEqual(self.by_source("picker"), [])
+        self.assertEqual(reviewqueue.items()["errors"], {})
+
+    def test_a_pending_batch_is_one_pointer_row(self):
+        self.write_picker_state(videos=3)
+        rows = self.by_source("picker")
+        self.assertEqual(len(rows), 1)
+        self.assertIn("batch of 3 videos", rows[0]["title"])
+        self.assertEqual(rows[0]["actions"], [])
+        self.assertEqual(rows[0]["open"], "#subs-visuals")
+        self.assertEqual(rows[0]["date"], "2026-08-27")
+        self.assertIn("batch-0627", rows[0]["why"])
+        self.assertNotIn("not built", rows[0]["why"])
+
+    def test_an_unbuilt_picker_is_named_on_the_row(self):
+        self.write_picker_state(ready=False)
+        self.assertIn("picker not built yet",
+                      self.by_source("picker")[0]["why"])
+
+    def test_a_running_apply_job_is_not_waiting(self):
+        self.write_picker_state()
+        with mock.patch.object(subs_visuals, "_job_for",
+                               lambda b: {"id": "j", "status": "running",
+                                          "started": "", "finished": ""}):
+            self.assertEqual(self.by_source("picker"), [])
+
+    def test_a_finished_apply_job_leaves_the_row_pending(self):
+        # state only clears when the apply marks the batch reviewed; a
+        # failed/finished job means the decision is back with the owner
+        self.write_picker_state()
+        with mock.patch.object(subs_visuals, "_job_for",
+                               lambda b: {"id": "j", "status": "error",
+                                          "started": "", "finished": ""}):
+            self.assertEqual(len(self.by_source("picker")), 1)
+
+    def test_a_stale_record_without_a_batch_dir_is_nothing(self):
+        (self.root / "subs-visuals-state.json").write_text(
+            json.dumps({"pending": {"batch_dir": ""}}), encoding="utf-8")
+        self.assertEqual(self.by_source("picker"), [])
 
 
 class BriefSectionTests(_Case):
