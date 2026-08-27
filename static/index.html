@@ -224,6 +224,27 @@
           <p id="forge-flow-description">Operational systems, reusable starters, and every part that makes them run.</p>
         </div>
         <div class="forge-actions">
+          <div class="forge-tools" id="forge-tools" role="group" aria-label="Edit tools">
+            <button class="forge-tool" id="forge-undo" type="button" aria-label="Undo" title="Undo">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 10.5h11a4.5 4.5 0 0 1 0 9h-2.5"/><path d="M7.5 6.5l-4 4 4 4"/></svg>
+            </button>
+            <button class="forge-tool" id="forge-redo" type="button" aria-label="Redo" title="Redo">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 10.5h-11a4.5 4.5 0 0 0 0 9h2.5"/><path d="M16.5 6.5l4 4-4 4"/></svg>
+            </button>
+            <span class="forge-tool-split" aria-hidden="true"></span>
+            <button class="forge-tool" id="forge-copy" type="button" aria-label="Copy component" title="Copy">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 8.5h10v11h-10z"/><path d="M6.5 15.5h-2v-11h10v2"/></svg>
+            </button>
+            <button class="forge-tool" id="forge-paste" type="button" aria-label="Paste component" title="Paste">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5h-3v14h13v-14h-3"/><path d="M9.5 3.5h5v3h-5z"/></svg>
+            </button>
+            <button class="forge-tool" id="forge-duplicate" type="button" aria-label="Duplicate component" title="Duplicate">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 4.5h9v9h-9z"/><path d="M10.5 10.5h9v9h-9z"/></svg>
+            </button>
+            <button class="forge-tool" id="forge-delete" type="button" aria-label="Delete component" title="Delete">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15"/><path d="M9.5 7V4.5h5V7"/><path d="M6.5 7l1 12.5h9L17.5 7"/></svg>
+            </button>
+          </div>
           <button class="fchip sm" id="forge-new" type="button">New</button>
           <button class="fchip sm" id="forge-save-as" type="button">Save as</button>
           <button class="fchip sm" id="forge-save" type="button">Save</button>
