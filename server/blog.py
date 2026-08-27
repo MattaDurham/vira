@@ -4,12 +4,12 @@ The 2026-07-27 documents-merge architecture: Vira authors and owns content;
 the site publishes projections of it. Posts live here as markdown
 (data/blog/posts/<slug>.md) with a registry (data/blog/blog.json, jsonstore
 discipline); publish() renders a post page, runs it through the
-walkthrough_anon scanner, stages it into the site repo's lab/blog/, rewrites
+walkthrough_anon scanner, stages it into the site repo's blog/, rewrites
 the site's blog.json, and commits + pushes (the site's GitHub Action deploys).
 
 The anonymization gate FAILS CLOSED: a missing scanner blocks publishing the
 same as a scanner hit — public-bound content never ships unscanned. (The blog
-starts life gated at /lab/blog/; the flip to a public /blog/ is a per-item
+is PUBLIC at /blog/ (flipped 2026-08-27, public-flip wave 2); it started life
 decision in the site's flip playbook. The gate applies either way, because a
 gated post is one path-move away from public.)
 
@@ -39,7 +39,7 @@ from .gitutil import git as _git_run
 
 ROOT = Path(__file__).resolve().parents[1]
 BLOG_DIR = ROOT / "data" / "blog"            # patched by tests
-SITE_BLOG_REL = Path("lab") / "blog"
+SITE_BLOG_REL = Path("blog")
 SITE_URL = "https://thedurham.nyc"
 
 MAX_TITLE = 200
@@ -503,7 +503,7 @@ def publish(slug: str, *, push: bool = True) -> dict:
         return s
 
     jsonstore.mutate(_store(), fn, _blank())
-    return {"url": f"{SITE_URL}/lab/blog/{slug}/", "sha": sha}
+    return {"url": f"{SITE_URL}/blog/{slug}/", "sha": sha}
 
 
 def main(argv: list[str]) -> int:

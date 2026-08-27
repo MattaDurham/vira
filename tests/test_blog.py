@@ -164,10 +164,10 @@ class PublishTests(StoreBase):
             out = blog.publish("first-light")
         self.assertTrue(scan.called)
         self.assertEqual(out["url"],
-                         "https://thedurham.nyc/lab/blog/first-light/")
-        page = (self.site / "lab" / "blog" / "first-light" / "index.html")
+                         "https://thedurham.nyc/blog/first-light/")
+        page = (self.site / "blog" / "first-light" / "index.html")
         self.assertTrue(page.is_file())
-        idx = json.loads((self.site / "lab" / "blog" / "blog.json")
+        idx = json.loads((self.site / "blog" / "blog.json")
                          .read_text(encoding="utf-8"))
         self.assertEqual(idx[0]["slug"], "first-light")
         self.assertIn("add: blog/first-light", _git(self.site, "log", "-1",
@@ -188,7 +188,7 @@ class PublishTests(StoreBase):
         blog.add_dossier("AI Atlas", source, summary="Signals")
         with mock.patch.object(blog, "_anon_scan", return_value=(True, "clean")):
             out = blog.publish("ai-atlas", push=False)
-        dest = self.site / "lab" / "blog" / "ai-atlas"
+        dest = self.site / "blog" / "ai-atlas"
         self.assertTrue((dest / "index.html").is_file())
         self.assertTrue((dest / "signals.html").is_file())
         self.assertTrue((dest / "app.js").is_file())
@@ -207,7 +207,7 @@ class PublishTests(StoreBase):
             "new", encoding="utf-8")
         with mock.patch.object(blog, "_anon_scan", return_value=(True, "clean")):
             blog.publish("ai-atlas", push=False)
-        dest = self.site / "lab" / "blog" / "ai-atlas"
+        dest = self.site / "blog" / "ai-atlas"
         self.assertFalse((dest / "stale.js").exists())
         self.assertTrue((dest / "fresh.js").is_file())
 
@@ -218,7 +218,7 @@ class PublishTests(StoreBase):
             with self.assertRaises(RuntimeError) as ctx:
                 blog.publish("leaky")
         self.assertIn("anonymization gate", str(ctx.exception))
-        self.assertFalse((self.site / "lab" / "blog" / "leaky").exists())
+        self.assertFalse((self.site / "blog" / "leaky").exists())
         self.assertEqual(blog.get_post("leaky")["status"], "draft")
 
     def test_domain_only_hits_are_excused_but_mixed_hits_are_not(self):
@@ -276,7 +276,7 @@ class PublishTests(StoreBase):
         with mock.patch.object(blog, "_anon_scan", return_value=(True, "clean")):
             blog.publish("one")
             blog.publish("two")
-        idx = json.loads((self.site / "lab" / "blog" / "blog.json")
+        idx = json.loads((self.site / "blog" / "blog.json")
                          .read_text(encoding="utf-8"))
         self.assertEqual([p["slug"] for p in idx], ["two", "one"])
 
