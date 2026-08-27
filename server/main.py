@@ -74,6 +74,7 @@ from . import (actions, admission, agentbackend, aihealth, applecontacts,
                genreroutes,
                skins,
                subs_visuals,
+               events,
                subscriptions, suggest, threadread, triage, uistate, update, vault,
                doctags, walkthroughs,
                whatsapp)
@@ -169,6 +170,7 @@ async def _startup():
     whatsapp_watcher.start()   # dormant until a WhatsApp pairing exists
     photos.start_background_build()
     indexer.start()
+    events.start_background()  # event radar: plans in threads -> holds + drafts
     text_indexer.start()
     idea_indexer.start()       # keeps the backlog's tags/vectors current
     doc_indexer.start()        # and the Reader's documents, one batch a tick
@@ -219,6 +221,10 @@ def api_person(pid: str):
         detail["cadence"] = threadread.enrich_person(pid)
     except Exception:  # noqa: BLE001
         detail["cadence"] = None
+    try:
+        detail["upcoming_events"] = events.upcoming_for_person(pid)
+    except Exception:  # noqa: BLE001
+        detail["upcoming_events"] = []
     return detail
 
 
@@ -2282,6 +2288,19 @@ def api_companion_unpair(device_id: str):
         return companion.unpair(device_id)
     except RuntimeError as e:
         raise HTTPException(403, str(e))
+
+
+# ---------- event radar ----------
+
+@app.post("/api/events/scan")
+def api_events_scan(force: bool = False):
+    """Manual sweep; the background loop runs the same pass on cadence."""
+    return events.scan(force=force)
+
+
+@app.get("/api/events")
+def api_events():
+    return {"events": events.pending()}
 
 
 # ---------- suggestions ----------

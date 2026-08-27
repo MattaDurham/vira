@@ -336,6 +336,17 @@ def suggest(person_id, channel="imessage", extra="", mode="replies"):
     # drafts close loops instead of adding tone variations to guess between
     from . import threadread
     facts = threadread.facts_block(person_id)
+    # an open invitation with this person is the loop most worth closing
+    try:
+        from . import events as _events
+        evs = _events.upcoming_for_person(person_id)
+        if evs:
+            facts += "\nOpen plans with this person (unanswered):" + "".join(
+                f"\n- {e['title']} on {e['date']}"
+                f"{' at ' + e['time'] if e.get('time') else ''}"
+                for e in evs[:3])
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        pass
     if mode == "hook":
         prompt = HOOK_PROMPT.format(owner=owner, profile=profile_txt,
                                     thread=thread_txt[:12000], extra=extra,

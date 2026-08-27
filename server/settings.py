@@ -53,6 +53,16 @@ DEFAULTS = {
     "owner_name": "",                    # greeting name in the cockpit banner
     "notify_handle": "",                 # iMessage handle for pings; empty = notifications dormant
     "family_calendars": [],              # calendar names tagged "family" in the brief
+    "events_scan_days": 14,              # event-radar window over chat.db
+    "events_scan_interval_min": 240,     # background scan cadence
+    "events_auto_calendar": True,        # tentative holds land without a tap
+    "events_calendar": "",               # Calendar.app calendar for the holds;
+                                         # empty = no auto-create (a shared
+                                         # calendar makes the partner FYI
+                                         # automatic and silent)
+    "events_fyi_person": "",             # person_id for the partner FYI;
+                                         # empty = auto-detect spouse/partner
+                                         # from the CRM relationship
     "brief_remote_events": [],           # event-title substrings treated as remote/virtual
                                          # (a remote event never conflicts with an in-person one)
     "fixture_mode": None,                # None = auto (fixture when crm_root missing)

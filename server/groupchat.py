@@ -401,6 +401,23 @@ def _latest_rowid(chat_ids):
         con.close()
 
 
+def _open_event_lines(chat_ids):
+    """Pending event-radar rows for this group, injected into the brief
+    prompt so the summary and suggestions push the RSVP instead of
+    rediscovering it."""
+    try:
+        from . import events as _events
+        keys = {__import__("hashlib").sha1(",".join(
+            str(i) for i in sorted(chat_ids)).encode()).hexdigest()[:16]}
+        rows = _events.for_thread_keys(keys)
+    except Exception:  # noqa: BLE001 — garnish, never a gate
+        return []
+    return [f"OPEN EVENT (unanswered): {e['title']} on {e['date']}"
+            f"{' at ' + e['time'] if e.get('time') else ''}"
+            f"{' — ' + e['location'] if e.get('location') else ''}"
+            for e in rows]
+
+
 def _brief_prompt(prof, messages):
     owner = settings.get("owner_name") or "the owner"
     lines = [
@@ -437,6 +454,8 @@ def _brief_prompt(prof, messages):
             diff.append("without " + ", ".join(rg["missing"]))
         lines.append(f"Related group '{rg['label']}' ({rg['relation']}"
                      + (": " + "; ".join(diff) if diff else "") + ")")
+    for ol in _open_event_lines(prof["group"].get("chat_ids") or []):
+        lines.append(ol)
     lines.append("")
     lines.append(f"RECENT THREAD (oldest first; 'me' = {owner}):")
     for msg in messages:

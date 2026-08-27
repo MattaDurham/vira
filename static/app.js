@@ -1523,6 +1523,20 @@ async function openPerson(pid) {
     colA.appendChild(rs);
   }
 
+  // Open plans with this person, from the event radar — answered from the
+  // Daily Brief's review queue; here they are context on the relationship
+  if ((d.upcoming_events || []).length) {
+    const es = el("div", "p-section");
+    es.appendChild(el("h4", null, "Open plans"));
+    d.upcoming_events.forEach((ev) => {
+      es.appendChild(el("div", "p-summary",
+        `${ev.date}${ev.time ? " " + ev.time : ""} · ${ev.title}` +
+        (ev.state === "calendared" ? " — tentative hold on calendar"
+                                   : " — not on calendar yet")));
+    });
+    colA.appendChild(es);
+  }
+
   colA.appendChild(loopsSection(pid, prof?.open_loops));
   colA.appendChild(hooksSection(pid, prof?.hooks, draftFromHook));
 
@@ -9710,10 +9724,15 @@ async function reviewAct(btn, row, it, action, after) {
     b.disabled = true;
   });
   try {
-    await post("/api/review/act", { id: it.id, action });
+    const r = await post("/api/review/act", { id: it.id, action });
     row.classList.add("gone");
     setTimeout(() => row.remove(), 250);
-    toast(action === "approve" ? "Approved" : "Dropped");
+    // actions are server-named; only approve/drop are universal, the rest
+    // (reply / tell partner / calendar …) toast what actually happened
+    const done = { approve: "Approved", drop: "Dropped",
+                   reply: "Reply sent", "tell partner": "FYI sent",
+                   calendar: "Hold added to calendar" };
+    toast(r?.already ? "Already done" : (done[action] || action + " ✓"));
     if (after) after();
   } catch (e) {
     [...(acts?.querySelectorAll("button") || [])].forEach((b) => {
@@ -9728,13 +9747,20 @@ async function reviewAct(btn, row, it, action, after) {
 // `actions: []` and gets no buttons, because ruling on those is a canon
 // edit made with the document in view, not a tap in a brief.
 function reviewRow(sec, it, after) {
+  // only "drop" is the destructive-styled button; server-named actions
+  // (reply / tell partner / calendar) are ordinary verbs with their own
+  // meaning — styling them all as drops mislabels a send as a dismissal
+  const HINTS = {
+    approve: "Approve — the source's own tool performs the write",
+    drop: "Drop — recorded as decided, never shown again",
+    reply: "Send the drafted reply shown on this row",
+    "tell partner": "Send the drafted FYI shown on this row",
+    calendar: "Add a tentative hold to the calendar",
+  };
   const actions = (it.actions || []).map((a) => ({
     label: a,
-    cls: a === "approve" ? "" : "x",
-    title: (a === "approve"
-      ? "Approve — the source's own tool performs the write"
-      : "Drop — recorded as decided, never shown again")
-      + (it.note ? " (" + it.note + ")" : ""),
+    cls: a === "drop" ? "x" : "",
+    title: (HINTS[a] || a) + (it.note ? " (" + it.note + ")" : ""),
     run: (btn, row) => reviewAct(btn, row, it, a, after),
   }));
   const row = briefRow(sec, {

@@ -153,6 +153,18 @@ def priority_people(limit=PEOPLE_LIMIT):
         bump(pid, pts + stale,
              (f"you owe: {lp['what'][:70]}" if mine
               else f"open loop: {lp['what'][:70]}"))
+    # an open invitation is the strongest live reason to talk to its
+    # organizer — the event radar already extracted it, ride the store
+    try:
+        from . import events as _events
+        for ev in _events.pending():
+            pid = ev.get("organizer_pid")
+            if pid:
+                bump(pid, 25,
+                     f"invited you: {ev['title'][:50]} ({ev['date'][5:]})",
+                     first=True)
+    except Exception:  # noqa: BLE001 — radar never needs the radar
+        pass
     try:
         for b in (brief._calendar().get("birthdays") or []):
             title = b.get("title") or ""

@@ -115,9 +115,9 @@ class _Case(unittest.TestCase):
 
 class RegistryTests(_Case):
 
-    def test_the_four_sources_are_registered(self):
+    def test_the_five_sources_are_registered(self):
         self.assertEqual(set(reviewqueue.SOURCES),
-                         {"lessons", "inbox", "flags", "ideas"})
+                         {"lessons", "inbox", "flags", "ideas", "events"})
 
     def test_every_root_points_into_the_fixture(self):
         for name, path in reviewqueue.roots().items():

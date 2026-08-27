@@ -66,6 +66,9 @@ DECISIONS = ROOT / "data" / "review-decided.json"
 BRIEF_TOP = 5
 ACT_TIMEOUT_S = 60
 WHY_MAX = 400
+NOTE_MAX = 1600   # the note is the thing the owner must read BEFORE acting
+                  # — for a row whose action SENDS a drafted message, the
+                  # full draft must fit (send.py's visible-text contract)
 TITLE_MAX = 200
 
 # A store id that reaches a subprocess argv. Deliberately far narrower than
@@ -188,7 +191,7 @@ def item(source, raw_id, title, why="", stamp="", actions=(), ref="",
         "ref": str(ref or ""),
         # A caveat the owner must see BEFORE acting on the row (today: a
         # proposal whose id is shared, which changes what approve does).
-        "note": _clip(note, WHY_MAX),
+        "note": _clip(note, NOTE_MAX),
     }
 
 
@@ -373,6 +376,61 @@ def _lessons_act(raw_id, action):
                          "its shared id and its siblings stay pending")
     _record_decision("lessons", str(raw_id), action, out["mode"])
     return out
+
+
+# -------------------------------------------------- source: event radar
+
+def _events_read():
+    """Open events detected in the owner's threads. The full draft rides
+    the row note — send.py's contract is the exact text visible before the
+    one tap, and the note is where the queue shows it."""
+    from . import events as _events
+    rows = []
+    for e in _events.pending():
+        when = e["date"] + (f" {e['time']}" if e.get("time") else "")
+        drafts = e.get("drafts") or {}
+        bits = []
+        if drafts.get("reply"):
+            bits.append(("reply (sent)" if e.get("reply_sent")
+                         else "reply") + f": {drafts['reply']}")
+        if drafts.get("partner_fyi"):
+            bits.append(("fyi (sent)" if e.get("fyi_sent")
+                         else "fyi") + f": {drafts['partner_fyi']}")
+        note = "   |   ".join(bits)
+        hold = ("on calendar (tentative)"
+                if e.get("state") == "calendared" else "not on calendar yet")
+        acts = []
+        if drafts.get("reply") and not e.get("reply_sent"):
+            acts.append("reply")
+        if drafts.get("partner_fyi") and not e.get("fyi_sent"):
+            acts.append("tell partner")
+        if e.get("state") != "calendared":
+            acts.append("calendar")
+        acts.append("drop")
+        rows.append(item(
+            "events", e["key"],
+            f"{when} · {e['title']}"
+            + (f" — {e['organizer']} hosting" if e.get("organizer")
+               and e["organizer"] != "me" else ""),
+            why=f"{e.get('thread_label')}: \u201c{e.get('quote','')[:180]}\u201d"
+                f" · {hold}",
+            stamp=e.get("detected", ""),
+            actions=tuple(acts),
+            ref=e.get("location") or "",
+            note=note))
+    return rows
+
+
+def _events_act(raw_id, action):
+    from . import events as _events
+    return _events.act(raw_id, action)
+
+
+register(Source(
+    "events", "Plans in your threads",
+    "invitations and plans Vira spotted in your messages — the hold is "
+    "tentative until you reply; every send is your tap",
+    _events_read, _events_act, ("reply", "tell partner", "calendar", "drop")))
 
 
 register(Source(
