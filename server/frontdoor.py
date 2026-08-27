@@ -482,13 +482,17 @@ def _applications_prompt(answers):
         "by hand.",
         "",
         "Payload shape (config_json):",
-        '{"record_dir": str, "locations": [str], "remote_ok": bool, '
+        '{"record_dir": str, "locations": [str], "remote_regions": [str], '
+        '"remote_ok": bool, '
         '"boards": [{"company": str, "ats": str, "slug": str, '
         '"query": str, "location": str, "note": str}]}',
         "",
         "`locations` is the list of place names they will work in — leave "
         "it EMPTY if they did not say, because an empty list means "
         "unfiltered and a guessed city silently hides most of the board.",
+        "`remote_regions` is the separate list of employer-written remote "
+        "territories they can work from. Leave it EMPTY if they did not "
+        "say; never infer a country or time zone from a city.",
         "",
         "STEP 5 — REPORT",
         "Say what you built, how many boards are registered, what the "
@@ -566,6 +570,14 @@ def configure_applications(payload):
                           "(empty list = unfiltered)")
     locations = [_s(x)[:80] for x in locations if _s(x)][:20]
 
+    remote_regions = payload.get("remote_regions") or []
+    if isinstance(remote_regions, str):
+        remote_regions = [p.strip() for p in remote_regions.split(",")
+                          if p.strip()]
+    if not isinstance(remote_regions, list):
+        raise ConfigError("remote_regions must be a list of territory names")
+    remote_regions = [_s(x)[:80] for x in remote_regions if _s(x)][:20]
+
     boards = payload.get("boards") or []
     if not isinstance(boards, list):
         raise ConfigError("boards must be a list")
@@ -602,6 +614,7 @@ def configure_applications(payload):
         self_record=str(root),
         applications_universe=str(analysis),
         applications_locations=locations,
+        applications_remote_regions=remote_regions,
         applications_remote_ok=payload.get("remote_ok", True) is not False,
     )
 
@@ -618,7 +631,8 @@ def configure_applications(payload):
                          name="frontdoor-first-poll").start()
 
     return {"record_dir": str(root), "universe_dir": str(analysis),
-            "locations": locations, "added": added, "skipped": skipped,
+            "locations": locations, "remote_regions": remote_regions,
+            "added": added, "skipped": skipped,
             "polling": bool(added)}
 
 

@@ -316,6 +316,7 @@ class ConfigureApplicationsTest(unittest.TestCase):
 
     def payload(self, **kw):
         base = {"record_dir": str(self.rec), "locations": ["New York"],
+                "remote_regions": ["United States", "US East"],
                 "boards": [{"company": "Example", "ats": "greenhouse",
                             "slug": "example"}]}
         base.update(kw)
@@ -327,6 +328,8 @@ class ConfigureApplicationsTest(unittest.TestCase):
         self.assertEqual(self.written["applications_universe"],
                          str(self.rec / "analysis"))
         self.assertEqual(self.written["applications_locations"], ["New York"])
+        self.assertEqual(self.written["applications_remote_regions"],
+                         ["United States", "US East"])
         self.assertTrue((self.rec / "analysis" / "candidate-universe"
                          / "role").is_dir())
         self.assertTrue((self.rec / "analysis" / "boards").is_dir())
@@ -337,8 +340,16 @@ class ConfigureApplicationsTest(unittest.TestCase):
         self.assertEqual(self.written["self_record"], str(self.rec))
 
     def test_empty_locations_is_allowed_and_means_unfiltered(self):
-        frontdoor.configure_applications(self.payload(locations=[]))
+        frontdoor.configure_applications(self.payload(
+            locations=[], remote_regions=[]))
         self.assertEqual(self.written["applications_locations"], [])
+
+    def test_remote_regions_are_stored_separately_from_office_places(self):
+        frontdoor.configure_applications(self.payload(
+            locations=["Berlin"], remote_regions=["Germany"]))
+        self.assertEqual(self.written["applications_locations"], ["Berlin"])
+        self.assertEqual(self.written["applications_remote_regions"],
+                         ["Germany"])
 
     def test_rejects_a_bad_ats(self):
         # Deliberately a kind no ATS table will ever carry: this asserts
@@ -436,6 +447,24 @@ class LocationRuleTest(unittest.TestCase):
         self.assertFalse(jobboards.eligible_location(
             {"locations": ["Paris, France"]}, r))
 
+    def test_public_defaults_do_not_assume_a_remote_geography(self):
+        r = self.rule({"applications_locations": ["Berlin"]})
+        self.assertIsNone(r["exclude"])
+        self.assertIsNone(r["hints"])
+        self.assertTrue(jobboards.eligible_location(
+            {"locations": ["Remote - Europe"]}, r))
+
+    def test_private_remote_geography_can_be_configured(self):
+        r = self.rule({
+            "applications_locations": ["Berlin"],
+            "applications_remote_exclude": ["Canada"],
+            "applications_region_hints": ["Germany"],
+        })
+        self.assertFalse(jobboards.eligible_location(
+            {"locations": ["Remote - Canada"]}, r))
+        self.assertTrue(jobboards.eligible_location(
+            {"locations": ["Germany", "Remote"]}, r))
+
     def test_remote_can_be_switched_off(self):
         r = self.rule({"applications_locations": ["Berlin"],
                        "applications_remote_ok": False})
@@ -448,6 +477,13 @@ class LocationRuleTest(unittest.TestCase):
             {"locations": ["St. Louis (MO)"]}, r))
         self.assertFalse(jobboards.eligible_location(
             {"locations": ["StXLouis MO"]}, r))
+
+    def test_a_short_place_alias_matches_a_token_not_a_substring(self):
+        r = self.rule({"applications_locations": ["NY"]})
+        self.assertTrue(jobboards.eligible_location(
+            {"locations": ["New York, NY"]}, r))
+        self.assertFalse(jobboards.eligible_location(
+            {"locations": ["Germany"]}, r))
 
     def test_a_broken_pattern_never_stops_a_poll(self):
         r = self.rule({"applications_remote_exclude": "[unclosed"})

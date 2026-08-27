@@ -664,8 +664,10 @@ def _norm(board, uid, title, dept="", team="", locations=None,
     """
     locations = [str(x) for x in (locations or []) if x]
     wp = workplace.read(jd)
+    office_bind = bool(wp and wp.get("binds")
+                       and not wp.get("remote_limited"))
     if remote_flag and not any("remote" in x.lower() for x in locations) \
-            and not (wp and wp["binds"]):
+            and not office_bind:
         locations.append("Remote")
     remote = "remote" if any("remote" in x.lower() for x in locations) else ""
     return {
@@ -696,24 +698,6 @@ def _norm(board, uid, title, dept="", team="", locations=None,
 
 REMOTE_RE = re.compile(r"\bremote\b", re.I)
 
-# The out-of-region and in-region hint sets. These are DEFAULTS for an
-# owner who works in the US — the shipped starting point for
-# `applications_remote_exclude` / `applications_region_hints`, both of
-# which config overrides wholesale. They are not a claim about where jobs
-# are worth having.
-DEFAULT_REMOTE_EXCLUDE = (
-    r"europe|emea|\buk\b|london|paris|munich|berlin|frankfurt|madrid|"
-    r"dublin|amsterdam|zurich|geneva|stockholm|warsaw|canada|toronto|"
-    r"vancouver|montreal|india|bangalore|mumbai|apac|australia|sydney|"
-    r"brazil|s[aã]o paulo|mexico|bogot|singapore|japan|tokyo|korea|seoul|"
-    r"israel|tel aviv|riyadh|dubai|saudi|\buae\b|hong kong|taipei|"
-    r"beijing|shanghai|middle east|latam")
-DEFAULT_REGION_HINTS = (
-    r"\bUSA?\b|United States|San Francisco|Seattle|Austin|Boston|"
-    r"Washington|Chicago|Los Angeles|Palo Alto|Mountain View|Denver|"
-    r"Miami|Atlanta|,\s*[A-Z]{2}(?:,|\s|$)")
-
-
 def _rx(pattern):
     """A compiled pattern, or None when the owner cleared it (empty
     string / empty list means 'do not apply this test at all')."""
@@ -723,7 +707,14 @@ def _rx(pattern):
         parts = [str(p).strip() for p in pattern if str(p).strip()]
         if not parts:
             return None
-        pattern = "|".join(re.escape(p) for p in parts)
+        # Short aliases such as NY, SF, or UK are whole tokens, not
+        # arbitrary substrings ("NY" must not match "Germany"). Longer
+        # configured names intentionally retain substring semantics so
+        # "Berlin" matches "Berlin, Germany".
+        pattern = "|".join(
+            (rf"\b{re.escape(p)}\b"
+             if len(p) <= 3 and p.isalnum() else re.escape(p))
+            for p in parts)
     try:
         return re.compile(pattern, re.I)
     except re.error:            # a bad config pattern must not stop a poll
@@ -733,22 +724,21 @@ def _rx(pattern):
 def location_rule():
     """The owner's location rule, read from config.
 
-    `applications_locations` is a list of place substrings the owner will
-    work in ("New York", "NYC"). `applications_remote_ok` (default true)
-    accepts remote roles. `applications_remote_exclude` and
+    `applications_locations` is a list of office-place substrings the owner
+    will work in. `applications_remote_regions` separately names territories
+    from which region-limited remote work is acceptable. Product code does
+    not infer either list from an owner's home city. `applications_remote_ok`
+    (default true) accepts remote roles. `applications_remote_exclude` and
     `applications_region_hints` tune which remote postings are actually
     reachable — a bare "Remote" on a role whose named cities are all in
     another region usually is not."""
     cfg = settings.raw()
     return {
         "places": _rx(cfg.get("applications_locations")),
+        "remote_regions": _rx(cfg.get("applications_remote_regions")),
         "remote_ok": cfg.get("applications_remote_ok", True) is not False,
-        "exclude": _rx(cfg.get("applications_remote_exclude")
-                       if "applications_remote_exclude" in cfg
-                       else DEFAULT_REMOTE_EXCLUDE),
-        "hints": _rx(cfg.get("applications_region_hints")
-                     if "applications_region_hints" in cfg
-                     else DEFAULT_REGION_HINTS),
+        "exclude": _rx(cfg.get("applications_remote_exclude")),
+        "hints": _rx(cfg.get("applications_region_hints")),
     }
 
 
@@ -762,19 +752,20 @@ def eligible_location(rec, rule=None):
     the default view, never what is fetched: every role lands in the
     snapshot either way."""
     rule = rule or location_rule()
-    if rule["places"] is None and rule["remote_ok"]:
+    if rule["places"] is None and rule.get("remote_regions") is None \
+            and rule["remote_ok"]:
         return True                       # nothing configured, nothing cut
     locs = rec.get("locations") or []
 
     # THE BODY OUTRANKS THE LOCATION FIELD. A posting whose description
-    # says "based in San Francisco, CA -- hybrid, 3 days in the office"
-    # is not reachable from New York whatever its location field or its
-    # board's remote checkbox claims, and 179 snapshot roles read as
-    # eligible on exactly that mistake. The reading only ever narrows:
+    # names a binding office cannot be made eligible by a board's Remote
+    # checkbox unless that office matches the owner's configured places.
+    # The reading only ever narrows:
     # it names offices, so it can refuse, but it never manufactures
     # eligibility a location string did not already support.
     wp = rec.get("workplace")
-    if wp and not workplace.allows(wp, rule["places"], locs):
+    if wp and not workplace.allows(
+            wp, rule["places"], locs, rule.get("remote_regions")):
         return False
 
     if rule["places"] is not None:

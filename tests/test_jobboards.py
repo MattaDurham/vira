@@ -63,7 +63,11 @@ ADJ = {
 # reads data/config.json, which is the RUNNING INSTANCE's file — without
 # this every eligibility assertion below would depend on how the machine
 # running the tests happens to be set up.
-NYC_CONFIG = {"applications_locations": ["New York", "NYC"],
+NYC_CONFIG = {"applications_locations": ["New York", "NYC", "NY"],
+              "applications_remote_regions": [
+                  "United States", "US East", "Eastern", "tri-state"],
+              "applications_remote_exclude": "seoul|europe|emea",
+              "applications_region_hints": "United States|San Francisco",
               "applications_remote_ok": True}
 
 
