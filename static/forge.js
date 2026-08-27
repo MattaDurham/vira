@@ -104,8 +104,214 @@
     };
   }
 
+  /* ---------- Edit history ------------------------------------------------
+     setDirty() is the Forge's one mutation choke point - every edit on the
+     board already calls it - so the undo stack hangs off it rather than off
+     the forty individual call sites, which is what keeps a newly added
+     mutation undoable without anyone remembering this file exists.
+
+     A snapshot is the DOCUMENT only. Server-owned identity (id, revision,
+     created, updated) is deliberately left out: an undo restores content and
+     must never re-point the flow at another record. */
+
+  const HISTORY_MAX = 60;
+  const COALESCE_MS = 800;
+  const CLIP_KEY = "vira-forge-clip";
+  const history = { past: [], future: [], baseline: null, saved: null, key: null, at: 0 };
+  let historyLock = false;
+
+  function docSnapshot(flow = state.current) {
+    if (!flow) return null;
+    return JSON.stringify({
+      name: flow.name || "",
+      description: flow.description || "",
+      kind: flow.kind || "flow",
+      // source_loading is a spinner flag, not content: captured mid-hydration
+      // and restored, it would leave a card spinning forever.
+      nodes: (flow.nodes || []).map((node) => {
+        const clean = { ...node };
+        delete clean.source_loading;
+        return clean;
+      }),
+      edges: flow.edges || [],
+      contexts: flow.contexts || [],
+      triggers: flow.triggers || [],
+    });
+  }
+
+  function restoreDoc(snap) {
+    const doc = JSON.parse(snap);
+    const flow = state.current;
+    if (!flow) return;
+    flow.name = doc.name;
+    flow.description = doc.description;
+    flow.kind = doc.kind;
+    flow.nodes = doc.nodes;
+    flow.edges = doc.edges;
+    flow.contexts = doc.contexts;
+    flow.triggers = doc.triggers;
+  }
+
+  // A text field fires change() on every keystroke, so without coalescing one
+  // typed sentence would be sixty undo steps and would evict every structural
+  // edit behind it. The key is stamped on the element itself, which keeps all
+  // the existing inputControl/textareaControl call sites untouched.
+  function editKey() {
+    const el = document.activeElement;
+    if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA")) return null;
+    if (el.type === "checkbox" || el.type === "radio") return null;
+    if (!el.dataset.forgeKey) el.dataset.forgeKey = id("edit");
+    return el.dataset.forgeKey;
+  }
+
+  function historyMark() {
+    const before = history.baseline;
+    const after = docSnapshot();
+    history.baseline = after;
+    if (after == null || before === after) return;
+    const key = editKey();
+    const now = Date.now();
+    // Same field, still typing: fold into the entry already on the stack.
+    const merge = key && key === history.key && now - history.at < COALESCE_MS;
+    history.key = key;
+    history.at = now;
+    if (merge || before == null) return;
+    history.past.push(before);
+    if (history.past.length > HISTORY_MAX) history.past.shift();
+    history.future.length = 0;
+  }
+
+  function historyReset() {
+    history.past.length = 0;
+    history.future.length = 0;
+    history.baseline = docSnapshot();
+    history.saved = history.baseline;
+    history.key = null;
+    history.at = 0;
+  }
+
+  function stepHistory(back) {
+    const from = back ? history.past : history.future;
+    const to = back ? history.future : history.past;
+    if (!state.current || !from.length) return;
+    to.push(history.baseline);
+    const snap = from.pop();
+    history.baseline = snap;
+    history.key = null;
+    historyLock = true;
+    try {
+      restoreDoc(snap);
+      // The inspector holds live closures over the node and edge objects this
+      // restore just replaced; left open, further typing writes into orphans.
+      closeInspector();
+      if (!state.current.nodes.some((node) => node.id === state.selectedNode)) state.selectedNode = null;
+      // Stepping back to exactly what was saved is not an unsaved change.
+      setDirty(snap !== history.saved);
+    } finally {
+      historyLock = false;
+    }
+    renderIdentity();
+    renderBoard();
+    renderOutline();
+    renderSpatial();
+    renderRunContext();
+  }
+
+  /* ---------- Clipboard ---------------------------------------------------
+     Held in localStorage rather than a variable so a component can be copied
+     in one Flow and pasted into another, which is the whole point of having
+     it alongside Duplicate. */
+
+  function readClip() {
+    try {
+      const raw = localStorage.getItem(CLIP_KEY);
+      const clip = raw ? JSON.parse(raw) : null;
+      return clip && clip.node ? clip : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function currentNode() {
+    return state.current?.nodes.find((node) => node.id === state.selectedNode) || null;
+  }
+
+  // Placement for a pasted/duplicated part: step off the original until the
+  // slot is clear, so pasting three times gives three readable cards rather
+  // than one stack.
+  function freeSpot(node) {
+    let x = clamp((Number(node.x) || 0) + 42, 0, 3900);
+    let y = clamp((Number(node.y) || 0) + 42, 60, 2550);
+    for (let tries = 0; tries < 24; tries += 1) {
+      const taken = state.current.nodes.some((item) => Math.abs(item.x - x) < 14 && Math.abs(item.y - y) < 14);
+      if (!taken) break;
+      x = clamp(x + 42, 0, 3900);
+      y = clamp(y + 42, 60, 2550);
+    }
+    return { x, y };
+  }
+
+  function copyNode() {
+    const node = currentNode();
+    if (!node) return;
+    const clean = { ...node };
+    // Anything that points at THIS Flow's other parts cannot survive the trip,
+    // and a dangling reference would be worse than not carrying it.
+    ["source_loading", "source_loaded", "source_detail", "source_files",
+      "source_truncated", "proposal_for", "source_system", "locked", "z",
+    ].forEach((key) => delete clean[key]);
+    try {
+      localStorage.setItem(CLIP_KEY, JSON.stringify({ node: clean, from: state.current?.name || "" }));
+    } catch (error) {
+      toast("Could not copy that component");
+      return;
+    }
+    syncTools();
+    toast(`Copied "${node.name}"`);
+  }
+
+  function pasteNode() {
+    const clip = readClip();
+    if (!clip || !state.current || state.current.kind === "native") return;
+    const clone = copy(clip.node);
+    clone.id = id(clone.type === "agent" ? "stage" : clone.type || "part");
+    const spot = freeSpot(clone);
+    clone.x = spot.x;
+    clone.y = spot.y;
+    clone.expanded = false;
+    clone.locked = false;
+    clone.z = ++state.z;
+    state.current.nodes.push(clone);
+    state.selectedNode = clone.id;
+    setDirty();
+    renderBoard();
+    renderOutline();
+    toast(`Pasted "${clone.name}"`);
+  }
+
+  function syncTools() {
+    const flow = state.current;
+    const node = currentNode();
+    const editable = !!flow && flow.kind !== "native";
+    const set = (selector, enabled) => {
+      const button = q(selector);
+      if (button) button.disabled = !enabled;
+    };
+    set("#forge-undo", !!flow && history.past.length > 0);
+    set("#forge-redo", !!flow && history.future.length > 0);
+    set("#forge-copy", !!node);
+    set("#forge-paste", editable && !!readClip());
+    set("#forge-duplicate", editable && !!node);
+    set("#forge-delete", editable && !!node && !node.locked);
+  }
+
   function setDirty(value = true) {
     state.dirty = value;
+    if (!historyLock) {
+      if (value) historyMark();
+      else historyReset();
+    }
+    syncTools();
     const line = q("#forge-status");
     if (!line) return;
     line.textContent = value
@@ -263,6 +469,7 @@
     q("#forge-save-as").disabled = !flow;
     q("#forge-test").disabled = !flow;
     q("#forge-run").disabled = !flow;
+    syncTools();
   }
 
   function libraryItems() {
@@ -547,6 +754,7 @@
     empty.style.display = nodes.length ? "none" : "grid";
     nodes.forEach((node) => nodeHost.appendChild(nodeElement(node)));
     renderWires();
+    syncTools();
   }
 
   function nodeElement(node) {
@@ -1499,6 +1707,7 @@
     if (state.view === "spatial") state.selectedNode = null;
     renderWires();
     renderSpatial();
+    syncTools();
   }
 
   function removeNode(nodeId) {
@@ -2010,6 +2219,55 @@
     });
   }
 
+  /* The shortcuts are document-level, so every guard here is about NOT firing:
+     the Forge has to be the thing on screen, a dialog must not be up, and a
+     text field must keep its own native undo and clipboard. */
+  function forgeShowing() {
+    const pane = q("#work-dispatch-pane");
+    return !!pane && pane.getClientRects().length > 0 && !!state.current;
+  }
+
+  function forgeKeys(event) {
+    if (!forgeShowing()) return;
+    if (q(".forge-dialog-backdrop", q("#forge-shell"))) return;
+    const typing = event.target?.closest?.("input, textarea, select, [contenteditable='true']");
+    const mod = event.metaKey || event.ctrlKey;
+    const key = (event.key || "").toLowerCase();
+
+    if (mod && (key === "z" || key === "y")) {
+      if (typing) return;
+      event.preventDefault();
+      stepHistory(key === "z" && !event.shiftKey);
+      return;
+    }
+    if (mod && key === "c") {
+      // Never steal a real text selection - that is what the user meant.
+      if (typing || !currentNode() || !window.getSelection()?.isCollapsed) return;
+      event.preventDefault();
+      copyNode();
+      return;
+    }
+    if (mod && key === "v") {
+      if (typing || !readClip()) return;
+      event.preventDefault();
+      pasteNode();
+      return;
+    }
+    if (mod && key === "d") {
+      const node = currentNode();
+      if (typing || !node || state.current.kind === "native") return;
+      event.preventDefault();
+      duplicateNode(node);
+      return;
+    }
+    if ((key === "delete" || key === "backspace") && !mod) {
+      const node = currentNode();
+      if (typing || !node || node.locked || state.current.kind === "native") return;
+      event.preventDefault();
+      removeNode(node.id);
+    }
+  }
+
   function bind() {
     if (!q("#forge-shell") || state.bound) return;
     state.bound = true;
@@ -2030,6 +2288,13 @@
       else renderLibrary();
     });
     q("#forge-library-filter").addEventListener("change", (event) => { state.filter = event.target.value; renderLibrary(); });
+    q("#forge-undo").addEventListener("click", () => stepHistory(true));
+    q("#forge-redo").addEventListener("click", () => stepHistory(false));
+    q("#forge-copy").addEventListener("click", copyNode);
+    q("#forge-paste").addEventListener("click", pasteNode);
+    q("#forge-duplicate").addEventListener("click", () => { const node = currentNode(); if (node) duplicateNode(node); });
+    q("#forge-delete").addEventListener("click", () => removeNode(state.selectedNode));
+    document.addEventListener("keydown", forgeKeys);
     q("#forge-library-toggle").addEventListener("click", openLibrary);
     q("#forge-library-float").addEventListener("click", toggleLibraryFloat);
     q("#forge-inspector-close").addEventListener("click", closeInspector);
