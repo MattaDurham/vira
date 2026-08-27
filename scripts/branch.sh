@@ -11,8 +11,11 @@
 #   branch.sh serve <slug> --fixture synthetic-data preview (safe to share)
 #   branch.sh stop <slug>      stop the test instance
 #   branch.sh list             all branch worktrees, their state, running ports
+#   branch.sh pr <slug>        push the branch + open/update its GitHub PR
+#                              (draft by default; --title T --body-file F --ready)
 #   branch.sh merge <slug>     fast, clean merge into live main (aborts on conflict)
-#   branch.sh discard <slug>   remove worktree + branch (refuses if dirty)
+#   branch.sh discard <slug>   remove worktree + branch (refuses if dirty;
+#                              closes an open PR without merging)
 
 set -eu
 
@@ -39,7 +42,7 @@ PORT_MAX=8399
 PIDFILE=.test-instance.json
 
 # $0 inside a zsh function is the FUNCTION name, not the script.
-usage() { sed -n '2,15p' "${(%):-%x}"; exit 1; }
+usage() { sed -n '2,18p' "${(%):-%x}"; exit 1; }
 
 slug_check() {
   [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]] || {
@@ -588,6 +591,130 @@ cmd_list() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# The PR layer (2026-08-27). PRs are the DISPLAY of the work on GitHub; the
+# local merge gate stays the door. `pr` pushes the branch and opens a draft PR
+# with a written body; `merge` then runs exactly as before, and because merges
+# are --no-ff, pushing main flips the PR to Merged on its own. `discard`
+# closes an open PR without merging, so a rejected experiment keeps its diff
+# and write-up as the record. Everything here except cmd_pr itself is
+# BEST-EFFORT: a GitHub nicety must never wedge or fail a finished merge.
+
+gh_ok() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
+
+# "number state isDraft url" for the branch's PR, rc 1 when there is none.
+# gh resolves the repo from the cwd's remotes, hence the subshell cd.
+pr_info() {
+  ( cd "$LIVE" && gh pr view "$1" --json number,state,isDraft,url \
+      --jq '"\(.number) \(.state) \(.isDraft) \(.url)"' ) 2>/dev/null
+}
+
+cmd_pr() {
+  slug_check "$1"
+  local slug=$1 branch="claude/$1"; shift
+  local title="" body_file="" ready=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --title)     [[ $# -ge 2 ]] || { echo "error: --title needs a value" >&2; exit 1; }
+                   title=$2; shift 2;;
+      --body-file) [[ $# -ge 2 ]] || { echo "error: --body-file needs a value" >&2; exit 1; }
+                   body_file=$2; shift 2;;
+      --ready)     ready=1; shift;;
+      --draft)     ready=0; shift;;
+      # An unknown flag is refused, never ignored (the serve-flags lesson).
+      *) echo "error: unknown flag $1" >&2; exit 1;;
+    esac
+  done
+  [[ -n "$body_file" && ! -f "$body_file" ]] && {
+    echo "error: no such body file: $body_file" >&2; exit 1; }
+  git -C "$LIVE" show-ref --verify --quiet "refs/heads/$branch" || {
+    echo "error: no branch $branch" >&2; exit 1; }
+  gh_ok || {
+    echo "error: gh is missing or not authenticated — run: gh auth login" >&2; exit 1; }
+
+  git -C "$LIVE" push -u origin "$branch"
+
+  local info num state draft url
+  if info=$(pr_info "$branch") && { read -r num state draft url <<<"$info"; [[ "$state" == "OPEN" ]]; }; then
+    # The push above already updated the PR's commits; apply any edits.
+    [[ -n "$title" ]]     && ( cd "$LIVE" && gh pr edit "$branch" --title "$title" ) >/dev/null
+    [[ -n "$body_file" ]] && ( cd "$LIVE" && gh pr edit "$branch" --body-file "$body_file" ) >/dev/null
+    if [[ "$ready" == 1 && "$draft" == "true" ]]; then
+      ( cd "$LIVE" && gh pr ready "$branch" ) >/dev/null
+      echo "PR #$num updated + marked ready: $url"
+    else
+      echo "PR #$num updated: $url"
+    fi
+  else
+    [[ -n "$title" ]] || title=$(git -C "$LIVE" log --reverse --format=%s "main..$branch" 2>/dev/null | head -1)
+    [[ -n "$title" ]] || title="$branch"
+    local -a args
+    args=(pr create --head "$branch" --base main --title "$title")
+    if [[ -n "$body_file" ]]; then args+=(--body-file "$body_file")
+    else args+=(--body "Work in progress on \`$branch\`. Description to follow."); fi
+    [[ "$ready" == 1 ]] || args+=(--draft)
+    ( cd "$LIVE" && gh "${args[@]}" )
+  fi
+}
+
+# After a successful local merge: mark the PR ready, post the preflight rows
+# as a comment (the gate made visible), and set PR_NOTE for the checklist.
+# The rows come from preflight.sh, which is tracked in this public repo, so
+# nothing in the comment can say more than the repo already does.
+PR_NOTE=""
+pr_merge_hook() {
+  local branch=$1 pf_log=${2:-} pf_pass=${3:-0}
+  local info num state draft url rows verdict body
+  gh_ok || return 0
+  info=$(pr_info "$branch") || return 0
+  read -r num state draft url <<<"$info"
+  [[ "$state" == "OPEN" ]] || return 0
+  if [[ "$draft" == "true" ]]; then
+    ( cd "$LIVE" && gh pr ready "$branch" ) >/dev/null 2>&1 \
+      && echo "  marked PR #$num ready for review" \
+      || echo "  NOTE: could not mark PR #$num ready — gh pr ready $branch"
+  fi
+  rows=""
+  [[ -n "$pf_log" && -f "$pf_log" ]] && \
+    rows=$(grep -E '^[[:space:]]+(ok|WARN|FAIL)[[:space:]]' "$pf_log" || true)
+  if [[ "$pf_pass" == 1 ]]; then verdict="passed"
+  else verdict="OVERRIDDEN (VIRA_SKIP_PREFLIGHT=1)"; fi
+  if [[ -n "$rows" ]]; then
+    body="Local merge gate $verdict before the local \`--no-ff\` merge:
+
+\`\`\`
+$rows
+\`\`\`
+
+Merged locally by \`branch.sh merge\`; this PR flips to **Merged** when main is pushed."
+  else
+    body="Merged locally by \`branch.sh merge\` (no preflight rows available); this PR flips to **Merged** when main is pushed."
+  fi
+  if printf '%s\n' "$body" | ( cd "$LIVE" && gh pr comment "$branch" --body-file - ) >/dev/null 2>&1; then
+    echo "  posted the merge-gate comment on PR #$num"
+  else
+    echo "  NOTE: could not post the merge-gate comment on PR #$num"
+  fi
+  PR_NOTE="   # flips PR #$num to Merged"
+}
+
+# Discard closes an open PR WITHOUT merging — "considered and rejected" is
+# part of the record, and the closed PR is what keeps the diff visible after
+# the branch is deleted (GitHub retains refs/pull/N/head).
+pr_discard_hook() {
+  local branch=$1 info num state draft url
+  gh_ok || return 0
+  info=$(pr_info "$branch") || return 0
+  read -r num state draft url <<<"$info"
+  [[ "$state" == "OPEN" ]] || return 0
+  ( cd "$LIVE" && gh pr comment "$branch" --body "Closed without merging — this line of work was discarded. The diff and write-up stay here as the record of what was considered." ) >/dev/null 2>&1 || true
+  if ( cd "$LIVE" && gh pr close "$branch" ) >/dev/null 2>&1; then
+    echo "closed PR #$num without merging (the diff stays visible on GitHub)"
+  else
+    echo "NOTE: could not close PR #$num — close it by hand: gh pr close $branch"
+  fi
+}
+
 cmd_merge() {
   slug_check "$1"
   local dir branch="claude/$1"; dir=$(wt_dir "$1")
@@ -609,15 +736,25 @@ cmd_merge() {
   # already shipped once; see scripts/preflight.sh --list. A MISSING preflight
   # is announced rather than silently skipped — an absent check that reads as a
   # pass is the exact failure mode this whole gate exists to end.
+  # Output is captured to a file (then shown whole) so pr_merge_hook can post
+  # the rows as the PR's merge-gate comment; capture-then-cat rather than tee,
+  # because a pipeline would hide preflight's exit status under set -eu.
+  local pf_log pf_pass=0
+  pf_log=$(mktemp)
   if [[ ! -f "$LIVE/scripts/preflight.sh" ]]; then
     echo "NOTE: scripts/preflight.sh not present — merging WITHOUT preflight checks."
-  elif ! PREFLIGHT_SLUG="$1" bash "$LIVE/scripts/preflight.sh" --pre-merge "$1"; then
+  elif PREFLIGHT_SLUG="$1" bash "$LIVE/scripts/preflight.sh" --pre-merge "$1" >"$pf_log" 2>&1; then
+    pf_pass=1
+    cat "$pf_log"
+  else
+    cat "$pf_log"
     echo ""
     if [[ "${VIRA_SKIP_PREFLIGHT:-}" == "1" ]]; then
       echo "VIRA_SKIP_PREFLIGHT=1 — proceeding over the failures above."
     else
       echo "preflight failed — merge refused. Fix the above, or override with:"
       echo "  VIRA_SKIP_PREFLIGHT=1 scripts/branch.sh merge $1"
+      rm -f "$pf_log"
       exit 1
     fi
   fi
@@ -663,7 +800,10 @@ cmd_merge() {
     echo "  [ ] server code changed — restart live:"
     echo "      launchctl kickstart -k gui/501/nyc.durham.vira"
   fi
-  echo "  [ ] push:     git -C $LIVE push"
+  PR_NOTE=""
+  pr_merge_hook "$branch" "$pf_log" "$pf_pass" || true
+  rm -f "$pf_log"
+  echo "  [ ] push:     git -C $LIVE push$PR_NOTE"
   echo "  [ ] teardown: scripts/branch.sh discard $1"
 }
 
@@ -683,10 +823,20 @@ cmd_discard() {
     rm -rf "$dir/data"
     git -C "$LIVE" worktree remove --force "$dir"
   fi
+  pr_discard_hook "$branch" || true
   if git -C "$LIVE" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$LIVE" branch -d "$branch" 2>/dev/null ||
       { echo "branch $branch is unmerged; deleting anyway (recoverable from reflog)";
         git -C "$LIVE" branch -D "$branch"; }
+  fi
+  # Tidy the remote copy too — the PR (merged or closed) keeps the diff via
+  # refs/pull/N/head, so deleting origin's branch loses nothing.
+  if git -C "$LIVE" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    if git -C "$LIVE" push origin --delete "$branch" 2>/dev/null; then
+      echo "deleted origin/$branch (its PR keeps the diff)"
+    else
+      echo "NOTE: could not delete origin/$branch — remove it by hand if wanted"
+    fi
   fi
   echo "discarded $branch"
 }
@@ -703,6 +853,7 @@ case "$cmd" in
   serve)   [[ $# -ge 1 ]] || usage; cmd_serve "$@";;
   stop)    [[ $# -ge 1 ]] || usage; cmd_stop "$@";;
   list)    cmd_list;;
+  pr)      [[ $# -ge 1 ]] || usage; cmd_pr "$@";;
   merge)   [[ $# -ge 1 ]] || usage; cmd_merge "$@";;
   discard) [[ $# -ge 1 ]] || usage; cmd_discard "$@";;
   *) usage;;
