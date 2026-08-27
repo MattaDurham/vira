@@ -1697,6 +1697,18 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
 .alert-more { flex: none; text-align: center; color: var(--term-dim);
   font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
   text-transform: uppercase; padding: 7px 0 0; }
+/* The Attention window reuses the cascade's card shell in place — no
+   entrance animation (the list repaints on a poll, not on an arrival) and
+   a calmer shadow, since it sits in a window rather than over the desk */
+.attn-card { animation: none; box-shadow: none; margin: 6px 0 10px; }
+.attn-review-foot {
+  display: block; width: 100%; margin-top: 12px; padding: 8px 10px;
+  background: none; border: 1px dashed var(--accent-line); border-radius: 3px;
+  color: var(--text-dim); font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+  text-align: left;
+}
+.attn-review-foot:hover { color: var(--text); border-color: var(--accent); }
 /* Where the waiting count lives is a per-width decision, the way the layout
    button is desktop-only: at the desk it is a topbar count, on a phone the
    brand wears a dot and the drawer carries the list. A "3 waiting" button in
