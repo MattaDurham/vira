@@ -4855,15 +4855,15 @@ function revealIdea(id) {
   }
   if (it && !ideaMatchesQuery(it, ideaQuery.trim())) setIdeaQuery("");
   // A filed idea is not in the queue at all any more, so unhiding it there
-  // is impossible — jump to the tab that actually holds it (opening the
-  // Done fold if that is where it sits).
+  // is impossible — jump to the view that actually holds it (opening the
+  // Done fold if that is where it sits): Record's Filed chip.
   if (it && isFiledIdea(it)) {
     if (it.status === "done" && !ideaShowFiledDone) {
       ideaShowFiledDone = true;
       localStorage.setItem("vira-idea-show-parked", "1");
     }
-    setWorkTab("record");
-    setRecordFilter("filed");
+    setWorkTab("live");
+    setRunsFilter("filed");
   } else {
     renderIdeas();
   }
@@ -5155,8 +5155,8 @@ async function runReindex(btn, pending) {
 // than each mutation site having to remember it.
 function renderIdeas() {
   renderQueue();
-  if (recordFilter === "filed"
-      && $("#work-record-list")?.offsetParent != null) renderRecord();
+  if (runsFilter === "filed"
+      && $("#work-filed-list")?.offsetParent != null) renderRunsFiled();
 }
 
 function renderQueue() {
@@ -5327,48 +5327,25 @@ function appendFiledPointer(list, filed) {
   foot.appendChild(el("span", "",
     `${bits.join(" · ")} — filed, not in the queue. `));
   const go = el("button", "btn small", "Deferred & Dropped");
-  go.title = "Browse and reopen filed ideas in the Record tab";
-  go.addEventListener("click", () => { setWorkTab("record");
-                                       setRecordFilter("filed"); });
+  go.title = "Browse and reopen filed ideas — Record's Filed view";
+  go.addEventListener("click", () => { setWorkTab("live");
+                                       setRunsFilter("filed"); });
   foot.appendChild(go);
   list.appendChild(foot);
 }
 
 // ----- change log (read-only, derived from session retros + resolved ideas
-// + the durable claude-job ledger). Rendered by the Work window's Record
-// tab — see loadRecord/renderRecord below the jobs section. -----
+// + the durable claude-job ledger). Session groups render as kind-
+// "shipped" cards in the merged Record stream — see the RUNS block. -----
 const CL_TAG = { ship: "shipped", done: "done", dropped: "dropped", job: "job" };
 
-function clGroupLabel(g) {
-  if (!g.date) return g.goal || "Recent";
-  const d = new Date(g.date + (g.time ? "T" + g.time : "T00:00"));
-  const day = isNaN(d) ? g.date
-    : d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  const t = g.time && !isNaN(d)
-    ? " · " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
-  return day + t;
-}
-
-// One changelog session group as a flat node list (head, goal, entries).
-// skipJobs leaves kind-"job" lines to the ledger rows beside them in the
-// Record's merged "All" timeline; the Shipped filter keeps the fold.
-function clGroupNodes(g, opts = {}) {
-  const nodes = [];
-  const entries = opts.skipJobs
-    ? g.entries.filter((e) => e.kind !== "job") : g.entries;
-  const head = el("div", "cl-head");
-  head.appendChild(el("span", "cl-date", clGroupLabel(g)));
-  const count = entries.length;
-  head.appendChild(el("span", "cl-count", count + (count === 1 ? " change" : " changes")));
-  nodes.push(head);
-  if (g.goal && g.date) nodes.push(el("div", "cl-goal", g.goal));
-  entries.forEach((e) => {
-    const row = el("div", "cl-entry cl-" + (e.kind || "ship"));
-    row.appendChild(el("span", "cl-tag", CL_TAG[e.kind] || e.kind || "shipped"));
-    row.appendChild(el("span", "cl-text", e.text));
-    nodes.push(row);
-  });
-  return nodes;
+// One change entry — the retro bullet, a resolved idea, or a job the
+// merged stream is not already showing as a ledger row.
+function clEntryRow(e) {
+  const row = el("div", "cl-entry cl-" + (e.kind || "ship"));
+  row.appendChild(el("span", "cl-tag", CL_TAG[e.kind] || e.kind || "shipped"));
+  row.appendChild(el("span", "cl-text", e.text));
+  return row;
 }
 
 // ==================== images attached to an idea ====================
@@ -6648,7 +6625,7 @@ $("#free-run").addEventListener("click", () => {
     post(`/api/circuits/${cid}/run`, { input: v, cwd: null })
       .then(() => {
         $("#free-prompt").value = "";
-        toast("Flow running — see The Forge · Runs");
+        toast("Flow running — see The Forge · Record");
         setWorkSub("recipes");
         setCircuitsTab("runs");
       })
@@ -6729,11 +6706,28 @@ const JOB_PHASE_CLASS = {
 // a session, `last_activity` for a branch. One semantic — "when did this
 // last move" — is what lets a branch touched an hour ago sit beside the
 // session that touched it, which is the whole point of the merge.
-const runsState = { flow: [], session: [], orphan: [], ready: false };
+//
+// RECORD FOLDED IN (2026-08-27, owner's ruling: "one clean list of
+// everything that Vira has done"). The old Record tab's two timelines —
+// the durable job ledger's history and the retro-derived Shipped
+// changelog — were the same subject again, split from Runs by nothing
+// but recency. They are two more SOURCES of this one stream now: ledger
+// rows dedupe by job id against sessions already on the list (and against
+// flow-stage / unlanded claims), changelog job entries dedupe by the
+// job_id the server stamps on them, and Shipped session groups sort into
+// the chronology by their session date. Rules and Deferred & Dropped are
+// NOT runs, so they survive as list-swapping chips (RUN_VIEWS) rather
+// than being forced into the chronology.
+const runsState = { flow: [], session: [], orphan: [],
+                    history: [], shipped: [], ready: false };
 let runsFilter = lsGet("vira-runs-filter", "all");
 let runsQuery = lsGet("vira-runs-q", "");
 let runsFlowTimer = null;
 let runsSig = "";
+// Older history makes the list long, so it pages: a bounded render with a
+// COUNTED Show more (the applications pattern), never a silent cap.
+const RUNS_PAGE = 80;
+let runsShown = RUNS_PAGE;
 // An armed inline confirm ("Land <branch>? …") lives in the DOM, not in
 // state, so a poll-driven repaint would silently disarm it under the
 // cursor. Every path that ends the confirm clears the hold.
@@ -6749,7 +6743,15 @@ function runTs(v) {
 }
 
 const RUN_KINDS = { all: "All", unlanded: "Unlanded", flow: "Flows",
-                    session: "Sessions" };
+                    session: "Sessions", history: "History",
+                    shipped: "Shipped" };
+// Chips that SWAP the pane's list instead of filtering the chronology:
+// Rules is the lesson-recurrence counter, Filed is Deferred & Dropped.
+const RUN_VIEWS = ["rules", "filed"];
+// A saved filter value no longer offered falls back to All — the old
+// Record tab's seg values were never stored, but the rule costs nothing.
+if (!(runsFilter in RUN_KINDS) && !RUN_VIEWS.includes(runsFilter))
+  runsFilter = "all";
 
 // One merged, filtered, newest-first list. A stage session and the branch
 // a session left behind are NOT separate runs — they are the same work
@@ -6815,6 +6817,58 @@ function runItems() {
     });
   });
 
+  // The ledger's history — jobs the live registry has forgotten. One
+  // piece of work still never renders twice: a job already on the list as
+  // a session row, inside a flow card, or on an unlanded row is covered,
+  // and `covered` then also drives the changelog dedupe below.
+  const covered = new Set(claimed);
+  runsState.session.forEach((j) => covered.add(j.id));
+  runsState.history.forEach((r) => {
+    if (covered.has(r.id)) return;
+    covered.add(r.id);
+    out.push({
+      kind: "history", key: "hist:" + r.id, src: r,
+      ts: runTs(r.finished) || runTs(r.started),
+      tsWord: r.finished ? "finished" : "started",
+      title: (r.title || r.prompt || "").slice(0, 120),
+      state: r.status === "orphaned" ? "error" : (r.status || ""),
+      stateLabel: r.status || "",
+      sig: [r.status, (r.judge || {}).grade].join("|"),
+      hay: searchFold([r.title, r.prompt, r.status, r.mode,
+                       r.model].join(" ")),
+    });
+  });
+
+  // The Shipped changelog — session groups from the retros, plus the
+  // done/dropped ideas the server folded into them. A kind-"job" entry
+  // whose job is already on this list (its `job_id`, stamped server-side)
+  // is the same work seen from another angle and is dropped; a job-shaped
+  // entry with no id (an older server) is dropped outright, which is what
+  // the old merged-All timeline did with skipJobs.
+  runsState.shipped.forEach((g) => {
+    const entries = (g.entries || []).filter((e) =>
+      e.kind !== "job" || (e.job_id && !covered.has(e.job_id)));
+    if (!entries.length) return;
+    const ts = g.date
+      ? runTs(g.date + "T" + (g.time || "00:00"))
+      : Date.now() / 1000;   // the "recent / unfiled" bucket IS recent
+    out.push({
+      // The goal joins the key: a retro missing its date frontmatter and
+      // the server's own unfiled bucket are BOTH date-less, and two cards
+      // must not share one key.
+      kind: "shipped",
+      key: "cl:" + (g.date || "unfiled") + (g.time || "")
+        + ":" + (g.goal || "").slice(0, 32),
+      src: g, entries, ts, tsWord: "shipped",
+      title: g.goal || (g.date ? "Session" : "Recent — not yet in a retro"),
+      state: "done",
+      stateLabel: entries.length + " change" + (entries.length === 1 ? "" : "s"),
+      sig: entries.length + "|" + (entries[0] ? entries[0].text : ""),
+      hay: searchFold([g.goal, entries.map((e) => e.text).join(" ")]
+        .join(" ")),
+    });
+  });
+
   out.sort((a, b) => b.ts - a.ts);
   return out;
 }
@@ -6876,7 +6930,13 @@ function renderRuns() {
     count.classList.toggle("filtered", shown.length !== all.length);
   }
 
-  const sig = [runsFilter, runsQuery, shown.map((i) => i.key + i.state + i.sig).join(",")]
+  // Rules / Filed swap the pane's list for their own — the bar above
+  // (unlanded count, Land all, seg state) is still kept honest, and the
+  // chronology simply is not the list on screen.
+  if (RUN_VIEWS.includes(runsFilter)) return;
+
+  const sig = [runsFilter, runsQuery, runsShown,
+               shown.map((i) => i.key + i.state + i.sig).join(",")]
     .join("~");
   if (sig === runsSig && list.childElementCount) return;
   if (runsHold) return;
@@ -6885,22 +6945,44 @@ function renderRuns() {
   list.innerHTML = "";
   if (!shown.length) {
     list.appendChild(el("div", "empty left", runsState.ready
-      ? (all.length ? "No runs match this filter."
-         : "No runs yet — launch a Flow from The Forge.")
-      : "Loading runs…"));
+      ? (all.length ? "Nothing matches this filter."
+         : "Nothing on the record yet — dispatch a job or launch a Flow.")
+      : "Loading the record…"));
     return;
   }
   let day = null;
-  shown.forEach((it) => {
+  shown.slice(0, runsShown).forEach((it) => {
     const d = runDayLabel(it.ts);
     if (d !== day) { day = d; list.appendChild(el("div", "runs-day", d)); }
     list.appendChild(runCard(it));
   });
+  if (shown.length > runsShown) {
+    const more = el("button", "btn small runs-more",
+      `Show more (${shown.length - runsShown} more)`);
+    more.addEventListener("click", () => {
+      runsShown += RUNS_PAGE;
+      renderRuns();
+    });
+    list.appendChild(more);
+  }
 }
 
-// ONE shell for all three kinds. Dot = STATE (what matters), title, then a
+// ONE shell for the run kinds. Dot = STATE (what matters), title, then a
 // quiet mono kind tag (the "minor distinction"), then the kind's own body.
+// The exception is deliberate: a HISTORY item renders the ledger row
+// itself (jobHistRow — judge chip/button, transcript copy, click-to-
+// reopen), because those affordances are the point of a ledger row and a
+// second implementation of them would be two chances to drift.
 function runCard(it) {
+  if (it.kind === "history") {
+    const row = jobHistRow(it.src);
+    row.classList.add("k-history");
+    row.dataset.runKey = it.key;
+    const main = row.querySelector(".link-main");
+    if (main) row.insertBefore(el("span", "run-kind", "history"),
+                               main.nextSibling);
+    return row;
+  }
   const card = el("article", "run-card k-" + it.kind + " is-" + it.state);
   card.dataset.runKey = it.key;
   const head = el("div", "run-head");
@@ -6919,8 +7001,27 @@ function runCard(it) {
 
   if (it.kind === "flow") flowBody(card, it.src);
   else if (it.kind === "unlanded") orphanBody(card, it.src);
+  else if (it.kind === "shipped") shippedBody(card, it);
   else cardAction(card, () => openSession(it.src.id));
   return card;
+}
+
+// A Shipped card's body is the session group's change entries — the
+// retro's own bullets plus the ideas the server folded in. Long groups
+// fold past the first few behind a COUNTED disclosure, never a silent cap.
+const SHIPPED_LEAD = 6;
+
+function shippedBody(card, it) {
+  const lead = it.entries.slice(0, SHIPPED_LEAD);
+  const rest = it.entries.slice(SHIPPED_LEAD);
+  lead.forEach((e) => card.appendChild(clEntryRow(e)));
+  if (!rest.length) return;
+  const box = document.createElement("details");
+  box.className = "run-result";
+  box.appendChild(el("summary", "",
+    `+ ${rest.length} more change${rest.length === 1 ? "" : "s"}`));
+  rest.forEach((e) => box.appendChild(clEntryRow(e)));
+  card.appendChild(box);
 }
 
 // ---------- flow runs ----------
@@ -7198,11 +7299,31 @@ async function loadOrphans() {
   } catch (e) { /* the cached render stands */ }
 }
 
+// The Record halves that used to be their own tab fold into the same
+// loader — one fetch path per source. `/api/jobs/history` (the ledger) is
+// a DIFFERENT endpoint from `/api/jobs` (the live registry refreshJobs
+// reads); neither is fetched twice. Both stay off the 15s/3s polls: the
+// ledger and the retros move when a job finishes or a session closes, and
+// those paths refresh explicitly.
+async function refreshHistory() {
+  const h = await api("/api/jobs/history?limit=200");
+  runsState.history = h.jobs || [];
+  renderRuns();
+}
+
+async function refreshShipped() {
+  const cl = await api("/api/changelog");
+  runsState.shipped = cl.groups || [];
+  renderRuns();
+}
+
 async function loadRuns() {
   if (!$("#runs-list")) return;
   await Promise.all([
     refreshJobs().catch(() => {}),
     refreshFlowRuns().catch(() => {}),
+    refreshHistory().catch(() => {}),
+    refreshShipped().catch(() => {}),
   ]);
   runsState.ready = true;
   renderRuns();
@@ -7326,7 +7447,54 @@ async function runOrphanAction(foot, it, name) {
   }
 }
 
-// ---------- the Runs toolbar ----------
+// ---------- the two list-swapping views: Rules and Filed ----------
+// Neither is a run, so neither is forced into the chronology: the Rules
+// chip swaps in the lesson-recurrence list (loadRules/renderRules,
+// unchanged) and the Filed chip swaps in Deferred & Dropped (renderFiled,
+// unchanged) — the old Record tab's two non-timeline segs, re-homed.
+
+function renderRunsFiled() {
+  const host = $("#work-filed-list");
+  if (!host) return;
+  host.innerHTML = "";
+  renderFiled(host);
+}
+
+// Applies the active chip to the pane: seg state, which list shows, and
+// the swap views' own loads. Runs on every chip click AND on tab open, so
+// a persisted "rules"/"filed" comes back as the view it was.
+function applyRunsView() {
+  $("#runs-filter")?.querySelectorAll(".seg-btn").forEach((b) =>
+    b.classList.toggle("on", b.dataset.run === (runsFilter || "all")));
+  const swap = RUN_VIEWS.includes(runsFilter);
+  const show = (sel, on) => {
+    const n = $(sel);
+    if (n) n.style.display = on ? "" : "none";
+  };
+  show("#runs-list", !swap);
+  show("#runs-count", !swap);
+  show("#work-rules-list", runsFilter === "rules");
+  show("#work-filed-list", runsFilter === "filed");
+  if (runsFilter === "rules") loadRules().catch(() => {});
+  if (runsFilter === "filed") {
+    // Filed renders real idea rows, so it needs the backlog — this pane
+    // can be opened without the Cues tab ever loading.
+    if (!ideasCache.length)
+      loadIdeas().then(renderRunsFiled).catch(() => {});
+    renderRunsFiled();
+  }
+}
+
+function setRunsFilter(f) {
+  if (!(f in RUN_KINDS) && !RUN_VIEWS.includes(f)) f = "all";
+  runsFilter = f;
+  lsSet("vira-runs-filter", f);
+  runsShown = RUNS_PAGE;
+  applyRunsView();
+  renderRuns();
+}
+
+// ---------- the Record toolbar ----------
 
 $("#runs-refresh")?.addEventListener("click", () => {
   runsHold = false;
@@ -7338,15 +7506,12 @@ $("#runs-refresh")?.addEventListener("click", () => {
 if ($("#runs-q") && runsQuery) $("#runs-q").value = runsQuery;
 
 $("#runs-filter")?.querySelectorAll(".seg-btn").forEach((b) =>
-  b.addEventListener("click", () => {
-    runsFilter = b.dataset.run || "all";
-    lsSet("vira-runs-filter", runsFilter);
-    renderRuns();
-  }));
+  b.addEventListener("click", () => setRunsFilter(b.dataset.run || "all")));
 
 $("#runs-q")?.addEventListener("input", (e) => {
   runsQuery = e.target.value;
   lsSet("vira-runs-q", runsQuery);
+  runsShown = RUNS_PAGE;    // a new search means a new first page
   renderRuns();
 });
 $("#runs-q-clear")?.addEventListener("click", () => {
@@ -7354,6 +7519,7 @@ $("#runs-q-clear")?.addEventListener("click", () => {
   if (box) box.value = "";
   runsQuery = "";
   lsSet("vira-runs-q", "");
+  runsShown = RUNS_PAGE;
   renderRuns();
   box?.focus();
 });
@@ -8645,13 +8811,13 @@ function attnCardBlock(row) {
 
 // The verb is the row's ONE action, and it comes from the row's kind —
 // every verb lands on the surface that owns the act (the terminal, the
-// Runs list, the health recheck), never a second implementation of it.
+// Record stream, the health recheck), never a second implementation of it.
 function attnVerb(r) {
   if (r.kind === "orphan" || r.kind === "flow")
     return { label: r.kind === "flow" ? "watch" : "review",
              title: r.kind === "flow"
-               ? "Open the Runs list — the run's stages and terminals live there"
-               : "Open the Runs list — Land / Resume / Discard live there",
+               ? "Open the Record stream — the run's stages and terminals live there"
+               : "Open the Record stream — Land / Resume / Discard live there",
              run: () => { openApp("work"); setWorkTab("live"); } };
   if (r.id === "health:ai")
     return { label: "recheck",
@@ -8746,10 +8912,15 @@ function renderAttention() {
   }
 }
 
-// ----- the Record tab: the durable job ledger + the change log, merged -----
+// ----- the durable job ledger's row + the two swap views -----
+// The Record TAB is gone (2026-08-27): its All/Jobs/Shipped timeline
+// folded into the one chronological stream in the RUNS block above, and
+// its two non-timeline segs — Deferred & Dropped, Rules — survive below
+// as the stream's list-swapping chips (RUN_VIEWS).
 
 // One ledger row — status dot, judge chip (or judge button), transcript
 // copy, click-to-reopen (read-only from the ledger for finished jobs).
+// Rendered by runCard for kind-"history" items.
 function jobHistRow(r) {
   const row = el("div", "card job-row-full job-hist");
   row.appendChild(el("span", "job-dot "
@@ -8805,93 +8976,7 @@ function jobHistRow(r) {
   return row;
 }
 
-let recordFilter = "all";           // all | jobs | shipped | filed | rules
-let recordCache = { groups: null, jobs: null };
-
-async function loadRecord() {
-  const [cl, hist] = await Promise.all([
-    api("/api/changelog").catch(() => null),
-    api("/api/jobs/history?limit=100").catch(() => null),
-  ]);
-  recordCache = { groups: cl ? cl.groups : null,
-                  jobs: hist ? hist.jobs : null };
-  renderRecord();
-}
-
-function setRecordFilter(f) {
-  recordFilter = f;
-  $("#record-filter")?.querySelectorAll(".seg-btn")
-    .forEach((b) => b.classList.toggle("on", b.dataset.rec === f));
-  const rec = $("#work-record-list"), rules = $("#work-rules-list");
-  if (rec) rec.style.display = f === "rules" ? "none" : "";
-  if (rules) rules.style.display = f === "rules" ? "" : "none";
-  if (f === "rules") { loadRules().catch(() => {}); return; }
-  // The filed view renders real idea rows, so it needs the backlog — the
-  // Record window can be opened without the Queue tab ever loading.
-  if (f === "filed" && !ideasCache.length) loadIdeas().catch(() => {});
-  renderRecord();
-}
-$("#record-filter")?.querySelectorAll(".seg-btn").forEach((b) =>
-  b.addEventListener("click", () => setRecordFilter(b.dataset.rec)));
-
-function renderRecord() {
-  const host = $("#work-record-list");
-  if (!host) return;
-  host.innerHTML = "";
-  // Filed ideas come from the backlog, not the changelog — this branch
-  // sits ABOVE the "record unavailable" guard so a failed /api/changelog
-  // can't blank a list it has nothing to do with.
-  if (recordFilter === "filed") { renderFiled(host); return; }
-  const { groups, jobs } = recordCache;
-  if (groups === null && jobs === null) {
-    host.appendChild(el("div", "empty left", "Record unavailable."));
-    return;
-  }
-  if (recordFilter === "jobs") {
-    if (!jobs || !jobs.length) {
-      host.appendChild(el("div", "empty left",
-        "No jobs on the ledger yet — launch a Flow from The Forge."));
-      return;
-    }
-    jobs.forEach((r) => host.appendChild(jobHistRow(r)));
-    return;
-  }
-  if (recordFilter === "shipped") {
-    if (!groups || !groups.length) {
-      host.appendChild(el("div", "empty left", "No changes recorded yet."));
-      return;
-    }
-    groups.forEach((g) =>
-      clGroupNodes(g).forEach((n) => host.appendChild(n)));
-    return;
-  }
-  // All: one timeline — session groups and ledger rows interleaved by
-  // time, newest first. A job folded into a session group renders as its
-  // actionable ledger row here (skipJobs suppresses the duplicate text
-  // line); the Shipped filter shows the changelog's own fold verbatim.
-  const items = [];
-  (groups || []).forEach((g) => {
-    const t = g.date
-      ? (Date.parse(g.date + "T" + (g.time || "00:00")) || 0)
-      : Infinity;   // the "recent / unfiled" bucket leads, as it does today
-    const nodes = clGroupNodes(g, { skipJobs: true });
-    if (nodes.length > (g.goal && g.date ? 2 : 1))   // head(+goal) alone = all jobs
-      items.push({ t, nodes });
-  });
-  (jobs || []).forEach((r) => {
-    const t = Date.parse(r.started || "") || 0;
-    items.push({ t, nodes: [jobHistRow(r)] });
-  });
-  if (!items.length) {
-    host.appendChild(el("div", "empty left",
-      "Nothing recorded yet — dispatch a job or ship a session."));
-    return;
-  }
-  items.sort((a, b) => b.t - a.t);
-  items.forEach((it) => it.nodes.forEach((n) => host.appendChild(n)));
-}
-
-// ---------- RECORD > Deferred & Dropped — where filed ideas live ----------
+// ---------- Record > Filed — where deferred & dropped ideas live ----------
 // The queue is active work; this is the archive behind it, and it is a
 // place to REVISIT rather than a graveyard: every row is a live idea row,
 // so its status dropdown reopens it (deferred -> open) exactly where it is
@@ -8938,7 +9023,7 @@ function renderFiled(host) {
     ideaShowFiledDone = !ideaShowFiledDone;
     localStorage.setItem("vira-idea-show-parked",
                          ideaShowFiledDone ? "1" : "0");
-    renderRecord();
+    renderRunsFiled();
   };
   foldHead.addEventListener("click", toggle);
   foldHead.addEventListener("keydown", (e) => {
@@ -8948,7 +9033,7 @@ function renderFiled(host) {
   if (openFold) done.forEach((it) => host.appendChild(ideaRow(it)));
 }
 
-// ---------- RECORD > Rules — the lesson-recurrence counter ----------
+// ---------- Record > Rules — the lesson-recurrence counter ----------
 // How often each standing rule in the corrections ledger has actually
 // been broken, per the sessions' own retrospectives. Read-only surface
 // over GET /api/lessons; the counts come from server/lessonwatch.py.
@@ -12493,14 +12578,22 @@ function refreshGates(flow) {
 }
 
 
-// ---------- The Forge: Cues | Flows | Runs | Record ----------
+// ---------- The Forge: Cues | Flows | Record ----------
 // Five cockpit windows (Actions, Jobs, Ideas & On-Hold, Circuits, Agent
 // Loops) first merged into Work in 2026-07-21. The Forge keeps their aliases
 // and stores while replacing the old Dispatch pane with the visual Flow
-// editor. Internal tab ids stay stable so old deep links remain valid.
+// editor. Internal tab ids stay stable so old deep links remain valid —
+// including `record`, whose tab merged into `live` on 2026-08-27 (the
+// WORK_TAB_ALIAS below), which is what keeps #work/record, saved values
+// and every right-click jump landing.
 
-let workTab = "queue";        // queue | dispatch | live | record
+let workTab = "queue";        // queue | dispatch | live (record aliases in)
 let workSub = "library";      // dispatch sub-panel: library | recipes | schedules
+
+// Runs + Record merged 2026-08-27: `live` is the surviving pane, retitled
+// "Record". The retired tab id normalizes here so no stored value — a deep
+// link, a palette entry, a caller written before the merge — can dead-end.
+const WORK_TAB_ALIAS = { record: "live" };
 
 // Anything that still opens a folded window by id (context menus, saved
 // links, cross-module jumps) lands on the right Work tab.
@@ -12551,12 +12644,13 @@ function peopleTabLoad(tab) {
 }
 
 function setWorkTab(tab, opts = {}) {
+  tab = WORK_TAB_ALIAS[tab] || tab;
   const previous = workTab;
   workTab = tab;
   $("#work-tabs")?.querySelectorAll(".seg-btn")
     .forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   const panes = { queue: "#work-queue-pane", dispatch: "#work-dispatch-pane",
-                  live: "#work-live-pane", record: "#work-record-pane" };
+                  live: "#work-live-pane" };
   Object.entries(panes).forEach(([t, sel]) => {
     const p = $(sel);
     if (p) p.style.display = t === tab ? "" : "none";
@@ -12613,8 +12707,10 @@ function workTabLoad(tab) {
   if (tab === "dispatch") {
     window.loadForge?.().catch(() => {});
   }
-  if (tab === "live") loadRuns().catch(() => {});
-  if (tab === "record") loadRecord().catch(() => {});
+  if (tab === "live") {
+    applyRunsView();          // a persisted Rules/Filed chip comes back
+    loadRuns().catch(() => {});
+  }
 }
 
 $("#work-tabs")?.querySelectorAll(".seg-btn").forEach((b) =>
@@ -14544,7 +14640,7 @@ function circuitCard(c, models) {
       await post(`/api/circuits/${c.id}/run`, {
         input, cwd: cwd.value.trim() || null, stages: edits });
       inp.value = "";
-      toast("Flow running — see The Forge · Runs");
+      toast("Flow running — see The Forge · Record");
       setCircuitsTab("runs");
     } catch (e) { alert("Run failed: " + e.message); }
     go.disabled = false;
@@ -19336,8 +19432,10 @@ function renameSessionPopup(win, x, y) {
                               { title: name });
         win.dataset.wname = res.title || name;
         refreshJobs().catch(() => {});
-        if ($("#work-record-list")?.offsetParent != null)
-          loadRecord().catch(() => {});
+        if ($("#work-live-pane")?.offsetParent != null) {
+          refreshHistory().catch(() => {});
+          refreshShipped().catch(() => {});
+        }
       } catch (e) { toast("Rename failed"); }
     },
   });
@@ -19364,9 +19462,11 @@ function makeTitleEditable(titleEl, jidRef) {
       const res = await put("/api/jobs/" + jid + "/title", { title: text });
       titleEl.textContent = res.title || text;
       refreshJobs().catch(() => {});
-      // reflect the new name in the Record timeline if it's on screen
-      if ($("#work-record-list")?.offsetParent != null)
-        loadRecord().catch(() => {});
+      // reflect the new name in the Record stream if it's on screen
+      if ($("#work-live-pane")?.offsetParent != null) {
+        refreshHistory().catch(() => {});
+        refreshShipped().catch(() => {});
+      }
     } catch (e) {
       titleEl.textContent = saved;   // revert on failure
       toast("Rename failed");
@@ -21024,7 +21124,7 @@ function paletteMatches(q) {
   cmds.push(
     workCmd("Ideas & proposals — The Forge · Cues", "queue"),
     workCmd("Kit — The Forge · Flows", "dispatch", "library"),
-    workCmd("Jobs — The Forge · Runs", "live"),
+    workCmd("Jobs — The Forge · Record", "live"),
     workCmd("Circuits — The Forge · Flows", "dispatch", "recipes"),
     workCmd("Agent Loops — The Forge · Flows", "dispatch", "schedules"),
     // the two folded retrieval windows stay findable by their old names
@@ -21406,6 +21506,8 @@ const HASH_ROUTES = {
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
   "work": (rest) => {           // #work, #work/queue|dispatch|live|record
+    // "record" stays accepted: setWorkTab's WORK_TAB_ALIAS lands it on
+    // the merged Record pane (tab id `live`).
     const t = rest[0];
     if (["queue", "dispatch", "live", "record"].includes(t))
       setWorkTab(t, { defer: true });

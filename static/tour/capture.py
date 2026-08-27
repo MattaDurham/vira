@@ -452,16 +452,20 @@ def s_live(ctx, anon):
 
 
 def s_record(ctx, anon):
-    """Record: what already shipped, and the transcript that proves it."""
+    """Record: the one chronological ledger of everything Vira has done."""
     page = boot(ctx)
-    tab(page, "record", wait=1500)
-    # loadRecord fetches the changelog AND the whole job history and renders
-    # only once both settle. On a well-used instance that is seconds, not
-    # milliseconds — a fixed wait here photographed an empty pane and called
-    # it the product. Wait for a row, generously, and say so if none comes.
+    # The Record tab IS the old Runs pane (tab id `live`), retitled at the
+    # 2026-08-27 merge — history and shipped work interleave into the same
+    # stream, so this beat photographs one list instead of two panes.
+    tab(page, "live", wait=1500)
+    # loadRuns fetches the changelog AND the whole job history beside the
+    # live sources and renders as each settles. On a well-used instance
+    # that is seconds, not milliseconds — a fixed wait here photographed an
+    # empty pane and called it the product. Wait for a row, generously, and
+    # say so if none comes.
     try:
         page.wait_for_function(
-            "document.querySelectorAll('#work-record-list > *').length > 0",
+            "document.querySelectorAll('#runs-list > *').length > 0",
             timeout=45000)
     except Exception:                                         # noqa: BLE001
         raise SystemExit(
@@ -469,10 +473,10 @@ def s_record(ctx, anon):
             "renders rather than photographing a blank pane")
     page.wait_for_timeout(1200)
     d = page.evaluate("""() => ({
-      filters: [...document.querySelectorAll('#record-filter .seg-btn')]
-        .map((b) => b.dataset.rec + (b.classList.contains('on') ? '*' : '')),
-      rows: document.querySelectorAll('#work-record-list > *').length,
-      text: (document.querySelector('#work-record-list') || {}).innerText || '',
+      filters: [...document.querySelectorAll('#runs-filter .seg-btn')]
+        .map((b) => b.dataset.run + (b.classList.contains('on') ? '*' : '')),
+      rows: document.querySelectorAll('#runs-list > *').length,
+      text: (document.querySelector('#runs-list') || {}).innerText || '',
     })""")
     print("    record:", json.dumps({k: v for k, v in d.items()
                                      if k != 'text'}), "| text:",
@@ -482,26 +486,26 @@ def s_record(ctx, anon):
 
     page.evaluate(SETTLE)
     shot(page, "record", work_sels(
-        filter="#record-filter", list="#work-record-list",
-        r0=("#work-record-list > *", 0),
-        r1=("#work-record-list > *", 1),
-        r2=("#work-record-list > *", 2),
-    ), anon=anon, extra={"tab": tabrect(page, "record")})
+        filter="#runs-filter", list="#runs-list",
+        r0=("#runs-list > *", 0),
+        r1=("#runs-list > *", 1),
+        r2=("#runs-list > *", 2),
+    ), anon=anon, extra={"tab": tabrect(page, "live")})
     m = meta["record"]
     m["top"] = clamp(union(m.get("filter"), m.get("r1")))
 
-    # ---- the ledger of runs, which is the other half of the record ----
+    # ---- the ledger's own history, which is one source of the stream ----
     page.evaluate("""() => {
-      const b = document.querySelector('#record-filter .seg-btn[data-rec="jobs"]');
+      const b = document.querySelector('#runs-filter .seg-btn[data-run="history"]');
       if (b) b.click(); }""")
     page.wait_for_timeout(2600)
-    n = page.evaluate("document.querySelectorAll('#work-record-list > *').length")
-    print("    jobs filter rows:", n)
+    n = page.evaluate("document.querySelectorAll('#runs-list > *').length")
+    print("    history filter rows:", n)
     page.evaluate(SETTLE)
     shot(page, "ledger", work_sels(
-        filter="#record-filter", list="#work-record-list",
-        r0=("#work-record-list > *", 0),
-        r1=("#work-record-list > *", 1),
+        filter="#runs-filter", list="#runs-list",
+        r0=("#runs-list > *", 0),
+        r1=("#runs-list > *", 1),
     ), anon=anon)
     meta["ledger"]["rows"] = clamp(union(meta["ledger"].get("r0"),
                                          meta["ledger"].get("r1")))

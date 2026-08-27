@@ -166,11 +166,14 @@
   <!-- THE FORGE. The internal id remains work so saved layouts, dock order,
        deep links and every folded cockpit alias keep their established home. -->
   <section id="view-work" class="view">
+    <!-- Runs + Record merged into ONE chronological ledger (2026-08-27,
+         owner's ruling: "one clean list of everything that Vira has
+         done"). The surviving tab id is `live`; the retired `record` id
+         is aliased in setWorkTab so every stored link still lands. -->
     <div class="seg ideas-tabs" id="work-tabs">
       <button data-tab="queue" class="seg-btn on">Cues</button>
       <button data-tab="dispatch" class="seg-btn">Flows</button>
-      <button data-tab="live" class="seg-btn">Runs</button>
-      <button data-tab="record" class="seg-btn">Record</button>
+      <button data-tab="live" class="seg-btn">Record</button>
     </div>
 
     <div id="work-queue-pane">
@@ -359,23 +362,33 @@
       </div>
     </div>
 
-    <!-- RUNS — one chronological stream. Flow runs, stage sessions and
-         unlanded branches are three SOURCES of one subject (work this Vira
-         ran), and stacking them as three fixed sections ordered the list by
-         provenance: the newest thing that happened sat below two other
-         lists, and unlanded work — which is always recent — sat at the very
-         foot. See the RUNS block in app.js for the whole reasoning. -->
+    <!-- RECORD — one chronological ledger. Flow runs, stage sessions and
+         unlanded branches merged into one stream on 2026-08-12; the old
+         Record tab's two timelines (the durable job ledger's history and
+         the retro-derived Shipped changelog) folded into the SAME stream
+         on 2026-08-27 — they were two timelines of one subject, split by
+         recency rather than by anything meaningful. See the RUNS block in
+         app.js for the whole reasoning. -->
     <div id="work-live-pane" style="display:none">
       <div class="ideas-sortbar runs-bar">
+        <!-- The first four chips FILTER the chronology; History and
+             Shipped are two more sources of the same stream. Rules and
+             Filed SWAP the pane's list instead (the lesson-recurrence
+             counter and Deferred & Dropped are not runs) — RUN_VIEWS in
+             app.js is the split. -->
         <div class="seg mini" id="runs-filter">
           <button data-run="all" class="seg-btn on">All</button>
           <button data-run="unlanded" class="seg-btn">Unlanded</button>
           <button data-run="flow" class="seg-btn">Flows</button>
           <button data-run="session" class="seg-btn">Sessions</button>
+          <button data-run="history" class="seg-btn">History</button>
+          <button data-run="shipped" class="seg-btn">Shipped</button>
+          <button data-run="rules" class="seg-btn">Rules</button>
+          <button data-run="filed" class="seg-btn">Filed</button>
         </div>
         <div class="idea-searchwrap">
           <input id="runs-q" class="search" type="search"
-                 placeholder="Search runs — name, branch, status, what was asked"
+                 placeholder="Search the record — name, branch, status, what was asked"
                  autocomplete="off" spellcheck="false">
           <button id="runs-q-clear" class="idea-search-clear"
                   title="Clear search" aria-label="Clear search">×</button>
@@ -385,18 +398,8 @@
       </div>
       <div id="runs-count" class="idea-count"></div>
       <div id="runs-list" class="runs-list"></div>
-    </div>
-
-    <div id="work-record-pane" style="display:none">
-      <div class="seg mini" id="record-filter">
-        <button data-rec="all" class="seg-btn on">All</button>
-        <button data-rec="jobs" class="seg-btn">Jobs</button>
-        <button data-rec="shipped" class="seg-btn">Shipped</button>
-        <button data-rec="filed" class="seg-btn">Deferred &amp; Dropped</button>
-        <button data-rec="rules" class="seg-btn">Rules</button>
-      </div>
-      <div id="work-record-list" class="list"></div>
       <div id="work-rules-list" class="list" style="display:none"></div>
+      <div id="work-filed-list" class="list" style="display:none"></div>
     </div>
   </section>
 

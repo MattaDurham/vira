@@ -1967,7 +1967,7 @@
     }
   }
 
-  // The runs LIST lives in Work · Runs now, as one chronological stream
+  // The runs LIST lives in Work · Record now, as one chronological stream
   // over flows, stage sessions and unlanded work (app.js `loadRuns`) —
   // ordering three sections by source put the newest run below two other
   // lists. The Forge's own call sites (launching a Flow, opening the

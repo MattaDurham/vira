@@ -116,3 +116,20 @@ class ChangelogScopeTests(unittest.TestCase):
         groups = self._groups([], [])
         self.assertEqual(groups[0]["date"], "2026-07-11")
         self.assertIn("The widget shipped.", self._texts(groups))
+
+    def test_job_entries_carry_their_full_job_id(self):
+        # The merged Record stream renders the ledger BESIDE the changelog
+        # and dedupes one job's two appearances by this key — the id inside
+        # the entry text is truncated to 8 chars and unusable for the join.
+        long_id = "abcdef0123456789"
+        groups = self._groups([], [_job(long_id, str(changelog.REPO))])
+        jobs = [e for g in groups for e in g["entries"]
+                if e["kind"] == "job"]
+        self.assertEqual([e.get("job_id") for e in jobs], [long_id])
+
+    def test_non_job_entries_carry_no_job_id(self):
+        groups = self._groups([_idea("i1", "vira thing", "Vira")], [])
+        for g in groups:
+            for e in g["entries"]:
+                if e["kind"] != "job":
+                    self.assertNotIn("job_id", e)
