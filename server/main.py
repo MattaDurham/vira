@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from . import (actions, admission, agentbackend, aihealth, applecontacts,
                applicationmap, applications,
-               atlas,
+               atlas, attention,
                backup, brainchat, brief,
                briefstate, changelog,
                circuits,
@@ -2911,6 +2911,15 @@ def api_sessions_pending():
         row["title"] = name["title"]
         row["command"] = name["command"]
     return {"pending": rows}
+
+
+@app.get("/api/attention")
+def api_attention():
+    """The tier-1 attention payload: everything Vira is doing right now and
+    everything waiting on the owner right now, one read (server/attention.py).
+    Read-only end to end — acting on a row goes through the surface that
+    owns it — so there is deliberately no passive guard here."""
+    return attention.compose(jobs)
 
 
 @app.get("/api/jobs/history")

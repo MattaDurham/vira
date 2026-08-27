@@ -1126,6 +1126,23 @@ def state_mtime():
 
 # ------------------------------------------------------------------ status
 
+def health():
+    """Cheap probe for the attention surface: when was the last sweep, and
+    which boards errored on it. Snapshot-only — never loads the universe,
+    the scores, or the canon, because this is read on a short poll. Manual
+    boards carry `manual: True` and no `error`, so they never read as a
+    failing poll."""
+    reg = load_registry()
+    if not reg["boards"]:
+        return {"registered": 0, "fetched": "", "errors": {}}
+    snapshot = _read_json(_snapshot_path(), {})
+    errors = {bid: m["error"]
+              for bid, m in (snapshot.get("boards") or {}).items()
+              if m.get("ok") is False and m.get("error")}
+    return {"registered": len(reg["boards"]),
+            "fetched": snapshot.get("fetched") or "", "errors": errors}
+
+
 def status():
     reg = load_registry()
     snapshot = _read_json(_snapshot_path(), {})

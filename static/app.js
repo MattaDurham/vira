@@ -8413,13 +8413,21 @@ const alertVisible = () => alertRows.filter(
 const alertKind = (c) =>
   c.kind === "ask" ? "a question" : "approval: " + (c.tool || "a tool call");
 
+// One fetch drives every attention surface — the window, the badge, the
+// drawer section, and the mobile card cascade all read /api/attention, so
+// they cannot disagree about what is waiting. The payload embeds the
+// pending cards verbatim (the pending_all shape), which is what keeps
+// answering here and answering in a terminal the same act.
+let attnData = null;      // last /api/attention payload
 async function refreshAlerts() {
-  let rows;
+  let p;
   try {
-    rows = (await api("/api/sessions/pending")).pending || [];
+    p = await api("/api/attention");
   } catch {
     return;   // a failed poll must never clear a decision off the screen
   }
+  attnData = p;
+  const rows = p.cards || [];
   alertRows = rows;
   const live = new Set(rows.map((r) => r.card.req_id));
   let dropped = false;
@@ -8429,6 +8437,8 @@ async function refreshAlerts() {
   if (dropped) saveAlertMin();
   if (alertFront && !live.has(alertFront)) alertFront = null;
   renderAlerts();
+  renderAttention();
+  attnMaybeOpen();
 }
 
 function alertPark(reqId) {
@@ -8482,19 +8492,26 @@ function alertCard(row) {
 function renderAlerts() {
   const layer = $("#alerts");
   const waiting = alertWaiting();
-  // count + dot surfaces first, so they are right even when the cascade
-  // itself is empty (every card parked, or every terminal already open)
+  // The badge counts everything that needs the owner — cards plus parked
+  // replies, unlanded work, health — not just cards, because it is the
+  // attention window's closed-state face. Falls back to the card count
+  // when the payload has not landed yet.
+  const need = attnData ? (attnData.counts?.needs_you || 0) : waiting.length;
   const btn = $("#alerts-btn");
   if (btn) {
-    btn.hidden = !waiting.length;
-    btn.textContent = waiting.length + " waiting";
+    btn.hidden = !need;
+    btn.textContent = need + " waiting";
     btn.classList.toggle("parked", waiting.length > 0 && !alertVisible().length);
   }
-  $("#brand-btn")?.classList.toggle("has-alerts", waiting.length > 0);
+  $("#brand-btn")?.classList.toggle("has-alerts", need > 0);
   if (document.body.classList.contains("nd-open")) renderNavDrawer();
   if (!layer) return;
 
-  const vis = alertVisible();
+  // On the desktop the cards live in the Attention window — the popup
+  // cascade would be a second live copy of the same picker, which is the
+  // exact double-render the cascade's own rules forbid. The phone keeps
+  // the cascade: there are no floating windows there.
+  const vis = isDesktop ? [] : alertVisible();
   if (!vis.length) {
     layer.hidden = true;
     layer.innerHTML = "";
@@ -8531,6 +8548,178 @@ function renderAlerts() {
     stack.appendChild(el("div", "alert-more",
       (behind.length - 2) + " more waiting"));
   layer.appendChild(stack);
+}
+
+// ---------- the Attention window: the tier-1 surface ----------
+//
+// One short list of what Vira is doing right now and what is waiting on
+// the owner right now (server/attention.py) — the generalization of the
+// decision cascade into a window with a home. Two tiers, deliberately
+// separate: decisions that KEEP live in Needs Review and appear here only
+// as the foot line (plus the server's aging-escalation row); this window
+// carries the LIVE tier only, so it stays short by construction.
+//
+// AUTO-REOPEN IS EDGE-TRIGGERED. Closing the window marks every current
+// trigger token seen (per device, localStorage — closing it at the desk
+// must not silence the phone), and it reopens only when a token arrives
+// that this browser has not seen: a new session, a run flipping to
+// waiting-on-you, a new unlanded branch. Mere progress never re-triggers —
+// the server's token contract (attention.py) is what guarantees that.
+// While focus mode is up it defers: a window auto-opened behind the scrim
+// is invisible (the Define lesson), and stealing the scrim would be worse
+// — the badge carries it until focus exits, then the next poll opens it.
+
+let attnKey = "";
+const attnSeen = new Set(lsGet("vira-attn-seen", []));
+const saveAttnSeen = () => lsSet("vira-attn-seen", [...attnSeen]);
+
+function attnMaybeOpen() {
+  if (!attnData) return;
+  const live = attnData.tokens || [];
+  const liveSet = new Set(live);
+  let changed = false;
+  [...attnSeen].forEach((t) => {
+    if (!liveSet.has(t)) { attnSeen.delete(t); changed = true; }
+  });
+  const fresh = live.filter((t) => !attnSeen.has(t));
+  const open = !!winState.attention?.open;
+  if (open || !isDesktop) {
+    // on screen (or on a phone, where the badge + drawer carry it and
+    // there is no window to pop) — everything current counts as seen
+    if (fresh.length) { live.forEach((t) => attnSeen.add(t)); changed = true; }
+  } else if (fresh.length
+             && !document.body.classList.contains("focus-mode")
+             && !(typeof editing !== "undefined" && editing)) {
+    openWindow("attention");
+    live.forEach((t) => attnSeen.add(t));
+    changed = true;
+  }
+  if (changed) saveAttnSeen();
+}
+
+// A decision card, rendered in place — the same permissionCard/askCard the
+// terminal shows, so answering here and answering there is one act. No
+// minimize: parking is a cascade gesture, and in a window the card simply
+// sits in the list until it is answered.
+function attnCardBlock(row) {
+  const { card: p, job_id: jid } = row;
+  const box = el("div", "alert-card attn-card" + (p.kind === "ask" ? " ask" : ""));
+  const head = el("div", "alert-head");
+  const main = el("div", "alert-head-main");
+  main.appendChild(el("div", "alert-kicker",
+    (p.kind === "ask" ? "Vira is asking" : "Vira needs approval")));
+  main.appendChild(el("div", "alert-title", row.title || jid));
+  head.appendChild(main);
+  const open = el("button", "alert-act", "open");
+  open.title = "Open this session's terminal";
+  open.addEventListener("click", () => openSession(jid));
+  head.appendChild(open);
+  box.appendChild(head);
+  box.appendChild(p.kind === "ask" ? askCard(jid, p) : permissionCard(jid, p));
+  return box;
+}
+
+// The verb is the row's ONE action, and it comes from the row's kind —
+// every verb lands on the surface that owns the act (the terminal, the
+// Runs list, the health recheck), never a second implementation of it.
+function attnVerb(r) {
+  if (r.kind === "orphan" || r.kind === "flow")
+    return { label: r.kind === "flow" ? "watch" : "review",
+             title: r.kind === "flow"
+               ? "Open the Runs list — the run's stages and terminals live there"
+               : "Open the Runs list — Land / Resume / Discard live there",
+             run: () => { openApp("work"); setWorkTab("live"); } };
+  if (r.id === "health:ai")
+    return { label: "recheck",
+             title: "Probe the AI backend again right now",
+             run: async (btn) => {
+               btn.disabled = true;
+               try { await post("/api/health/ai/recheck", {}); }
+               catch (e) { toast("Recheck failed: " + e.message); }
+               refreshAlerts();
+             } };
+  if (r.kind === "health")
+    return { label: "open",
+             title: "Open the boards strip in Applications",
+             run: () => openApp("applications") };
+  if (r.kind === "review")
+    return { label: "open", title: "Open Needs Review",
+             run: () => openApp("review") };
+  if (r.job_id)
+    return { label: r.verb || "open", title: "Open this session's terminal",
+             run: () => openSession(r.job_id) };
+  return null;
+}
+
+function attnRow(sec, r) {
+  const verb = attnVerb(r);
+  const row = briefRow(sec, {
+    time: r.age_days != null ? briefDays(r.age_days) : "",
+    title: r.title,
+    sub: r.sub,
+    tag: r.machine ? "machine" : (r.kind === "health" ? "health" : null),
+    actions: verb ? [{ label: verb.label, title: verb.title,
+                       run: (btn) => verb.run(btn) }] : [],
+  });
+  if (r.job_id) {
+    row.classList.add("click");
+    row.addEventListener("click", () => openSession(r.job_id));
+  }
+  return row;
+}
+
+function renderAttention() {
+  const body = $("#attention-body");
+  if (!body || !attnData) return;
+  const rows = attnData.rows || [];
+  const cards = attnData.cards || [];
+  const rev = attnData.review;
+  // Keyed rebuild — the cards hold half-typed answers, so a blind repaint
+  // every poll would wipe them (the cascade's own rule, inherited).
+  const key = (attnData.tokens || []).join("|") + "#"
+    + cards.map((c) => c.card.req_id).join(",") + "#"
+    + (rev ? rev.total + ":" + rev.oldest_days : "");
+  if (key === attnKey && body.childElementCount) return;
+  attnKey = key;
+  body.innerHTML = "";
+
+  const count = $("#attn-count");
+  const need = attnData.counts?.needs_you || 0;
+  const working = attnData.counts?.working || 0;
+  if (count) count.textContent = !rows.length ? "Nothing needs you"
+    : [need ? need + " waiting on you" : "",
+       working ? working + " working" : ""].filter(Boolean).join(" · ");
+
+  const cardIds = new Set(cards.map((c) => c.card.req_id));
+  const needRows = rows.filter((r) => r.needs_you && !cardIds.has(r.req_id));
+  const workRows = rows.filter((r) => !r.needs_you);
+
+  if (cards.length || needRows.length) {
+    const sec = briefSection(body, "Waiting on you");
+    cards.forEach((c) => sec.appendChild(attnCardBlock(c)));
+    needRows.forEach((r) => attnRow(sec, r));
+  }
+  if (workRows.length) {
+    const sec = briefSection(body, "Working");
+    workRows.forEach((r) => attnRow(sec, r));
+  }
+  if (!rows.length)
+    body.appendChild(el("div", "brief-empty",
+      "Nothing is running and nothing is waiting on you."));
+  // The tier-2 reference: a count, never the list — Needs Review is the
+  // batch surface and merging it here would make this list long, which is
+  // the one thing it must not be.
+  if (rev && rev.total) {
+    const foot = el("button", "attn-review-foot",
+      "Needs Review: " + rev.total + " decision"
+      + (rev.total === 1 ? "" : "s")
+      + (rev.oldest_days >= 1
+        ? " · oldest " + Math.floor(rev.oldest_days) + "d" : ""));
+    foot.title = "Open Needs Review — the batch tier: proposals, staged "
+      + "ideas, inbox stubs";
+    foot.addEventListener("click", () => openApp("review"));
+    body.appendChild(foot);
+  }
 }
 
 // ----- the Record tab: the durable job ledger + the change log, merged -----
@@ -12408,6 +12597,7 @@ function viewLoad(id) {
   if (id === "research") window.loadResearch?.().catch(() => {});
   if (id === "journal") loadJournal().catch(() => {});
   if (id === "review") loadReview().catch(() => {});
+  if (id === "attention") { renderAttention(); refreshAlerts(); }
   if (id === "subs") loadSubs().catch(() => {});
   if (id === "find") loadFindStatus().catch(() => {});
   if (id === "find-cloud" || id === "find-related") {
@@ -17884,6 +18074,8 @@ const WINDOWS = [
     icon: "M5 5h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 7.5h2.5c1 0 1.5-.5 1.5-1M10 7.5h1.5c2.5 0 2.5 10 2.5 10" },
   { id: "brief", title: "Daily Brief", w: 520,
     icon: "M12 3v3M5.3 6.3l2.1 2.1M2.5 13.5h3M18.5 13.5h3M16.6 8.4l2.1-2.1M7.5 15.5a4.5 4.5 0 0 1 9 0M3.5 19h17" },
+  { id: "attention", title: "Attention", w: 480,
+    icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
   { id: "review", title: "Needs Review", w: 560,
     icon: "M5 4h14v16H5zM8.5 9.5h7M8.5 13h7M9 16.5l1.5 1.5 3-3" },
   { id: "journal", title: "Journal", w: 520,
@@ -25632,7 +25824,11 @@ async function boot() {
   // The stream is the fast path; this poll is what survives a dead stream.
   refreshAlerts();
   startPoll(() => refreshAlerts(), 5000);
-  $("#alerts-btn")?.addEventListener("click", alertRaiseAll);
+  // Desktop: the badge is the Attention window's closed-state face, so
+  // clicking it opens the window. The phone keeps the cascade raise.
+  $("#alerts-btn")?.addEventListener("click",
+    () => (isDesktop ? openApp("attention") : alertRaiseAll()));
+  $("#attn-refresh")?.addEventListener("click", () => refreshAlerts());
   startPoll(() => {
     // the sent log lives in Setup's Notifications card now; the node
     // exists only while that card is on screen

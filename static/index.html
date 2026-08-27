@@ -77,6 +77,21 @@
     <div id="brief-body"></div>
   </section>
 
+  <!-- ATTENTION — the tier-1 surface: what Vira is doing right now and
+       what is waiting on the owner right now (server/attention.py). The
+       window auto-reopens on genuinely NEW membership (edge-triggered,
+       so closing it means "seen" until something new arrives); Needs
+       Review stays the batch tier and is only referenced from the foot. -->
+  <section id="view-attention" class="view">
+    <div class="section-head">
+      <h2>Attention</h2>
+      <button class="fchip sm" id="attn-refresh" style="margin-left:auto">Refresh</button>
+    </div>
+    <div class="radar-sub"><span id="attn-count">Nothing needs you</span>
+      <span class="hint">closes until something new starts or asks</span></div>
+    <div id="attention-body"></div>
+  </section>
+
   <!-- NEEDS REVIEW — the picker the brief's Needs review section links to.
        One list of every decision waiting on the owner, from every source
        registered in server/reviewqueue.py. -->

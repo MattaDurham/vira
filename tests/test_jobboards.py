@@ -826,5 +826,42 @@ class PartialCoverageIsReported(PollDiffAndNotify):
         self.assertEqual(meta["partial"], "detail cap hit")
 
 
+class HealthProbe(unittest.TestCase):
+    """health() is the attention surface's cheap read — snapshot-only, and
+    a manual board (ok False by design, forever) must never read as a
+    failing poll."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        p = mock.patch.object(jobboards, "boards_dir",
+                              return_value=self.dir)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_no_boards_reads_dormant(self):
+        (self.dir / "boards.json").write_text(json.dumps({"boards": []}),
+                                              encoding="utf-8")
+        self.assertEqual(jobboards.health(),
+                         {"registered": 0, "fetched": "", "errors": {}})
+
+    def test_errors_are_real_failures_only(self):
+        (self.dir / "boards.json").write_text(json.dumps(
+            {"boards": [dict(GH_BOARD)]}), encoding="utf-8")
+        (self.dir / "snapshot.json").write_text(json.dumps({
+            "fetched": "2026-08-27T09:00:00",
+            "boards": {
+                "gh-acme": {"ok": False, "error": "HTTP 500"},
+                "meta-ai": {"ok": False, "manual": True,
+                            "note": "not headlessly pollable"},
+                "as-openai": {"ok": True},
+            }}), encoding="utf-8")
+        h = jobboards.health()
+        self.assertEqual(h["errors"], {"gh-acme": "HTTP 500"})
+        self.assertEqual(h["fetched"], "2026-08-27T09:00:00")
+        self.assertEqual(h["registered"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
