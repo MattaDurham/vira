@@ -306,6 +306,12 @@
               <button type="button" id="forge-zoom-in" aria-label="Zoom in">+</button>
               <button type="button" id="forge-arrange">Arrange</button>
             </div>
+            <!-- The run trace strip: which run the board is wearing, its
+                 live progress, and the way out. A wrapping second row of
+                 the FLOATING boardbar — the bar sits absolutely over the
+                 viewport, so an in-flow sibling would render underneath it,
+                 unreachable. Hidden unless a trace is armed. -->
+            <div class="forge-tracebar" id="forge-trace" hidden></div>
           </div>
           <div class="forge-viewport" id="forge-viewport">
             <div class="forge-world" id="forge-world">

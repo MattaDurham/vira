@@ -189,6 +189,71 @@ class Flows(Base):
                                             "stages": {}}]
         self.assertEqual(self.compose()["rows"], [])
 
+    def test_flow_rows_carry_the_stage_strip_in_topo_order(self):
+        # stages_def is stored in AUTHORING order; the strip must read
+        # left-to-right in execution order, judge stages marked, grades
+        # carried — the exact fields the client's mini strip renders.
+        from server import circuits
+        circuits.list_runs.return_value = [{
+            "id": "run_1", "status": "running", "circuit_name": "PBJ",
+            "stages_def": [
+                {"id": "judge", "name": "Judge", "mode": "judge",
+                 "needs": ["build"], "judge": {"of": ["build"]}},
+                {"id": "build", "name": "Build", "mode": "bypassPermissions",
+                 "needs": ["plan"]},
+                {"id": "plan", "name": "Plan", "mode": "manual", "needs": []},
+            ],
+            "stages": {"plan": {"status": "done"},
+                       "build": {"status": "running"},
+                       "judge": {"status": "pending", "grade": "B"}}}]
+        [r] = self.compose()["rows"]
+        strip = r["stages"]
+        self.assertEqual([s["id"] for s in strip],
+                         ["plan", "build", "judge"])
+        self.assertEqual([s["status"] for s in strip],
+                         ["done", "running", "pending"])
+        self.assertEqual([s["judge"] for s in strip],
+                         [False, False, True])
+        self.assertEqual(strip[2]["grade"], "B")
+        self.assertNotIn("grade", strip[0])
+        self.assertEqual(strip[0]["name"], "Plan")
+
+    def test_the_strip_never_joins_the_trigger_token(self):
+        # A stage transition is progress; progress must not re-pop the
+        # window. The token stays membership-only however the strip moves.
+        from server import circuits
+        run = {"id": "run_1", "status": "running", "circuit_name": "PBJ",
+               "stages_def": [{"id": "plan", "mode": "manual", "needs": []}],
+               "stages": {"plan": {"status": "pending"}}}
+        circuits.list_runs.return_value = [run]
+        before = self.compose()["rows"][0]["trigger"]
+        run["stages"]["plan"]["status"] = "done"
+        after = self.compose()["rows"][0]["trigger"]
+        self.assertEqual(before, after)
+
+    def test_a_legacy_run_without_stages_def_still_strips(self):
+        # Runs stored before stages_def existed fall back to the stages
+        # dict's own order — an honest strip, never a crash or an absence.
+        from server import circuits
+        circuits.list_runs.return_value = [{
+            "id": "run_1", "status": "running", "circuit_name": "Old",
+            "stages": {"a": {"status": "done"},
+                       "b": {"status": "running"}}}]
+        [r] = self.compose()["rows"]
+        self.assertEqual([s["id"] for s in r["stages"]], ["a", "b"])
+        self.assertEqual([s["judge"] for s in r["stages"]], [False, False])
+
+    def test_a_legacy_stage_mode_spelling_still_reads_as_not_judge(self):
+        # Stored defs outlive the 2026-07-29 rung rename; the judge flag
+        # goes through norm_stage_mode, so "autopilot" is an agent stage.
+        from server import circuits
+        circuits.list_runs.return_value = [{
+            "id": "run_1", "status": "running", "circuit_name": "Old",
+            "stages_def": [{"id": "s", "mode": "autopilot", "needs": []}],
+            "stages": {"s": {"status": "running"}}}]
+        [r] = self.compose()["rows"]
+        self.assertEqual(r["stages"][0]["judge"], False)
+
 
 class Orphans(Base):
 

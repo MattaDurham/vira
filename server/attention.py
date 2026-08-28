@@ -187,6 +187,42 @@ def _card_rows(registry, names):
 
 # ---------------------------------------------------------------- flows
 
+def _stage_strip(run):
+    """The minimal per-stage list the client's mini stage strip renders —
+    id, name, status, judge?, grade — in TOPO order, because the strip's
+    whole point is plan-vs-build-vs-judge reading left to right and a
+    stages_def list is stored in authoring order, not execution order.
+    Derived per read from the run's own frozen stages_def; a run stored
+    before stages_def existed falls back to the stages dict's own order
+    (insertion order, which start_run wrote from the defs anyway).
+
+    Deliberately NOT part of the row's trigger token: a stage transition
+    is progress, and progress must never re-pop a window the owner just
+    closed — the client repaints the strip off its own render key."""
+    from . import circuits
+    defs = [d for d in (run.get("stages_def") or []) if d.get("id")]
+    states = run.get("stages") or {}
+    by_id = {d["id"]: d for d in defs}
+    if defs:
+        try:
+            order = circuits.topo_order(defs)
+        except (ValueError, KeyError, TypeError):
+            order = [d["id"] for d in defs]
+    else:
+        order = list(states)
+    strip = []
+    for sid in order:
+        d = by_id.get(sid) or {}
+        s = states.get(sid) or {}
+        item = {"id": sid, "name": d.get("name") or sid,
+                "status": s.get("status") or "pending",
+                "judge": circuits.norm_stage_mode(d.get("mode")) == "judge"}
+        if s.get("grade"):
+            item["grade"] = s["grade"]
+        strip.append(item)
+    return strip
+
+
 def _flow_rows():
     from . import circuits
     rows = []
@@ -204,7 +240,8 @@ def _flow_rows():
         rows.append(_row(
             f"flow:{run['id']}", "flow", "running", False,
             run.get("circuit_name") or run["id"], sub, verb="trace",
-            run_id=run["id"], stages_done=done, stages_total=len(stages)))
+            run_id=run["id"], stages_done=done, stages_total=len(stages),
+            stages=_stage_strip(run)))
     return rows
 
 

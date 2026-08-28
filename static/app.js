@@ -6780,7 +6780,10 @@ function runItems() {
         : (r.status === "running" ? `running — ${done}/${defs.length} steps done`
         : r.status === "done" ? `${defs.length} step${defs.length === 1 ? "" : "s"} complete`
         : r.status),
-      sig: [r.status, gate, defs.map((d) => (st[d.id] || {}).status).join("")].join("|"),
+      // Grades join the signature so a verdict landing repaints the strip;
+      // an armed confirm is still protected by runsHold, never by staleness.
+      sig: [r.status, gate, defs.map((d) => ((st[d.id] || {}).status || "")
+        + ((st[d.id] || {}).grade || "")).join(",")].join("|"),
       hay: searchFold([r.circuit_name, r.circuit_id, r.input, r.status,
                        r.error].join(" ")),
     });
@@ -7026,7 +7029,92 @@ function shippedBody(card, it) {
 
 // ---------- flow runs ----------
 
+// The circuits stage-status vocabulary, verbatim (server/circuits.py
+// STAGE_STATUSES) — tests/test_flow_trace_contract.py pins the two copies
+// together and pins a stylesheet rule for each, so a new status cannot
+// ship invisible to the dots that render it.
+const STAGE_STATUSES = ["pending", "running", "waiting", "done", "error",
+                        "skipped"];
+
+// Kahn's over `needs`, ties broken ALPHABETICALLY — a faithful mirror of
+// circuits.topo_order, because the attention strip is ordered server-side
+// by that function and the Record strip must read identically (measured:
+// source-order ties swapped dossier and judge between the two surfaces).
+// A cycle is never a valid circuit, but stored runs outlive validators;
+// list order is the honest fallback.
+function topoStageDefs(defs) {
+  const byId = new Map(defs.map((d) => [d.id, d]));
+  const needs = new Map();
+  defs.forEach((d) =>
+    needs.set(d.id, new Set((d.needs || []).filter((n) => byId.has(n)))));
+  const ready = [...needs].filter(([, n]) => !n.size)
+    .map(([sid]) => sid).sort();
+  ready.forEach((sid) => needs.delete(sid));
+  const order = [];
+  while (ready.length) {
+    const sid = ready.shift();
+    order.push(sid);
+    [...needs].forEach(([other, n]) => {
+      n.delete(sid);
+      if (!n.size) { needs.delete(other); ready.push(other); }
+    });
+    ready.sort();
+  }
+  if (needs.size) return defs;
+  return order.map((sid) => byId.get(sid));
+}
+
+// A run card's per-stage list in the attention payload's shape
+// ({id, name, status, judge, grade}), derived from the run itself so the
+// Record card and the Attention row render one strip from one vocabulary.
+function runStripStages(run) {
+  const st = run.stages || {};
+  return topoStageDefs(run.stages_def || []).map((d) => ({
+    id: d.id, name: d.name || d.id,
+    status: (st[d.id] || {}).status || "pending",
+    judge: d.mode === "judge",
+    grade: (st[d.id] || {}).grade || null,
+  }));
+}
+
+// The mini stage strip — plan vs build vs judge at a glance. One dot per
+// stage in topo order, status-toned; a judge dot is squared and dashed and
+// carries its grade once graded. The strip IS the trace affordance:
+// clicking it opens the Forge board on that run with the overlay armed.
+// Pure DOM, tokens-only CSS — deliberately no canvas at card scale.
+function stageStripEl(stages, runId) {
+  if (!(stages || []).length) return null;
+  const strip = el("button", "stagestrip");
+  strip.type = "button";
+  strip.title = "Trace this run on the Forge board";
+  stages.forEach((s) => {
+    const status = STAGE_STATUSES.includes(s.status) ? s.status : "pending";
+    const dot = el("i",
+      "ss-dot is-" + status + (s.judge ? " ss-judge" : ""),
+      s.judge && s.grade ? s.grade : "");
+    dot.title = [s.name || s.id, status,
+                 s.grade ? "grade " + s.grade : ""].filter(Boolean).join(" · ");
+    strip.appendChild(dot);
+  });
+  strip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    traceFlowRun(runId);
+  });
+  return strip;
+}
+
+// The trace gesture: open Work > Flows with the run painted onto its own
+// board. The board is the surface that owns a flow's shape, so the verb
+// lands there — never a second renderer of the graph.
+function traceFlowRun(runId) {
+  openApp("work");
+  setWorkTab("dispatch");
+  window.Forge?.traceRun?.(runId);
+}
+
 function flowBody(card, run) {
+  const strip = stageStripEl(runStripStages(run), run.id);
+  if (strip) card.querySelector(".run-titlerow")?.appendChild(strip);
   if (run.input) card.appendChild(el("div", "run-note", run.input));
   const defs = run.stages_def || [];
   if (defs.length) {
@@ -7340,8 +7428,12 @@ function scheduleRunsPoll() {
   if (runsFlowTimer) { clearTimeout(runsFlowTimer); runsFlowTimer = null; }
   const live = runsState.flow.some((r) => r.status === "running"
     || Object.values(r.stages || {}).some((s) => s && s.status === "waiting"));
+  // The breadboard joined the overlay surfaces with the run trace, so an
+  // armed trace on the Flows tab follows the same poll the spatial view
+  // always has — never a poller of its own.
   const visible = $("#work-live-pane")?.offsetParent
-    || $("#forge-spatial")?.offsetParent;
+    || $("#forge-spatial")?.offsetParent
+    || $("#forge-viewport")?.offsetParent;
   if (!live || !visible) return;
   runsFlowTimer = setTimeout(() => {
     refreshFlowRuns().catch(() => {}).then(scheduleRunsPoll);
@@ -8813,11 +8905,14 @@ function attnCardBlock(row) {
 // every verb lands on the surface that owns the act (the terminal, the
 // Record stream, the health recheck), never a second implementation of it.
 function attnVerb(r) {
-  if (r.kind === "orphan" || r.kind === "flow")
-    return { label: r.kind === "flow" ? "watch" : "review",
-             title: r.kind === "flow"
-               ? "Open the Record stream — the run's stages and terminals live there"
-               : "Open the Record stream — Land / Resume / Discard live there",
+  if (r.kind === "flow")
+    return { label: "trace",
+             title: "Trace this run on the Forge board — live stage states "
+               + "painted on the flow's own graph",
+             run: () => traceFlowRun(r.run_id) };
+  if (r.kind === "orphan")
+    return { label: "review",
+             title: "Open the Record stream — Land / Resume / Discard live there",
              run: () => { openApp("work"); setWorkTab("live"); } };
   if (r.id === "health:ai")
     return { label: "recheck",
@@ -8851,6 +8946,13 @@ function attnRow(sec, r) {
     actions: verb ? [{ label: verb.label, title: verb.title,
                        run: (btn) => verb.run(btn) }] : [],
   });
+  // A flow row carries the mini stage strip — the same dots the Record
+  // card wears, from the same vocabulary; the server sends the per-stage
+  // list in topo order so the two surfaces cannot disagree.
+  if (r.kind === "flow" && (r.stages || []).length) {
+    const strip = stageStripEl(r.stages, r.run_id);
+    if (strip) row.insertBefore(strip, row.querySelector(".brief-acts"));
+  }
   if (r.job_id) {
     row.classList.add("click");
     row.addEventListener("click", () => openSession(r.job_id));
@@ -8866,9 +8968,16 @@ function renderAttention() {
   const rev = attnData.review;
   // Keyed rebuild — the cards hold half-typed answers, so a blind repaint
   // every poll would wipe them (the cascade's own rule, inherited).
+  // Flow stage states join the key but NEVER the tokens: a stage
+  // transition must repaint the strip without re-popping a window the
+  // owner just closed (the edge-trigger contract is membership-only).
   const key = (attnData.tokens || []).join("|") + "#"
     + cards.map((c) => c.card.req_id).join(",") + "#"
-    + (rev ? rev.total + ":" + rev.oldest_days : "");
+    + (rev ? rev.total + ":" + rev.oldest_days : "") + "#"
+    + rows.filter((r) => r.kind === "flow")
+      .map((r) => (r.stages || [])
+        .map((s) => s.status + (s.grade || "")).join(""))
+      .join("|");
   if (key === attnKey && body.childElementCount) return;
   attnKey = key;
   body.innerHTML = "";

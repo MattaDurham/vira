@@ -74,6 +74,16 @@ def norm_stage_mode(m, default="manual"):
     return _LEGACY_STAGE_MODES.get(s.lower(), s)
 
 
+# The complete stage-status vocabulary this module ever writes into a run's
+# per-stage state ("canceled" is a RUN status, never a stage's — a canceled
+# run's unfinished stages read "skipped"). Every client surface that tones a
+# stage (the Record cards, the Attention strip's dots, the Forge board's
+# trace overlay) keys on these spellings; tests/test_flow_trace_contract.py
+# pins this tuple against the driver's own assignments AND against the
+# frontend's copy plus its stylesheet rules, so a new status cannot ship
+# invisible to the surfaces that render it.
+STAGE_STATUSES = ("pending", "running", "waiting", "done", "error", "skipped")
+
 EXTRA_CAP = 4_000        # per-stage owner instructions (tray) length cap
 MAX_RETRIES = 5          # ceiling a tray-set grade gate may ask for
 

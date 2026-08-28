@@ -89,6 +89,10 @@
     libraryFloatRect: null,
     runs: [],
     boardLayerFocus: null,
+    // The armed run trace: { runId, run (stash for runs older than the
+    // fetch window), sig (repaint guard) }. The overlay is a STATE laid
+    // over the flow's own board — one renderer, never a second one.
+    trace: null,
   };
   let spatial = null;
 
@@ -372,6 +376,10 @@
     // The Queue link is a fact about ONE Flow, so opening another drops it —
     // otherwise a later run would close out an idea it has nothing to do with.
     if (state.idea && state.idea.flow_id !== flow.id) state.idea = null;
+    // An armed trace is equally a fact about one Flow: opening another drops
+    // it rather than leaving an overlay pointed at a board it cannot paint.
+    if (state.trace && (tracedRun() || {}).circuit_id !== flow.id)
+      state.trace = null;
     state.selectedNode = null;
     state.selectedEdge = null;
     state.zoom = 1;
@@ -446,11 +454,183 @@
     renderSpatial();
     renderOutline();
     renderRunContext();
+    renderTraceBar();
+  }
+
+  /* ---------- Run trace ---------------------------------------------------
+     Selecting a run paints its state onto the flow's OWN board: per-node
+     status, the active handoff pulsing, a judge wearing its grade, and a
+     click on a stage that ran opening that stage's terminal. A FINISHED run
+     traces exactly the same way — status tones, grades and terminals all
+     still answer; only the live pulse is running-only. */
+
+  function tracedRun() {
+    if (!state.trace) return null;
+    return state.runs.find((run) => run.id === state.trace.runId)
+      || state.trace.run || null;
+  }
+
+  function runFitsFlow(run) {
+    return Boolean(run && state.current
+      && (state.current.id === run.circuit_id
+          || (state.current.kind === "trace"
+              && state.current.trace_run === run.id)));
   }
 
   function currentRun() {
     if (!state.current) return null;
+    const traced = tracedRun();
+    if (traced && runFitsFlow(traced)) return traced;
     return state.runs.find((run) => run.circuit_id === state.current.id) || null;
+  }
+
+  // The run stage behind a board node, or null when no trace is armed for
+  // this flow. Stage ids equal node ids for every circuit-backed Flow; a
+  // decomposed system's children run as `parent__child`, the same suffix
+  // rule the spatial view's stageStatus has always used.
+  function runStage(nodeId) {
+    const run = tracedRun();
+    if (!run || !runFitsFlow(run)) return null;
+    const stages = run.stages || {};
+    if (stages[nodeId]) return stages[nodeId];
+    const nested = Object.entries(stages)
+      .find(([stageId]) => stageId.endsWith(`__${nodeId}`));
+    return nested ? nested[1] : null;
+  }
+
+  function stopTrace() {
+    if (!state.trace) return;
+    state.trace = null;
+    if (state.current?.kind === "trace") state.current = null;
+    renderBoard();
+    renderSpatial();
+    renderTraceBar();
+    renderIdentity();
+  }
+
+  function renderTraceBar() {
+    const bar = q("#forge-trace");
+    if (!bar) return;
+    const run = tracedRun();
+    bar.hidden = !run;
+    bar.replaceChildren();
+    if (!run) return;
+    const defs = run.stages_def || [];
+    const states = run.stages || {};
+    const done = defs.filter((d) => (states[d.id] || {}).status === "done").length;
+    const grades = defs.map((d) => (states[d.id] || {}).grade).filter(Boolean);
+    bar.appendChild(make("i", `forge-trace-dot is-${run.status || "done"}`));
+    const label = make("span", "forge-trace-label");
+    label.appendChild(make("strong", "",
+      `Tracing ${run.circuit_name || run.circuit_id || "run"}`));
+    label.appendChild(make("small", "", [
+      run.id,
+      run.status === "running"
+        ? `running — ${done}/${defs.length || Object.keys(states).length} steps done`
+        : run.status,
+      grades.length ? `graded ${grades.join(", ")}` : "",
+    ].filter(Boolean).join(" · ")));
+    bar.appendChild(label);
+    const stop = make("button", "fchip sm", "Stop tracing");
+    stop.type = "button";
+    stop.addEventListener("click", stopTrace);
+    bar.appendChild(stop);
+  }
+
+  /* A run can outlive its circuit (a deleted Flow — builtins and saved
+     Flows always graph via /api/flows). The trace then compiles the run's
+     OWN frozen stages_def into a display graph: topo columns from `needs`
+     (the same deterministic layout the server's flows._layout uses),
+     judge/logic/approval/output modes as their node types. Marked kind
+     "trace" so nothing offers to save or launch a ghost. */
+  function traceFlowFromRun(run) {
+    const defs = (run.stages_def || []).filter((d) => d && d.id);
+    const byId = Object.fromEntries(defs.map((d) => [d.id, d]));
+    const depth = {};
+    const visit = (sid, seen) => {
+      if (depth[sid] != null) return depth[sid];
+      seen = new Set(seen || []);
+      if (seen.has(sid)) return 0;
+      seen.add(sid);
+      const needs = (byId[sid].needs || []).filter((n) => byId[n]);
+      depth[sid] = needs.length
+        ? Math.max(...needs.map((n) => visit(n, seen))) + 1 : 0;
+      return depth[sid];
+    };
+    defs.forEach((d) => visit(d.id));
+    const rows = {};
+    const nodes = defs.map((d) => {
+      const col = depth[d.id] || 0;
+      const row = rows[col] || 0;
+      rows[col] = row + 1;
+      const mode = d.mode;
+      const type = ["judge", "logic", "approval", "output", "native"]
+        .includes(mode) ? mode : "agent";
+      return {
+        id: d.id, type, name: d.name || d.id,
+        description: "From the run's frozen stage definition.",
+        x: 150 + col * 310, y: 130 + row * 180, width: 244, height: 148,
+        model: d.model || "", mode: d.mode || "",
+        read_only: Boolean(d.read_only), prompt: d.prompt || "",
+        judge: copy(d.judge || {}), locked: true, source: "trace",
+      };
+    });
+    const edges = [];
+    defs.forEach((d) => (d.needs || []).forEach((need) => {
+      if (byId[need]) edges.push({
+        id: `edge:${need}:${d.id}`, from: need, to: d.id,
+        from_port: "result", to_port: "input",
+        label: "", instructions: "", direction: "forward",
+      });
+    }));
+    return {
+      id: run.circuit_id || `trace:${run.id}`, trace_run: run.id,
+      name: run.circuit_name || run.circuit_id || "Traced run",
+      description: "This Flow's definition is gone — the board shows the "
+        + "run's own frozen stages.",
+      kind: "trace", builtin: false, revision: 1,
+      nodes, edges, contexts: [], triggers: [], executable: false,
+    };
+  }
+
+  /** The one entry point app.js calls: load the run's circuit onto the
+   *  board and arm the trace overlay. */
+  async function traceRun(runId) {
+    if (!runId) return;
+    if (!state.ready) await loadForge();
+    let run = state.runs.find((r) => r.id === runId);
+    if (!run) {
+      // The shared runs fetch is a window of the newest 24; a traced run
+      // may sit past it, so reach for the full retained set once.
+      try {
+        const data = await request("/api/circuits/runs?limit=200");
+        if (data.runs?.length) state.runs = data.runs;
+        run = state.runs.find((r) => r.id === runId);
+      } catch (error) { /* the honest refusal below covers it */ }
+    }
+    if (!run) return toast("That run is no longer on the record.");
+    const flow = state.flows.find((f) => f.id === run.circuit_id);
+    if (flow) {
+      if (state.current?.id !== flow.id) await selectFlow(flow.id);
+      if (state.current?.id !== flow.id) return;   // dirty-guard declined
+    } else {
+      if (state.dirty && !await forgeDialog({
+        title: "Trace this run?",
+        message: "This instance has unsaved changes. Discard them and show "
+          + "the traced run's own stage graph?",
+        confirm: "Discard changes",
+      })) return;
+      state.current = traceFlowFromRun(run);
+      state.selectedNode = null;
+      state.selectedEdge = null;
+      setDirty(false);
+    }
+    state.trace = { runId: run.id, run, sig: "" };
+    setView("board");
+    renderAll();
+    // The overlay follows the existing runs refresh — loadRuns arms the
+    // 3s live poll while the run is running; no poller of its own.
+    loadForgeRuns();
   }
 
   function renderSpatial() {
@@ -464,11 +644,15 @@
     q("#forge-flow-description").textContent = flow?.description
       || "Operational systems, reusable starters, and every part that makes them run.";
     q("#forge-flow-revision").textContent = flow ? `v${flow.revision || 1}` : "";
-    q("#forge-save").disabled = !flow || flow.kind === "native";
+    // A traced ghost (kind "trace") is the board of a DELETED circuit —
+    // there is nothing to save it over and nothing for a launch to run, so
+    // every control that would act on a definition goes dark.
+    const ghost = flow?.kind === "trace";
+    q("#forge-save").disabled = !flow || flow.kind === "native" || ghost;
     q("#forge-save").textContent = flow?.id ? "Save instance" : "Save";
-    q("#forge-save-as").disabled = !flow;
-    q("#forge-test").disabled = !flow;
-    q("#forge-run").disabled = !flow;
+    q("#forge-save-as").disabled = !flow || ghost;
+    q("#forge-test").disabled = !flow || ghost;
+    q("#forge-run").disabled = !flow || ghost;
     syncTools();
   }
 
@@ -800,6 +984,28 @@
     if (node.locked) tags.appendChild(make("span", "", "source locked"));
     body.appendChild(tags);
     card.appendChild(body);
+
+    // The trace overlay: this run's state, painted on the flow's own card.
+    // Status is a flag riding the card's top edge; a graded judge wears the
+    // grade beside it; a stage that ran opens its terminal on click.
+    const stage = runStage(node.id);
+    if (stage) {
+      const status = stage.status || "pending";
+      card.classList.add("has-run", `run-${status}`);
+      const badge = make("span", "forge-run-badge", status);
+      if (stage.job_id) {
+        badge.classList.add("is-open");
+        badge.title = "Open this stage's terminal";
+        badge.addEventListener("pointerdown", (event) => event.stopPropagation());
+        badge.addEventListener("click", (event) => {
+          event.stopPropagation();
+          window.openSession?.(stage.job_id);
+        });
+      }
+      card.appendChild(badge);
+      if (stage.grade) card.appendChild(
+        make("span", "forge-run-grade", stage.grade));
+    }
 
     if (node.expanded) card.appendChild(nodeEditor(node));
     const inputs = nodePorts(node, "in");
@@ -1477,7 +1683,15 @@
       active = null;
       card.classList.remove("is-dragging");
       if (moved) setDirty();
-      else toggleNode(node.id);
+      else {
+        // While a trace is armed, a click on a stage that ran opens that
+        // stage's terminal — the run is what the owner is here to read.
+        // Stages that never launched (and every non-stage part) keep the
+        // ordinary expand gesture.
+        const stage = runStage(node.id);
+        if (stage?.job_id) window.openSession?.(stage.job_id);
+        else toggleNode(node.id);
+      }
     };
     head.addEventListener("pointerup", finish);
     head.addEventListener("pointercancel", () => { active = null; card.classList.remove("is-dragging"); });
@@ -1633,7 +1847,16 @@
       path.setAttribute("d", shape.path);
       const layerMuted = state.boardLayerFocus
         && (!state.boardLayerFocus.has(edge.from) || !state.boardLayerFocus.has(edge.to));
-      path.setAttribute("class", `forge-wire${edge.id === state.selectedEdge ? " is-selected" : ""}${edge.direction === "both" ? " is-both" : ""}${layerMuted ? " is-layer-muted" : ""}`);
+      // Trace overlay on the handoff itself: the wire INTO a running stage
+      // pulses (the active handoff), a wire whose source stage finished
+      // reads settled green. Same rule the 3D board's drawWire has always
+      // applied, expressed as classes so reduced-motion can switch the
+      // pulse off in CSS while the state stays readable.
+      const fromStage = runStage(edge.from);
+      const toStage = runStage(edge.to);
+      const runLive = fromStage?.status === "running" || toStage?.status === "running";
+      const runDone = fromStage?.status === "done";
+      path.setAttribute("class", `forge-wire${edge.id === state.selectedEdge ? " is-selected" : ""}${edge.direction === "both" ? " is-both" : ""}${layerMuted ? " is-layer-muted" : ""}${runLive ? " is-run-live" : (runDone ? " is-run-done" : "")}`);
       path.addEventListener("click", (event) => { event.stopPropagation(); openEdgeInspector(edge); });
       path.addEventListener("dblclick", (event) => { event.stopPropagation(); openEdgeInspector(edge); });
       svg.append(hit, path);
@@ -1983,6 +2206,22 @@
 
   function setRuns(runs) {
     state.runs = runs || [];
+    if (state.trace) {
+      const fresh = state.runs.find((run) => run.id === state.trace.runId);
+      if (fresh) state.trace.run = fresh;
+      const run = tracedRun();
+      // Repaint the board only when the run's overlay-visible state moved
+      // (the runsSig discipline): a blind repaint every 3s poll would tear
+      // an open node editor out from under the owner's typing.
+      const sig = run ? JSON.stringify([run.status,
+        Object.entries(run.stages || {}).map(([sid, s]) =>
+          [sid, s.status, s.grade || "", s.job_id || ""])]) : "";
+      if (sig !== state.trace.sig) {
+        state.trace.sig = sig;
+        renderBoard();
+        renderTraceBar();
+      }
+    }
     renderSpatial();
   }
 
@@ -2331,5 +2570,6 @@
   window.loadForgeRuns = loadForgeRuns;
   window.initForge = () => { bind(); };
   window.Forge = { state, load: loadForge, selectFlow, render: renderAll,
-    setLibrary: switchLibrary, openLibrary, openIdea, setRuns };
+    setLibrary: switchLibrary, openLibrary, openIdea, setRuns,
+    traceRun, stopTrace };
 })();
