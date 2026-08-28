@@ -87,6 +87,59 @@ class IndexTest(Base):
         self.assertIn("New Person", names)
 
 
+class QualifierTest(Base):
+    """A qualifier is rendered as a bare string in a pill, so markup that
+    survives is shown literally. Measured 2026-08-28: 80 of the live
+    vault's 182 person pages open with a marked-up line — 66 a bolded
+    employer, one a markdown link."""
+
+    def test_markup_is_unwrapped_in_the_index_not_just_the_helper(self):
+        (self.wiki / "river-stone.md").write_text(
+            '---\ntitle: "River Stone"\ntype: person\n---\n\n# River Stone\n\n'
+            "Founder of **Northwind Capital**, author of "
+            "[Some Piece](https://example.com/x) and a *recurring* voice.\n",
+            encoding="utf-8")
+        os.utime(self.wiki, (0, 9999999999))
+        idx = vaultpeople.people_index(self.root)
+        entry = next(e for e in idx if e["name"] == "River Stone")
+        self.assertEqual(entry["qualifier"],
+                         "Founder of Northwind Capital, author of "
+                         "Some Piece and a recurring voice.")
+
+    def test_wikilinks_still_win_their_label(self):
+        self.assertEqual(
+            vaultpeople._clean_qualifier("[[claude-code|Claude Code]] lead"),
+            "Claude Code lead")
+
+    def test_underscores_inside_a_word_are_not_emphasis(self):
+        # snake_case_name is an identifier; mangling it would be worse than
+        # leaving the markup, because the reader cannot tell it was changed.
+        self.assertEqual(
+            vaultpeople._clean_qualifier("Wrote snake_case_name and a_b."),
+            "Wrote snake_case_name and a_b.")
+
+    def test_a_lone_marker_is_left_alone(self):
+        self.assertEqual(
+            vaultpeople._clean_qualifier("Rated 5 * overall, 60% _ish_."),
+            "Rated 5 * overall, 60% ish.")
+
+    def test_nested_emphasis_unwraps_completely(self):
+        self.assertEqual(
+            vaultpeople._clean_qualifier("**Bold _and_ italic** together."),
+            "Bold and italic together.")
+
+    def test_plain_prose_is_untouched(self):
+        plain = "Product lead at Anthropic; no markup here at all."
+        self.assertEqual(vaultpeople._clean_qualifier(plain), plain)
+
+    def test_the_cap_applies_after_stripping(self):
+        # Otherwise the markers spend the budget and the pill is cut short.
+        line = "**" + ("word " * 60).strip() + "**"
+        got = vaultpeople._clean_qualifier(line)[:vaultpeople.QUALIFIER_CAP]
+        self.assertNotIn("*", got)
+        self.assertEqual(len(got), vaultpeople.QUALIFIER_CAP)
+
+
 class SearchTest(Base):
     def test_word_prefix_outranks_substring(self):
         # "wu" prefixes Cat Wu's surname; a substring-only match would tie.
