@@ -894,7 +894,101 @@ body > .forge-library.is-detached .forge-panel-head:active { cursor: grabbing; }
   .forge-launchbar label:nth-child(2) { display: none; }
 }
 
+/* ---- Run trace overlay --------------------------------------------------
+   A selected run painted onto the flow's own board. Node cards wear one
+   run-<status> class per circuits stage status (the contract test pins a
+   rule for every entry in STAGE_STATUSES), the active handoff wire pulses,
+   and a graded judge wears its grade chip. Tokens only — a skin repaints
+   the trace with the board. */
+
+/* The bar never wraps on its own (status is the shrinkable middle); the
+   basis-100% trace row is what needs the wrap to take its own line. */
+.forge-boardbar { flex-wrap: wrap; }
+.forge-tracebar {
+  /* full-width row of the bar, and SHRINKABLE with min-width 0 — a rigid
+     basis-100% item grows to its min-content and shoves the Stop button
+     off a 402px screen (the min-width:auto trap, measured) */
+  flex: 1 1 100%; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 3px; padding: 6px 4px 2px;
+  border-top: 1px solid var(--line);
+}
+.forge-trace-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-faint);
+}
+.forge-trace-dot.is-running {
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: forgeTracePulse 1.4s ease-in-out infinite;
+}
+.forge-trace-dot.is-done { background: var(--green); }
+.forge-trace-dot.is-error, .forge-trace-dot.is-canceled { background: var(--red); }
+.forge-trace-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1 1 0; }
+.forge-trace-label strong {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
+  font-size: 11px; color: var(--text); white-space: nowrap;
+}
+.forge-trace-label small {
+  flex: 0 1 auto; min-width: 0;
+  font: 9px var(--mono); color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.forge-run-badge {
+  position: absolute; top: -9px; right: 10px; z-index: 3;
+  display: inline-flex; align-items: center;
+  padding: 2px 7px;
+  font: 600 8px var(--mono); text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-dim);
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-raised);
+}
+.forge-run-badge.is-open { cursor: pointer; }
+.forge-run-badge.is-open:hover { border-color: var(--accent-line); color: var(--text); }
+.forge-run-grade {
+  position: absolute; top: -10px; left: 10px; z-index: 3;
+  padding: 2px 6px;
+  font: 700 9px var(--mono);
+  color: var(--accent-bright);
+  border: 1px solid var(--accent-line); border-radius: 8px;
+  background: var(--bg-raised);
+}
+
+.forge-node.run-pending .forge-run-badge { opacity: .6; }
+.forge-node.run-running {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 26px var(--accent-glow),
+              0 12px 30px var(--scrim);
+}
+.forge-node.run-running .forge-run-badge {
+  color: var(--accent-bright); border-color: var(--accent-line);
+  animation: forgeTracePulse 1.4s ease-in-out infinite;
+}
+.forge-node.run-waiting { border-color: var(--accent-line); }
+.forge-node.run-waiting .forge-run-badge { color: var(--accent-bright); }
+.forge-node.run-done { border-color: var(--green-line); }
+.forge-node.run-done .forge-run-badge { color: var(--green); border-color: var(--green-line); }
+.forge-node.run-error { border-color: var(--red-line); }
+.forge-node.run-error .forge-run-badge { color: var(--red); border-color: var(--red-line); }
+.forge-node.run-skipped { opacity: .55; }
+.forge-node.run-skipped .forge-run-badge { color: var(--text-faint); }
+
+.forge-wire.is-run-live {
+  stroke: var(--accent-bright); stroke-width: 2.6;
+  stroke-dasharray: 10 7;
+  animation: forgeWireFlow 1s linear infinite;
+}
+.forge-wire.is-run-done { stroke: var(--green); opacity: .8; }
+
+@keyframes forgeTracePulse { 50% { opacity: .45; } }
+@keyframes forgeWireFlow { to { stroke-dashoffset: -17; } }
+
 @media (prefers-reduced-motion: reduce) {
   .forge-port { transition: none; }
   .forge-spatial canvas { scroll-behavior: auto; }
+  .forge-trace-dot.is-running,
+  .forge-node.run-running .forge-run-badge,
+  .forge-wire.is-run-live { animation: none; }
 }

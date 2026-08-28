@@ -3774,6 +3774,49 @@ a.sub-name:hover { color: var(--accent); text-decoration: underline; }
 }
 .run-stage > span { font: 9px var(--mono); color: var(--text-faint); }
 .run-stage.is-clickable { cursor: pointer; }
+
+/* The mini stage strip — one dot per stage in topo order, on every surface
+   a flow run renders (Record cards, Attention rows). Clicking it traces the
+   run on the Forge board. The is-* classes are circuits' stage vocabulary;
+   tests/test_flow_trace_contract.py pins a rule here for every status. */
+.stagestrip {
+  display: inline-flex; align-items: center; gap: 4px;
+  /* the strip is the SHRINKABLE flex item and its dots wrap — a 36-stage
+     run must never widen a card on a phone (the min-width:auto trap) */
+  flex: 0 1 auto; min-width: 0;
+  max-width: 100%; flex-wrap: wrap;
+  padding: 2px 6px; margin: 0;
+  background: none; border: 1px solid transparent; border-radius: 9px;
+  cursor: pointer;
+}
+.stagestrip:hover {
+  border-color: var(--accent-line); background: var(--bg-raised);
+}
+.ss-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--line);
+  font: 700 7px/9px var(--mono); text-align: center;
+  color: var(--accent-contrast);
+}
+.ss-dot.is-pending { background: var(--line); }
+.ss-dot.is-running { background: var(--accent-bright);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  animation: ssPulse 1.3s ease-in-out infinite; }
+.ss-dot.is-waiting { background: var(--accent); }
+.ss-dot.is-done { background: var(--green); }
+.ss-dot.is-error { background: var(--red); }
+.ss-dot.is-skipped { background: var(--line); opacity: .45; }
+/* A judge dot is squared and dash-ringed — the same visual grammar as the
+   circuit graph's judge chips — and widens to carry its grade letter. */
+.ss-dot.ss-judge {
+  border-radius: 2px; outline: 1px dashed var(--text-faint);
+  outline-offset: 1px; width: auto; min-width: 8px; height: 9px;
+  padding: 0 1px;
+}
+@keyframes ssPulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) {
+  .ss-dot.is-running { animation: none; }
+}
 .run-approval {
   display: grid; grid-template-columns: minmax(90px, 1fr) auto auto;
   gap: 4px; margin-top: 7px;

@@ -222,11 +222,17 @@
       });
     }
 
-    function stageStatus(nodeId) {
+    function stageRecord(nodeId) {
       const stages = scene.run?.stages || {};
-      if (stages[nodeId]) return stages[nodeId].status || "pending";
+      if (stages[nodeId]) return stages[nodeId];
       const nested = Object.entries(stages).find(([stageId]) => stageId.endsWith(`__${nodeId}`));
-      return nested?.[1]?.status || "idle";
+      return nested?.[1] || null;
+    }
+
+    function stageStatus(nodeId) {
+      const record = stageRecord(nodeId);
+      if (!record) return "idle";
+      return record.status || "pending";
     }
 
     function statusColor(status, base, colors) {
@@ -351,9 +357,13 @@
       const name = String(node.name || node.id || node.type).slice(0, 25);
       ctx.fillText(name, center.x, center.y + 22 * center.scale + 6);
       if (status !== "idle") {
+        // A graded judge names its grade on the same status line — the
+        // cheapest true rendering of the verdict this view can carry.
+        const grade = stageRecord(node.id)?.grade;
         ctx.fillStyle = accent;
         ctx.font = "600 7px ui-monospace, SFMono-Regular, Menlo, monospace";
-        ctx.fillText(status.toUpperCase(), center.x, center.y + 34 * center.scale + 8);
+        ctx.fillText(status.toUpperCase() + (grade ? ` · ${grade}` : ""),
+          center.x, center.y + 34 * center.scale + 8);
       }
       ctx.restore();
 
