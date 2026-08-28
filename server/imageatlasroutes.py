@@ -14,7 +14,7 @@ import io
 import os
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from . import atlasops, imageatlas
@@ -96,7 +96,24 @@ def _file(p, cache: bool = False):
 def viewer_index():
     if imageatlas.VIEWER_DIR is None:
         raise HTTPException(503, "chaska is not installed")
-    return _file(imageatlas.VIEWER_DIR / "index.html")
+    p = imageatlas.VIEWER_DIR / "index.html"
+    if not p.is_file():
+        raise HTTPException(404, "not found")
+    # Chaska owns the standalone viewer. Vira adds only the shell-specific
+    # phone chrome here, keeping the engine and its vendored document intact.
+    # Absolute asset paths work both in the embedded window and a full tab.
+    html = p.read_text(encoding="utf-8")
+    enhancement = (
+        '<link rel="stylesheet" href="/imageatlas-mobile.css">\n'
+        '<script src="/imageatlas-mobile.js" defer></script>\n'
+    )
+    if "</head>" not in html:
+        raise HTTPException(500, "image atlas viewer has no document head")
+    html = html.replace("</head>", enhancement + "</head>", 1)
+    return HTMLResponse(
+        html,
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/imageatlas/atlases.json")
