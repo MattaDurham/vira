@@ -1,12 +1,47 @@
 # If you are an AI agent in the Vira repo
 
-Two different jobs land an agent here. Take the section that matches yours:
+Three different jobs land an agent here. Take the section that matches yours:
 
 - **Installing Vira for someone** — the "Installing" section below is the
   whole job.
-- **Changing the code** — a dispatched task, a feature, a fix, a review:
+- **Adding research, documents, or other owner content to this Vira
+  instance** — use "Adding local content" below. Local content is not a
+  public product change just because Vira can display it.
+- **Changing the public code or reusable product** — a dispatched task, a
+  feature, a fix, a review:
   jump to "Working on the code" at the end. The installing section's
   advice does not apply to you.
+
+If a request could reasonably mean either local content or a public product
+change, ask the owner which destination they intend before writing anything.
+"Safe to publish" is not permission to publish. A mixed request can use both
+paths, but keep its local content and public implementation separate.
+
+# Adding local content
+
+This path is for research, Markdown, HTML dossiers, plans, and other material
+the owner wants available in their installed Vira. Do not create a feature
+branch or copy the content into tracked files unless the owner also asked to
+change the public product.
+
+| Content | Canonical local home | How Vira finds it |
+|---|---|---|
+| Searchable Markdown or research | The configured `vault_root` in the appropriate vault folder | Find indexes it on the normal vault scan |
+| A self-contained HTML dossier | `python -m server.sitedocs add "<title>" <directory>` | The command copies it into git-ignored `static/docs/`, records it, and registers it with Reader |
+| Documents that should remain in an existing external folder | A configured `reader_sources` folder | Reader keeps a soft pointer to the source file |
+| Generated indexes, queues, thumbnails, and application state | `data/` | Vira owns and regenerates these; they are never the canonical document |
+
+For a paired HTML and Markdown artifact, use both relevant homes: register the
+portable HTML dossier with `server.sitedocs`, and place the Markdown edition
+in the connected vault. Preserve existing vault frontmatter, links, and local
+organization when refreshing a page. Personal or owner-only content never
+enters git, even when every individual sentence would be harmless in public.
+
+If the requested content cannot be added through an existing local path, stop
+and explain the missing capability. A new public feature needs a topic-neutral,
+native setup path that another user can discover and use with their own
+content. Do not turn one owner's document into a hard-coded product feature
+merely to make that document appear locally.
 
 # Installing
 
