@@ -52,6 +52,13 @@ DEFAULTS = {
     "graph_email": "",                   # default account for Connect M365 + cockpit banner
     "owner_name": "",                    # greeting name in the cockpit banner
     "notify_handle": "",                 # iMessage handle for pings; empty = notifications dormant
+    # The reply channel (server/inbound.py): the self-thread read as a
+    # command line. Dormant without notify_handle, like every sender.
+    "imessage_reply_enabled": True,
+    # Machine senders that are neither notify.py nor prefixed "Vira: " —
+    # extends inbound.MACHINE_PREFIXES so their texts are never read as
+    # the owner talking. Match is a prefix, not a substring.
+    "inbound_ignore_prefixes": [],
     "family_calendars": [],              # calendar names tagged "family" in the brief
     "brief_remote_events": [],           # event-title substrings treated as remote/virtual
                                          # (a remote event never conflicts with an in-person one)

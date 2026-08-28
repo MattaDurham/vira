@@ -355,6 +355,17 @@ class Watcher:
                                 dead.append(q)
                         for q in dead:
                             self.listeners.remove(q)
+                    # The self-thread loops back, so the owner's own replies
+                    # are already in `new` (is_from_me=0 like any inbound).
+                    # The reply channel rides this tick rather than opening a
+                    # second sqlite cycle to re-read rows we just fetched.
+                    # Outside the lock, and it never raises: a reply that
+                    # cannot be routed must not stop the feed.
+                    try:
+                        from . import inbound
+                        inbound.consume(new)
+                    except Exception:  # noqa: BLE001
+                        pass
             except sqlite3.OperationalError:
                 self.ok = False  # db locked or unreadable this tick; retry next poll
             self._stop.wait(self.poll)

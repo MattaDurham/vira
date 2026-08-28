@@ -34,12 +34,26 @@ LOG = _DATA / "notify-log.json"
 SENDER_COOLDOWN = 6 * 3600
 DAILY_CAP = 20
 
+# Every Vira-originated message in the self-thread MUST start with this.
+# It is half of the reply channel's echo filter (server/inbound.py): the
+# thread loops back — a message sent to your own number lands AGAIN as
+# is_from_me=0 — and chat.db carries no column that separates Vira's send
+# from the owner's (measured 2026-08-28: service, account, is_sent,
+# destination_caller_id and every other candidate are byte-identical
+# across the two). Text is the only discriminator there is.
+VIRA_PREFIX = "Vira: "
+
+# Conversational replies are not notifications: they answer something the
+# owner just said, so they bypass the sender cooldown and the notification
+# cap and carry their own runaway backstop instead.
+REPLY_DAILY_CAP = 60
+
 _lock = threading.Lock()
 
 
 def config():
     try:
-        cfg = json.loads(CONFIG.read_text())
+        cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         cfg = {}
     return {
@@ -52,7 +66,7 @@ def config():
 def save_config(updates):
     with _lock:
         try:
-            cfg = json.loads(CONFIG.read_text())
+            cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             cfg = {}
         if "enabled" in updates:
@@ -60,20 +74,20 @@ def save_config(updates):
         if "handle" in updates and updates["handle"] is not None:
             cfg["notify_handle"] = str(updates["handle"]).strip()
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG.write_text(json.dumps(cfg, indent=2))
+        CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return config()
 
 
 def _load_log():
     try:
-        return json.loads(LOG.read_text())
+        return json.loads(LOG.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"sent": []}
 
 
 def _save_log(log):
     LOG.parent.mkdir(parents=True, exist_ok=True)
-    LOG.write_text(json.dumps(log, indent=1))
+    LOG.write_text(json.dumps(log, indent=1), encoding="utf-8")
 
 
 def recent(limit=40):
@@ -138,7 +152,16 @@ def maybe_notify(item):
     if why:
         return
     subject = item.get("subject") or (item.get("text") or "")[:80]
-    text = f"Vira: {person['name']} emailed — {subject[:140]}"
+    text = f"{VIRA_PREFIX}{person['name']} emailed — {subject[:140]}"
+    item = dict(item, ref={
+        "kind": "email",
+        "account": item.get("account") or "",
+        "rowid": item.get("rowid") or "",
+        "subject": subject,
+        "from_addr": item.get("from_addr") or "",
+        "person_id": item.get("person_id") or "",
+        "person_name": person["name"],
+    })
     threading.Thread(target=_send, args=(cfg["handle"], text, item),
                      daemon=True, name="vira-notify").start()
 
@@ -174,6 +197,11 @@ def _send(handle, text, item):
         "person_name": item.get("person_name"),
         "channel": item.get("channel"),
         "text": text,
+        # What this notification was ABOUT, in enough detail to act on it
+        # later. A bare "Reply yes" is meaningless without it: the reply
+        # channel binds an answer to the newest notification, and RSVPing
+        # an invite needs the account and uid of the mail it rode in on.
+        "ref": item.get("ref") or None,
         "ok": False,
     }
     via = []
@@ -248,6 +276,112 @@ def subs_renewals():
         return sent
     finally:
         conn.close()
+
+
+def channel_send(text, kind="reply", ref=None):
+    """Say something back in the self-thread.
+
+    The conversational counterpart to the notification senders above, and
+    the ONLY path server/inbound.py answers on. Three differences from a
+    notification, each deliberate:
+
+    * The VIRA_PREFIX is enforced rather than assumed. It is half of the
+      echo filter, so a reply that lost it would be read back as the owner
+      talking and routed as an instruction — the runaway-loop failure.
+    * It is recorded BEFORE the send, not after. The loopback row can be in
+      chat.db within milliseconds; recording afterwards leaves a window in
+      which Vira's own words are indistinguishable from the owner's. A
+      phantom entry from a failed send is harmless (it suppresses a message
+      that was never delivered and that nobody typed).
+    * It bypasses the sender cooldown and the notification cap — answering
+      a question the owner just asked is not a notification — and carries
+      REPLY_DAILY_CAP as its own runaway backstop instead.
+    """
+    cfg = config()
+    if not cfg["enabled"] or not cfg["handle"]:
+        return False
+    body = text if text.startswith(VIRA_PREFIX) else VIRA_PREFIX + text
+    body = body[:1400]
+    today = datetime.now().date().isoformat()
+    sent = _load_log().get("sent", [])
+    if sum(1 for e in sent if e.get("channel") == kind
+           and (e.get("at") or "").startswith(today)) >= REPLY_DAILY_CAP:
+        return False
+    entry = {
+        "at": datetime.now().isoformat(timespec="seconds"),
+        "person_id": f"channel:{kind}",
+        "person_name": "Vira",
+        "channel": kind,
+        "text": body,
+        "ref": ref,
+        "ok": False,
+    }
+    _record(entry)
+    from . import send
+    try:
+        send.send_imessage(body, handle=cfg["handle"])
+    except Exception as e:  # noqa: BLE001 — never crash the reply channel
+        with _lock:
+            log = _load_log()
+            for row in reversed(log.get("sent", [])):
+                if row is not entry and row.get("at") == entry["at"] \
+                        and row.get("text") == body:
+                    row["error"] = str(e)[:200]
+                    break
+            _save_log(log)
+        return False
+    with _lock:
+        log = _load_log()
+        for row in reversed(log.get("sent", [])):
+            if row.get("text") == body and row.get("channel") == kind:
+                row["ok"] = True
+                row["via"] = ["imessage"]
+                break
+        _save_log(log)
+    return True
+
+
+def sent_texts(window_s=1800):
+    """Every message Vira has put in the thread recently, exact text.
+
+    The precise half of the echo filter. chat.db carries NO column that
+    separates a Vira send from an owner send in this thread (measured
+    2026-08-28: service, account, is_sent, is_delivered and
+    destination_caller_id are byte-identical across the two), so the only
+    discriminator available is what Vira knows it said.
+    """
+    now = time.time()
+    out = []
+    for e in _load_log().get("sent", []):
+        t = e.get("text")
+        if not t:
+            continue
+        try:
+            at = datetime.fromisoformat(e["at"]).timestamp()
+        except (KeyError, ValueError):
+            continue
+        if now - at <= window_s:
+            out.append(t)
+    return out
+
+
+def recent_refs(window_s=6 * 3600, kind=None):
+    """What Vira has notified about recently, newest first — the context a
+    bare reply like "yes" is answering. `kind` filters to one ref kind."""
+    now = time.time()
+    out = []
+    for e in reversed(_load_log().get("sent", [])):
+        ref = e.get("ref")
+        if not ref or (kind and ref.get("kind") != kind):
+            continue
+        try:
+            at = datetime.fromisoformat(e["at"]).timestamp()
+        except (KeyError, ValueError):
+            continue
+        if now - at > window_s:
+            break
+        out.append({"at": e.get("at"), "text": e.get("text"), "ref": ref})
+    return out
 
 
 def send_test(handle=None):
