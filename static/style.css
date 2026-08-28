@@ -63,7 +63,7 @@
   --term-tool: #d8c3af;
   --term-code: #eab68f;
   --term-dot: #4b463f;
-  --radius: 10px;            /* engineered, not designed */
+  --radius: 13px;            /* engineered, not designed */
   --pad: 16px;
   /* the phone's access bar: its height is a layout constant, because the
      column's bottom padding, the scroll fade and every full-height frame
@@ -2764,7 +2764,7 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
     flex-direction: column;
     background: var(--bg-window);
     backdrop-filter: blur(18px);
-    border: 1px solid var(--line); border-radius: 2px;
+    border: 1px solid var(--line); border-radius: 12px;
     box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
     opacity: 0; transform: scale(.92);
     transition: opacity .18s ease, transform .18s ease, filter .3s ease;
