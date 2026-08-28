@@ -63,7 +63,7 @@
   --term-tool: #d8c3af;
   --term-code: #eab68f;
   --term-dot: #4b463f;
-  --radius: 2px;            /* engineered, not designed */
+  --radius: 13px;            /* engineered, not designed */
   --pad: 16px;
   /* the phone's access bar: its height is a layout constant, because the
      column's bottom padding, the scroll fade and every full-height frame
