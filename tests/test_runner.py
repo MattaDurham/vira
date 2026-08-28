@@ -713,5 +713,30 @@ class AskOwnerTests(RunnerCase):
         self.assertIn("[you] Hold", out)
 
 
+class TurnBoundaryResult(unittest.TestCase):
+    """A parked session's answer must be readable WHILE it is parked.
+
+    A SOURCE CONTRACT, deliberately: the assignment lives inside
+    run_session's engine loop, and driving that loop to the park runs the
+    epilogue, which writes the real job ledger — a test that reaches it
+    would not be isolated. What matters here is an ORDERING (the result is
+    published before the park begins), which the source states exactly.
+    The behaviour that depends on it is covered for real in
+    tests/test_inbound.py::Follower.
+    """
+
+    def test_the_result_is_published_before_the_session_parks(self):
+        src = (Path(__file__).resolve().parent.parent
+               / "server" / "runner.py").read_text(encoding="utf-8")
+        body = src[src.index("async def run_session"):]
+        park = body.index("await self.await_reply()")
+        publish = body.rfind('self.state["result_text"]', 0, park)
+        self.assertNotEqual(
+            publish, -1,
+            "run_session parks without publishing the turn's result_text — "
+            "a parked session then reports an empty answer, and anything "
+            "reading it at the turn boundary sends nothing")
+
+
 if __name__ == "__main__":
     unittest.main()

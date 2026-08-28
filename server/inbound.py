@@ -58,6 +58,10 @@ BIND_HOURS = 6
 # A message Vira sent within this window is its own echo, not the owner.
 ECHO_WINDOW_S = 1800
 LOG_KEEP = 200
+# How long one follower watches a session. A parked session stays open for
+# session_reply_window_hours (12), and its whole point is that the owner can
+# answer hours later, so the follower has to outlive the turn that made it.
+FOLLOW_MAX_S = 12 * 3600
 
 # Machine senders that are NOT notify.py and so carry neither the prefix nor
 # a ledger entry. The Morning Picker's daily text is sent by a TC-IL
@@ -70,6 +74,7 @@ CANCEL = {"cancel", "nevermind", "never mind", "stop", "no thanks",
           "forget it", "abort"}
 
 _lock = threading.Lock()
+_following = set()
 
 
 def _cfg(key, default):
@@ -336,6 +341,7 @@ def _steer(jid, text):
     new = (res or {}).get("job") or jid
     if new != jid:
         _bind_session(new)
+    _ensure_follow(new)
     return {"route": "steer", "ok": True, "job": new}
 
 
@@ -396,8 +402,11 @@ this channel:
   first with mcp__vira__ask_owner; the question is texted to him and his
   reply comes back to you.
 * If you need anything clarified, ask the same way rather than guessing.
-* He is reading this on a phone. Your final message is texted to him
-  verbatim, so make it one or two plain sentences, no markdown, no preamble.
+* He is reading this on a phone. Your LAST message is texted to him
+  verbatim and is the only part of this he sees, so end the turn with the
+  message ITSELF — one or two plain sentences, no markdown. Do not
+  introduce it and do not narrate sending it ("Reply sent on the thread:",
+  "here's what I'll say"): that preamble gets texted too.
 """
 
 
@@ -417,32 +426,70 @@ def _dispatch(text):
         notify.channel_send(f"couldn't start on that — {e}", kind="reply")
         return {"route": "dispatch", "ok": False, "detail": str(e)[:300]}
     _bind_session(jid)
-    threading.Thread(target=_follow, args=(jid,), daemon=True,
-                     name="vira-inbound-follow").start()
+    _ensure_follow(jid)
     return {"route": "dispatch", "ok": True, "job": jid}
 
 
-def _follow(jid, timeout_s=900):
-    """Text back the session's answer when it lands.
+def _ensure_follow(jid):
+    """One follower per session, ever.
 
-    Only the FINAL text: the owner asked for a chat, not a transcript.
+    Both entry points arm it — a fresh dispatch and a steer — because a
+    steered session needs its answer carried back exactly as much as a new
+    one does, and `say` can RESUME an ended session under a new id.
+    """
+    if not jid:
+        return
+    with _lock:
+        if jid in _following:
+            return
+        _following.add(jid)
+    threading.Thread(target=_follow, args=(jid,), daemon=True,
+                     name="vira-inbound-follow").start()
+
+
+def _follow(jid, max_s=FOLLOW_MAX_S):
+    """Text back each turn's answer as it lands.
+
+    THE ANSWER ARRIVES AT THE TURN BOUNDARY, NOT AT THE END OF THE RUN.
+    A session that finishes a turn with nothing queued PARKS in its reply
+    window — status stays `running` with awaiting "reply", which is what
+    keeps the conversation open so the owner's next text steers this same
+    session instead of starting a new one. Waiting for a terminal status
+    therefore waits for something that only happens when he says Finish,
+    which is how the first real use of this channel produced a correct
+    answer that was never sent (2026-08-28).
+
+    So it follows for as long as the session lives and sends each NEW
+    completed answer, which is also what makes a multi-turn exchange work:
+    he replies, the session runs again, and that turn's answer comes back
+    down the thread too.
     """
     from . import session
-    end = time.time() + timeout_s
-    while time.time() < end:
-        time.sleep(3)
-        try:
-            snap = session.sessions.get(jid)
-        except Exception:  # noqa: BLE001
-            return
-        if not snap:
-            return
-        if snap.get("status") == "running":
-            continue
-        out = (snap.get("result_text") or "").strip()
-        if out:
-            notify.channel_send(out[:900], kind="reply")
-        return
+    end = time.time() + max_s
+    sent = ""
+    delay = 2.0
+    try:
+        while time.time() < end:
+            time.sleep(delay)
+            delay = min(delay * 1.4, 20.0)   # eager while it works, quiet after
+            try:
+                snap = session.sessions.get(jid)
+            except Exception:  # noqa: BLE001
+                return
+            if not snap:
+                return
+            status = snap.get("status")
+            settled = snap.get("awaiting") == "reply" or status != "running"
+            out = (snap.get("result_text") or "").strip()
+            if settled and out and out != sent:
+                notify.channel_send(out[:900], kind="reply")
+                sent = out
+                delay = 2.0      # a reply may follow; watch closely again
+            if status != "running":
+                return
+    finally:
+        with _lock:
+            _following.discard(jid)
 
 
 # ---------- decision cards raised anywhere reach the phone ----------
