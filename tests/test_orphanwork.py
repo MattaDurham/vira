@@ -658,6 +658,12 @@ class Landing(_BranchShCase):
         self.assertIn("push:", a["output"])
 
     def test_a_dirty_row_dispatches_a_finishing_session_then_merges(self):
+        # mode="finish" is explicit since 2026-08-28: Land's DEFAULT is now
+        # diagnose (it stops and asks before changing anything), so this
+        # case names the mode whose prompt it asserts. The lifecycle it
+        # covers — dirty row -> session -> merge on a clean committed tree
+        # — is the same under both modes; the diagnose default's dispatch
+        # is pinned in tests/test_landdiagnose.py.
         wt = self.make_worktree("d1", commits=1)
         captured = {}
 
@@ -671,7 +677,8 @@ class Landing(_BranchShCase):
              mock.patch("server.joblog.list_records",
                         return_value=[{"id": "job-land-1", "status": "done"}]):
             reg.launch.side_effect = fake_launch
-            jid = orphanwork.land(self._item("d1", worktree=str(wt), dirty=2))
+            jid = orphanwork.land(self._item("d1", worktree=str(wt), dirty=2),
+                                  mode="finish")
             self.assertEqual(jid, "job-land-1")
             a = self._wait("claude/d1")
         self.assertEqual(a["status"], "ok")
@@ -685,6 +692,31 @@ class Landing(_BranchShCase):
         # window — the watcher is waiting on its terminal status.
         self.assertTrue(captured["meta"]["machine"])
         self.assertEqual(captured["meta"]["kind"], "orphan-land")
+
+    def test_the_default_mode_diagnoses_and_still_lands(self):
+        """The new default runs the identical lifecycle — the change is
+        WHAT the session is told, not whether the merge still happens on a
+        clean committed tree."""
+        wt = self.make_worktree("d1b", commits=1)
+        captured = {}
+
+        def fake_launch(prompt, cwd=None, **kw):
+            captured["prompt"] = prompt
+            captured["meta"] = kw.get("meta")
+            return "job-land-1b"
+
+        with mock.patch("server.session.sessions") as reg, \
+             mock.patch("server.joblog.list_records",
+                        return_value=[{"id": "job-land-1b",
+                                       "status": "done"}]):
+            reg.launch.side_effect = fake_launch
+            orphanwork.land(self._item("d1b", worktree=str(wt), dirty=2))
+            a = self._wait("claude/d1b")
+        self.assertEqual(a["status"], "ok")
+        self.assertIn("branch.sh merge d1b", a["output"])
+        self.assertIn("STOP AND ASK", captured["prompt"])
+        self.assertIn("ask_owner", captured["prompt"])
+        self.assertEqual(captured["meta"]["land_mode"], "diagnose")
 
     def test_a_session_that_ends_badly_never_merges(self):
         wt = self.make_worktree("d2", commits=1)

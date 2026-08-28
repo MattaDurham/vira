@@ -30,8 +30,8 @@ from pathlib import Path
 from . import agentbackend, jobfiles, joblog, settings, viratools, worktree
 from .session import (EDIT_TOOLS, OUTPUT_CAP, READ_ONLY_EXCLUDE,
                       _extract_plan_md, _finalize_plan, _mark_idea,
-                      _plan_ref, _sdk_env, _tool_preview, _tool_summary,
-                      norm_mode)
+                      _plan_ref, _scfg, _sdk_env, _tool_preview,
+                      _tool_summary, norm_mode)
 
 # The SDK is required only by the gated (Anthropic) path. A best-effort
 # CLI-exec session must still run on a machine without it, so a failed
@@ -57,6 +57,24 @@ except Exception as e:  # noqa: BLE001 — tolerated for CLI-exec jobs
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = HookMatcher = None
     PermissionResultAllow = PermissionResultDeny = ResultMessage = None
     SystemMessage = TextBlock = ThinkingBlock = ToolUseBlock = None
+
+
+# The floor is the SDK's own default, so a nonsense config value can only
+# ever make the buffer BIGGER than shipping behaviour, never smaller — a
+# misconfiguration must not be able to reintroduce the failure this exists
+# to remove.
+_SDK_DEFAULT_BUFFER = 1024 * 1024
+
+
+def _max_buffer_bytes():
+    """Bytes for ClaudeAgentOptions.max_buffer_size, never below the SDK
+    default. Read per launch (not at import) so a config change reaches the
+    next session without a restart."""
+    try:
+        mb = float(_scfg("session_max_buffer_mb"))
+    except Exception:  # noqa: BLE001 — a bad value must not block a launch
+        mb = 0
+    return max(int(mb * 1024 * 1024), _SDK_DEFAULT_BUFFER)
 
 # Who the mid-turn steering is from, in the words the model will read.
 OWNER_LABEL = settings.get("owner_name") or "The owner"
@@ -697,6 +715,12 @@ class Runner:
             vira_srv = viratools.sdk_server()
             options = ClaudeAgentOptions(
                 cwd=spec["cwd"],
+                # See session.SESSION_DEFAULTS for why this is set at all:
+                # the SDK bounds ONE NDJSON line at 1 MiB by default, and a
+                # message carrying a large file's content exceeds it and
+                # kills the session outright. Left unset, editing this
+                # repo's own static/app.js is unsurvivable.
+                max_buffer_size=_max_buffer_bytes(),
                 model=spec.get("model_resolved") or spec.get("model"),
                 env=_sdk_env(),
                 # CONTINUE an earlier conversation rather than starting one.

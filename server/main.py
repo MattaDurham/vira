@@ -72,7 +72,8 @@ from . import (
                roomvault,
                routines,
                routinesrc,
-               search as msearch, secrets, send, sendpref, session, settings,
+               search as msearch, secrets, send, sendpref, session,
+               sessiondiag, settings,
                genreroutes,
                skins,
                subs_visuals,
@@ -3624,6 +3625,17 @@ class OrphanKeyReq(BaseModel):
     key: str
 
 
+class OrphanLandReq(BaseModel):
+    key: str
+    # "diagnose" (default) reads why the earlier session stopped and asks
+    # before changing anything; "finish" is the old straight-to-work run.
+    mode: str = "diagnose"
+
+
+class OrphanLandAllReq(BaseModel):
+    mode: str = "diagnose"
+
+
 class OrphanDiscardReq(BaseModel):
     key: str
     force: bool = False
@@ -3680,6 +3692,38 @@ def api_orphanwork_context(key: str):
     return orphanwork.context(it)
 
 
+@app.get("/api/orphanwork/land-prompt")
+def api_orphanwork_land_prompt(key: str, mode: str = "diagnose"):
+    """The composed landing prompt with no side effects — for a passive
+    instance, or to paste into another session. Also the honest way to
+    read what a Land would actually say before running one: the diagnose
+    prompt embeds the branch's recorded failures, so this doubles as
+    "why did this stop?" without spending a session."""
+    it = _orphan_item(key)
+    if it is None:
+        raise HTTPException(404, "no such orphan-work item")
+    m = orphanwork.norm_land_mode(mode)
+    prompt = (orphanwork.land_diagnose_prompt(it) if m == "diagnose"
+              else orphanwork.land_prompt(it))
+    return {"prompt": prompt, "mode": m, "cwd": it.get("worktree") or ""}
+
+
+@app.get("/api/orphanwork/failures")
+def api_orphanwork_failures(key: str):
+    """Why this branch's sessions stopped — deterministic, no model call.
+    READ-ONLY and safe on a passive instance."""
+    it = _orphan_item(key)
+    if it is None:
+        raise HTTPException(404, "no such orphan-work item")
+    branch = it.get("branch") or ""
+    fails = sessiondiag.failures_for_branch(branch)
+    return {"branch": branch,
+            "repeated": sessiondiag.repeated_kind(fails),
+            "failures": [{k: v for k, v in f.items()
+                          if k not in ("output_tail", "runner_tail")}
+                         for f in fails]}
+
+
 @app.get("/api/orphanwork/resume-prompt")
 def api_orphanwork_resume_prompt(key: str):
     """The composed resume prompt with no side effects — for a passive
@@ -3729,10 +3773,22 @@ def api_orphanwork_discard(req: OrphanDiscardReq):
 
 
 @app.post("/api/orphanwork/land")
-def api_orphanwork_land(req: OrphanKeyReq):
-    """Finish-and-merge in one gesture: a dirty row gets a finishing
-    session dispatched into its worktree first, then the server merges +
-    pushes when it completes; a clean committed row merges directly.
+def api_orphanwork_land(req: OrphanLandReq):
+    """Land a row.
+
+    A clean committed row merges directly — there is nothing to diagnose.
+    A DIRTY row gets a session dispatched into its worktree first, and
+    `mode` decides what that session is told to do:
+
+      diagnose (default) — find out why the earlier session stopped, then
+        STOP and raise a decision card with options. Nothing is changed
+        until the owner answers. This exists because the old behaviour
+        re-dispatched into a failure it could not see: three sessions on
+        one branch died at the identical step on 2026-08-28, and the
+        fourth was told only to "carry the work to done".
+      finish — the old straight-to-work run, for when the owner already
+        knows what stopped it.
+
     Passive blocked — both halves act on the real repo."""
     if os.environ.get("VIRA_PASSIVE"):
         raise HTTPException(403, "passive instance — land from the live "
@@ -3743,19 +3799,21 @@ def api_orphanwork_land(req: OrphanKeyReq):
     if it.get("kind") == "unpushed":
         raise HTTPException(409, "main needs a push, not a landing")
     try:
-        jid = orphanwork.land(it)
+        jid = orphanwork.land(it, mode=req.mode)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"started": True, "job_id": jid}
 
 
 @app.post("/api/orphanwork/land-all")
-def api_orphanwork_land_all():
-    """One serial pass over every row — see orphanwork.land_all."""
+def api_orphanwork_land_all(req: OrphanLandAllReq | None = None):
+    """One serial pass over every row — see orphanwork.land_all. Carries
+    the same `mode` as a single land, and defaults the same way: each
+    dirty row diagnoses and asks before it changes anything."""
     if os.environ.get("VIRA_PASSIVE"):
         raise HTTPException(403, "passive instance — land from the live "
                                  "checkout instead")
-    n = orphanwork.land_all()
+    n = orphanwork.land_all(mode=(req.mode if req else "diagnose"))
     return {"started": n > 0, "count": n}
 
 

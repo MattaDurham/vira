@@ -3914,6 +3914,26 @@ a.sub-name:hover { color: var(--accent); text-decoration: underline; }
 .orphan-read.land .orphan-read-v { color: var(--green); }
 .orphan-read.resume .orphan-read-v { color: var(--accent); }
 .orphan-read.discard .orphan-read-v { color: var(--red); }
+/* WHY it stopped — deterministic, so it is on the row whenever the ledger
+   recorded a failure. A harness failure is toned clay rather than red: it
+   says the machinery refused to carry the work, not that the work is
+   wrong, and colouring it like a defect would misreport it. .orphan-fail-why
+   wraps and never truncates; the row is what an owner reads before
+   deciding to land or destroy the branch. */
+.orphan-fail {
+  white-space: normal; font-size: 12px; color: var(--text-dim);
+  margin-top: 6px; padding: 6px 8px; border-radius: var(--radius);
+  border: 1px solid var(--red-line); background: var(--red-soft);
+  min-width: 0;
+}
+.orphan-fail.harness { border-color: var(--line-warm); background: none; }
+.orphan-fail-tag {
+  font-weight: 600; text-transform: uppercase; font-size: 10.5px;
+  letter-spacing: 0.05em; color: var(--red); margin-right: 2px;
+}
+.orphan-fail.harness .orphan-fail-tag { color: var(--oxidized); }
+.orphan-fail-why { margin-top: 4px; line-height: 1.45; }
+.orphan-fail-fix { margin-top: 4px; line-height: 1.45; color: var(--text); }
 .fchip.rec { border-color: var(--accent); color: var(--accent); }
 .fchip.warn { color: var(--red); border-color: var(--red-line); }
 .fchip.warn:hover { background: var(--red-soft); }
