@@ -722,8 +722,38 @@ cmd_merge() {
     echo "error: no branch $branch" >&2; exit 1; }
 
   # Preflight: both trees clean, instance down.
-  [[ -n "$(git -C "$LIVE" status --porcelain)" ]] && {
-    echo "error: live tree has uncommitted changes — resolve first" >&2; exit 1; }
+  #
+  # The LIVE tree is judged on TRACKED changes only (-uno). Untracked files
+  # are left to git's own protection, which is both stricter and better
+  # worded than anything here: a merge that would overwrite an untracked
+  # path is refused BY GIT, naming the file, with its content preserved
+  # (verified 2026-08-28, both directions). Everything else untracked is a
+  # bystander — an agent's screenshot, a Playwright dump, a scratch file —
+  # and it survives the merge untouched.
+  #
+  # Failing on those was the single shared chokepoint in an otherwise
+  # well-isolated branch-first system: one stray artifact in the live
+  # checkout blocked EVERY session's merge whatever it was working on, and
+  # it surfaced to the owner as sessions "bumping into each other" when no
+  # two had touched the same code. Gitignoring the known writers fixed the
+  # symptom; this fixes the class, so the next tool that writes into the
+  # repo root costs nobody a merge.
+  #
+  # Tracked modifications still block, and that is the part that matters:
+  # those are real uncommitted work a merge can entangle or lose.
+  if [[ -n "$(git -C "$LIVE" status --porcelain -uno)" ]]; then
+    echo "error: live tree has uncommitted changes to TRACKED files — resolve first" >&2
+    git -C "$LIVE" status --porcelain -uno | sed 's/^/       /' >&2
+    exit 1
+  fi
+  # Untracked files are allowed through, never silently: the count is the
+  # signal that something is writing into the checkout, without being a
+  # refusal. Reported, not enforced.
+  local untracked; untracked=$(git -C "$LIVE" ls-files --others --exclude-standard "$LIVE" | wc -l | tr -d ' ')
+  [[ "$untracked" != "0" ]] && echo "note: $untracked untracked file(s) in the live tree — left alone; git refuses a merge that would overwrite one"
+  # The WORKTREE stays strict, including untracked. We merge FROM it, so an
+  # uncommitted file there is work that will NOT ride the merge — the
+  # session believes it delivered something the merge silently drops.
   if [[ -d "$dir" && -n "$(git -C "$dir" status --porcelain)" ]]; then
     echo "error: worktree $dir has uncommitted changes — commit or stash first" >&2; exit 1; fi
   local pid; pid=$(instance_pid "$dir" 2>/dev/null)
