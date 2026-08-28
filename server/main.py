@@ -20,7 +20,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (actions, admission, agentbackend, aihealth, applecontacts,
+from . import (
+    actions, admission, agentbackend, aihealth, applecontacts,
                applicationmap, applications,
                atlas, attention,
                backup, brainchat, brief,
@@ -43,6 +44,7 @@ from . import (actions, admission, agentbackend, aihealth, applecontacts,
                docthumbs,
                readingroom,
                fixtures, groupchat, ideaimages, ideas, ideatags, imessage,
+               inbound,
                ingestfeed,
                jobboards,
                jobdesc,
@@ -185,6 +187,11 @@ async def _startup():
     # cadence and iMessages the owner on a green->red edge, so a Claude-auth
     # lapse surfaces out-of-band instead of as a silently dead cockpit job.
     ai_health_watcher.start()
+    # The reply channel's card pinger: texts the owner when a session is
+    # blocked on a decision, so a card he never saw can still be answered
+    # from the thread. Reading his replies needs no thread of its own — it
+    # rides the message watcher's tick (server/inbound.py).
+    inbound.start()
     # Job boards: fetch-and-diff the registered career boards on a cadence,
     # iMessage the owner when a new eligible role appears (server/jobboards).
     jobboards_poller.start()
@@ -2800,6 +2807,23 @@ def api_onboard_login_cancel(req: OnboardLoginReq):
 @app.get("/api/onboard/login/{pid}")
 def api_onboard_login_status(pid: str):
     return models.login_status(pid)
+
+
+# ---------- the reply channel (the self-thread read as a command line) ----
+
+
+@app.get("/api/inbound")
+def api_inbound():
+    """What the owner has texted Vira and what each message did.
+
+    The observability half: a channel that acts on a text must be able to
+    show what it acted on, or a mis-routed reply is invisible.
+    """
+    st = inbound._state()
+    return {"enabled": inbound.enabled(),
+            "held": st.get("held"),
+            "session": st.get("session"),
+            "recent": inbound.recent()}
 
 
 # ---------- notifications (iMessage push on high-value inbound) ----------
