@@ -786,6 +786,15 @@ class Runner:
                     # output; refine a plan by running Plan again. The same
                     # goes for every machine-dispatched run — see
                     # parks_at_turn_end for the full reasoning.
+                    # A parked session has FINISHED its work — the turn
+                    # ended on its own — so its answer exists now. Publish
+                    # it before parking: state["result_text"] was only
+                    # written in the epilogue, so a session waiting in its
+                    # reply window reported no result at all, and anything
+                    # reading the answer at the turn boundary (the reply
+                    # channel texts it back) got an empty string. The
+                    # epilogue's own assignment still wins at finalize.
+                    self.state["result_text"] = (result_text or "")[:RESULT_KEEP]
                     reply = (await self.await_reply()
                              if self.should_park(ok) else None)
                     if reply is None:

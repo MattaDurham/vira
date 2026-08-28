@@ -316,5 +316,103 @@ class Dormancy(Base):
         self.assertEqual(routed, [])
 
 
+class Follower(Base):
+    """Carrying the session's answer back down the thread.
+
+    The regression these exist for: the first real use of this channel
+    produced a correct answer that was never sent, because the follower
+    waited for the session to stop RUNNING and a parked session never
+    does — it sits at awaiting "reply" until the owner says Finish.
+    """
+
+    def follow(self, snaps):
+        """Drive one follower over a scripted sequence of snapshots."""
+        seq = list(snaps)
+
+        def get(jid):
+            return seq.pop(0) if seq else None
+        fake = mock.Mock()
+        fake.get.side_effect = get
+        with mock.patch("server.session.sessions", fake), \
+             mock.patch.object(inbound.time, "sleep", lambda s: None):
+            inbound._follow("j1", max_s=60)
+
+    @staticmethod
+    def snap(text="", awaiting=None, status="running"):
+        return {"result_text": text, "awaiting": awaiting, "status": status}
+
+    def test_a_parked_session_is_answered(self):
+        self.follow([self.snap("all landed.", awaiting="reply"),
+                     self.snap("all landed.", awaiting="reply",
+                               status="done")])
+        self.assertEqual(self.sent, ["all landed."])
+
+    def test_a_working_session_is_not_answered_early(self):
+        # Mid-turn text is not an answer; only a settled turn is.
+        self.follow([self.snap("thinking out loud"),
+                     self.snap("thinking out loud"),
+                     None])
+        self.assertEqual(self.sent, [])
+
+    def test_each_new_turn_is_answered_and_none_is_answered_twice(self):
+        # The multi-turn exchange: he replies, it runs again, that answer
+        # comes back too — but the same text never goes out twice.
+        self.follow([self.snap("first answer", awaiting="reply"),
+                     self.snap("first answer", awaiting="reply"),
+                     self.snap("", status="running"),
+                     self.snap("second answer", awaiting="reply"),
+                     self.snap("second answer", status="done")])
+        self.assertEqual(self.sent, ["first answer", "second answer"])
+
+    def test_a_finished_session_is_answered_too(self):
+        self.follow([self.snap("done and dusted", status="done")])
+        self.assertEqual(self.sent, ["done and dusted"])
+
+    def test_a_session_that_ends_silently_sends_nothing(self):
+        self.follow([self.snap("", status="error")])
+        self.assertEqual(self.sent, [])
+
+    def test_a_vanished_session_stops_the_follower(self):
+        self.follow([None])
+        self.assertEqual(self.sent, [])
+
+
+class FollowerArming(Base):
+    def setUp(self):
+        super().setUp()
+        inbound._following.clear()
+        self.addCleanup(inbound._following.clear)
+        self.started = []
+        p = mock.patch.object(
+            inbound.threading, "Thread",
+            lambda target=None, args=(), **kw: mock.Mock(
+                start=lambda: self.started.append(args[0])))
+        p.start(); self.addCleanup(p.stop)
+
+    def test_only_one_follower_is_ever_armed_for_a_session(self):
+        inbound._ensure_follow("j1")
+        inbound._ensure_follow("j1")
+        self.assertEqual(self.started, ["j1"])
+
+    def test_steering_arms_a_follower_too(self):
+        # A steered session needs its answer carried back exactly as much
+        # as a fresh one; without this a reply mid-conversation goes
+        # nowhere once the original follower has exited.
+        fake = mock.Mock()
+        fake.say.return_value = {"job": "j2"}
+        with mock.patch.object(inbound, "_bound_session", lambda: "j2"), \
+             mock.patch("server.session.sessions", fake):
+            inbound.route("carry on")
+        self.assertEqual(self.started, ["j2"])
+
+    def test_a_resumed_session_is_followed_under_its_new_id(self):
+        fake = mock.Mock()
+        fake.say.return_value = {"job": "j3-resumed"}
+        with mock.patch.object(inbound, "_bound_session", lambda: "j2"), \
+             mock.patch("server.session.sessions", fake):
+            inbound.route("carry on")
+        self.assertEqual(self.started, ["j3-resumed"])
+
+
 if __name__ == "__main__":
     unittest.main()
