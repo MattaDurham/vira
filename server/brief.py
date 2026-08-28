@@ -22,6 +22,7 @@ from . import channels
 from . import data as crm
 from . import imessage
 from . import journal
+from . import modelbudget
 from . import settings
 from . import suggest
 from . import threadread
@@ -601,6 +602,27 @@ def compose(feed_items=None):
 
 # ---------- narrative (the one AI touch, cached per day) ----------
 
+# WHAT THIS BOUNDS: the brief data the narrative model SEES — the one AI
+# touch in this module. It used to be a flat json.dumps(...)[:14000], a
+# number typed once in July and never compared against the window that
+# had to hold it (server/modelbudget.py records what that pattern cost in
+# define.py and find.py). The SIZE is the backend's answer now. Cutting a
+# JSON dump at a character offset still leaves the model reading something
+# malformed — that is unchanged — but on any configured backend the brief
+# no longer reaches the ceiling at all, and where it does the cut is
+# ANNOUNCED rather than simply stopping. Measured 2026-08-28 in fixture
+# mode: a composed brief is 7,728 characters against a budget of 251,685
+# at the anthropic floor, so the whole brief now reaches the model where
+# 14,000 characters of it used to. A real CRM composes more than the
+# fixture does and that was NOT measured here — the truncation branch is
+# what covers being wrong about it.
+#
+# "standard" is the class: the narrative is composed once a day and cached,
+# and nothing blocks on it — the brief window renders first and fills this
+# box in from a background call (loadBrief in app.js), and the rewrite
+# button is the same call again. A composed answer, not a card opening.
+NARRATIVE_CLASS = "standard"
+
 NARRATIVE_PROMPT = """You are writing the TL;DR for {owner}'s daily brief.
 
 Below is today's brief data as JSON: calendar (their day and the family's),
@@ -637,7 +659,12 @@ def generate_narrative(feed_items=None, force=False):
             return hit
     data = compose(feed_items)
     data.pop("narrative", None)
-    slim = json.dumps(data, ensure_ascii=False)[:14000]
+    room = modelbudget.context_chars(NARRATIVE_CLASS)
+    slim = json.dumps(data, ensure_ascii=False)
+    if len(slim) > room:
+        # A truncation we perform is one we can report: say so in band
+        # rather than handing the model a JSON dump that simply stops.
+        slim = slim[:room] + "\n\n[brief data truncated to fit the model]"
     owner = settings.get("owner_name") or "the owner"
     text = suggest.complete(NARRATIVE_PROMPT.format(owner=owner,
                                                     data=slim)).strip()

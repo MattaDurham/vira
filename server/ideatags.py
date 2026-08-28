@@ -47,7 +47,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import ideas, jsonstore, localmodels, settings, suggest
+from . import ideas, jsonstore, localmodels, modelbudget, settings, suggest
 
 try:
     import numpy as np
@@ -85,7 +85,25 @@ AXES = (
 AXIS_IDS = tuple(a["id"] for a in AXES)
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 BATCH = 12                 # ideas per model call
-VOCAB_SHOWN = 60           # tags per axis handed to the tagger
+
+# HOW MUCH EACH MODEL CALL MAY CARRY IS ASKED OF THE BACKEND, NOT TYPED
+# HERE. `VOCAB_SHOWN = 60` and the `[:900]` per-idea truncation below were
+# both chosen once against no window at all, and both cost exactly what
+# this module exists to prevent. Measured 2026-08-28 on the live backlog:
+# the `concept` axis carries 101 distinct tags, so a tagger told to REUSE
+# the existing vocabulary was shown 59% of it — which is precisely how
+# "reader" and "reading-room" become two tags for one subject — and 9 of
+# 260 ideas run past 900 characters (the longest is 4,245), so the most
+# detailed items were tagged from a fragment. The whole vocabulary is
+# 2,898 characters and the whole backlog is a rounding error against any
+# real window.
+#
+# TAG_CLASS is `deep`: the tagging pass runs out-of-process on a ten-minute
+# tick and the module's own docstring says nothing waits on it. FOLD_CLASS
+# is `interactive`: the owner has a run sheet open and is waiting for the
+# checkboxes to pre-tick, so latency binds there, not capacity.
+TAG_CLASS = "deep"
+FOLD_CLASS = "interactive"
 FOREGROUND_EMBED_S = 8     # ceiling on an embed a request is waiting on
 
 # Similarity fusion. Cosine dominates when vectors exist because it is the
@@ -724,23 +742,45 @@ Return ONLY JSON:
 {{"tags": [{{"id": "<the idea id>", {shape}}}]}}"""
 
 
-def _vocab_block(vocab):
+def _vocab_block(vocab, budget):
+    """The vocabulary the tagger is told to reuse, within `budget` chars.
+
+    Commonest tag first, so a cut that binds drops the rarest spellings —
+    the ones least likely to be the right reuse. A cut is COUNTED in the
+    line: a tagger that believes it has seen the whole vocabulary will
+    happily mint a synonym for a tag it was never shown."""
+    per_axis = max(40, int(budget) // max(len(AXES), 1))
     lines = []
     for ax in AXES:
         pairs = vocab.get(ax["id"]) or []
-        shown = ", ".join(f"{t} x{n}" for t, n in pairs[:VOCAB_SHOWN])
-        lines.append(f"  {ax['id']}: {shown or '(none yet)'}")
+        shown, used = [], 0
+        for t, n in pairs:
+            chunk = f"{t} x{n}"
+            if shown and used + len(chunk) + 2 > per_axis:
+                break
+            shown.append(chunk)
+            used += len(chunk) + 2
+        line = ", ".join(shown) or "(none yet)"
+        if len(shown) < len(pairs):
+            line += f" (+{len(pairs) - len(shown)} more not shown)"
+        lines.append(f"  {ax['id']}: {line}")
     return "\n".join(lines)
 
 
 def _tag_prompt(batch, vocab):
+    # One share per idea in a FULL batch, plus one for the vocabulary. Parts
+    # come from BATCH rather than len(batch) so a short trailing batch is
+    # sized identically to a full one — the alternative sizes the last
+    # ideas of a pass differently from every other idea, for no reason a
+    # reader could reconstruct.
+    _, per = modelbudget.split(TAG_CLASS, BATCH + 1)
     axes = "\n".join(f"- {a['id']}: {a['hint']} (at most {a['max']})"
                      for a in AXES)
     shape = ", ".join(f'"{a["id"]}": []' for a in AXES)
     items = "\n\n".join(
         f"- id: {it['id']}\n  project: {it.get('project') or 'Vira'}\n"
-        f"  idea: {item_text(it)[:900]}" for it in batch)
-    return TAG_PROMPT.format(axes=axes, vocab=_vocab_block(vocab),
+        f"  idea: {item_text(it)[:per]}" for it in batch)
+    return TAG_PROMPT.format(axes=axes, vocab=_vocab_block(vocab, per),
                              items=items, shape=shape)
 
 
@@ -873,15 +913,30 @@ def fold_analysis(idea_id, candidate_ids, items=None):
     if not cands:
         return {"verdicts": [], "analyzed": 0}
     s = _read()
+    # One share per candidate, one for the task being dispatched, and one
+    # left over for the scaffolding around them (the id, status and tag
+    # lines, plus the separators). The literals this replaces were
+    # 1500 / 700 / 24_000 — a target trimmed shorter than the candidates it
+    # is being compared against, and a block cap that could silently drop
+    # whole candidates off the end of a list the owner had ticked boxes
+    # against. That third share is what keeps the backstop below from
+    # doing the same thing at the route's own 40-candidate ceiling:
+    # measured, 40 candidates each filling their share plus ~50 characters
+    # of scaffolding overran a two-way split by 469 characters, and the
+    # cut landed mid-text on the last candidate.
+    total, per = modelbudget.split(FOLD_CLASS, len(cands) + 2)
 
-    def block(it):
+    def block(it, per=per):
         tags = ", ".join(sorted(_flat_tags(tags_for(it, s)))) or "untagged"
         return (f"- id: {it['id']}\n  status: {it.get('status')}\n"
-                f"  tags: {tags}\n  idea: {(it.get('text') or '')[:700]}")
+                f"  tags: {tags}\n  idea: {(it.get('text') or '')[:per]}")
 
     prompt = FOLD_PROMPT.format(
-        target=f"{(target.get('text') or '')[:1500]}",
-        cands="\n\n".join(block(c) for c in cands)[:24_000])
+        target=f"{(target.get('text') or '')[:per]}",
+        # A backstop, not the working cap: the per-candidate shares plus
+        # their scaffolding sum under it for any list this app can send,
+        # so it only ever catches a caller reaching past that.
+        cands="\n\n".join(block(c) for c in cands)[:total])
     parsed = suggest._extract_json(suggest.complete(prompt))
     ok = {c["id"] for c in cands}
     out = []

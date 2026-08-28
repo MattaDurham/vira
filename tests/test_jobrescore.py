@@ -264,10 +264,33 @@ class PromptTests(Base):
         self.assertIn("60", text)
 
     def test_a_long_prior_reasoning_is_truncated_and_says_so(self):
-        text = self.compose(prior=score(why_fit="x" * 4000))
-        self.assertIn(f"first {jobrescore.PRIOR_WHY_IN_PROMPT} characters",
-                      text)
-        self.assertNotIn("x" * (jobrescore.PRIOR_WHY_IN_PROMPT + 1), text)
+        """The cap comes from the budget seam now, not a literal - but the
+        contract is unchanged: cut it, and SAY it was cut, so the model is
+        never handed a fragment it might read as the whole judgment."""
+        why_cap = jobrescore.budget()[1]
+        text = self.compose(prior=score(why_fit="x" * (why_cap + 3000)))
+        self.assertIn(f"first {why_cap} characters", text)
+        self.assertNotIn("x" * (why_cap + 1), text)
+
+    def test_the_posting_is_cut_at_what_the_budget_allows_and_says_so(self):
+        """Same contract the prior reasoning has, on the block that was two
+        orders of magnitude too small: cut it, and say it was cut."""
+        with mock.patch.object(jobrescore, "budget",
+                               return_value=(500, 900, 900)):
+            text = self.compose(jd=dict(JD, text="y" * 4000))
+        self.assertIn("truncated", text)
+        self.assertNotIn("y" * 600, text,
+                         "the posting ignored the budget it was given")
+
+    def test_the_floors_hold_when_the_budget_cannot_be_read(self):
+        """A budget must never fail a rescore - on any failure the module
+        sends exactly the prompt it sent before the seam existed."""
+        with mock.patch("server.modelbudget.split",
+                        side_effect=RuntimeError("no backend")):
+            self.assertEqual(
+                jobrescore.budget(2),
+                (jobrescore.JD_FLOOR, jobrescore.PRIOR_WHY_FLOOR,
+                 jobrescore.ANCHOR_TEXT_FLOOR))
 
     def test_an_undated_prior_score_says_undated_rather_than_guessing(self):
         text = self.compose(prior=score(scored_at=""))

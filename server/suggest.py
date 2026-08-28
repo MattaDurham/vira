@@ -121,8 +121,40 @@ Return ONLY a JSON object:
 """
 
 
-def _call_cli(prompt, model, timeout):
-    cmd = ["claude", "--print", "--output-format", "json", "--model", model]
+# Tools a caller may opt into on the CLI path. Read-only by construction:
+# this is a completion path, and nothing composed here has any business
+# mutating the machine. Anything absent from an allow-list is refused by
+# --permission-mode default, which also RECORDS the refusal.
+READ_TOOLS = ("Read", "Glob", "Grep")
+
+
+def _call_cli(prompt, model, timeout, tools=None):
+    """One completion through the Claude CLI, with tools OFF unless asked.
+
+    THIS PATH IS A FULL CLAUDE CODE TURN, NOT A TEXT COMPLETION -- measured
+    2026-08-28, and the reason this function pins a permission mode at all.
+    Invoked with no flags it inherits ~/.claude/settings.json, and on a
+    machine whose defaultMode is "auto" that means Write, Edit and Bash are
+    live and permitted against absolute paths outside cwd, with
+    permission_denials empty. Verified by writing a file, twice.
+
+    That matters because 37 call sites route through here and several put
+    text the owner did not write into the prompt -- an inbound email body
+    (receipts), an employer's job posting (jobrescore), a message thread
+    (reply drafting). Model injection-resistance was the ONLY thing standing
+    between that text and a shell, and model judgement is not a control: it
+    has no audit trail and it changes with the model.
+
+    So the default is locked. `--permission-mode default` was verified to
+    deny the Write AND to record it in permission_denials, which is what
+    makes a refusal visible rather than silent. A caller that genuinely
+    needs to gather context passes `tools=READ_TOOLS`; that was verified to
+    permit a read of a file outside cwd while writes stay denied.
+    """
+    cmd = ["claude", "--print", "--output-format", "json", "--model", model,
+           "--permission-mode", "default"]
+    if tools:
+        cmd += ["--allowedTools", ",".join(tools)]
     res = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                          timeout=timeout, env=settings.strip_env())
     if res.returncode != 0:
@@ -132,15 +164,47 @@ def _call_cli(prompt, model, timeout):
         text = envelope.get("result", "")
         if envelope.get("is_error"):
             raise RuntimeError(f"claude error: {text[:300]}")
+        _learn_from_cli(envelope, model)
     except json.JSONDecodeError:
         text = res.stdout
     return text
 
 
+def _learn_from_cli(envelope, model):
+    """Read the response's own account of the window it ran in.
+
+    The CLI reports modelUsage.<resolved-model>.contextWindow and
+    maxOutputTokens on every --output-format json call, so the app can size
+    its prompts from its own receipts instead of from a literal that goes
+    stale the week a model ships. This is the one rung of modelbudget's
+    ladder that cannot rot. Best-effort by construction: losing a completion
+    over bookkeeping would be the worse trade.
+    """
+    try:
+        from . import modelbudget
+        usage = envelope.get("modelUsage") or {}
+        for resolved, row in usage.items():
+            ctx = int(row.get("contextWindow") or 0)
+            out = int(row.get("maxOutputTokens") or 0)
+            if ctx or out:
+                # Learn under BOTH the requested spelling and the one the CLI
+                # actually resolved: `--model opus` is an alias whose target
+                # moves, and a budget asked for by the alias must still find
+                # the answer (models.py's 2026-07-29 alias lesson).
+                modelbudget.learn("anthropic", "cli", model, ctx, out)
+                modelbudget.learn("anthropic", "cli", resolved, ctx, out)
+    except Exception:      # noqa: BLE001
+        pass
+
+
 def _call_api(prompt, model, timeout, key):
+    # Was a hardcoded 1500 against models reporting 128_000 -- an 85x
+    # reduction nobody chose, sized for the 2026-07-07 reply-draft path this
+    # function was written for and never revisited as 22 modules adopted it.
+    from . import modelbudget
     body = json.dumps({
         "model": model,
-        "max_tokens": 1500,
+        "max_tokens": modelbudget.api_output_tokens(),
         "messages": [{"role": "user", "content": prompt}],
     }).encode()
     req = urllib.request.Request(
@@ -161,7 +225,10 @@ def _call_codex_cli(prompt, model, timeout):
     binary = provider.find_binary("openai")
     if not binary:
         raise RuntimeError("codex CLI not found on this Mac")
-    cmd = [binary, "exec", "--skip-git-repo-check"]
+    # Same posture as _call_cli: a drafting call gets codex's read-only
+    # sandbox rather than its default workspace-write one. `exec` accepts
+    # --sandbox (only `exec resume` does not -- see agentbackend).
+    cmd = [binary, "exec", "--skip-git-repo-check", "--sandbox", "read-only"]
     if model:                       # empty = codex's own configured default
         cmd += ["--model", model]
     cmd += [prompt]
@@ -239,15 +306,16 @@ def _provider_models(cfg, pid):
     return cfg["cli_model"], cfg["api_model"]
 
 
-def _run(prompt, cfg):
-    """Pick the EFFECTIVE backend, call it, and on failure record the auth
-    state so the app degrades gracefully. Returns (text, backend_used).
+def effective_backend(cfg):
+    """(provider, backend) that will ACTUALLY answer, after the ladder.
 
-    Backend selection is the fallback ladder (aihealth rung 3):
-      - configured "api" but no key present  -> fall back to cli
-      - configured "cli" but the login is dead + a key IS present -> use api
-    A dead cli login with no key stands as cli: the call then fails honestly
-    and note_failure flips the health state red + alerts the owner."""
+    Extracted from _run so that anything needing to reason about the
+    answering backend -- modelbudget, above all -- asks the same question
+    _run answers, instead of carrying a second copy of a ladder that really
+    does re-route (no key, dead login). Two implementations of "which model
+    is about to run" is how a surface ends up describing one backend while
+    another one answers.
+    """
     from . import aihealth
     from . import models as provider
     backend = cfg["ai_backend"]
@@ -260,12 +328,27 @@ def _run(prompt, cfg):
     if pid in API_ONLY:
         # No CLI to fall back to: the API is the only path, and a missing
         # key fails honestly rather than silently switching providers.
-        backend = "api"
-    else:
-        if backend == "api" and not key:
-            backend = "cli"
-        if backend == "cli":
-            backend = aihealth.preferred_backend("cli", key)
+        return pid, "api"
+    if backend == "api" and not key:
+        backend = "cli"
+    if backend == "cli":
+        backend = aihealth.preferred_backend("cli", key)
+    return pid, backend
+
+
+def _run(prompt, cfg, tools=None):
+    """Pick the EFFECTIVE backend, call it, and on failure record the auth
+    state so the app degrades gracefully. Returns (text, backend_used).
+
+    Backend selection is the fallback ladder (aihealth rung 3):
+      - configured "api" but no key present  -> fall back to cli
+      - configured "cli" but the login is dead + a key IS present -> use api
+    A dead cli login with no key stands as cli: the call then fails honestly
+    and note_failure flips the health state red + alerts the owner."""
+    from . import aihealth
+    from . import models as provider
+    pid, backend = effective_backend(cfg)
+    key = provider.api_key(pid)
     cli_model, api_model = _provider_models(cfg, pid)
     try:
         if backend == "api":
@@ -289,16 +372,22 @@ def _run(prompt, cfg):
             return _call_api(prompt, api_model, cfg["timeout"], key), backend
         if pid == "openai":
             return _call_codex_cli(prompt, cli_model, cfg["timeout"]), backend
-        return _call_cli(prompt, cli_model, cfg["timeout"]), backend
+        return _call_cli(prompt, cli_model, cfg["timeout"], tools), backend
     except Exception as e:  # noqa: BLE001 — classify + record, then re-raise
         aihealth.note_failure(str(e), source="reply-draft")
         raise
 
 
-def complete(prompt):
-    """One-shot plain-text completion on the configured backend (used by the
-    daily-brief narrative). Same CLI/API selection and fallback as suggest()."""
-    return _run(prompt, config())[0]
+def complete(prompt, tools=None):
+    """One-shot completion on the configured backend.
+
+    `tools` is an explicit, read-only allow-list for a caller that needs to
+    gather its own context (see READ_TOOLS). It is honoured ONLY on the
+    Anthropic CLI path -- every other backend is a plain completion -- so a
+    caller must treat it as an enhancement and still work when it does
+    nothing. Ask modelbudget.has_tools() before relying on it.
+    """
+    return _run(prompt, config(), tools=tools)[0]
 
 
 def _extract_json(text):

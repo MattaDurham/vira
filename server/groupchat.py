@@ -20,7 +20,7 @@ import hashlib
 from pathlib import Path
 
 from . import data as crm
-from . import imessage, jsonstore, settings
+from . import imessage, jsonstore, modelbudget, settings
 
 ROOT = Path(__file__).resolve().parent.parent
 BRIEFS = ROOT / "data" / "group-briefs.json"
@@ -29,7 +29,64 @@ BRIEF_CACHE_MAX = 40      # groups worth of cached briefs
 RELATED_MAX = 12          # related-group rows returned
 RELATED_MIN_SHARED = 2    # fewer shared members than this is every group
 EDGE_MAX = 20             # interconnection rows returned
-THREAD_TAIL = 80          # messages the brief reads
+
+# ---------- how much of the thread the one AI pass may read ----------
+#
+# WHAT THIS BOUNDS: the conversation the brief model SEES, and nothing
+# else — the deterministic payload above is capped separately, for the
+# client. Until 2026-08-28 it was two literals: THREAD_TAIL = 80 messages,
+# each cut to 200 characters inside _brief_prompt. That is 16,000
+# characters of a group's conversation, chosen once when the module was
+# written and never compared against the window that had to hold it —
+# the exact pattern server/modelbudget.py exists to end (define fed a
+# model 9,000 characters against a backend reporting 1,000,000 tokens).
+# Both halves are asked of the answering backend now.
+#
+# The class is "standard", and the honest version of why: somebody IS
+# looking at this. The group panel renders immediately and this section
+# spins ("Vira is reading the room…", loadBrief in app.js), so the read is
+# not blocking but it is not unwatched either. What keeps it out of
+# "interactive" is that neither half of the growth below is spent unless
+# the conversation is really there: MSG_CHARS is a per-message CEILING,
+# not a size, and the tail is a LIMIT on a chat.db read, so a short group
+# composes the same small prompt it always did. Add the cache — a given
+# group spins at most once per new message — and the latency the
+# interactive ceiling exists to protect is not what binds here.
+BRIEF_CLASS = "standard"
+# The thread's share of that budget. The rest of the prompt is the member
+# dossiers, the who-talks split, the graph edges and the related-group
+# diffs — all deterministic, and all small beside the messages.
+THREAD_SHARE = 0.6
+# THE OLD LITERALS ARE THE REFERENCE SHAPE, NOT A FLOOR — thread_budget
+# scales BOTH of them from here, so this pair is simply the point where
+# that scale reads 1.0, and a thin backend goes below it. Measured
+# 2026-08-28 against the per-provider floors: anthropic 245 x 614,
+# openai 193 x 482, and a backend that reports nothing at all 35 x 120.
+# That last one is the seam degrading downward on purpose: guessing high
+# is the asymmetric error, since an over-large prompt is rejected or
+# silently truncated by the provider and a truncation we did not perform
+# is one we cannot report.
+THREAD_TAIL = 80          # messages the brief read before the seam
+MSG_CHARS = 200           # characters of each of them, before the seam
+
+
+def thread_budget():
+    """(messages, characters per message) this backend can afford.
+
+    Both halves grow together, keeping the SHAPE of the prompt the module
+    was written against — more of the conversation, and less of it cut
+    mid-sentence — rather than four thousand messages still clipped at
+    200 characters. A backend that can hold less than the old prompt gets
+    less; the seam degrades downward by design.
+    """
+    room = int(modelbudget.context_chars(BRIEF_CLASS) * THREAD_SHARE)
+    grow = (room / float(THREAD_TAIL * MSG_CHARS)) ** 0.5
+    # THE REAL FLOORS. Not the pair above: a conversation you could still
+    # follow, and a message you could still read. Below this the pass is
+    # not worth making at all, so it stops shrinking rather than composing
+    # a prompt too thin to answer from.
+    return (max(int(THREAD_TAIL * grow), 24),
+            max(int(MSG_CHARS * grow), 120))
 
 
 # ---------- resolution: one chat row -> the merged logical group ----------
@@ -401,7 +458,7 @@ def _latest_rowid(chat_ids):
         con.close()
 
 
-def _brief_prompt(prof, messages):
+def _brief_prompt(prof, messages, msg_chars=MSG_CHARS):
     owner = settings.get("owner_name") or "the owner"
     lines = [
         f"You are Vira, {owner}'s chief of staff, reading one iMessage "
@@ -441,7 +498,7 @@ def _brief_prompt(prof, messages):
     lines.append(f"RECENT THREAD (oldest first; 'me' = {owner}):")
     for msg in messages:
         who = "me" if msg["from_me"] else (msg.get("sender") or "?")
-        lines.append(f"[{who}] {msg['text'][:200]}")
+        lines.append(f"[{who}] {msg['text'][:msg_chars]}")
     lines.append("")
     lines.append(
         "Return STRICT JSON only, no prose around it:\n"
@@ -504,12 +561,13 @@ def brief(chat_ids, force=False):
     prof = profile(chat_ids=chat_ids)
     if prof.get("status") != "ok":
         return prof
-    messages = imessage.group_thread(chat_ids, limit=THREAD_TAIL)
+    tail, msg_chars = thread_budget()
+    messages = imessage.group_thread(chat_ids, limit=tail)
     if not messages:
         return {"status": "empty", "note": "no visible messages"}
 
     from . import suggest
-    text = suggest.complete(_brief_prompt(prof, messages))
+    text = suggest.complete(_brief_prompt(prof, messages, msg_chars))
     cleaned = _clean_brief(suggest._extract_json(text))
     from .jobshared import now_iso
     generated = now_iso()

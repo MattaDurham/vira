@@ -60,7 +60,12 @@ _TOOL_RE = re.compile(r"^\s*→\s*(\w+)(?::\s*(.*)|\s+(.*))?$")
 
 # A path argument inside a tool line. Absolute only — a bare word is not a
 # path, and guessing one would put a fabricated filename in a diagnosis.
-_PATH_RE = re.compile(r"(/[^\s'\"]+)")
+# A WINDOWS PATH IS A PATH. This matched only /... , so on Windows the
+# transcript's C:\\Users\\...\\app.js never matched and the oversized file
+# could never be named - the one fact this diagnosis exists to state.
+# Shipped code a Windows install exercises, so skipping the test there
+# would have hidden real coverage rather than stated a fact.
+_PATH_RE = re.compile(r"([A-Za-z]:\\[^\s'\"]+|/[^\s'\"]+)")
 
 
 def _read_tail(path, limit=TAIL_CHARS):

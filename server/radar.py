@@ -49,6 +49,7 @@ from pathlib import Path
 
 from . import brief
 from . import data as crm
+from . import modelbudget
 from .filelock import locked
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +61,9 @@ TOP_ACTIVE = 120          # most-active contacts considered for groupings
 # prompt and the replies it writes scale with this. Forty candidates ran
 # past 120s and silently fell back to raw matches; twenty lands in ~85s
 # and the model was never weighing forty rooms seriously anyway.
+# It is NOT a context cap and must not be routed through modelbudget: the
+# window was never what bound it, so raising it with the budget would buy
+# back the timeout this measurement paid for.
 MAX_CANDIDATES = 20       # candidates offered to the AI curator
 PAIR_SLOTS = 14           # of those, at most this many two-person rooms
 MIN_SHARED = 2            # shared rare tokens to qualify as common ground
@@ -627,6 +631,32 @@ group>"}}]}}
 """
 
 
+# WHAT THIS BOUNDS: the curation prompt — the only material this model
+# sees. It was two literals: a 260-character dossier per member, and a
+# flat [:30_000] on the whole composed candidate block.
+#
+# THE SECOND ONE COULD BITE, AND WHETHER IT DID DEPENDED ON THE SHAPE OF
+# THAT DAY'S POOL. Measured 2026-08-28 by composing the real block below
+# at MAX_CANDIDATES with every dossier filled to the retired 260-character
+# cap: twenty two-person rooms compose 14,569 characters and fit, twenty
+# three-person 20,149 and fit, twenty five-person 31,389 and DO NOT — the
+# tail was dropped mid-block. Whether a given refresh crossed the line
+# turned on how large that day's rooms were and how long the dossiers ran,
+# and nothing anywhere said which — the silent truncation
+# server/modelbudget.py exists to end (a cap that is too small yields
+# confident output, never an error). Both halves are the answering
+# backend's answer now, and what is left over the budget is ANNOUNCED
+# rather than simply stopping (see the format call below).
+#
+# "standard", deliberately not "deep". The refresh is a weekly routine and
+# nothing blocks on it - the one hand-driven path posts and then POLLS
+# (#radar-groupings-refresh in app.js), so no request is held open. What
+# rules "deep" out is the MEASURED wall-clock ceiling above: this pass is
+# one CLI call against a timeout it has already blown once, and a prompt
+# sized for thoroughness alone would spend that ceiling on prefill.
+CURATE_CLASS = "standard"
+
+
 def _key(members):
     return "grp:" + ":".join(sorted(members))
 
@@ -768,7 +798,12 @@ def refresh_groupings():
 
         _annotate(cands, _atlas_pairs(), _group_finder())
 
-        def dossier(pid):
+        # the pair the seam replaces: how much room the whole prompt has,
+        # and how much of it one member's dossier may take
+        prompt_chars, dossier_chars = modelbudget.split(
+            CURATE_CLASS, MAX_CANDIDATES * MAX_MEMBERS)
+
+        def dossier(pid, cap):
             person = c["by_id"].get(pid) or {}
             prof = c["profiles"].get(pid) or {}
             master = (crm.get_person(pid) or {}).get("master") or {}
@@ -777,8 +812,8 @@ def refresh_groupings():
                 if master.get(k):
                     bits.append(f"{k}: {master[k]}")
             if isinstance(prof.get("relationship_summary"), str):
-                bits.append(prof["relationship_summary"][:200])
-            return " | ".join(bits)
+                bits.append(prof["relationship_summary"][:cap])
+            return " | ".join(bits)[:cap]
 
         blocks = []
         for i, cd in enumerate(cands):
@@ -799,13 +834,21 @@ def refresh_groupings():
                 f"  shared topics: {', '.join(cd['topics'])}\n"
                 f"  trigger: {trigger}\n"
                 f"  connection: {room}; suggested move: {cd['move']}\n"
-                # dossiers dominate this prompt — 40 candidates of up to
-                # five people each. Kept tight so the whole pass stays
-                # inside the model timeout rather than falling back.
-                + "\n".join(f"  - {dossier(p)[:260]}" for p in cd["members"]))
+                # dossiers dominate this prompt — MAX_CANDIDATES rooms of
+                # up to MAX_MEMBERS people each — which is why their size
+                # is the backend's answer rather than a literal.
+                + "\n".join(f"  - {dossier(p, dossier_chars)}"
+                             for p in cd["members"]))
         owner = settings.get("owner_name") or "the owner"
-        prompt = CURATE_PROMPT.format(owner=owner,
-                                      candidates="\n".join(blocks)[:30_000])
+        block_text = "\n".join(blocks)
+        if len(block_text) > prompt_chars:
+            # A truncation we perform is one we can report. The retired
+            # [:30_000] dropped the tail candidates mid-block in silence,
+            # which is the failure this whole seam exists to end; the
+            # budget makes it far rarer, never impossible.
+            block_text = (block_text[:prompt_chars]
+                          + "\n[candidate list truncated to fit the model]")
+        prompt = CURATE_PROMPT.format(owner=owner, candidates=block_text)
         by_members = {frozenset(cd["members"]): cd for cd in cands}
         groupings, curated = [], True
         try:

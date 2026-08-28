@@ -35,7 +35,7 @@ from datetime import date
 from pathlib import Path
 
 from . import data as crm
-from . import imessage, jsonstore, secrets, settings, sources, suggest
+from . import imessage, jsonstore, modelbudget, secrets, settings, sources, suggest
 
 _lock = threading.Lock()          # people.json / master.json writes
 _build_lock = threading.Lock()    # dossier-builder state
@@ -237,6 +237,15 @@ def import_google_csv(text):
 
 # ---------- first dossiers ----------
 
+# HOW MANY MESSAGES a dossier is drawn from. Deliberately still a literal and
+# deliberately NOT raised here: it is the part COUNT, and _build_one asks
+# modelbudget how much room each of those parts gets. Whether 60 is also the
+# wrong number is a separate question with a real cost on the other side - this
+# is the one step that quotes a per-person spend to the owner BEFORE the click
+# (_cost_line), and multiplying the input would make that stated figure wrong.
+# Flagged, not changed.
+DOSSIER_MESSAGES = 60
+
 DOSSIER_PROMPT = """You are building a first CRM dossier for {owner}'s \
 private assistant. Below is their recent iMessage history with {name}.
 
@@ -317,14 +326,33 @@ def _profile_from(pid, name, parsed, n_msgs):
 
 
 def _build_one(pid, name, prof_dir, owner):
-    thread = imessage.thread_for_person(pid, limit=60)
+    """One dossier: the conversation in, a validated profile out.
+
+    HOW MUCH OF THE CONVERSATION THE MODEL SEES IS ASKED, NOT TYPED. This
+    carried the exact `N items x M chars` pair modelbudget exists to replace -
+    60 messages, each cut at 300 characters, the whole transcript then
+    tail-cut at 8,000 - three literals written once and never compared to the
+    window they had to fit inside. On the Anthropic path that was 8k
+    characters into a context the backend reports in the millions of tokens,
+    and the failure was silent by construction: a thin transcript yields a
+    confident dossier, not an error.
+
+    `parts` is the thread's ACTUAL length rather than DOSSIER_MESSAGES, so a
+    short thread's few messages each get the whole share instead of being
+    rationed against messages that do not exist. The class is "standard", not
+    "deep": this runs in a background thread, but the owner is watching a
+    progress card through it during setup and 25 calls run back to back, so
+    thorough-beats-quick is not the trade here.
+    """
+    thread = imessage.thread_for_person(pid, limit=DOSSIER_MESSAGES)
     if len(thread) < 3:
         return None
+    budget, per_msg = modelbudget.split("standard", parts=len(thread))
     lines = []
     for m in thread:
         who = "me" if m["from_me"] else name
-        lines.append(f"{who}: {m['text'][:300]}")
-    text = "\n".join(lines)[-8000:]
+        lines.append(f"{who}: {m['text'][:per_msg]}")
+    text = "\n".join(lines)[-budget:]
     raw = suggest.complete(DOSSIER_PROMPT.format(
         owner=owner or "the owner", name=name, thread=text))
     parsed = suggest._extract_json(raw)

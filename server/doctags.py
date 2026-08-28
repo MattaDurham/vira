@@ -61,9 +61,45 @@ STORE = ROOT / "data" / "doc-index.json"
 AXES = ideatags.AXES
 AXIS_IDS = ideatags.AXIS_IDS
 
+# BATCH stays this module's own decision, and it is bounded by OUTPUT rather
+# than by the window: the model has to emit one JSON object per document in
+# the batch, and a long list is where entries start going missing. It is also
+# the `parts` side of modelbudget.split's contract — a module says how many
+# passages it wants and is told how large each may be.
 BATCH = 12                 # documents per model call, as ideatags uses
-VOCAB_SHOWN = 60           # tags per axis handed to the tagger
 MAX_BATCHES = 20           # ceiling on one refresh, so a click is bounded
+
+# HOW MUCH EACH PART OF THE CALL MAY CARRY IS ASKED, NOT TYPED.
+#
+# Two literals used to decide it and neither had a capacity behind it: 700
+# characters of a document's opening prose and 60 tags per axis. The
+# vocabulary block is the ONE thing that makes this tagger converge — a
+# truncated list is how reader / Reader / reading-room / reader-queue all get
+# minted for one subject — and it was cut at 60 because a prompt had to be
+# small, against a backend reporting a 1,000,000-token window in its own
+# response JSON. Neither cap could fail loudly: a thin excerpt yields a
+# confident tag drawn from a document's first paragraph.
+#
+# "deep": this runs on the Indexer's tick with nobody watching, which is
+# modelbudget's own definition of the class where being thorough beats being
+# quick.
+BUDGET_CLASS = "deep"
+# The parts of one call: BATCH document excerpts, plus one vocabulary line
+# per axis.
+_BUDGET_PARTS = BATCH + len(AXIS_IDS)
+# The pre-seam sizes, used ONLY when the seam cannot answer. A tagging pass
+# degrades; it never raises.
+_FALLBACK_PART = 700
+
+
+def part_chars():
+    """Characters one part of a tagging call may carry — one document's
+    excerpt, or one axis's vocabulary line."""
+    from . import modelbudget
+    try:
+        return modelbudget.split(BUDGET_CLASS, _BUDGET_PARTS)[1]
+    except Exception:  # noqa: BLE001 — sizing must never stop the pass
+        return _FALLBACK_PART
 
 # A module tag has to be a real word to match inside a slug. Two-letter and
 # generic tags would match everything ("ui" inside "build"), which is worse
@@ -129,10 +165,15 @@ def doc_text(it):
             f"[{_slug_words(it.get('locator'))}]")
 
 
-# How much of a document to read when its title says nothing. Enough to carry
-# a retro's goal line and its first shipped item; small enough that 423 of them
-# is a quick sweep rather than a corpus scan.
-EXCERPT_CHARS = 700
+# How much of a document to read when its title says nothing comes from
+# part_chars() above. The old 700 was sized to carry "a retro's goal line and
+# its first shipped item" — which is a floor dressed as a ceiling, since a
+# retro's SUBJECT is spread through the whole note and 423 of these 519
+# documents are tagged from this excerpt alone.
+# The disk read is a multiple of the budget because markup and frontmatter are
+# stripped afterwards; it is bounded by BATCH either way, so a wider excerpt
+# is still a dozen file reads per tick rather than a corpus scan.
+_READ_MULTIPLE = 6
 
 # A title with no words in it beyond a date, a time and a project name. The
 # per-session retros are all of this shape — `2026-08-03 2133 vira` — and there
@@ -163,18 +204,20 @@ def _is_thin(title):
     return len(words) <= _THIN_WORDS
 
 
-def excerpt(it, limit=EXCERPT_CHARS):
+def excerpt(it, limit=None):
     """The document's opening prose, for titles that carry no subject.
 
     Read ONLY for thin titles, and only during a tagging pass — never on a
     request. A miss returns '' and the document is tagged from its title alone,
     which is the honest degradation: an unreadable file must not stop the pass.
     """
+    limit = part_chars() if limit is None else limit
     try:
         p = readinglist.source_path(it)
         if not p or not p.is_file():
             return ""
-        raw = p.read_text(encoding="utf-8", errors="replace")[:limit * 6]
+        raw = p.read_text(encoding="utf-8",
+                          errors="replace")[:limit * _READ_MULTIPLE]
     except (OSError, ValueError):
         return ""
     raw = _FRONTMATTER.sub("", raw)
@@ -267,13 +310,36 @@ def _deterministic(it, vocab):
 
 # ---------------------------------------------------------------- rung two ---
 
+def _vocab_line(tags, cap):
+    """As much of one axis's vocabulary as the budget carries, most-used
+    first. A COUNT is the wrong cap here — the tags are two characters and
+    twenty, and what has to fit is the line.
+
+    A cut is COUNTED in the line, as ideatags._vocab_block does with the
+    same list: this block exists to stop the tagger minting a synonym for
+    a tag it was never shown, and a tagger that believes it has seen the
+    whole vocabulary will do exactly that. A silent cut here is the defect
+    the block was built against, wearing a smaller number."""
+    out, used = [], 0
+    for tag, _n in tags:
+        if out and used + len(tag) + 2 > cap:
+            break
+        out.append(tag)
+        used += len(tag) + 2
+    line = ", ".join(out)
+    if line and len(out) < len(tags):
+        line += f" (+{len(tags) - len(out)} more not shown)"
+    return line
+
+
 def _prompt(batch, vocab):
     """One tagging call. The vocabulary block is the whole point: tagging each
     document independently yields reader/Reader/reading-room/reader-queue for
     one subject, which groups nothing."""
+    cap = part_chars()
     lines = []
     for ax in AXES:
-        have = ", ".join(t for t, _ in (vocab.get(ax["id"]) or [])[:VOCAB_SHOWN])
+        have = _vocab_line(vocab.get(ax["id"]) or [], cap)
         lines.append(f"- {ax['id']} (max {ax['max']}): {ax['hint']}\n"
                      f"  Already in use: {have or '(nothing yet)'}")
     axes_block = "\n".join(lines)

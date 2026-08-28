@@ -47,7 +47,13 @@ MEDIA_INDEX = DATA / "media-index.sqlite"
 ACCOUNTS = DATA / "mail-accounts.json"
 
 CAND_PER_SOURCE = 5          # newest candidates kept per merchant per source
-TEXT_CAP = 2600              # chars of each candidate handed to the model
+                             # LEFT AS A LITERAL deliberately: this bounds
+                             # RETRIEVAL, not context - each candidate past it
+                             # is another Graph round trip or IMAP RFC822
+                             # fetch, so it is a network-cost decision, not a
+                             # question about the window.  _text_cap below is
+                             # the context half of the old `N items x M chars`
+                             # pair, and it takes this count as its divisor.
 RECEIPT_TERMS = "receipt OR invoice OR renewal OR billing OR payment OR subscription"
 EVIDENCE_KINDS = ("receipt", "renewal_notice", "price_change", "trial_end",
                   "cancel_confirm")
@@ -55,6 +61,41 @@ EVIDENCE_KINDS = ("receipt", "renewal_notice", "price_change", "trial_end",
 
 def _accounts():
     return channels.mail_accounts(ACCOUNTS)
+
+
+def _text_cap(sources):
+    """Chars of each candidate document the extraction pass may read.
+
+    Replaces TEXT_CAP = 2600, and that literal was cutting the half of every
+    receipt that matters.  Measured against the live media index 2026-08-28:
+    of 1,195 indexed email documents, 601 - exactly 50% - are longer than
+    2,600 chars, median 2,604 and p90 18,145.  A receipt puts its total, its
+    plan name and its next billing date at the BOTTOM, under the letterhead
+    and the marketing block, so a head-truncated invoice is the one shape
+    that reads complete to the model and answers the wrong thing.  Engine
+    rule 8 hangs off this pass: an off-pattern charge is a charge to VERIFY,
+    and it is verified from the part of the document the cap was removing.
+
+    `sources` is how many candidate sources this sweep can draw on (the
+    on-disk media index plus one per mail account), so the per-candidate
+    share divides the deep-class budget by the most candidates a single
+    merchant's prompt can carry.  It is a CEILING, not an allocation - real
+    receipts are a few thousand characters, so the effect is that the cap
+    stops binding rather than that the prompt grows to the budget.
+
+    `deep`: the weekly Sweeper is the caller this is sized for and nobody
+    watches it.  The card's Find-receipts button runs the same pass on a
+    BLOCKING request (POST /api/subs/receipts is synchronous - unlike
+    /api/reconnect/refresh, which threads), so the owner does wait on it;
+    that button is already labelled "may take a minute" because the wait is
+    the Graph/IMAP round trips and one model call, not the size of the
+    prompt.  Sizing this pass for that button would starve the sweep that
+    nobody is waiting on, which is the reading engine rule 8 depends on.
+    """
+    from . import modelbudget
+    _total, per = modelbudget.split(
+        "deep", parts=max(CAND_PER_SOURCE * max(sources, 1), 1))
+    return per
 
 
 def _merchant_terms(m):
@@ -68,7 +109,7 @@ def _merchant_terms(m):
 
 # ---------- candidate sources ----------
 
-def _candidates_media(merchant):
+def _candidates_media(merchant, text_cap):
     """Invoice-ish mail attachments already on disk with extracted text."""
     if not MEDIA_INDEX.exists():
         return []
@@ -92,7 +133,7 @@ def _candidates_media(merchant):
                     r["date_ns"] / 1e9, tz=timezone.utc).date().isoformat()
                 out.append({"ref": f"media:{r['seq']}", "account": "attachment",
                             "date": when, "subject": r["name"],
-                            "text": r["doc_text"][:TEXT_CAP]})
+                            "text": r["doc_text"][:text_cap]})
             if out:
                 break
     finally:
@@ -125,7 +166,7 @@ def _search_queries(merchant):
     return qs
 
 
-def _candidates_graph(merchant, account_email):
+def _candidates_graph(merchant, account_email, text_cap):
     """$search the M365 mailbox; pull full bodies for the top hits."""
     hits = []
     for kql in _search_queries(merchant):
@@ -150,11 +191,11 @@ def _candidates_graph(merchant, account_email):
         out.append({"ref": f"graph:{h['id']}", "account": account_email,
                     "date": (h.get("receivedDateTime") or "")[:10],
                     "subject": f"{h.get('subject', '')} (from {sender})",
-                    "text": body[:TEXT_CAP]})
+                    "text": body[:text_cap]})
     return out
 
 
-def _candidates_imap(merchant, acct):
+def _candidates_imap(merchant, acct, text_cap):
     """Search Gmail All Mail (X-GM-RAW) / generic IMAP for receipt mail.
 
     Deliberately NOT folded onto channels.imap_special_folder: this path
@@ -192,7 +233,7 @@ def _candidates_imap(merchant, acct):
                 continue
             msg = email.message_from_bytes(msg_data[0][1])
             when = email.utils.parsedate_to_datetime(msg.get("Date"))
-            body = mail._body_preview(msg, limit=TEXT_CAP)
+            body = mail._body_preview(msg, limit=text_cap)
             mid = (msg.get("Message-ID") or f"uid-{uid.decode()}").strip()
             out.append({"ref": f"imap:{mid}", "account": addr,
                         "date": when.date().isoformat() if when else "",
@@ -210,17 +251,25 @@ def _candidates_imap(merchant, acct):
 def gather_candidates(merchant):
     """All three sources, local-first, errors isolated per source."""
     cands, errors = [], []
-    for fn, label in ((lambda: _candidates_media(merchant), "media-index"),):
+    accounts = _accounts()
+    # One budget for the whole sweep of this merchant: the media index plus
+    # one source per mail account.  Computed here, where the source count is
+    # known, and passed down - a source function that looked it up itself
+    # would be a second place the divisor could drift.
+    text_cap = _text_cap(1 + len(accounts))
+    for fn, label in ((lambda: _candidates_media(merchant, text_cap),
+                       "media-index"),):
         try:
             cands.extend(fn())
         except Exception as e:  # noqa: BLE001
             errors.append(f"{label}: {e}")
-    for acct in _accounts():
+    for acct in accounts:
         try:
             if acct.get("type") == "graph":
-                cands.extend(_candidates_graph(merchant, acct["email"]))
+                cands.extend(_candidates_graph(merchant, acct["email"],
+                                               text_cap))
             else:
-                cands.extend(_candidates_imap(merchant, acct))
+                cands.extend(_candidates_imap(merchant, acct, text_cap))
         except Exception as e:  # noqa: BLE001
             errors.append(f"{acct.get('email', '?')}: {e}")
     seen, unique = set(), []

@@ -48,9 +48,20 @@ from datetime import datetime
 import os
 from pathlib import Path
 
+# What this module will ACCEPT and RENDER, not what a model may read.
+# MAX_BYTES refuses a file at the door; MAX_LINES bounds the paragraphs of
+# a hand-written draft (and the marked copy reproduces every one of them,
+# so it is a statement about the document, not about a context window);
+# MAX_SUGGESTIONS bounds what comes BACK from the model, which no window
+# size makes more useful. The one cap here that really was a context
+# budget is the posting excerpt — see `jd_chars`.
 MAX_BYTES = 400_000
 MAX_LINES = 400
 MAX_SUGGESTIONS = 60
+
+# The posting excerpt's floor. Was the whole rule (`[:6000]`); now the
+# minimum `jd_chars` may return.
+JD_FLOOR = 6000
 
 KINDS = ("resume", "cover")
 
@@ -548,6 +559,34 @@ def _clean_model(raw, lines):
     return out, dropped
 
 
+def jd_chars():
+    """Characters of the posting the judgment pass may read.
+
+    WHAT IT BOUNDS: material the model sees. It was a bare `[:6000]` in the
+    middle of an expression — sized against nothing, while the backend
+    answering the call reports a 1,000,000-token window and real postings
+    run to 24,000 characters. So a quarter of the thing the draft is being
+    judged against was being cut off, silently, and a judgment made from
+    the surviving quarter reads exactly like one made from the whole.
+    `modelbudget` asks the backend; parts=3 because the posting shares the
+    prompt with the employer's hiring signals and the draft itself.
+
+    THE DRAFT IS NOT BUDGETED, deliberately: the model answers with LINE
+    INDEXES into it, so dropping lines to fit would produce findings that
+    address a document the owner never sent. Its bound is MAX_LINES, which
+    is a fact about what a hand-written draft is, not about a window.
+
+    The old literal is the FLOOR, so a backend that can tell us nothing
+    still gets exactly the prompt it got before this seam existed.
+    """
+    try:
+        from . import modelbudget
+        _total, per = modelbudget.split("standard", parts=3)
+        return max(per, JD_FLOOR)
+    except Exception:  # noqa: BLE001 -- a budget never fails a review
+        return JD_FLOOR
+
+
 def model_findings(lines, role, kind, hiring=""):
     """One pass. Returns ([], {"unavailable": 1}) when no backend answers."""
     try:
@@ -558,7 +597,7 @@ def model_findings(lines, role, kind, hiring=""):
     parts = [_PROMPT_HEAD,
              f"\nTHE DRAFT IS A {kind.upper()}.",
              f"\nROLE: {role.get('title', '')} at {role.get('company', '')}"]
-    jd = _norm(role.get("jd") or role.get("reason") or "")[:6000]
+    jd = _norm(role.get("jd") or role.get("reason") or "")[:jd_chars()]
     if jd:
         parts.append(f"\nTHE POSTING:\n{jd}")
     if hiring:

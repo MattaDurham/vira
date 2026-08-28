@@ -103,6 +103,31 @@ class Classify(unittest.TestCase):
         self.assertIn(str(big), d["why"])
         self.assertIn("1,062,221", d["why"])
 
+    def test_a_windows_path_is_a_path(self):
+        """WHICH OS RUNS THE SUITE MUST NOT DECIDE WHETHER THIS IS TESTED.
+
+        _PATH_RE matched only /... , so on Windows the transcript's
+        C:\\Users\\...\\app.js never matched and the oversized file - the one
+        fact this diagnosis exists to state - could never be named. Every
+        case around this one uses a POSIX tmp path, so they pass against the
+        broken regex on a Mac and the failure showed up only in CI.
+
+        The extraction is asserted directly rather than through classify():
+        a real Windows path cannot be stat'd here, and the bug was in the
+        matching, not in the stat.
+        """
+        win = r"  \u2192 Edit C:\Users\RUNNER~1\AppData\Local\Temp\t1\app.js"
+        self.assertEqual(
+            sessiondiag._PATH_RE.findall(win),
+            [r"C:\Users\RUNNER~1\AppData\Local\Temp\t1\app.js"])
+        # The POSIX form must keep working - this widened, it did not move.
+        self.assertEqual(
+            sessiondiag._PATH_RE.findall("  \u2192 Edit /srv/vira/static/app.js"),
+            ["/srv/vira/static/app.js"])
+        # A bare word is still not a path: guessing one would put a
+        # fabricated filename in a diagnosis.
+        self.assertEqual(sessiondiag._PATH_RE.findall("  \u2192 Edit app.js"), [])
+
     def test_it_does_not_invent_a_file_it_cannot_stat(self):
         """Grounded-or-silent: a path that is not on disk is never
         reported with a size, because the point of naming a file is that

@@ -36,6 +36,24 @@ from . import triage
 _CLASSES = {"friend", "family", "business", "service", "company"}
 
 
+def _block_cap():
+    """Chars each block of the resolve prompt may carry — the contact's own
+    thread, the referral group's thread, and the shared contact cards.
+
+    `interactive`: the add-to-CRM sheet auto-resolves in the background the
+    moment a referral-hinted card is opened, and the owner watches the name
+    field fill in, so latency is the binding constraint rather than capacity.
+
+    ONE definition for the three blocks so the class and the part count
+    cannot be spelled two ways in two functions.  The literals it replaces
+    were `_fmt_msgs(msgs, cap=30)` and a 2,000-char slice per contact card;
+    the message cap was the worse of the two, and see _fmt_msgs for why.
+    """
+    from . import modelbudget
+    _total, per = modelbudget.split("interactive", parts=3)
+    return per
+
+
 # ---------- referrer extraction (deterministic, precise on purpose) ----------
 # "intro'd by Eric", "referred by Sarah Chen", "Eric connected us". A generic
 # capitalized-word scan would pull "Brooklyn" and "Saturday" out of the
@@ -150,10 +168,16 @@ def _read_vcard(att_id):
         return ""
 
 
-def _vcards(person_id, group_chat_ids):
+def _vcards(person_id, group_chat_ids, cap):
     """Text of shared contact cards in the contact's direct thread and any
     referral group. When someone 'connects us' it often literally means a
-    card was sent — carrying the full name and number."""
+    card was sent — carrying the full name and number.
+
+    `cap` is the budget's per-block share (was a flat 2,000 chars).  NOTE a
+    limit this does not fix: a vCard carrying a base64 PHOTO puts the blob
+    ahead of TEL and EMAIL, so a head-truncated card can lose exactly the
+    fields this reads it for.  A bigger cap makes that rarer; stripping the
+    PHOTO property is the real answer and is not attempted here."""
     docs = []
     try:
         if person_id:
@@ -172,7 +196,7 @@ def _vcards(person_id, group_chat_ids):
         seen.add(att)
         txt = _read_vcard(att).strip()
         if txt:
-            cards.append(txt[:2000])
+            cards.append(txt[:cap])
     return cards
 
 
@@ -194,7 +218,7 @@ def gather_evidence(handle, person_id=None, memory=""):
                 who = m.get("sender") or ("me" if m["from_me"] else "them")
                 group_msgs.append((who, m["text"]))
 
-    cards = _vcards(person_id, group_chat_ids)
+    cards = _vcards(person_id, group_chat_ids, _block_cap())
 
     sources = []
     if memory.strip():
@@ -234,13 +258,37 @@ Rules:
 - referral_fact is provenance only — one factual sentence, no speculation."""
 
 
-def _fmt_msgs(msgs, cap=30):
-    return "\n".join(f"{who}: {t}" for who, t in msgs[-cap:] if t) or "(none)"
+def _fmt_msgs(msgs, cap):
+    """The most recent messages that fit in `cap` CHARACTERS, oldest first.
+
+    This was `cap=30` MESSAGES, and it was a second truncation sitting
+    downstream of the fetch that had already paid for the material: the
+    thread is fetched at limit=30 (so the cap did nothing there), while the
+    referral block gathers up to three groups at limit=40 each and this
+    then threw away 90 of the 120 messages it had just read — from the one
+    thread where the introduction actually happened, which is the entire
+    reason the referral chain is walked.
+
+    Bounding by characters instead of by a message count is what lets the
+    budget decide it: a message is a line of chat, not a fixed size, so a
+    count cannot be derived from a window."""
+    out, used = [], 0
+    for who, t in reversed(msgs):      # newest first while filling
+        if not t:
+            continue
+        line = f"{who}: {t}"
+        if out and used + len(line) > cap:
+            break
+        out.append(line)
+        used += len(line) + 1
+    out.reverse()
+    return "\n".join(out) or "(none)"
 
 
 def _build_prompt(handle, memory, ev):
     from . import settings
     owner = settings.get("owner_name") or "the owner"
+    cap = _block_cap()
     memory_block = (f"What {owner} remembers about them:\n{memory.strip()}\n\n"
                     if memory.strip() else "")
     referrer_block = ""
@@ -255,14 +303,14 @@ def _build_prompt(handle, memory, ev):
         group_block = (f"Messages in the group thread they share with "
                        f"{ev['referrer'] or 'the referrer'} (where the "
                        f"introduction likely happened):\n"
-                       f"{_fmt_msgs(ev['group_msgs'])}\n\n")
+                       f"{_fmt_msgs(ev['group_msgs'], cap)}\n\n")
     cards_block = ""
     if ev["cards"]:
         cards_block = ("Shared contact card(s) exchanged in these threads:\n"
-                       + "\n---\n".join(ev["cards"]) + "\n\n")
+                       + "\n---\n".join(ev["cards"])[:cap] + "\n\n")
     return RESOLVE_PROMPT.format(
         owner=owner, handle=handle, memory_block=memory_block,
-        referrer_block=referrer_block, thread=_fmt_msgs(ev["thread"]),
+        referrer_block=referrer_block, thread=_fmt_msgs(ev["thread"], cap),
         group_block=group_block, cards_block=cards_block)
 
 

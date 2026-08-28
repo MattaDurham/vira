@@ -24,10 +24,75 @@ import json
 from . import data as crm
 from . import imessage, settings, suggest, textindex
 
+# WHAT ONE REFRESH MAY CARRY IS ASKED, NOT TYPED.
+#
+# The two block caps below were 6,000 and 2,500 characters, typed with this
+# module in 2026-07-28 with no reason written down, against a backend that
+# reports a 1,000,000-token context window in its own response JSON. A
+# dossier truncated at 6,000 characters does not fail: it produces a
+# confident summary written from half the material, which is exactly why it
+# survived. modelbudget converts a budget CLASS into characters against
+# whatever backend is actually answering.
+#
+# "interactive": the owner pressed a button on the person page and is
+# watching it spin, so latency is the binding constraint here rather than
+# capacity — modelbudget's class ceiling is what keeps that true when the
+# window is enormous.
+BUDGET_CLASS = "interactive"
+# Five blocks of material reach the model and they share the budget evenly:
+# the profile Vira already holds, the master evidence, the recent thread,
+# the newest mail, and the oldest mail. Even shares because WHICH block
+# carries the answer changes per person — a contact with no email is all
+# thread, and a pre-2016 friendship is the other way round.
+BUDGET_PARTS = 5
+
+# HOW MANY items to gather stays this module's own decision — the contract
+# stated in modelbudget.split, where a module says how many passages it
+# wants and is told how large each may be. These are not capacity numbers:
+# they name the SHAPE of the evidence (the recent thread, plus mail from
+# BOTH ends, because the oldest mail is the only place a pre-2016 history
+# exists). The budget below is what actually bounds the prompt.
 THREAD_N = 60          # recent direct messages in the current-mode context
 MAIL_RECENT_N = 25     # newest indexed mail bodies with this person
 MAIL_OLDEST_N = 15     # oldest — where the pre-archive history lives
-SNIPPET = 280
+# Per-line previews, deliberately left literal (the viratools.PREVIEW
+# precedent): these bound ONE message or ONE mail body, and past a few
+# hundred characters a mail line is quoted history rather than more signal.
+# What the budget decides is how many of them survive into the prompt.
+SNIPPET = 280      # one mail body
+MSG_CHARS = 200    # one iMessage — the same preview rule
+
+# The pre-seam size, used ONLY when the seam itself cannot answer. A refresh
+# must never fail over its own sizing.
+_FALLBACK_BLOCK = 2500
+
+
+def _block_chars():
+    """Characters each material block may carry, asked of the backend that
+    will answer this pass."""
+    from . import modelbudget
+    try:
+        return modelbudget.split(BUDGET_CLASS, BUDGET_PARTS)[1]
+    except Exception:  # noqa: BLE001 — sizing must never break a refresh
+        return _FALLBACK_BLOCK
+
+
+def _fit(lines, cap, tail=False):
+    """As many WHOLE lines as the budget carries.
+
+    Whole lines, because truncating the joined block cuts a message in half
+    and reads as corrupted evidence. From the END when the lines are
+    chronological (`tail`): a thread is oldest-first, so what has to survive
+    a squeeze is the most recent exchange, not the first one.
+    """
+    seq = list(reversed(lines)) if tail else list(lines)
+    out, used = [], 0
+    for ln in seq:
+        if out and used + len(ln) + 1 > cap:
+            break
+        out.append(ln)
+        used += len(ln) + 1
+    return list(reversed(out)) if tail else out
 
 
 def _mail_lines(pid, order, limit):
@@ -62,7 +127,7 @@ def _context(pid):
         "person": p,
         "prof": prof,
         "prof_slim": prof_slim,
-        "evidence": (master.get("evidence") or "")[:2500],
+        "evidence": (master.get("evidence") or "")[:_block_chars()],
         "thread": thread,
         "mail_recent": _mail_lines(pid, "recent", MAIL_RECENT_N),
         "mail_oldest": _mail_lines(pid, "oldest", MAIL_OLDEST_N),
@@ -72,6 +137,7 @@ def _context(pid):
 def _prompt(ctx):
     owner = settings.get("owner_name") or "the owner"
     name = ctx["person"]["name"]
+    cap = _block_chars()
     lines = [
         f"You maintain the private CRM dossier {owner} keeps on "
         f"{name}. Rewrite the relationship description so it reads "
@@ -79,23 +145,26 @@ def _prompt(ctx):
         "material below.",
         "",
         f"CURRENT PROFILE (model-synthesized earlier):",
-        json.dumps(ctx["prof_slim"], ensure_ascii=False, default=str)[:6000],
+        json.dumps(ctx["prof_slim"], ensure_ascii=False,
+                   default=str)[:cap],
         "",
     ]
     if ctx["evidence"]:
         lines += ["MASTER EVIDENCE:", ctx["evidence"], ""]
     if ctx["thread"]:
-        lines.append(f"RECENT DIRECT THREAD (oldest first; 'me' = {owner}):")
+        msgs = []
         for m in ctx["thread"]:
             who = "me" if m["from_me"] else name.split(" ")[0]
-            lines.append(f"[{(m.get('when') or '')[:10]}] [{who}] "
-                         + m["text"][:200])
-        lines.append("")
+            msgs.append(f"[{(m.get('when') or '')[:10]}] [{who}] "
+                        + m["text"][:MSG_CHARS])
+        lines.append(f"RECENT DIRECT THREAD (oldest first; 'me' = {owner}):")
+        lines += _fit(msgs, cap, tail=True) + [""]
     if ctx["mail_recent"]:
-        lines += ["RECENT EMAIL (indexed bodies):"] + ctx["mail_recent"] + [""]
+        lines += (["RECENT EMAIL (indexed bodies):"]
+                  + _fit(ctx["mail_recent"], cap) + [""])
     if ctx["mail_oldest"]:
-        lines += ["OLDEST EMAIL ON RECORD (the early history):"] \
-            + ctx["mail_oldest"] + [""]
+        lines += (["OLDEST EMAIL ON RECORD (the early history):"]
+                  + _fit(ctx["mail_oldest"], cap) + [""])
     lines.append(
         "Return STRICT JSON only, no prose around it:\n"
         "{\n"
@@ -148,9 +217,16 @@ def explore_prompt(pid):
     name = p["name"]
     owner = settings.get("owner_name") or "the owner"
     handles = p.get("handles", {})
+    # The same block budget: this prompt only ORIENTS a session that then
+    # goes and reads the rest itself, and the two blocks it carries (the
+    # current description, the handle list) are smaller material than the
+    # one-pass refresh gets. What the budget ends is the silent truncation —
+    # 2,200 characters cut a long description mid-sentence, and 600 cut the
+    # handle list of a contact carrying nine addresses.
+    cap = _block_chars()
     known = json.dumps({k: prof.get(k) for k in (
         "relationship_class", "relationship_summary", "how_we_met")
-        if prof.get(k)}, ensure_ascii=False)[:2200]
+        if prof.get(k)}, ensure_ascii=False)[:cap]
     stats = prof.get("stats") or {}
     first = stats.get("imsg_first") or "unknown"
     return (
@@ -160,7 +236,7 @@ def explore_prompt(pid):
         "'Explore and refresh' on this profile — they want you to "
         "actually dig, not summarize what the dossier already says.\n\n"
         f"KNOWN TODAY: {known or '(no profile yet)'}\n"
-        f"Their handles: {json.dumps(handles)[:600]}\n"
+        f"Their handles: {json.dumps(handles)[:cap]}\n"
         f"The iMessage archive with them starts {first} — anything "
         "earlier only exists in email, notes, and photos.\n\n"
         "How to work:\n"

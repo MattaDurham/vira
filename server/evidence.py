@@ -57,7 +57,18 @@ MAX_PROSE = 2000
 MAX_SKILLS = 8
 MAX_SKILL_CHARS = 80
 MAX_CITATIONS = 10
-JOB_PROMPT_HEAD = 400
+
+# What the BROWSER gets for each job on the episodes payload.  Deliberately a
+# head and not the whole prompt: nothing renders it (evEpisodeRow draws
+# goal/date/time and a Compose button), so shipping every live job's full
+# prompt would add ~240KB to /api/evidence for data no surface reads.
+#
+# It was called JOB_PROMPT_HEAD and it was ALSO the compose prompt's only
+# view of the material - one 400-char literal serving a payload nobody reads
+# and the model call this module exists for.  The compose side asks
+# modelbudget now (see _compose_prompt_cap and _format_jobs).
+PAYLOAD_PROMPT_HEAD = 400
+
 BUILDLOG_HEAD_LINES = 30
 COMPOSE_LIMIT_DEFAULT = 5
 
@@ -164,9 +175,34 @@ def _is_project_cwd(cwd):
         return False
 
 
-def _jobs():
+def _compose_prompt_cap():
+    """Chars of each job's launch prompt the COMPOSE pass may read.
+
+    Measured on the live ledger 2026-08-28: 62 of the 63 jobs launched in
+    this checkout carry a prompt longer than the old 400-char head — median
+    1,452 chars, p90 4,342, longest 49,462 — and _format_jobs then cut that
+    again to 200.  So the model was shown ~14% of a median instruction while
+    being asked to write down HOW THE OWNER DIRECTED THE AGENT, which is the
+    one thing that prompt IS.  Nothing failed: a cap that small yields a
+    confident case study composed from one sentence.
+
+    The ceiling is the whole standard-class budget rather than a share of it,
+    because this is a truncation limit and not an allocation — every live job
+    prompt put together is ~243k chars, so reading at the ceiling
+    materialises nothing that was not already in the ledger.  _format_jobs
+    does the per-job division, so the block still fits the class.
+    """
+    from . import modelbudget
+    return modelbudget.context_chars("standard")
+
+
+def _jobs(prompt_cap):
     """Jobs launched in THIS checkout, from the durable ledger — the
-    prompt head is how the owner directed the agent that day."""
+    prompt is how the owner directed the agent that day.
+
+    `prompt_cap` is required rather than defaulted: the payload and the
+    compose prompt want different amounts of it, and a default here is what
+    let one number quietly answer both questions."""
     from . import joblog
     out = []
     for r in joblog.list_records():
@@ -176,7 +212,7 @@ def _jobs():
             "id": r.get("id"),
             "title": joblog.name(r),
             "status": r.get("status") or "",
-            "prompt": (r.get("prompt") or "")[:JOB_PROMPT_HEAD],
+            "prompt": (r.get("prompt") or "")[:prompt_cap],
             "started": r.get("started") or "",
         })
     return out
@@ -218,10 +254,14 @@ def _composed_keys():
             if c.get("status") != "archived"}
 
 
-def mine():
+def mine(prompt_cap=PAYLOAD_PROMPT_HEAD):
     """Every episode, newest first: one per session retro, with the day's
     commits, jobs, and build-log notes attached by date. Unmatched commits
-    or jobs are simply not shown — this is raw material, not an audit."""
+    or jobs are simply not shown — this is raw material, not an audit.
+
+    The default `prompt_cap` is the payload head; _episode() overrides it
+    with the compose budget, which is the only caller that reads the job
+    prompts rather than shipping them."""
     parsed = []
     for f in _retro_files():
         info = _parse_retro_full(f)
@@ -231,7 +271,7 @@ def mine():
     parsed.sort(key=lambda e: (e["date"], e["time"]), reverse=True)
 
     commits = _git_log()
-    jobs = _jobs()
+    jobs = _jobs(prompt_cap)
     buildlogs = _buildlogs()
     composed = _composed_keys()
 
@@ -254,7 +294,10 @@ def mine():
 
 
 def _episode(key):
-    ep = next((e for e in mine() if e["key"] == key), None)
+    # The compose path, and the only reader of a job's prompt — so it takes
+    # the model's budget rather than the browser's head.
+    ep = next((e for e in mine(prompt_cap=_compose_prompt_cap())
+               if e["key"] == key), None)
     if ep is None:
         raise KeyError(key)
     return ep
@@ -378,7 +421,15 @@ def _format_commits(commits):
 
 
 def _format_jobs(jobs):
-    lines = [f"- {j['id']} [{j['status']}] {j['title']}: {j['prompt'][:200]}"
+    # The jobs block is the owner's own direction, so it gets the standard
+    # class's budget divided across the jobs in THIS episode (the busiest
+    # real day in the ledger carries 8).  The literal it replaces was
+    # [:200], applied on top of an already-truncated 400-char head: a second
+    # and smaller cap downstream of a first, which is the shape that makes a
+    # starved prompt impossible to notice from either end.
+    from . import modelbudget
+    _total, per = modelbudget.split("standard", parts=max(len(jobs), 1))
+    lines = [f"- {j['id']} [{j['status']}] {j['title']}: {j['prompt'][:per]}"
              for j in jobs]
     return "\n".join(lines) or "(none)"
 

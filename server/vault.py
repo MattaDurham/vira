@@ -434,7 +434,60 @@ def _epoch(iso):
         return None
 
 
-def ask(question, k=10, hits=None):
+# ------------------------------------------------------------ the ask budget
+# What qocha's own ask() can actually CARRY, read out of its source rather
+# than guessed: it renders each hit at up to 2,400 characters and truncates
+# the joined block at 60,000. Those two are not ours to raise -- qocha is a
+# separate package with its own release ritual -- but they ARE the ceiling
+# this module has to respect, because a hit retrieved past them is searched
+# for, paid for, and then dropped from the prompt with nothing said.
+ENGINE_CHUNK_CHARS = 2_400
+ENGINE_PROMPT_CHARS = 60_000
+
+# A PASSAGE COSTS MORE THAN ITS TEXT.  qocha renders each hit under a header
+# line (`--- CHUNK n | path | heading`) and joins the blocks with a blank
+# line, so counting only the 2,400 characters of text over-retrieves and
+# hands the engine material it truncates in silence -- the exact failure
+# ask_hits() exists to prevent, one layer along.  Measured over the real
+# 39,756-chunk index: median 141, p99 236, max 324.  The reserve is the
+# MAX rather than the median on purpose, because the two errors are not
+# symmetric: being conservative costs one passage, being generous costs a
+# passage that was searched for, paid for, and then dropped with nothing
+# said.  A vault with longer paths than this one would still overrun, by
+# at most one passage.
+ENGINE_BLOCK_OVERHEAD = 324
+
+
+def ask_hits(kind="standard"):
+    """How many passages to retrieve for one grounded answer.
+
+    WAS a bare `k=10` default on ask() below -- typed once, never revisited,
+    and the exact twin of find.ASK_LIMIT (8, which left the right note at
+    rank 34 while the model answered confidently from the wrong ones). It
+    was never measured against a window, and it could not fail loudly: a cap
+    that is too small yields confident output from thin material.
+
+    TWO CEILINGS, AND THE SMALLER WINS. modelbudget says what the answering
+    backend can hold, so switching backends in Config re-sizes this instead
+    of leaving a literal describing a machine nobody re-measured; the engine
+    constants above say what the prompt downstream can carry. Retrieving
+    past the second would spend the search and hand qocha material it
+    silently truncates, which is the same defect one layer along.
+    """
+    from . import modelbudget
+    room = min(modelbudget.context_chars(kind), ENGINE_PROMPT_CHARS)
+    return max(1, int(room // (ENGINE_CHUNK_CHARS + ENGINE_BLOCK_OVERHEAD)))
+
+
+def ask(question, k=None, hits=None):
+    """Grounded answer over the vault.
+
+    `k` is the retrieval width used when the caller has not already narrowed
+    the corpus itself. None asks ask_hits() rather than carrying a number
+    here; a caller that means a specific width still passes one.
+    """
+    if k is None:
+        k = ask_hits()
     merged = search(question, limit=k) if hits is None else hits
     return _vault().ask(question, k=k, hits=merged)
 

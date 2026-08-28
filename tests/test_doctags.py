@@ -140,11 +140,22 @@ class Excerpt(unittest.TestCase):
             self.assertEqual(doctags.excerpt({}), "")
 
     def test_the_excerpt_is_bounded(self):
+        """Bounded by what the SEAM allows, not by a literal.
+
+        EXCERPT_CHARS was 700 - a number typed once against a backend that
+        reports a 1,000,000-token window in its own response JSON. The test
+        asserts the behaviour (the excerpt respects the budget it was given)
+        rather than a new magic number, so raising the budget cannot break
+        it and removing the bound cannot pass it.
+        """
         p = self._at("a.md", "word " * 5000)
         with mock.patch.object(doctags.readinglist, "source_path",
                                return_value=p):
             self.assertLessEqual(len(doctags.excerpt({})),
-                                 doctags.EXCERPT_CHARS)
+                                 doctags.part_chars())
+            # An explicit limit is honoured, which is what proves the bound
+            # is applied rather than merely computed.
+            self.assertLessEqual(len(doctags.excerpt({}, limit=120)), 120)
 
 
 class ParseModelOutput(unittest.TestCase):
