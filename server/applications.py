@@ -209,9 +209,11 @@ def places_for(locs, wp=None):
     by their leading city segment.
 
     `wp` is the body's own workplace reading (server.workplace). Where
-    it BINDS -- the description names the offices and rules remote out
-    -- it decides the facets instead: the Remote facet is dropped and
-    the offices the body names are folded in. That is what stops a
+    an OFFICE policy binds -- the description names the offices and rules
+    remote out -- it decides the facets instead: the Remote facet is dropped
+    and the offices the body names are folded in. A territorially limited
+    remote policy still keeps Remote; eligibility handles its reach. That is
+    what stops a
     posting tagged "US - Remote" whose body says "based in San
     Francisco, CA, hybrid 3 days a week" from answering the Remote
     filter, and what makes it answer the San Francisco one, which is
@@ -220,7 +222,7 @@ def places_for(locs, wp=None):
     disagreement stays visible rather than being quietly resolved.
     """
     from . import jobboards
-    bind = bool(wp and wp.get("binds"))
+    bind = bool(wp and wp.get("binds") and not wp.get("remote_limited"))
     out, seen = [], set()
 
     def add(name):
@@ -232,7 +234,7 @@ def places_for(locs, wp=None):
         for p in wp.get("places") or []:
             add(_facet(p))
     for loc in locs or []:
-        for part in re.split(r"[|;]", str(loc)):
+        for part in re.split(r"[|;•]", str(loc)):
             part = part.strip()
             if not part:
                 continue
@@ -291,7 +293,8 @@ def _norm(job, source, avail=None, rule=None):
     # a stamp withheld -- so the sweep stays the authority on everything
     # except the one thing it could not see.
     if eligible and rule is not None \
-            and not workplace.allows(wp, rule["places"], locs):
+            and not workplace.allows(
+                wp, rule["places"], locs, rule.get("remote_regions")):
         eligible = False
     return {
         "uid": uid,
@@ -303,7 +306,8 @@ def _norm(job, source, avail=None, rule=None):
         "places": places_for(locs, wp),
         "workplace": wp,
         "workplace_label": workplace.label(wp),
-        "remote": "" if (wp and wp.get("binds")) else (
+        "remote": "" if (wp and wp.get("binds")
+                         and not wp.get("remote_limited")) else (
             job.get("remote") or ("remote" if any(
                 "remote" in (l or "").lower() for l in locs) else "")),
         "seniority": job.get("seniority") or "",
@@ -505,8 +509,10 @@ def load_universe():
                 "first_seen": j.get("first_seen")
                               or cr.get("first_seen") or "",
                 "baseline": bool(cr.get("baseline")),
-                "remote": "" if (wp and wp.get("binds")) \
-                    else (j.get("remote") or ""),
+                "remote": "" if (wp and wp.get("binds")
+                                  and not wp.get("remote_limited")) \
+                    else (j.get("remote") or ("remote" if any(
+                        "remote" in str(loc).lower() for loc in locs) else "")),
                 "seniority": j.get("seniority") or "",
                 "salaryMin": j.get("salaryMin"),
                 "salaryMax": j.get("salaryMax"),
@@ -758,12 +764,17 @@ def compose(company=None, view=None):
         for k, v in sorted(facets.items(), key=lambda kv: (-kv[1], kv[0]))]
     meta["eligibility"] = elig
     cfg = settings.raw()
+    remote_regions = cfg.get("applications_remote_regions") or []
+    if isinstance(remote_regions, str):
+        remote_regions = [remote_regions]
     meta["location_rule"] = {
         "places": list(cfg.get("applications_locations") or []),
+        "remote_regions": list(remote_regions),
         "remote_ok": cfg.get("applications_remote_ok", True) is not False,
         # unconfigured means unfiltered (jobboards.eligible_location) —
         # the dropdown only offers the rule rows when there is a rule
         "configured": bool(cfg.get("applications_locations"))
+                      or bool(cfg.get("applications_remote_regions"))
                       or "applications_remote_ok" in cfg,
     }
     state = get_state()

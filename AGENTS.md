@@ -224,3 +224,26 @@ section is the portable minimum that holds for any agent, any harness:
   and a pre-commit PII guard backstops the rule. Never loosen the
   `.gitignore` or copy owner data into the tracked tree to make something
   easier to reach.
+
+## Public code and private state
+
+Vira's source repository is public. An owner's records, preferences, scores,
+applications, messages, and local configuration are private. Public code may
+read those values and apply a general rule, but it must not turn one owner's
+value into a product default or a hard-coded policy. For example, the product
+may read an employer's required office and compare it with configured places;
+it must not assume that the required office should be any particular city.
+
+Every code-session handoff must separate these three things explicitly:
+
+1. **Public code candidate** — tracked files and commits containing only
+   reusable product behavior, tests, and documentation. State whether they
+   are merely on a worktree branch, merged locally, or pushed. Only this part
+   is ever a merge or push candidate.
+2. **Private local state** — git-ignored or external records and configuration
+   touched during the work. Name the kind of data and its local destination
+   without copying personal content into the repository. This part is never
+   merged or pushed.
+3. **Owner action** — the exact review, merge, push, restart, or private-config
+   step still required. Say `none` when there is none; do not blur a proposed
+   public change together with a completed private-data update.

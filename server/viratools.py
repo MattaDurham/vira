@@ -961,13 +961,16 @@ TOOL_SPECS = [
      {"slug": str, "items_json": str}, _t_add_reading_room_items),
     ("configure_applications",
      "Apply first-run setup for the Applications module. Pass config_json "
-     "as a JSON string: {record_dir, locations: [str], remote_ok: bool, "
+     "as a JSON string: {record_dir, locations: [str], "
+     "remote_regions: [str], remote_ok: bool, "
      "boards: [{company, ats, slug, query, location, note}]}. ats is "
      "greenhouse|ashby|lever|microsoft|google|manual. The server creates "
      "the record and universe directories, writes the config keys, "
      "registers every board, and starts the first poll — never edit "
      "data/config.json or the boards registry by hand. An EMPTY locations "
-     "list means unfiltered; never guess a city.",
+     "list means unfiltered; never guess a city. remote_regions separately "
+     "lists accepted employer-written remote territories; never infer it "
+     "from a city.",
      {"config_json": str}, _t_configure_applications),
     ("record_role_scores",
      "File job-role scores into the candidate universe. Pass scores_json "

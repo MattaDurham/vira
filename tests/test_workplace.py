@@ -16,22 +16,53 @@ import unittest
 from server import applications, jobboards, workplace
 
 
-def rule(places=("New York", "NYC"), remote_ok=True):
+def rule(places=("New York", "NYC", "NY"), remote_ok=True,
+         remote_regions=("United States", "US East", "Eastern",
+                         "tri-state")):
     return {
         "places": jobboards._rx(list(places)) if places else None,
+        "remote_regions": (jobboards._rx(list(remote_regions))
+                           if remote_regions else None),
         "remote_ok": remote_ok,
-        "exclude": jobboards._rx(jobboards.DEFAULT_REMOTE_EXCLUDE),
-        "hints": jobboards._rx(jobboards.DEFAULT_REGION_HINTS),
+        "exclude": jobboards._rx(REMOTE_EXCLUDE),
+        "hints": jobboards._rx(REGION_HINTS),
     }
 
 
 BOARD = {"company": "TestCo", "ats": "ashby", "slug": "testco"}
+
+REMOTE_EXCLUDE = r"europe|emea|germany|seoul"
+REGION_HINTS = r"United States|San Francisco|New York"
 
 # The corpus's single most common policy sentence: 221 of OpenAI's 735
 # listed postings carried this shape while the board flagged them remote.
 HYBRID_SF = ("This role is based in San Francisco, CA. We use a hybrid "
              "work model of 3 days in the office per week and offer "
              "relocation assistance to new employees.")
+
+ABRIDGE_HYBRID_SF = (
+    "This is a hybrid role with a minimum of 3 days weekly in our San "
+    "Francisco office. Please only apply if you are able to commit to "
+    "this model and/or willing to relocate to San Francisco.")
+
+ASANA_REMOTE_HYBRID = (
+    "This role can either be fully remote depending on which US state "
+    "you live in, or based in our New York City office with an "
+    "office-centric hybrid schedule. If based in-office: The standard "
+    "in-office days are Monday, Tuesday, and Thursday. Most Asanas have "
+    "the option to work from home on Wednesdays. Working from home on "
+    "Fridays depends on the type of work you do and the teams with which "
+    "you partner.")
+
+SCALE_HYBRID_SF_NYC = (
+    "This is a hybrid role (3 days per week in office) based in our San "
+    "Francisco or New York City office to join our team and participate "
+    "in the hiring process from beginning to end.")
+
+ABRIDGE_IN_PERSON_WEEKDAYS = (
+    "This role is based out of our San Francisco office and is in-person "
+    "Monday, Wednesday, and Friday. Please only apply if you are open to "
+    "relocation and our hybrid in-person model in San Francisco.")
 
 
 class TheReader(unittest.TestCase):
@@ -47,6 +78,54 @@ class TheReader(unittest.TestCase):
         self.assertEqual(wp["mode"], "hybrid")
         self.assertEqual(wp["days"], 3)
         self.assertEqual(wp["places"], ["San Francisco, CA"])
+
+    def test_a_schedule_first_hybrid_names_its_binding_office(self):
+        # Verbatim Abridge policy: there is no "role is based" trigger,
+        # and both "hybrid role" and "3 days weekly" are real corpus
+        # forms. The office still has to be read from the body.
+        wp = workplace.read(ABRIDGE_HYBRID_SF)
+        self.assertTrue(wp["binds"])
+        self.assertFalse(wp["remote_ok"])
+        self.assertEqual(wp["mode"], "hybrid")
+        self.assertEqual(wp["days"], 3)
+        self.assertEqual(wp["places"], ["San Francisco"])
+
+    def test_schedule_follow_on_weekdays_are_not_places(self):
+        # Verbatim Asana policy. The schedule trigger starts after the
+        # remote option and after the real NYC office; generic scanning
+        # for a later "based" used to turn Tuesday and Thursday into
+        # office names.
+        wp = workplace.read(ASANA_REMOTE_HYBRID)
+        self.assertEqual(wp["places"], [])
+
+    def test_schedule_first_based_clause_keeps_both_offices(self):
+        # Verbatim Scale policy. The words after "office" are unrelated
+        # prose and must not cause the second office to be discarded.
+        wp = workplace.read(SCALE_HYBRID_SF_NYC)
+        self.assertEqual(wp["places"], ["San Francisco", "New York City"])
+
+    def test_residency_clause_stops_before_in_person_weekdays(self):
+        # Verbatim Abridge policy. The weekday schedule qualifies the San
+        # Francisco office; it does not add Wednesday and Friday as places.
+        wp = workplace.read(ABRIDGE_IN_PERSON_WEEKDAYS)
+        self.assertEqual(wp["places"], ["San Francisco"])
+
+    def test_location_heading_and_toronto_transition_are_binding(self):
+        heading = workplace.read(
+            "Location / work model: San Francisco, CA; hybrid, 3 days/week "
+            "in-office. Please note this policy.")
+        transition = workplace.read(
+            "This Toronto-based role is currently remote and is expected to "
+            "transition to an in-office arrangement.")
+        self.assertEqual(heading["places"], ["San Francisco, CA"])
+        self.assertEqual(transition["places"], ["Toronto"])
+        self.assertTrue(heading["binds"])
+        self.assertTrue(transition["binds"])
+
+    def test_functional_use_of_hybrid_is_not_a_workplace_policy(self):
+        self.assertIsNone(workplace.read(
+            "This is a unique hybrid role designed for a technically fluent "
+            "risk architect. You will own the program end-to-end."))
 
     def test_the_count_is_read_through_the_words_between_it_and_week(self):
         # "3 days in the office per week" -- a tighter pattern reported no
@@ -213,10 +292,83 @@ class WhatABodyMayOverride(unittest.TestCase):
         self.assertTrue(workplace.allows(
             wp, rule()["places"], ["Toronto", "New York", "Remote"]))
 
-    def test_a_schedule_with_nothing_on_site_to_bind_to_allows(self):
+    def test_a_schedule_without_a_confirmed_configured_base_refuses(self):
         wp = workplace.read("We use a hybrid work model of 3 days in the "
                             "office per week.")
-        self.assertTrue(workplace.allows(wp, rule()["places"], ["Remote"]))
+        self.assertFalse(workplace.allows(wp, rule()["places"], ["Remote"]))
+
+    def test_an_unmatched_region_limited_remote_role_refuses(self):
+        wp = workplace.read(
+            "This role is remote but the successful candidate should be "
+            "based in Germany or surrounding area. About the role")
+        self.assertTrue(wp["remote_limited"])
+        self.assertTrue(wp["remote_ok"])
+        configured = rule()
+        self.assertFalse(workplace.allows(
+            wp, configured["places"], ["Remote"],
+            configured["remote_regions"]))
+
+    def test_explicitly_configured_remote_territories_are_allowed(self):
+        east = workplace.read(
+            "This role is remote (must be located in US East, Central, or "
+            "West timezone). Compensation and benefits")
+        national = workplace.read(
+            "Candidates must be based in the United States; remote work is "
+            "also possible. About the role")
+        configured = rule()
+        self.assertTrue(workplace.allows(
+            east, configured["places"], ["Remote"],
+            configured["remote_regions"]))
+        self.assertTrue(workplace.allows(
+            national, configured["places"], ["Remote"],
+            configured["remote_regions"]))
+
+    def test_a_configured_tri_state_territory_is_allowed(self):
+        wp = workplace.read(
+            "This role is remote (must be based in the tri-state area). "
+            "Compensation and benefits")
+        configured = rule()
+        self.assertTrue(workplace.allows(
+            wp, configured["places"], ["New York, NY"],
+            configured["remote_regions"]))
+
+    def test_remote_territories_are_configuration_not_product_policy(self):
+        wp = workplace.read(
+            "This role is remote but the successful candidate should be "
+            "based in Germany. About the role")
+        office = jobboards._rx(["Berlin"])
+        germany = jobboards._rx(["Germany"])
+        canada = jobboards._rx(["Canada"])
+        self.assertTrue(workplace.allows(
+            wp, office, ["Remote"], germany))
+        self.assertFalse(workplace.allows(
+            wp, office, ["Remote"], canada))
+
+    def test_binding_office_uses_only_configured_places(self):
+        wp = workplace.read(
+            "This role is based in San Francisco. We use a hybrid work "
+            "model of 3 days in the office per week.")
+        self.assertTrue(workplace.allows(
+            wp, jobboards._rx(["San Francisco"]), ["Remote"]))
+        self.assertFalse(workplace.allows(
+            wp, jobboards._rx(["New York"]), ["Remote"]))
+
+    def test_anthropic_office_presence_needs_an_explicit_nyc_base(self):
+        wp = workplace.read(
+            "Location-based hybrid policy: Currently, we expect all staff "
+            "to be in one of our offices at least 25% of the time. However, "
+            "some roles may require more time in our offices.")
+        self.assertFalse(workplace.allows(
+            wp, rule()["places"], ["Remote-Friendly, United States"]))
+        self.assertTrue(workplace.allows(
+            wp, rule()["places"], ["New York, NY", "Remote-Friendly"]))
+
+    def test_abbreviated_sf_and_ny_offices_include_new_york(self):
+        wp = workplace.read(
+            "Must be willing to work from our SF or NY office 3x per week.")
+        self.assertEqual(wp["places"], ["SF", "NY"])
+        self.assertTrue(workplace.allows(
+            wp, rule()["places"], ["SF Office", "NYC Office", "Remote"]))
 
     def test_an_unconfigured_rule_never_refuses(self):
         wp = workplace.read(HYBRID_SF)
@@ -256,6 +408,14 @@ class TheBoardFlagIsNotTheEmployersWord(unittest.TestCase):
         self.assertEqual(rec["locations"], ["US - Remote"])
         self.assertTrue(rec["workplace"]["binds"])
 
+    def test_a_region_limited_remote_role_keeps_the_remote_flag(self):
+        rec = jobboards._norm(
+            BOARD, uid="u5", title="SWE", locations=["Germany"],
+            jd="This role is remote but the successful candidate should be "
+               "based in Germany.", remote_flag=True)
+        self.assertIn("Remote", rec["locations"])
+        self.assertEqual(rec["remote"], "remote")
+
 
 class Eligibility(unittest.TestCase):
     def test_the_body_refuses_a_role_the_location_field_called_remote(self):
@@ -263,6 +423,21 @@ class Eligibility(unittest.TestCase):
         self.assertTrue(jobboards.eligible_location(
             {"locations": ["US - Remote"]}, rule()))       # before
         self.assertFalse(jobboards.eligible_location(rec, rule()))
+
+    def test_a_remote_tag_cannot_override_abridge_hybrid_sf(self):
+        rec = {"locations": ["Remote"],
+               "workplace": workplace.read(ABRIDGE_HYBRID_SF)}
+        self.assertFalse(jobboards.eligible_location(rec, rule()))
+
+    def test_asana_state_remote_is_not_narrowed_by_weekdays(self):
+        rec = {"locations": ["US IL Remote"],
+               "workplace": workplace.read(ASANA_REMOTE_HYBRID)}
+        self.assertTrue(jobboards.eligible_location(rec, rule()))
+
+    def test_scale_hybrid_includes_its_new_york_office(self):
+        rec = {"locations": ["San Francisco", "New York City"],
+               "workplace": workplace.read(SCALE_HYBRID_SF_NYC)}
+        self.assertTrue(jobboards.eligible_location(rec, rule()))
 
     def test_the_reading_only_ever_narrows(self):
         # A role the location rule already refuses cannot be rescued by a
@@ -275,7 +450,7 @@ class Eligibility(unittest.TestCase):
     def test_an_unconfigured_install_is_still_unfiltered(self):
         rec = {"locations": ["San Francisco"], "workplace": workplace.read(HYBRID_SF)}
         self.assertTrue(jobboards.eligible_location(
-            rec, rule(places=None, remote_ok=True)))
+            rec, rule(places=None, remote_ok=True, remote_regions=None)))
 
 
 class TheFacetsAndTheStamp(unittest.TestCase):
@@ -289,6 +464,19 @@ class TheFacetsAndTheStamp(unittest.TestCase):
         self.assertEqual(
             applications.places_for(["US - Remote", "San Francisco"], None),
             ["Remote", "San Francisco"])
+
+    def test_board_bullets_split_into_real_place_facets(self):
+        self.assertEqual(
+            applications.places_for(
+                ["San Francisco, CA • New York, NY • United States"], None),
+            ["San Francisco", "New York", "United States"])
+
+    def test_region_limited_remote_keeps_its_remote_facet(self):
+        wp = workplace.read(
+            "This role is remote but the successful candidate should be "
+            "based in Germany.")
+        self.assertEqual(applications.places_for(["Germany", "Remote"], wp),
+                         ["Germany", "Remote"])
 
     def test_a_stale_stamp_is_vetoed_by_the_body(self):
         src = {"slug": "x", "company": "X"}

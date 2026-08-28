@@ -76,7 +76,11 @@ Casey,Madeup,https://example.com/in/casey,,Unrelated Co,Analyst,03 Jan 2026
 # The catalog computes location eligibility through
 # jobboards.location_rule(), which reads the RUNNING machine's config —
 # pinned here so eligibility assertions test the code, not this Mac.
-NYC_CFG = {"applications_locations": ["New York", "NYC"],
+NYC_CFG = {"applications_locations": ["New York", "NYC", "NY"],
+           "applications_remote_regions": [
+               "United States", "US East", "Eastern", "tri-state"],
+           "applications_remote_exclude": "europe|emea|seoul",
+           "applications_region_hints": "United States|San Francisco",
            "applications_remote_ok": True}
 
 # bound BEFORE the base class patches the name — _nyc_rule replaces
@@ -784,7 +788,9 @@ class PlacesAndLocationTest(ApplicationsBase):
                          len(data["roles"]))
         lr = data["meta"]["location_rule"]
         self.assertTrue(lr["configured"])
-        self.assertEqual(lr["places"], ["New York", "NYC"])
+        self.assertEqual(lr["places"], ["New York", "NYC", "NY"])
+        self.assertEqual(lr["remote_regions"], [
+            "United States", "US East", "Eastern", "tri-state"])
         self.assertTrue(lr["remote_ok"])
 
 
