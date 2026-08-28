@@ -26,6 +26,10 @@ lands here.
 
 Read-only: `GET /api/changelog` → { groups: [ {date, time, goal, entries:
 [{text, kind}]} ] }, newest first. kind ∈ {ship, done, dropped, job}.
+A kind-"job" entry also carries `job_id` (the full ledger id) so a client
+rendering the ledger BESIDE the changelog — the Work window's merged
+Record stream — can drop the changelog's copy of a job it is already
+showing as a ledger row, instead of rendering one job twice.
 """
 import re
 from pathlib import Path
@@ -107,7 +111,9 @@ def _job_entry(r, idea_texts):
     bits.append("job " + r["id"][:8])
     if r.get("model"):
         bits.append(r["model"])
-    return {"text": " · ".join(bits), "kind": "job"}
+    # job_id is what lets a client that also renders the ledger dedupe —
+    # the id inside the text is truncated to 8 chars and unusable as a key.
+    return {"text": " · ".join(bits), "kind": "job", "job_id": r["id"]}
 
 
 def groups():

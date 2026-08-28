@@ -952,7 +952,13 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
   padding: 2px 6px; border-radius: 2px; border: 1px solid var(--line);
   color: var(--text-faint);
 }
-.cl-text { font-size: 13px; line-height: 1.42; color: var(--text); }
+/* The flexible column: min-width 0 or an unbreakable token (a path, a
+   branch name) refuses to shrink and shoves the row past a 402px viewport
+   — the documented min-width:auto trap, hit here by retro bullets. */
+.cl-text {
+  font-size: 13px; line-height: 1.42; color: var(--text);
+  min-width: 0; overflow-wrap: anywhere;
+}
 .cl-ship { border-left-color: var(--accent); }
 .cl-ship .cl-tag { color: var(--accent); border-color: var(--accent-line); }
 .cl-done { border-left-color: var(--green); }
@@ -3820,6 +3826,15 @@ a.sub-name:hover { color: var(--accent); text-decoration: underline; }
    body already owns the bottom edge. */
 .run-card > .idea-del { position: absolute; top: 7px; right: 8px; }
 .run-card.k-unlanded .run-titlerow { padding-right: 18px; }
+/* Ledger-history rows in the merged Record stream keep their own shell
+   (jobHistRow — the judge/transcript affordances ARE the row), spaced
+   like their .run-card neighbours; .runs-list has no flex gap. */
+.runs-list > .job-hist { margin-bottom: 8px; }
+.runs-list > .job-hist > .run-kind { align-self: center; }
+/* Shipped cards carry change entries; give the first breathing room. */
+.run-card.k-shipped .cl-entry:first-of-type { margin-top: 8px; }
+/* Older history pages: a bounded render with a counted Show more. */
+.runs-more { display: block; margin: 10px auto 4px; }
 
 /* Orphan-work sweeper leftovers still used inside the shared shell. */
 .orphan-foot {
