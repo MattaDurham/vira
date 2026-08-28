@@ -30,6 +30,10 @@ QUALIFIER_CAP = 160
 _TYPE_RE = re.compile(r"^type:\s*person\s*$", re.M)
 _TITLE_RE = re.compile(r'^title:\s*"?([^"\n]+?)"?\s*$', re.M)
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]")
+_MDLINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_EMPHASIS_RE = re.compile(r"(\*\*|\*|`)(?=\S)(.+?)(?<=\S)\1", re.S)
+# Underscores only outside a word: snake_case_name is an identifier, not emphasis.
+_USCORE_RE = re.compile(r"(?<![A-Za-z0-9])(__|_)(?=\S)(.+?)(?<=\S)\1(?![A-Za-z0-9])", re.S)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 _cache = {}   # wiki_dir -> (mtime, [entry])
@@ -38,6 +42,31 @@ _cache = {}   # wiki_dir -> (mtime, [entry])
 def _strip_wikilinks(text):
     """[[claude-code|Claude Code]] -> Claude Code; [[anthropic]] -> anthropic."""
     return _WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), text)
+
+
+def _clean_qualifier(text):
+    """The first prose line as a person PILL should read it: prose, not source.
+
+    A qualifier is rendered as a bare string in a dropdown (app.js `el`
+    assigns textContent), so any markup that survives is shown literally.
+    Measured against the live vault 2026-08-28: of 182 person pages, 80
+    open with a line carrying visible markup — 66 a bolded employer
+    ("Founder of **<the fund>**") and one a markdown link, which put a
+    raw URL in the pill. Emphasis and inline code are unwrapped to
+    their text, a link to its label; the wikilink pass already ran for the
+    same reason.
+
+    Only PAIRED markers are unwrapped, and only around non-space text, so a
+    lone asterisk or an underscored_identifier is left exactly as written.
+    """
+    text = _strip_wikilinks(text)
+    text = _MDLINK_RE.sub(lambda m: m.group(1), text)
+    for _ in range(3):     # **bold _and_ italic** unwraps outside-in
+        text, a = _EMPHASIS_RE.subn(lambda m: m.group(2), text)
+        text, b = _USCORE_RE.subn(lambda m: m.group(2), text)
+        if not a and not b:
+            break
+    return text
 
 
 def _parse_page(path, root):
@@ -66,7 +95,7 @@ def _parse_page(path, root):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        qualifier = _strip_wikilinks(line)[:QUALIFIER_CAP]
+        qualifier = _clean_qualifier(line)[:QUALIFIER_CAP]
         break
     return {"name": name,
             "ref": str(path.relative_to(root).as_posix()),
