@@ -1,0 +1,97 @@
+/* Vira's phone shell for Chaska's persistent Atlas controls. The viewer
+   remains untouched on desktop; on a phone its two large always-on panels
+   start as compact translucent launchers so the galaxy stays usable. */
+#vira-atlas-mobile-controls {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  #hud,
+  #legend {
+    display: none;
+  }
+
+  #hud.vira-mobile-open,
+  #legend.vira-mobile-open {
+    display: block;
+    top: auto;
+    right: auto;
+    bottom: 58px;
+    left: 10px;
+    width: calc(100vw - 20px);
+    max-width: none;
+    max-height: calc(100dvh - 72px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    z-index: 52;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+  }
+
+  #vira-atlas-mobile-controls {
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    z-index: 53;
+    display: flex;
+    gap: 7px;
+  }
+
+  .vira-atlas-mobile-toggle {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    place-items: center;
+    color: var(--dim);
+    background: rgba(14, 17, 26, 0.48);
+    border: 1px solid rgba(138, 147, 166, 0.32);
+    border-radius: 50%;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+  }
+
+  .vira-atlas-mobile-toggle[aria-expanded="true"] {
+    color: var(--accent);
+    border-color: rgba(109, 180, 255, 0.68);
+    background: rgba(14, 17, 26, 0.78);
+  }
+
+  .vira-atlas-mobile-toggle svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* The vault switcher drops out of #hud with position:absolute at top:100%.
+     Anchored to the BOTTOM of a phone that lands off the visible panel, and
+     the panel's own overflow-y then clips it into a scroll region nobody
+     would think to scroll. In the flow it simply grows the panel. */
+  #hud.vira-mobile-open #source-menu {
+    position: static;
+    margin-top: 6px;
+    box-shadow: none;
+  }
+
+  /* Keyboard-only gestures: drag/shift-drag/opt-drag/scroll/cmd-click.
+     None of them exist on touch, and the help text is the tallest thing
+     in the legend. */
+  #legend .controls {
+    display: none;
+  }
+
+  #legend .lbl-input {
+    width: min(180px, 55vw);
+  }
+
+  #hud input,
+  #hud button,
+  #legend input,
+  #legend button {
+    font-size: 16px;
+  }
+}

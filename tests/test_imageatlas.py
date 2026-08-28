@@ -226,6 +226,44 @@ class RouteTest(Base):
         r = self.client.get("/imageatlas/data/coords3.bin")
         self.assertEqual(len(r.content), 4 * 3 * 4)
 
+    def test_phone_chrome_is_injected_exactly_once(self):
+        """Chaska's document is read fresh per request, so a second GET must
+        not accumulate a second copy of the link/script pair."""
+        for _ in range(2):
+            body = self.client.get("/imageatlas/").text
+            self.assertEqual(body.count('/imageatlas-mobile.css'), 1)
+            self.assertEqual(body.count('/imageatlas-mobile.js'), 1)
+        # injected inside the head, before chaska's own module script runs
+        self.assertLess(body.index('/imageatlas-mobile.css'), body.index('</head>'))
+
+    def test_phone_chrome_is_revalidated_not_cached(self):
+        """The injected copy must never be served from a stale browser cache —
+        the tile-icon lesson: an asset the browser guesses at freezes."""
+        r = self.client.get("/imageatlas/")
+        self.assertIn("no-cache", r.headers["cache-control"])
+        self.assertEqual(r.headers["x-content-type-options"], "nosniff")
+        self.assertIn("text/html", r.headers["content-type"])
+
+    def test_phone_chrome_assets_carry_their_load_bearing_rules(self):
+        """Both files are reachable at the absolute paths the injection names,
+        and each still carries the rule the phone view depends on. A rename on
+        either side is the reader-with-no-writer failure this catches."""
+        css = self.client.get("/imageatlas-mobile.css")
+        self.assertEqual(css.status_code, 200)
+        body = css.text
+        self.assertIn("#vira-atlas-mobile-controls", body)
+        self.assertIn("max-width: 700px", body)
+        # the vault switcher drops out of #hud absolutely; bottom-anchored on a
+        # phone that lands off the panel, inside its own overflow clip
+        self.assertIn("#hud.vira-mobile-open #source-menu", body)
+        self.assertIn("position: static", body)
+
+        js = self.client.get("/imageatlas-mobile.js")
+        self.assertEqual(js.status_code, 200)
+        self.assertIn("vira-mobile-open", js.text)
+        # a launcher is only minted for a panel that exists
+        self.assertIn("if (!panel) continue", js.text)
+
     def test_atlases_json_generated(self):
         r = self.client.get("/imageatlas/atlases.json")
         j = r.json()
