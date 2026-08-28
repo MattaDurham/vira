@@ -7303,6 +7303,23 @@ function orphanBody(card, it) {
       card.appendChild(r);
     }
 
+    // WHY it stopped, on the row. Deterministic (no model call), so it is
+    // always here when the ledger recorded a failure. A REPEAT leads,
+    // because "three sessions died the same way" is the fact that decides
+    // whether landing it unchanged can possibly work.
+    if (it.failure && it.failure.headline) {
+      const f = it.failure;
+      const fx = el("div", "orphan-fail" + (f.harness ? " harness" : ""));
+      const tag = f.repeated
+        ? `${f.count} sessions failed the same way (${f.repeated})`
+        : (f.certain ? "Failed: " + f.kind : "Failed");
+      fx.appendChild(el("span", "orphan-fail-tag", tag));
+      fx.appendChild(document.createTextNode(" — " + f.headline));
+      if (f.why) fx.appendChild(el("div", "orphan-fail-why", f.why));
+      if (f.fix) fx.appendChild(el("div", "orphan-fail-fix", "Fix: " + f.fix));
+      card.appendChild(fx);
+    }
+
     card.appendChild(orphanContext(it));
 
     const foot = el("div", "run-foot orphan-foot");
@@ -7316,7 +7333,8 @@ function orphanBody(card, it) {
       const rec = it.read && it.read.verdict;
       const land = el("button", "fchip sm" + (rec === "land" ? " rec" : ""), "Land");
       land.title = it.dirty
-        ? "Dispatch a session to finish and commit this, then Vira merges + pushes it"
+        ? "Dispatch a session that first works out why this stopped, then asks "
+          + "you before changing anything"
         : "Merge this branch into live main and push";
       land.addEventListener("click", () => armOrphanAction(foot, it, "land"));
       const resume = el("button", "fchip sm" + (rec === "resume" ? " rec" : ""), "Resume");
@@ -7467,7 +7485,16 @@ function armOrphanAction(foot, it, name) {
   foot.innerHTML = "";
   const label = name === "land"
     ? (it.dirty
-      ? `Land ${it.branch}? A session finishes and commits it, then Vira merges + pushes.`
+      // A dirty row offers TWO ways to land, because they are genuinely
+      // different acts and the old single Confirm silently picked the
+      // dangerous one: it dispatched straight into work with no idea why
+      // the last attempt stopped. The failure line above the buttons is
+      // what makes this choice informed rather than a guess.
+      ? (it.failure && it.failure.repeated
+        ? `Land ${it.branch}? ${it.failure.count} earlier sessions died the same `
+          + `way (${it.failure.repeated}) — diagnosing first is the only one of `
+          + `these that can tell you whether that is still true.`
+        : `Land ${it.branch}? It has uncommitted work, so a session runs in it.`)
       : `Land ${it.branch}? Merges into live main and pushes.`)
     // Resume DISPATCHES — one click used to drop an autonomous agent into
     // the worktree with no confirm while Land and Discard were both gated
@@ -7483,15 +7510,36 @@ function armOrphanAction(foot, it, name) {
       ? `Discard ${it.dirty} uncommitted change${it.dirty === 1 ? "" : "s"}? This destroys them.`
       : `Discard ${it.branch}? This deletes the branch.`;
   foot.appendChild(el("span", "orphan-confirm-q", label));
-  const yes = el("button", "fchip sm warn", "Confirm");
-  yes.addEventListener("click", () => {
-    runsHold = false;
-    if (name === "resume") { orphanResume(it); return; }
-    runOrphanAction(foot, it, name);
-  });
   const no = el("button", "fchip sm", "Cancel");
   no.addEventListener("click", () => { runsHold = false; loadOrphans(); });
-  foot.append(yes, no);
+
+  if (name === "land" && it.dirty) {
+    // Diagnose leads and is the primary: it changes nothing until you
+    // answer its card, so it is the choice that cannot make things worse.
+    const diag = el("button", "fchip sm rec", "Diagnose first");
+    diag.title = "Read why the earlier session stopped, then stop and ask you "
+      + "what to do — nothing is edited until you answer";
+    diag.addEventListener("click", () => {
+      runsHold = false;
+      runOrphanAction(foot, it, "land", "diagnose");
+    });
+    const fin = el("button", "fchip sm warn", "Finish it now");
+    fin.title = "Skip the diagnosis: carry the work to done, commit, and merge. "
+      + "Use this when you already know what stopped it";
+    fin.addEventListener("click", () => {
+      runsHold = false;
+      runOrphanAction(foot, it, "land", "finish");
+    });
+    foot.append(diag, fin, no);
+  } else {
+    const yes = el("button", "fchip sm warn", "Confirm");
+    yes.addEventListener("click", () => {
+      runsHold = false;
+      if (name === "resume") { orphanResume(it); return; }
+      runOrphanAction(foot, it, name);
+    });
+    foot.append(yes, no);
+  }
   // The confirm lives only in the DOM, so a background repaint would
   // disarm it under the cursor. Held until it is answered or cancelled —
   // and the signature is INVALIDATED in the same breath, because the DOM
@@ -7502,19 +7550,24 @@ function armOrphanAction(foot, it, name) {
   runsSig = "";
 }
 
-async function runOrphanAction(foot, it, name) {
+async function runOrphanAction(foot, it, name, mode) {
   runsHold = false;
-  foot.textContent = name === "land" ? "Landing…"
+  foot.textContent = name === "land"
+    ? (mode === "diagnose" ? "Diagnosing…" : "Landing…")
     : name === "merge" ? "Merging…" : "Discarding…";
   try {
-    const body = name === "discard" ? { key: it.key, force: true } : { key: it.key };
+    const body = name === "discard" ? { key: it.key, force: true }
+      : name === "land" && mode ? { key: it.key, mode }
+      : { key: it.key };
     const r = await post(`/api/orphanwork/${name}`, body);
     // A dirty row's landing runs through a finishing session — open its
     // terminal so the landing is watchable, and let the row's action
     // field carry the state (it can run for a while; no bounded poll).
     if (name === "land" && r.job_id) {
       openSession(r.job_id);
-      toast("Landing — a session is finishing the work; Vira merges when it's done");
+      toast(mode === "diagnose"
+        ? "Diagnosing — it will ask you before it changes anything"
+        : "Landing — a session is finishing the work; Vira merges when it's done");
       loadOrphans();
       return;
     }
@@ -7619,11 +7672,15 @@ $("#runs-q-clear")?.addEventListener("click", () => {
 $("#runs-landall")?.addEventListener("click", async () => {
   const rows = runsState.orphan.length;
   if (!rows) { toast("Nothing unlanded"); return; }
+  // A sweep is where landing-without-looking was worst — it would
+  // re-dispatch into every unseen failure in turn. Each dirty row now
+  // diagnoses and raises its own card instead of guessing.
   if (!confirm(`Land all ${rows} branch${rows === 1 ? "" : "es"}? Vira works through `
-    + "them one at a time — dirty worktrees get a finishing session, then "
-    + "each branch merges into live main and pushes.")) return;
+    + "them one at a time. A branch with uncommitted work gets a session that "
+    + "first works out why it stopped and asks you before changing anything; "
+    + "a clean branch merges into live main and pushes.")) return;
   try {
-    const r = await post("/api/orphanwork/land-all", {});
+    const r = await post("/api/orphanwork/land-all", { mode: "diagnose" });
     toast(r.started ? `Landing ${r.count} — one at a time; watch the rows`
                     : "Nothing to land");
     loadOrphans();

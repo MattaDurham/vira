@@ -87,6 +87,19 @@ SESSION_DEFAULTS = {
     # this is placement-and-enforcement rather than a line in the preamble.
     "session_branch_first": True,
     "session_ask_timeout": 21600,        # 6h for an owner decision
+    # The SDK frames the CLI's stdout as NDJSON and BOUNDS ONE LINE. Its
+    # default is 1 MiB, and a single message carrying a large file's
+    # content blows straight through it — measured 2026-08-28: three
+    # sessions in a row died the instant they ran Edit on static/app.js,
+    # which is 1,062,221 bytes against a 1,048,576-byte ceiling. The error
+    # ("JSON message exceeded maximum buffer size") kills the whole
+    # session, so it reads as the work failing when it is the harness
+    # refusing to carry it.
+    #
+    # Bounded, not removed: the ceiling exists so a runaway CLI cannot OOM
+    # the runner, and that is still worth having. 64 MiB clears every file
+    # in this repo by ~60x while staying a real limit.
+    "session_max_buffer_mb": 64,
 }
 
 # The permission ladder, safest first. A session's mode is ONE of these —
