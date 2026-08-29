@@ -32,8 +32,11 @@ THE CANON CANNOT BE INLINED. `MASTER_HISTORY.md` is ~200KB and
 bring the record to the model. It does that through `resumeview._corpus`
 / `_anchors_for`: IDF-weighted coverage retrieval over the record's own
 passages, cached on the record's mtime, with the approved-wording
-endnotes given reserved slots. Never inline a head excerpt instead — the
-head of a career record is an arbitrary slice and usually the wrong one.
+endnotes given a reserved share. Never inline a head excerpt instead —
+the head of a career record is an arbitrary slice and usually the wrong
+one. How much of it fits is asked of the backend (`budget` below); how
+much of it is RELEVANT is `resumeview`'s floors, and the two are
+different questions.
 
 WHAT THE SERVER STILL OWNS. Every write goes through
 `jobscores.write`, which validates the entry, stamps `scored_at` and
@@ -68,14 +71,62 @@ MODES = ("current", "refetch")
 # it overwrites a considered paragraph with nothing and stamps it current.
 MIN_WHY = 60
 
-JD_IN_PROMPT = 9000     # the posting, enough to re-judge without the boilerplate
-PRIOR_WHY_IN_PROMPT = 900
-ANCHOR_TEXT = 900
+# ---------------------------------------------------------- prompt budget
+#
+# WHAT THESE BOUND: the material ONE rescore prompt carries — the posting,
+# the reasoning of the score being revised, and each retrieved passage of
+# the record. They were literals (9000 / 900 / 900) typed once on
+# 2026-08-12 and never revisited against the backend that answers the
+# call, which reports a 1,000,000-token context window in its own response
+# JSON while this prompt fed it under 20,000 characters. Postings run to
+# 24k, so the posting block alone dropped well over half of one.
+#
+# THE THREE BLOCKS SHARE ONE BUDGET (`split`, parts=3) rather than each
+# carrying its own number, because they are read together: sizing them
+# apart is exactly what let one of them be two orders of magnitude small
+# while the other two looked reasonable beside it.
+#
+# THE OLD LITERALS SURVIVE AS FLOORS. A backend that can tell us nothing
+# must not make a rescore WORSE than it was, so each block keeps its
+# 2026-08-12 size as a minimum and this seam can only ever add.
+#
+# NOT budgeted, and deliberately: QUERY_JD_CHARS below (a retrieval
+# judgement, not a capacity) and BATCH_WHY_EXCERPT (read by a session that
+# can open the file itself).
+JD_FLOOR = 9000
+PRIOR_WHY_FLOOR = 900
+ANCHOR_TEXT_FLOOR = 900
+
+
+def budget(anchors=0):
+    """(posting, prior reasoning, per anchor) characters for one prompt.
+
+    `standard`: a composed one-shot answer, which is what this is on both
+    the per-role button and the bulk pass. The per-anchor share divides by
+    the anchors actually retrieved, so a long list cannot quietly spend the
+    whole block on its first few passages.
+
+    Never raises — a budget that could fail a rescore would be worse than
+    the literals it replaces; on any failure the floors decide, which is
+    the behaviour this module had before the seam existed.
+    """
+    per = 0
+    try:
+        from . import modelbudget
+        _total, per = modelbudget.split("standard", parts=3)
+    except Exception:  # noqa: BLE001
+        per = 0
+    return (max(per, JD_FLOOR),
+            max(per, PRIOR_WHY_FLOOR),
+            max(per // max(anchors, 1), ANCHOR_TEXT_FLOOR))
 
 # The query the record is retrieved against. A whole 24k posting would
 # make almost every passage of the record share SOME rare token, which
 # ranks by passage length rather than by relevance; the title, team and
 # the opening of the description are what actually say what the job is.
+# NOT a context budget and NOT routed through `modelbudget`: nothing here
+# is read by a model. It is a statement about what makes a good retrieval
+# query, and a bigger window makes it no more true.
 QUERY_JD_CHARS = 3000
 
 
@@ -124,6 +175,7 @@ def prompt(role, jd, prior, anchors, ruling):
     """The one-pass contract. Strict JSON, one role, `jobscores`' own
     field names, and every claim about the owner grounded in the anchors
     rather than in what someone with this title probably did."""
+    jd_cap, why_cap, anchor_cap = budget(len(anchors or ()))
     lines = [
         "Re-score ONE job posting for the person whose career record is "
         "quoted below. A score for this role already exists; it was "
@@ -152,9 +204,9 @@ def prompt(role, jd, prior, anchors, ruling):
                 "snapshot": f"from the sweep of {(jd.get('as_of') or '')[:10]}",
                 "blurb": "AN OPENING EXCERPT ONLY, not the full posting"}
         lines += [f"THE POSTING ({rung.get(jd.get('source'), jd.get('source'))}"
-                  + (", truncated" if len(jd["text"]) > JD_IN_PROMPT else "")
+                  + (", truncated" if len(jd["text"]) > jd_cap else "")
                   + "):",
-                  jd["text"][:JD_IN_PROMPT], ""]
+                  jd["text"][:jd_cap], ""]
     else:
         lines += ["THE POSTING: not available — " + (jd.get("reason") or "")
                   + " Judge from the role fields above and say in why_fit "
@@ -171,9 +223,9 @@ def prompt(role, jd, prior, anchors, ruling):
                "dated)") + ":",
             json.dumps(p, ensure_ascii=False),
             "Its reasoning"
-            + (f" (first {PRIOR_WHY_IN_PROMPT} characters)"
-               if len(why) > PRIOR_WHY_IN_PROMPT else "") + ": "
-            + why[:PRIOR_WHY_IN_PROMPT],
+            + (f" (first {why_cap} characters)"
+               if len(why) > why_cap else "") + ": "
+            + why[:why_cap],
             "",
             "Keep what still holds. Change what the record no longer "
             "supports, and say what changed. Do not rewrite it merely to "
@@ -191,7 +243,7 @@ def prompt(role, jd, prior, anchors, ruling):
         for i, a in enumerate(anchors, 1):
             head = (" — " + a["heading"]) if a.get("heading") else ""
             tag = "GATE" if a.get("gate") else "RECORD"
-            lines.append(f"[{i}] {tag}{head}: {a['text'][:ANCHOR_TEXT]}")
+            lines.append(f"[{i}] {tag}{head}: {a['text'][:anchor_cap]}")
         lines.append("")
     else:
         lines += ["HIS RECORD: no passages could be retrieved. Judge the "
@@ -482,7 +534,24 @@ def _bulk_one(uid, mode):
 # posting, so each role costs more of a session's context than a first
 # score does; the batch is smaller than score_prompt's 40 for that reason
 # alone. The scheduler runs one session at a time either way.
+#
+# NOT a context budget, and `modelbudget` is deliberately not asked. What
+# bounds a batch is what a SESSION can carry through a whole turn — it
+# re-reads the canon and re-reads every posting with its own tools — and
+# that is tool-loop consumption, which no prompt-sizing seam can measure.
+# The prompt block below is a few kilobytes per role; the reading is the
+# cost. Raising this because a window got bigger would spend more of the
+# owner's plan per tick on a guess about the wrong quantity.
 BATCH = 25
+
+# The batch is read by an agent SESSION whose cwd is the self-record, so it
+# can open the score file itself: this excerpt is a POINTER, not the
+# material, which is why it is not budgeted the way `prompt()`'s blocks
+# are. `modelbudget.has_tools()` names the same distinction — a one-shot
+# has to be handed everything, a session only has to be told where to
+# look, and spending its working context on prose it can fetch is what
+# leaves too little for the postings and the canon it must actually read.
+BATCH_WHY_EXCERPT = 900
 
 
 def queue(udir=None, limit=None):
@@ -594,8 +663,8 @@ def batch_prompt(limit=BATCH, udir=None):
             "prior": {k: entry.get(k) for k in ("fit", "screen", "tier",
                                                 "final_tier", "lane")
                       if entry.get(k) is not None},
-            "prior_why_fit": why[:PRIOR_WHY_IN_PROMPT]
-            + ("…" if len(why) > PRIOR_WHY_IN_PROMPT else ""),
+            "prior_why_fit": why[:BATCH_WHY_EXCERPT]
+            + ("…" if len(why) > BATCH_WHY_EXCERPT else ""),
         }, ensure_ascii=False))
     return "\n".join(lines), len(rows)
 

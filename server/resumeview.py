@@ -73,7 +73,14 @@ ONE_PAGE_KINDS = ("resume1p",)
 MAX_TERM = 120
 MAX_NOTE = 4000
 MAX_BLOCKS = 400
-MAX_ANCHORS = 8
+# What a banked claim bubble may STORE. A bubble is read in a margin rail,
+# and one citing twenty passages is unreadable there — so this is a
+# rendering question, not a question about how much a model may read.
+# Split out of the old shared `MAX_ANCHORS` (2026-08-28) precisely so the
+# two can no longer move each other: the retrieval side is a context
+# budget now and asks the backend (see `anchor_chars`), while the rail
+# still shows what a person can scan.
+MAX_CITATIONS = 8
 MAX_QUESTION = 600
 # A selection long enough to be a sentence is a claim, not a term — the same
 # floor define.py uses to refuse defining a paragraph.
@@ -422,7 +429,8 @@ def set_claim(uid, block_id, question, answer, citations=(), quote="", kind=""):
         _role(state, uid)["claims"][block_id] = {
             "question": _clean(question, MAX_QUESTION),
             "answer": _clean(answer),
-            "citations": [_clean(c, 400) for c in list(citations)[:MAX_ANCHORS]],
+            "citations": [_clean(c, 400)
+                          for c in list(citations)[:MAX_CITATIONS]],
             "quote": _clean(quote, 600),
             "when": _now(),
         }
@@ -482,8 +490,83 @@ MIN_SHARED = 2
 # short, which is the confident-wrong-way-round failure.
 STRICT_MULT = 2.0   # is this line a claim the record speaks to at all?
 RELAXED_MULT = 1.0  # once it is, which gate wording governs it?
-GATE_SLOTS = 4
-BODY_SLOTS = 5
+# HOW MUCH OF THE RECORD ONE ANSWER MAY STAND ON (2026-08-28).
+#
+# This was three literals — MAX_ANCHORS = 8 fed by GATE_SLOTS = 4 plus
+# BODY_SLOTS = 5 — so the true ceiling was NINE candidates trimmed to
+# eight, chosen once and never compared to the window of the backend that
+# would read them. `find.ASK_LIMIT` was the same literal 8 for the same
+# reason, and the note left when it became 24 says what it cost: small
+# enough that the right passage routinely sat outside it while the model
+# answered confidently from the wrong ones. Measured here on the real
+# 627-passage record, one ordinary resume line offers EIGHT gate passages
+# and the old slot count showed FOUR — half of the approved outward
+# wording dropped before the model ever saw it.
+#
+# `modelbudget` answers the capacity question now, so the number moves
+# with the backend the owner has configured instead of with this file.
+#
+# WHAT IS NOT A CAPACITY AND THEREFORE DOES NOT MOVE: the reservation.
+# Gate passages carry the approved wording and its limits, so they get a
+# SHARE of the budget rather than competing with narrative prose on rank
+# (measured at build time, the governing endnote sat at rank 26 while its
+# own section led). GATE_SHARE holds that reservation at the 4-of-9
+# proportion the slot counts expressed. The strict/relaxed floors above
+# are judgements about evidence in the same way and are untouched.
+#
+# Selection fills to a CHARACTER budget rather than to a count, because a
+# passage is what costs the window and passages are not one size (median
+# 279 chars on the real record, max 519). The old counts survive as
+# FLOORS: a backend that can tell us nothing still returns the passages
+# the old slots reserved, so this seam can only ever add material.
+GATE_SHARE = 0.45
+MIN_GATE = 4
+MIN_BODY = 5
+
+
+def anchor_chars():
+    """Characters of the record one grounded answer may carry.
+
+    `standard`, not `interactive`: the owner is waiting on this, but he is
+    waiting on a judgment about his own career rather than on a popup, and
+    the passages ARE the judgment. parts=3 because the prompt carries the
+    line and its surrounding context alongside the anchors — the anchors
+    take their share of the surface's budget, not the whole of it.
+
+    Zero on any failure, which the floors below read as "the old slot
+    counts decide" — a budget must never be able to fail a retrieval.
+    """
+    try:
+        from . import modelbudget
+        _total, per = modelbudget.split("standard", parts=3)
+        return per
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _fill(rows, budget, floor, weight, out, seen):
+    """Take from one lane: the first `floor` rows whatever the budget says,
+    then while the character budget holds. Returns the characters spent."""
+    spent, taken = 0, 0
+    for score, signals, node in rows:
+        if node["id"] in seen:
+            continue
+        text = node["text"]
+        if taken >= floor and spent + len(text) > budget:
+            break
+        seen.add(node["id"])
+        out.append({
+            "text": text,
+            "heading": node.get("heading", ""),
+            "source": node.get("source", ""),
+            "gate": node.get("detail") == applicationmap.GATE_DETAIL,
+            "score": round(score / weight, 3),
+            "signals": signals[:6],
+        })
+        spent += len(text)
+        taken += 1
+    return spent
+
 
 _corpus_cache = {"key": None, "nodes": [], "tokens": [], "idf": {}}
 
@@ -531,11 +614,13 @@ def _anchors_for(text):
     Same rare-token principle as radar's person tokens and the atlas's
     shared_topic edge.
 
-    GATE PASSAGES GET RESERVED SLOTS rather than competing on that axis. The
-    endnotes decide what the owner may actually SAY, so a strong body match
-    with no gate wording alongside it is precisely the shape this feature
-    exists to prevent — and measured, the governing endnote sat at rank 26
-    while its narrative section led. Ranking alone would have hidden it.
+    GATE PASSAGES GET A RESERVED SHARE rather than competing on that axis
+    (it was a reserved SLOT COUNT until 2026-08-28; the reservation is the
+    same, what it is measured in is not — see GATE_SHARE). The endnotes
+    decide what the owner may actually SAY, so a strong body match with no
+    gate wording alongside it is precisely the shape this feature exists to
+    prevent — and measured, the governing endnote sat at rank 26 while its
+    narrative section led. Ranking alone would have hidden it.
     """
     nodes, tokens, idf = _corpus()
     query = applicationmap._tokens(text)
@@ -566,24 +651,15 @@ def _anchors_for(text):
     if not any(mass >= strict for mass, _sig, _n in scored):
         return []
     gate = [r for r in scored
-            if r[2].get("detail") == applicationmap.GATE_DETAIL][:GATE_SLOTS]
+            if r[2].get("detail") == applicationmap.GATE_DETAIL]
     body = [r for r in scored
             if r[2].get("detail") != applicationmap.GATE_DETAIL
-            and r[0] >= strict][:BODY_SLOTS]
+            and r[0] >= strict]
+    budget = anchor_chars()
     out, seen = [], set()
-    for score, signals, node in gate + body:
-        if node["id"] in seen:
-            continue
-        seen.add(node["id"])
-        out.append({
-            "text": node["text"],
-            "heading": node.get("heading", ""),
-            "source": node.get("source", ""),
-            "gate": node.get("detail") == applicationmap.GATE_DETAIL,
-            "score": round(score / weight, 3),
-            "signals": signals[:6],
-        })
-    return out[:MAX_ANCHORS]
+    spent = _fill(gate, int(budget * GATE_SHARE), MIN_GATE, weight, out, seen)
+    _fill(body, max(budget - spent, 0), MIN_BODY, weight, out, seen)
+    return out
 
 
 def ask(role, kind, question, block_id="", context_lines=3):

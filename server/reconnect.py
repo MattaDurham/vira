@@ -41,7 +41,12 @@ ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "reconnect.json"
 
 DORMANT_DAYS = 45        # quiet enough that reaching out is a reactivation
-MAX_CANDIDATES = 15      # offered to the AI curator
+MAX_CANDIDATES = 15      # offered to the AI curator.  LEFT AS A LITERAL: it
+                         # shapes the curator's TASK (pick 2-3 from this many)
+                         # and bounds the dormant scan, so it is a judgement
+                         # about the ask rather than a question about the
+                         # window.  It is the divisor _curate_budget passes to
+                         # modelbudget.split, which owns the char half.
 TOP_N = 3                # targets kept after curation
 FLOOR = 12               # below this a signal is coincidence, not relevance
 SENIORITY_TOKENS = {"founder": 10, "ceo": 10, "cto": 10, "vp": 8, "head": 8,
@@ -295,7 +300,26 @@ Candidates:
 """
 
 
-def _dossier(cd, prof):
+def _curate_budget(n):
+    """(whole candidates block, per-candidate) chars for the curation prompt.
+
+    Replaces three literals that were each chosen once: 20,000 chars for the
+    whole block, 600 per candidate dossier, and 200 for the relationship
+    summary inside it.  Only the last one ever bound - a dossier is a few
+    short fixed fields plus that summary, so 15 candidates could never reach
+    even the 9,000 chars the other two allowed, and the 20,000 was decoration
+    over a cap of 200.  Two hundred characters is a sentence and a half of
+    what Vira knows about a person, handed to a pass whose entire job is
+    judging WHICH relationship is worth reactivating.
+
+    `deep`: the weekly pivot-scout routine runs this and nobody watches it;
+    the refresh button runs the same pass while the UI polls.
+    """
+    from . import modelbudget
+    return modelbudget.split("deep", parts=max(n, 1))
+
+
+def _dossier(cd, prof, summary_cap):
     bits = [cd["name"], f"pid: {cd['pid']}"]
     comp_title = []
     if cd["company"]:
@@ -309,7 +333,9 @@ def _dossier(cd, prof):
     bits.append("reasons: " + "; ".join(cd["reasons"]))
     summ = prof.get("relationship_summary")
     if isinstance(summ, str) and summ:
-        bits.append(summ[:200])
+        # The one variable-length field in the dossier, so it is the one the
+        # budget has to reach; everything else here is a short fixed bit.
+        bits.append(summ[:summary_cap])
     try:  # who was reaching for whom before it went quiet
         from . import threadread
         cad = threadread.enrich_person(cd["pid"])
@@ -368,8 +394,10 @@ def refresh():
 
         c = crm._load()
         by_pid = {cd["pid"]: cd for cd in cands}
-        blocks = [f"- {_dossier(cd, c['profiles'].get(cd['pid']) or {})[:600]}"
-                 for cd in cands]
+        total_cap, per_cap = _curate_budget(len(cands))
+        blocks = [
+            f"- {_dossier(cd, c['profiles'].get(cd['pid']) or {}, per_cap)[:per_cap]}"
+            for cd in cands]
         owner = settings.get("owner_name") or "the owner"
         prompt = CURATE_PROMPT.format(
             owner=owner,
@@ -377,7 +405,7 @@ def refresh():
             lanes=", ".join(disp["lanes"]) or "(none named)",
             top_titles=(", ".join(picture.get("top_titles") or [])
                         or "(none)"),
-            candidates="\n".join(blocks)[:20_000])
+            candidates="\n".join(blocks)[:total_cap])
 
         targets, curated = [], True
         try:

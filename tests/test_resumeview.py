@@ -297,6 +297,90 @@ class AnchorTests(Base):
             "dependencies between counsel and brokers")
         self.assertTrue(any(a["gate"] for a in anchors))
 
+    # A record carrying MORE relevant passages than the old slot counts could
+    # ever show: ten body chapters and ten endnotes sharing the query's rare
+    # tokens, buried in padding so those tokens stay rare. Without this the
+    # budget cases would be vacuous - the base fixture has fewer passages than
+    # the floors, so every budget returns the same set.
+    WIDE = ("alpine", "borax", "cinder", "dovetail", "ember",
+            "fennel", "gantry", "halyard", "isobar", "jetty")
+
+    def wide_record(self):
+        """Rewrite the fixture record wide and return a query that hits it."""
+        body = "".join(
+            f"## Ledger chapter {w}\n\nThe subject built a reconciliation "
+            f"ledger with a deterministic cadence estimate across merchant "
+            f"statements during the {w} engagement.\n\n" for w in self.WIDE)
+        notes = "".join(
+            f'[^{i}]: **Ledger scope {w}.** Approved outward wording: "built '
+            f'a reconciliation ledger with a deterministic cadence estimate" '
+            f"for the {w} engagement.\n\n"
+            for i, w in enumerate(self.WIDE))
+        pad = "".join(f"## Unrelated chapter {i}\n\nThis passage concerns "
+                      f"gardening, tides and the number {i}.\n\n"
+                      for i in range(40))
+        (self.record / "canon" / "MASTER_HISTORY.md").write_text(
+            "# Master History\n\n" + body + pad + "\n# Endnotes\n\n" + notes,
+            encoding="utf-8")
+        resumeview._corpus_cache.update({"key": None, "nodes": [],
+                                         "tokens": [], "idf": {}})
+        return ("Built a reconciliation ledger with a deterministic cadence "
+                "estimate across merchant statements for the "
+                + " ".join(self.WIDE) + " engagements")
+
+    def anchors_at(self, chars, query):
+        with mock.patch.object(resumeview, "anchor_chars", lambda: chars):
+            return resumeview._anchors_for(query)
+
+    def test_how_much_of_the_record_is_offered_is_asked_of_the_seam(self):
+        """The ceiling is a fact about the backend that will READ these
+        passages, so it is asked rather than typed here. Pinned as a
+        relationship - a roomier backend must offer more of the record than a
+        cramped one - so raising a budget can never break this and deleting
+        the question can never pass it."""
+        query = self.wide_record()
+        cramped = self.anchors_at(1, query)
+        roomy = self.anchors_at(1_000_000, query)
+        self.assertGreater(
+            len(roomy), len(cramped),
+            "the anchor set ignored the budget it was given")
+        self.assertGreater(sum(1 for a in roomy if a["gate"]),
+                           sum(1 for a in cramped if a["gate"]),
+                           "the gate lane ignored the budget it was given")
+
+    def test_the_old_slot_counts_survive_as_floors(self):
+        """A backend that can tell us nothing must not make retrieval WORSE
+        than the literals it replaced: the reserved gate count and the body
+        count are still filled when there is no budget at all."""
+        query = self.wide_record()
+        tight = self.anchors_at(0, query)
+        self.assertEqual(sum(1 for a in tight if a["gate"]),
+                         resumeview.MIN_GATE)
+        self.assertEqual(sum(1 for a in tight if not a["gate"]),
+                         resumeview.MIN_BODY)
+
+    def test_a_budget_that_cannot_be_read_never_fails_a_retrieval(self):
+        """Degrade downward, never raise - a grounded answer must not depend
+        on being able to size a prompt."""
+        query = self.wide_record()
+        with mock.patch("server.modelbudget.split",
+                        side_effect=RuntimeError("no backend")):
+            self.assertEqual(resumeview.anchor_chars(), 0)
+            self.assertTrue(resumeview._anchors_for(query),
+                            "a failed budget swallowed the anchors")
+
+    def test_the_rail_cap_is_not_the_retrieval_cap(self):
+        """What a margin rail can SHOW and what a model may READ are two
+        questions; they shared one literal until 2026-08-28 and must not
+        share one again."""
+        query = self.wide_record()
+        roomy = self.anchors_at(1_000_000, query)
+        self.assertGreater(len(roomy), resumeview.MAX_CITATIONS)
+        resumeview.set_claim("a-1", "b1", "q", "a",
+                             citations=[f"c{i}" for i in range(40)])
+        rail = resumeview.annotations("a-1")["claims"][0]
+        self.assertEqual(len(rail["citations"]), resumeview.MAX_CITATIONS)
+
     def test_the_floors_scale_with_the_record(self):
         """The floors are multiples of the corpus's own median IDF, so a SHORT
         career record must behave like a long one. An absolute floor read as

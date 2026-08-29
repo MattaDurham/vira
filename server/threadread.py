@@ -27,7 +27,7 @@ from collections import Counter
 from datetime import timedelta
 
 from . import data as crm
-from . import imessage
+from . import imessage, modelbudget
 
 SESSION_GAP_H = 6      # silence that separates one conversation from the next
 STALE_H = 12           # an ask that sat this long registers as having sat
@@ -273,6 +273,22 @@ def analyze(pid, window_days=DEFAULT_WINDOW_D):
     }
 
 
+# HOW MANY MESSAGES the brief reads. Left where it was on purpose: unlike the
+# character caps below, this one is not purely a capacity number - the facts
+# block beside it describes a DEFAULT_WINDOW_D (14-day) window, and a
+# transcript reaching months further back would describe a different
+# conversation than the arithmetic above it. Coupled to a meaning rule, so it
+# stays a literal.
+BRIEF_MESSAGES = 40
+
+# HOW THE PROMPT'S EVIDENCE BUDGET IS DIVIDED, not how big it is. The three
+# blocks used to carry 4,000 / 4,000 / 12,000 characters as literals; only the
+# RATIO between them was ever a judgement - the transcript is the evidence and
+# the two computed blocks are its index, so the thread gets three times the
+# room. The total is asked of modelbudget, because how much a prompt may carry
+# is a fact about the backend answering it and not about this module.
+BRIEF_SHARES = {"facts": 1, "asks": 1, "thread": 3}
+
 BRIEF_PROMPT = """You are helping {owner} decide how to handle a conversation.
 You are NOT writing a menu of drafts. {owner} is tired and does not need three
 options to choose between; he needs to know what is actually being asked, what
@@ -323,7 +339,7 @@ def brief(pid, window_days=DEFAULT_WINDOW_D, extra=""):
     if facts.get("empty"):
         return {"empty": True, "person_id": pid}
 
-    msgs = imessage.thread_for_person(pid, limit=40)
+    msgs = imessage.thread_for_person(pid, limit=BRIEF_MESSAGES)
     thread = "\n".join(
         f"[{m['when'][:16] if m['when'] else '?'}] "
         f"{'me' if m['from_me'] else 'them'}: {m['text']}" for m in msgs)
@@ -332,11 +348,16 @@ def brief(pid, window_days=DEFAULT_WINDOW_D, extra=""):
     lean = {k: facts[k] for k in
             ("baseline", "recent", "deltas", "bursts", "colocation_caveat")}
     owner = suggest.config().get("owner_name") or "the user"
+    # "standard": a composed answer, not a card the owner is watching a
+    # spinner on. Each block takes its share of what the backend can actually
+    # hold; when that is small the shares shrink together, which is the point.
+    unit = max(modelbudget.context_chars("standard")
+               // sum(BRIEF_SHARES.values()), 1)
     prompt = BRIEF_PROMPT.format(
         owner=owner,
-        facts=_json.dumps(lean, indent=1)[:4000],
-        asks=_json.dumps(facts["asks"], indent=1)[:4000],
-        thread=thread[:12000],
+        facts=_json.dumps(lean, indent=1)[:unit * BRIEF_SHARES["facts"]],
+        asks=_json.dumps(facts["asks"], indent=1)[:unit * BRIEF_SHARES["asks"]],
+        thread=thread[:unit * BRIEF_SHARES["thread"]],
         extra=f"Guidance from {owner}: {extra}" if extra else "")
 
     text, backend = suggest._run(prompt, suggest.config())

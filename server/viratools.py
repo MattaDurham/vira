@@ -45,7 +45,17 @@ except Exception:  # noqa: BLE001 — any import failure means no native tools
     SDK_AVAILABLE = False
 
 ROOT = Path(__file__).resolve().parent.parent
-TEXT_CAP = 12_000        # per-tool-result ceiling; tool output feeds a model
+# The per-tool-result ceiling is asked of modelbudget rather than typed here.
+# It was 12_000 from the original build -- roughly 1% of the window the
+# sessions consuming it actually run in, and a number no module could have
+# adjusted when the owner changed backends. modelbudget bounds it by BOTH the
+# context window and the SDK's NDJSON transport frame; see tool_result_cap.
+def _text_cap():
+    from . import modelbudget
+    try:
+        return modelbudget.tool_result_cap()
+    except Exception:      # noqa: BLE001 -- a tool result must still return
+        return 12_000
 PREVIEW = 160            # per-line body/context preview
 
 
@@ -153,7 +163,7 @@ def preamble(native=True, worktree_path="", branch="", live_root=""):
 # ---------- shared rendering helpers ----------
 
 def _txt(text):
-    return {"content": [{"type": "text", "text": text[:TEXT_CAP]}]}
+    return {"content": [{"type": "text", "text": text[:_text_cap()]}]}
 
 
 def _hm(iso):

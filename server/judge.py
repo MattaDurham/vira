@@ -25,14 +25,101 @@ import threading
 import time
 from pathlib import Path
 
-from . import jobfiles, joblog, settings
+from . import jobfiles, joblog, modelbudget, settings
 
 GRADES = ["F", "D-", "D", "D+", "C-", "C", "C+",
           "B-", "B", "B+", "A-", "A", "A+"]
-DIFF_CAP = 30_000
-OUTPUT_CAP = 20_000
 POLL_S = 3.0
 JUDGE_TIMEOUT = 1800
+
+# ---- WHAT A JUDGE MAY SEE, asked of the backend that will answer ----
+#
+# Until 2026-08-28 this was four literals: DIFF_CAP = 30_000, OUTPUT_CAP =
+# 20_000, plus an inline [:8000] on the original ask and [:4000] on the run
+# context. 62_000 characters of evidence in total, roughly 18k tokens, each
+# number typed once against no particular backend and never revisited - while
+# the Anthropic path a judge session runs on reports a 1,000,000-token context
+# window in its own response JSON.
+#
+# A judge is the surface where a small cap does the most damage, because it
+# cannot detect its own truncation: handed the first 30k of a 400k diff it
+# grades what it was shown and returns a confident letter for work it only
+# partly read. That is the same signature as find.ASK_LIMIT = 8 and define's
+# 9,000 characters (see server/modelbudget.py) - a cap that fails silently
+# while looking correct.
+#
+# The class is DEEP: nobody waits on a judge, and thoroughness is the entire
+# job. The four evidence channels split that budget evenly. They are CAPS,
+# not allocations - a cap larger than the material costs nothing - and
+# dividing by four is what keeps all four of them inside the window
+# modelbudget measured, after its own template and output reserves.
+#
+# NOTE: the seam answers for the backend serving Vira's own model calls, which
+# is not necessarily the one hosting this session (a judge stage may name its
+# own model). That can only ever UNDER-spend against the session's real
+# window, which is the safe direction, so it is deliberately left alone.
+EVIDENCE_CHANNELS = 4
+
+# A SESSION PROMPT IS NOT A BARE MODEL CALL, so the window is not its only
+# ceiling. A judge prompt is handed to session.sessions.launch, and every
+# launch writes the prompt VERBATIM into three places: data/jobs/<id>/job.json,
+# the SDK's stdio transport, and - the binding one - joblog.record_launch's
+# ledger row. `data/jobs-log.json` carries the full initial prompt of every job
+# ever launched, is NEVER pruned (job DIRS prune at ~400; the ledger does not),
+# and is re-read and re-serialized in full under a lock on every subsequent job
+# write. So an unbounded prompt is a permanent, compounding store cost, not a
+# per-call one.
+#
+# Measured on this machine while routing these caps: the learned window is
+# 1,000,000 tokens, which makes the deep share 661,342 characters PER CHANNEL.
+# TWO of the four channels can never reach a ceiling because they are bounded
+# far below it upstream (runner.RESULT_KEEP truncates the report to 20,000; the
+# context is one sentence plus circuits.EXTRA_CAP). The other two are real: the
+# DIFF has no upstream cap at all, and the ASK is a composed dispatch prompt
+# that genuinely gets large - measured across the live ledger's 546 rows (6.8MB
+# on disk), the biggest is an applications.apply_prompt at 143,617 characters,
+# with 13 rows over 64,000. So the diff is what would have written
+# multi-hundred-kilobyte rows into that ledger forever, and the ask is what a
+# channel cap still truncates today - eight times less harshly than the [:8000]
+# it replaces.
+#
+# 256_000 characters of evidence is therefore the harness's ceiling rather than
+# the model's, and both halves of it are checkable rather than chosen: it sits
+# above the largest prompt this app has ever persisted (143,617) and ~4x under
+# the SDK's own measured NDJSON line bound of 1,048,576 bytes - the bound that
+# killed five sessions across three branches on 2026-08-28 - so even a full
+# echo of the prompt cannot reach it. Against the old flat literals it is still
+# ~4x more evidence than a judge has ever been given.
+#
+# THIS CEILING BELONGS IN modelbudget, not here: "a prompt bound for the session
+# harness" is a class every session-dispatching caller needs, and stating it in
+# one module means the next one restates it slightly differently. It is local
+# only because modelbudget is owned elsewhere this pass.
+SESSION_PROMPT_CHARS = 256_000
+
+
+def evidence_cap():
+    """Characters ONE evidence channel may carry - diff, report, ask, context.
+
+    The window's answer, clamped by what the session harness will persist.
+    Read per call, never at import: BOTH inputs are config the owner can change
+    at any moment, and a value cached at import would describe whichever
+    backend happened to be selected when the process started.
+    """
+    window = modelbudget.split("deep", parts=EVIDENCE_CHANNELS)[1]
+    return max(min(window, SESSION_PROMPT_CHARS // EVIDENCE_CHANNELS), 2_000)
+
+
+# How many untracked files to OPEN, and the size past which one is not read at
+# all. Untracked files are the one piece of evidence `git diff` never shows, so
+# a build that creates files is invisible to a judge without them. Neither
+# number is a statement about the model's window - the first bounds how many
+# files this function stats and reads, the second refuses to slurp a large one
+# into memory - so both are left exactly as they were. Only the per-file
+# TRUNCATION below was a context budget, and it was a flat [:4000]: a new
+# 200-line source file was graded from its first half.
+NEW_FILES = 12
+NEW_FILE_BYTES = 40_000
 
 VERDICT_CONTRACT = """Return your verdict as the FINAL thing in your reply,
 as a single JSON object in a ```json code fence:
@@ -89,6 +176,7 @@ def _git_diff(cwd):
     cwd is not a git repo or git is unhappy — evidence, not a hard dep."""
     if not cwd or not (Path(cwd).expanduser() / ".git").exists():
         return ""
+    cap = evidence_cap()
     try:
         status = subprocess.run(
             ["git", "status", "--short"], cwd=cwd, capture_output=True,
@@ -100,7 +188,7 @@ def _git_diff(cwd):
                      if ln.startswith("?? ")]
         extra = []
         root = Path(cwd).expanduser().resolve()
-        for f in untracked[:12]:
+        for f in untracked[:NEW_FILES]:
             p = Path(cwd).expanduser() / f
             # Containment: never follow an untracked symlink, and never
             # read a path that resolves outside the repo root — this text
@@ -112,14 +200,17 @@ def _git_diff(cwd):
                     continue
             except OSError:
                 continue
-            if p.is_file() and p.stat().st_size < 40_000:
+            if p.is_file() and p.stat().st_size < NEW_FILE_BYTES:
                 try:
+                    # A quarter of the diff channel each, so a handful of new
+                    # files can be read whole while the join's own cap below
+                    # stays the thing that binds. Was a flat [:4000].
                     extra.append(f"--- new file: {f}\n"
-                                 + p.read_text(errors="replace")[:4000])
+                                 + p.read_text(errors="replace")[:max(cap // 4, 1_000)])
                 except OSError:
                     pass
         return (f"git status --short:\n{status}\n\ngit diff:\n{diff}\n\n"
-                + "\n\n".join(extra))[:DIFF_CAP]
+                + "\n\n".join(extra))[:cap]
     except Exception:  # noqa: BLE001 — evidence gathering is best-effort
         return ""
 
@@ -128,17 +219,20 @@ def build_prompt(ask, output, cwd=None, transcript_tail="", context=""):
     """The judge brief: original ask + evidence. Deterministic — the judge
     session itself needs no shell access."""
     diff = _git_diff(cwd)
+    # One channel each: the ask, the context, the report, and the diff (or the
+    # transcript tail, which is the diff's alternative and never both).
+    cap = evidence_cap()
     parts = [
         "You are a JUDGE — a fresh, independent reviewer with no stake in "
         "the work. Another agent was given a task; your job is to grade "
         "what it produced. Be rigorous and specific: check the work "
         "against what was actually asked, not against effort.",
-        f"THE ORIGINAL ASK:\n{(ask or '').strip()[:8000]}",
+        f"THE ORIGINAL ASK:\n{(ask or '').strip()[:cap]}",
     ]
     if context:
-        parts.append(f"CONTEXT:\n{context[:4000]}")
+        parts.append(f"CONTEXT:\n{context[:cap]}")
     if output:
-        parts.append(f"THE WORKER'S FINAL REPORT:\n{output[:OUTPUT_CAP]}")
+        parts.append(f"THE WORKER'S FINAL REPORT:\n{output[:cap]}")
     if diff:
         parts.append("THE ACTUAL CHANGES ON DISK (git working tree at "
                      f"{cwd}):\n{diff}")
@@ -147,7 +241,7 @@ def build_prompt(ask, output, cwd=None, transcript_tail="", context=""):
                      "You may Read files in the repo to verify claims.")
     elif transcript_tail:
         parts.append(f"SESSION TRANSCRIPT (tail):\n"
-                     f"{transcript_tail[-OUTPUT_CAP:]}")
+                     f"{transcript_tail[-cap:]}")
     parts.append(VERDICT_CONTRACT)
     return "\n\n".join(parts)
 
@@ -158,7 +252,11 @@ def prompt_for_job(jid):
     if not rec:
         raise KeyError(jid)
     output = rec.get("result") or ""
-    tail = jobfiles.tail_output(jobfiles.job_dir(jid), OUTPUT_CAP)
+    # NOTE `output` here is the LEDGER's copy, which joblog truncates to its
+    # own RESULT_CAP (4,000) on write - so this channel's cap has never been
+    # what bound it on this path, and raising it alone changes nothing. The
+    # tail read below is the one that binds.
+    tail = jobfiles.tail_output(jobfiles.job_dir(jid), evidence_cap())
     return build_prompt(rec.get("prompt"), output, cwd=rec.get("cwd"),
                         transcript_tail=tail)
 

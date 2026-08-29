@@ -33,8 +33,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASELINE="$ROOT/scripts/preflight-baseline.txt"
 cd "$ROOT" || exit 2
 
-CHECKS=(base deps encoding pii ci)
-PRE_MERGE=(base deps encoding pii ci)
+CHECKS=(base deps encoding capdoc pii ci)
+PRE_MERGE=(base deps encoding capdoc pii ci)
 
 SLUG="${PREFLIGHT_SLUG:-}"
 fails=0
@@ -129,6 +129,31 @@ check_encoding() {
 }
 
 # ----------------------------------------------------------------- pii ----
+desc_capdoc="no NEW undocumented model-context cap (ratchet)"
+incident_capdoc="2026-08-28: define.py fed a model 5 x 1800 characters against a
+      backend reporting a 1,000,000-token window in its own response JSON. Both
+      constants carried no comment, directly above MAX_SELECTION_WORDS, which
+      carries a two-line justification. find.ASK_LIMIT (8 -> 24) was the same
+      defect ten days earlier. A cap that is too SMALL yields confident output
+      from thin material rather than an error, so nothing ever surfaces it."
+fix_capdoc="write the sentence saying what it bounds and why, or route it through server/modelbudget.py"
+check_capdoc() {
+  # AST, not grep: a comment on the line above is invisible to a line scan.
+  local n base
+  n=$(python3 "$ROOT/scripts/preflight_capdoc.py" --count 2>/dev/null)
+  [[ -z "$n" ]] && { bad capdoc "scanner failed to run"; return 0; }
+  base=$(baseline_for capdoc)
+  if [[ "$n" -gt "$base" ]]; then
+    bad capdoc "$n undocumented context caps, baseline $base - this change adds $((n-base))"
+    python3 "$ROOT/scripts/preflight_capdoc.py" 2>/dev/null | head -6 | sed 's/^/        /'
+    say "        fix: $fix_capdoc"
+  elif [[ "$n" -lt "$base" ]]; then
+    warn capdoc "$n caps, below the $base baseline - lower it to $n to lock the gain in"
+  else
+    ok capdoc "$n undocumented context caps (at baseline)"
+  fi
+}
+
 desc_pii="no personal data in the tracked tree — and the scan says how strong it was"
 incident_pii="2026-07-24: a docstring naming a contact and two employers shipped to
       the PUBLIC repo. data/pii-patterns.txt is gitignored, so CI ran with only the

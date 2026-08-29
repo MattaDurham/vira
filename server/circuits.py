@@ -37,7 +37,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import jobfiles, joblog, judge, settings
+from . import jobfiles, joblog, judge, modelbudget, settings
 from .filelock import locked
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,8 +45,24 @@ DEFS = ROOT / "data" / "circuits.json"
 RUNS = ROOT / "data" / "circuit-runs.json"
 
 TICK_S = 2.0
-OUTPUT_INJECT_CAP = 24_000
 RUNS_KEEP = 120
+
+# The stage-to-stage handoff cap for the NON-model readers of a stage's
+# output: the logic gate that matches text against it, the Output part that
+# stores it as its own result, and the finished-run row. It bounds what goes
+# back into data/circuit-runs.json, so it is a store cap and stays a literal.
+#
+# It was OUTPUT_INJECT_CAP = 24_000 and it bounded the model handoff too,
+# which is the half that now asks modelbudget (see render_prompt). WHICH
+# readers it really binds, measured rather than assumed: for a MODEL stage it
+# never bound anything, because runner.RESULT_KEEP truncates result_text to
+# 20_000 before it reaches state.json and joblog.RESULT_CAP truncates the
+# ledger fallback to 4_000 - the tighter upstream cap always won. For a LOCAL
+# part it DOES bind: an Output part's result_text is the join of its inputs,
+# written straight into circuit-runs.json without ever passing RESULT_KEEP, so
+# this is what stops that store row growing with its fan-in. Splitting the two
+# is what lets the prompt grow with the window while the store row does not.
+STAGE_OUTPUT_STORE_CAP = 24_000
 # The session permission ladder (session.MODES — kept literal here because
 # `session` is imported lazily throughout this module to dodge a circular
 # import) plus "judge", the one stage kind that is a role rather than a
@@ -706,12 +722,24 @@ def decide_approval(run_id, stage_id, approved, note=""):
 
 # ---------- prompt wiring ----------
 
-def _stage_output(run, sid):
+def _stage_output(run, sid, cap=None):
     """Final text of a finished stage: state.json result_text first (rich),
-    ledger result as fallback."""
+    ledger result as fallback.
+
+    `cap` is the CALLER'S, because the two kinds of caller are answering
+    different questions and one number cannot serve both. A model caller (a
+    downstream prompt, a judge's evidence) is asking how much of this text the
+    window affords and passes a modelbudget share; a local caller (the logic
+    gate, an Output part, the finished-run row) is asking how much text to put
+    back in the store and takes the default. Applying the window's answer to
+    the store would let one raised backend limit balloon
+    data/circuit-runs.json; applying the store's answer to a prompt is the
+    literal this sweep exists to remove.
+    """
+    cap = STAGE_OUTPUT_STORE_CAP if cap is None else cap
     st = run["stages"].get(sid) or {}
     if st.get("result_text"):
-        return str(st["result_text"])[:OUTPUT_INJECT_CAP]
+        return str(st["result_text"])[:cap]
     jid = st.get("job_id")
     if not jid:
         return ""
@@ -720,7 +748,37 @@ def _stage_output(run, sid):
     if not out:
         rec = joblog.get_record(jid) or {}
         out = rec.get("result") or ""
-    return out[:OUTPUT_INJECT_CAP]
+    return out[:cap]
+
+
+# A stage handoff is a background pass nobody is watching compose, so the
+# class is DEEP. The budget is split across the `{{stage.<id>.output}}`
+# references the template actually carries: a synthesis stage reading three
+# upstream stages (Council) must not be able to spend the whole window on
+# whichever one happened to run longest, and a template with a single
+# reference gets the whole share rather than an arbitrary fraction of it.
+HANDOFF_CLASS = "deep"
+
+
+def _handoff_cap(parts):
+    """Characters ONE `{{stage.x.output}}` substitution may carry.
+
+    Clamped by judge.SESSION_PROMPT_CHARS for the reason stated there: a
+    rendered stage prompt is handed to session.sessions.launch, and every
+    launch persists the prompt verbatim into the never-pruned job ledger. The
+    ceiling is shared rather than restated so the two callers cannot drift on
+    it - and the fact that two modules already need it is the argument for
+    moving it into modelbudget, where every session-dispatching caller can
+    reach it.
+
+    It does not bind today either way: runner.RESULT_KEEP truncates every
+    result_text to 20,000 before it reaches state.json. It is here so the
+    handoff grows with the window if that changes, without growing without
+    limit.
+    """
+    parts = max(int(parts), 1)
+    window = modelbudget.split(HANDOFF_CLASS, parts=parts)[1]
+    return max(min(window, judge.SESSION_PROMPT_CHARS // parts), 2_000)
 
 
 def _destination(item, run=None):
@@ -846,12 +904,19 @@ def _forge_brief(stage, run=None):
             "stages.\n" + "\n\n".join(blocks))
 
 
+_STAGE_REF_RE = re.compile(r"\{\{stage\.([\w-]+)\.output\}\}")
+
+
 def render_prompt(template, run, stage=None):
     out = template.replace("{{input}}", run["input"])
+    # Count the references BEFORE substituting: each one gets an equal share
+    # of the deep budget, so the handoff grows with the answering backend's
+    # window instead of the flat 24_000 every substitution used to carry.
+    cap = _handoff_cap(len(_STAGE_REF_RE.findall(out)))
 
     def sub(m):
-        return _stage_output(run, m.group(1))
-    out = re.sub(r"\{\{stage\.([\w-]+)\.output\}\}", sub, out)
+        return _stage_output(run, m.group(1), cap=cap)
+    out = _STAGE_REF_RE.sub(sub, out)
     return out + (_forge_brief(stage or {}, run))
 
 
@@ -1018,8 +1083,17 @@ class Driver(threading.Thread):
         if st_def.get("mode") == "judge":
             j = st_def.get("judge") or {}
             of = j.get("of") or (st_def.get("needs") or [])
+            # The evidence join IS the judge's report channel, so the judged
+            # stages divide THAT rather than the template-handoff budget.
+            # _handoff_cap(2) answered 128_000 per stage against a channel
+            # build_prompt then cuts to 64_000, so one long stage really could
+            # fill it - and because that cut takes the TAIL, the stage that
+            # silently disappeared was the last one. The cut stays the
+            # backstop; this share is what decides who survives it.
+            ev_cap = max(judge.evidence_cap() // max(len(of), 1), 2_000)
             evidence = "\n\n".join(
-                f"[stage {o} output]\n{_stage_output(run, o)}" for o in of)
+                f"[stage {o} output]\n{_stage_output(run, o, cap=ev_cap)}"
+                for o in of)
             target_cwd = run.get("cwd")
             context = (f"This work was stage(s) {', '.join(of)} of the "
                        f"'{run['circuit_name']}' pipeline.")

@@ -3287,6 +3287,29 @@ def api_define(term: str):
             raise HTTPException(400, str(e))
 
 
+class DefineReq(BaseModel):
+    term: str
+    # The passage the term was selected in. A caller that KNOWS the source -
+    # the note on screen, an article a lookup came from - hands it in and it
+    # always survives retrieval, instead of competing with the whole vault
+    # for a slot (see define._context).
+    text: str = ""
+    path: str = ""
+    label: str = ""
+
+
+@app.post("/api/define")
+def api_define_post(req: DefineReq):
+    src = None
+    if (req.text or "").strip():
+        src = {"text": req.text, "path": req.path, "label": req.label}
+    with admission.cpu("define"):
+        try:
+            return define.lookup(req.term, source=src)
+        except define.DefineError as e:
+            raise HTTPException(400, str(e))
+
+
 @app.get("/api/define/status")
 def api_define_status():
     return define.status()

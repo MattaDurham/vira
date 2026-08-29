@@ -239,6 +239,32 @@ class ModelPass(Base):
         kept, _ = dc._clean_model(raw, lines)
         self.assertEqual(len(kept), 1)
 
+    def test_the_posting_excerpt_is_cut_at_what_the_budget_allows(self):
+        """The posting is material a MODEL reads, so how much of it fits is
+        asked of the backend rather than typed here. Pinned as a relationship
+        - move the seam and the excerpt moves with it - so a bigger window can
+        never break this and deleting the question can never pass it."""
+        role = dict(self.role, jd="POSTING " + "z" * 40_000)
+        seen = {}
+
+        def _complete(prompt):
+            seen["prompt"] = prompt
+            return "[]"
+
+        with mock.patch.object(dc, "jd_chars", lambda: 500), \
+                mock.patch("server.suggest.complete", _complete):
+            dc.model_findings(["One line of the draft."], role, "cover")
+        self.assertIn("z" * 400, seen["prompt"])
+        self.assertNotIn("z" * 600, seen["prompt"],
+                         "the posting ignored the budget it was given")
+
+    def test_the_posting_floor_holds_when_the_budget_cannot_be_read(self):
+        """Degrade downward: a backend that can tell us nothing still gets
+        exactly the excerpt this module sent before the seam existed."""
+        with mock.patch("server.modelbudget.split",
+                        side_effect=RuntimeError("no backend")):
+            self.assertEqual(dc.jd_chars(), dc.JD_FLOOR)
+
     def test_a_model_outage_costs_the_judgment_half_and_nothing_else(self):
         with mock.patch.object(dc, "model_findings",
                                return_value=([], {"unavailable": 1})):

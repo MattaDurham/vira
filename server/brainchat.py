@@ -18,9 +18,15 @@ from . import jsonstore, suggest, vault
 STORE = Path(__file__).resolve().parent.parent / "data" / "brain-chat.json"
 MAX_SESSIONS = 20
 MAX_TURNS = 40
-MAX_CHUNKS = 8
-MAX_CHUNK_CHARS = 2400
 MAX_PRIOR_CONCEPTS = 60
+
+# THE CLASS, ONCE, FOR BOTH PROMPTS A TURN BUILDS. The answer and the concept
+# pass that follows it are composed answers over retrieved material, which is
+# what modelbudget's default class describes; neither is the latency-critical
+# popup `interactive` is for (define.py's card is that). Sizing the two
+# differently would be arbitrary -- they read the same passages in the same
+# request -- so the class is named here and both ask the seam with it.
+BUDGET = "standard"
 
 
 class Conflict(RuntimeError):
@@ -88,18 +94,52 @@ def _prune_sessions(state):
 def _answer_question(question, prior_turns, hits):
     if not prior_turns:
         return vault.ask(question, hits=hits)
-    transcript = []
-    for turn in prior_turns[-8:]:
-        transcript.append("User: " + str(turn.get("question") or "")[:1200])
-        transcript.append("Assistant: " + str(turn.get("answer") or "")[:2400])
     contextual = (
         "Continue this vault-grounded conversation. Use the earlier exchange "
         "only as conversational context; support every factual claim with the "
         "retrieved vault notes and preserve [[wikilink]] citations.\n\n"
-        "EARLIER EXCHANGE:\n" + "\n".join(transcript) +
+        "EARLIER EXCHANGE:\n" + _transcript(prior_turns) +
         "\n\nCURRENT QUESTION:\n" + question
     )
     return vault.ask(contextual, hits=hits)
+
+
+def _transcript(prior_turns):
+    """The earlier exchange, newest turn first into a budget from modelbudget.
+
+    WAS `prior_turns[-8:]` with each question cut at 1,200 characters and
+    each answer at 2,400 -- three literals typed together in one commit and
+    never revisited against any window. A session STORES forty turns
+    (MAX_TURNS), so a long conversation showed the model eight of them and
+    truncated every one, while the backend answering it reports a million-
+    token context window in its own response JSON. Nothing failed and
+    nothing said anything: a model handed a conversation that appears to
+    start later than it did simply answers as if it did.
+
+    modelbudget sizes it against whatever backend will actually answer, so
+    changing backends in Config re-sizes this instead of leaving a literal
+    describing a machine nobody re-measured. What still does not fit is
+    COUNTED in the prompt rather than dropped in silence.
+    """
+    from . import modelbudget
+    total, per_turn = modelbudget.split(BUDGET, parts=max(len(prior_turns), 1))
+    blocks, used = [], 0
+    for turn in reversed(prior_turns):
+        block = ("User: " + str(turn.get("question") or "")[:per_turn]
+                 + "\nAssistant: " + str(turn.get("answer") or "")[:per_turn])
+        # `split` FLOORS a part at a few hundred characters, so parts x
+        # per_turn can exceed the total on a small window. The running total
+        # is the binding constraint; the per-part figure is only a ceiling.
+        if blocks and used + len(block) > total:
+            break
+        blocks.append(block)
+        used += len(block)
+    blocks.reverse()
+    left = len(prior_turns) - len(blocks)
+    if left:
+        blocks.insert(0, f"({left} earlier turn(s) omitted -- they did not "
+                         "fit this backend's context budget)")
+    return "\n".join(blocks)
 
 
 _CONCEPT_PROMPT = """You distill vault-chat sessions into a semantic concept cloud.
@@ -126,23 +166,52 @@ def _extract_json(text):
 
 
 def _concept_prompt(question, answer, hits, prior):
+    """What the concept pass reads: the turn, and the passages that grounded it.
+
+    WAS `hits[:MAX_CHUNKS]` with each passage cut at `MAX_CHUNK_CHARS`
+    (8 x 2,400), the question at 4,000 and the answer at 8,000 -- four
+    literals bounding roughly 19k characters of material, none of them ever
+    compared to a window. Two were worse than merely small. `ask()`
+    retrieves ten passages, so two of every ten were searched for, paid for
+    and then dropped HERE with nothing said; and an answer past 8,000
+    characters had its tail excluded from the very extraction it was being
+    read for, which produces a thinner concept cloud rather than an error.
+
+    modelbudget answers all four now. Question, answer and every retrieved
+    passage are the parts, so the per-part figure is a ceiling and the TOTAL
+    is what binds -- a short question leaves its room to the passages
+    instead of wasting it.
+    """
+    from . import modelbudget
+    total, part = modelbudget.split(BUDGET, parts=len(hits) + 2)
+    q_text = question[:part]
+    a_text = answer[:part]
+    room = total - len(q_text) - len(a_text)
     chunks = []
-    for i, hit in enumerate(hits[:MAX_CHUNKS], 1):
+    for i, hit in enumerate(hits, 1):
         heading = hit.get("heading") or hit.get("heading_path") or ""
         label = str(hit.get("path") or "(unknown)")
         if heading:
             label += " | " + str(heading)
-        chunks.append(
-            f"--- CHUNK {i} | {label} ---\n"
-            + str(hit.get("text") or "")[:MAX_CHUNK_CHARS]
-        )
+        block = (f"--- CHUNK {i} | {label} ---\n"
+                 + str(hit.get("text") or "")[:part])
+        # The first passage always goes in -- an extraction pass with no
+        # grounding at all is worse than one that overruns a soft ceiling.
+        if chunks and len(block) > room:
+            break
+        chunks.append(block)
+        room -= len(block)
+    left = len(hits) - len(chunks)
+    if left:
+        chunks.append(f"({left} further passage(s) omitted -- they did not "
+                      "fit this backend's context budget)")
     prior_text = ", ".join(
         f"{c.get('term')} (w={float(c.get('weight') or 0):.2f})"
         for c in prior[:MAX_PRIOR_CONCEPTS] if c.get("term")
     ) or "(none; this is the first turn)"
     return (
-        _CONCEPT_PROMPT + "\nQUESTION:\n" + question[:4000]
-        + "\n\nANSWER:\n" + answer[:8000]
+        _CONCEPT_PROMPT + "\nQUESTION:\n" + q_text
+        + "\n\nANSWER:\n" + a_text
         + "\n\nCHUNKS:\n" + "\n\n".join(chunks)
         + "\n\nPRIOR CONCEPTS:\n" + prior_text
     )
@@ -254,7 +323,12 @@ def ask(question, session_id=None):
             "hits": hits,
         }
     else:
-        hits = vault.search(question, limit=10)
+        # ONE retrieval, read by both prompts. It was a bare `limit=10`
+        # sitting beside a MAX_CHUNKS of 8, so the answer prompt and the
+        # concept prompt read different sets and nobody could see it.
+        # vault.ask_hits() is the single answer, budgeted against the
+        # backend that will read it and the engine's own prompt ceiling.
+        hits = vault.search(question, limit=vault.ask_hits(BUDGET))
         answer = _answer_question(question, session.get("turns") or [], hits)
     answer_text = str(answer.get("answer") or "")
 

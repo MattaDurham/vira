@@ -36,9 +36,31 @@ from . import data as crm
 from .filelock import locked
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "brief-journal.json"
-MAX_ENTRIES = 400
-ROSTER_PEOPLE = 40      # recent people offered for name resolution
-PROMPT_LOOPS_CAP = 60   # open loops listed in the prompt
+MAX_ENTRIES = 400       # entries kept in the store; not a prompt size
+
+# THE PROMPT'S TWO VARIABLE BLOCKS ARE SIZED BY THE ANSWERING BACKEND, NOT
+# BY A LITERAL HERE. They used to be `ROSTER_PEOPLE = 40` and
+# `PROMPT_LOOPS_CAP = 60` — typed once, never revisited, and both failing
+# the silent way find.ASK_LIMIT did. The failure is worse here than a bad
+# ranking: INTEGRATE_PROMPT says "use ONLY person_ids present in the
+# roster" and "match_what must be byte-for-byte one of the listed loops",
+# so a row outside the cap is not ranked lower, it is UNREACHABLE. A note
+# about someone the owner had not messaged lately resolved to nobody, and
+# the pass reported that honestly — which reads as the model declining to
+# guess rather than as our own truncation.
+#
+# Measured on the live CRM 2026-08-28: the whole registry is 1,008 people
+# / 35,196 characters, so 40 names offered 4% of it, and the profiles have
+# carried 119 loops against a cap of 60. modelbudget gives the roster and
+# the loops one share each. `deep` because add() integrates on a daemon
+# thread and the POST has already returned: nobody is waiting on this call.
+BUDGET_CLASS = "deep"
+PROMPT_BLOCKS = 2       # the roster and the loops, one budget share each
+
+# The shortest a roster line can be ("- A -> p_xxxxxxxxxxxx"). Used only to
+# bound how many people are worth summarizing before the fit measures them
+# for real — never as the size of an actual row.
+ROSTER_MIN_ROW = 24
 
 
 def _now():
@@ -181,14 +203,47 @@ def _all_open_loops():
     return out
 
 
-def _roster(scoped_pid=None):
-    people = {p["id"]: p["name"]
-              for p in crm.search_people(limit=ROSTER_PEOPLE)}
+def _fit(lines, budget):
+    """(kept, dropped) — the leading lines that fit `budget` characters.
+
+    WHOLE LINES ONLY: half a roster row is a person_id the model cannot
+    use, and half a loop is a `match_what` that can never match. Callers
+    order by relevance first (most recent contact, the scoped person's
+    loops), so a cut that does bind drops the least likely rows. At least
+    one line always survives — an empty block is a worse answer than an
+    over-long one."""
+    kept, used = [], 0
+    for ln in lines:
+        if kept and used + len(ln) + 1 > budget:
+            break
+        kept.append(ln)
+        used += len(ln) + 1
+    return kept, len(lines) - len(kept)
+
+
+def _roster(scoped_pid, budget):
+    """(name -> person_id, dropped) for everyone a mention may resolve to.
+
+    Most-recently-contacted first, so a budget that binds drops the people
+    a note is least likely to be about. The scoped person is added AFTER
+    the fit and therefore always survives — the owner filed the note
+    against them, so they are the one name that cannot be optional.
+
+    `ROSTER_MIN_ROW` bounds the fetch, not the fit: there is no point
+    summarizing people whose shortest possible line could not fit anyway,
+    and `_fit` then measures the real rows.
+
+    `dropped` counts against the WHOLE REGISTRY, not against the slice
+    that was fetched — a prompt that says "3 more people exist" when 1,003
+    do is a silent cap wearing a number."""
+    rows = crm.search_people(limit=max(1, int(budget) // ROSTER_MIN_ROW))
+    kept, _ = _fit([f'- {p["name"]} -> {p["id"]}' for p in rows], budget)
+    people = {p["id"]: p["name"] for p in rows[:len(kept)]}
     if scoped_pid:
         p = crm._load()["by_id"].get(scoped_pid)
         if p:
             people[scoped_pid] = p["name"]
-    return people
+    return people, max(0, len(crm._load()["people"]) - len(people))
 
 
 def _integrate(eid):
@@ -214,13 +269,33 @@ def _integrate(eid):
 
 
 def _plan(entry):
-    from . import settings, suggest
-    roster = _roster(entry.get("person_id"))
+    from . import modelbudget, settings, suggest
+    # One share for the roster, one for the loops. Whatever is left over
+    # after a block underspends is NOT redistributed: the two blocks are
+    # sized independently so a long loop list cannot quietly cost the
+    # roster the name a mention needs.
+    _, per_block = modelbudget.split(BUDGET_CLASS, PROMPT_BLOCKS)
+    roster, roster_over = _roster(entry.get("person_id"), per_block)
     loops = _all_open_loops()
     scoped = entry.get("person_id")
     if scoped:  # the scoped person's loops always make the prompt
         loops.sort(key=lambda l: l["person_id"] != scoped)
-    loops = loops[:PROMPT_LOOPS_CAP]
+    loop_lines, loops_over = _fit(
+        [f'- {l["person_name"]} ({l["person_id"]}): "{l["what"]}" '
+         f'[owed_by {l["owed_by"] or "?"}, since {l["since"] or "?"}]'
+         for l in loops], per_block)
+    # A CAP THAT BINDS IS STATED IN THE PROMPT. INTEGRATE_PROMPT already
+    # tells the model to say so in `summary` when a mention cannot be
+    # resolved — it can only do that honestly if it knows the list it was
+    # handed is not the whole registry.
+    if roster_over:
+        roster_note = (f"\n({roster_over} more people are in the registry "
+                       "and are not listed here.)")
+    else:
+        roster_note = ""
+    if loops_over:
+        loop_lines.append(f"({loops_over} more open loops exist and are not "
+                          "listed here — never invent a match_what.)")
     scope = ""
     if scoped:
         scope = (f'\nThis note was written about {entry.get("person_name")} '
@@ -233,11 +308,9 @@ def _plan(entry):
         date=dt.date.today().isoformat(),
         text=entry["text"],
         scope=scope,
-        roster="\n".join(f"- {n} -> {i}" for i, n in roster.items()) or "(none)",
-        loops="\n".join(
-            f'- {l["person_name"]} ({l["person_id"]}): "{l["what"]}" '
-            f'[owed_by {l["owed_by"] or "?"}, since {l["since"] or "?"}]'
-            for l in loops) or "(none)")
+        roster=("\n".join(f"- {n} -> {i}" for i, n in roster.items())
+                or "(none)") + roster_note,
+        loops="\n".join(loop_lines) or "(none)")
     return suggest._extract_json(suggest.complete(prompt))
 
 

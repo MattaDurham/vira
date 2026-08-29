@@ -44,8 +44,22 @@ NOTE_TYPE = "concept"
 MAX_TERM = 120
 MAX_VALUE = 1200
 MAX_RELATED = 12
-MAX_CONTEXT_NOTES = 5
-MAX_CONTEXT_CHARS = 1800
+# HOW MUCH CONTEXT A CARD MAY CARRY IS ASKED, NOT TYPED.
+#
+# These were 5 and 1800 -- about 9,000 characters, set in this module's first
+# commit (2026-08-04) with no reason written down, directly above
+# MAX_SELECTION_WORDS, which has one. The backend they were feeding reports a
+# 1,000,000-token window in its own response JSON, so the card was composed on
+# roughly 1% of what it could hold, and a cap that is too small produces
+# confident output from thin material rather than an error -- which is why it
+# survived. find.ASK_LIMIT (8 -> 24) was the same defect ten days earlier.
+#
+# "interactive": the owner is watching a popup open, so latency is the binding
+# constraint here, not capacity -- filling a huge window to define one word
+# would make the gesture feel broken. modelbudget converts that class into
+# characters against whatever backend is actually answering.
+MAX_CONTEXT_NOTES = 8          # passages asked of the vault; sizes come from
+                               # modelbudget.split, never from a literal here
 # A selection long enough to be a sentence is not a term. Defining it would
 # be answering a question nobody asked, slowly.
 MAX_SELECTION_WORDS = 8
@@ -320,18 +334,48 @@ def _title_match(term):
     return None
 
 
-def _context(term):
-    """Vault passages about the term, to seed rung 3. Never the answer."""
-    out = []
+def _context(term, pinned=None):
+    """Passages to seed rung 3. Never the answer.
+
+    THE PINNED PASSAGE IS THE POINT, and it is what the vault search could
+    never guarantee. Retrieval ranks the WHOLE vault by similarity to the
+    term alone, so the document the owner is actually reading competes with
+    everything else and is not certain to place -- it only tended to, when
+    he had gone to the trouble of ingesting it first. That ingestion labour
+    was buying probability, not access. A caller that KNOWS the source
+    (the note on screen, an article a lookup came from) hands it in here and
+    it always survives; the vault fills whatever budget is left.
+
+    Sizes come from modelbudget, so switching backends re-sizes this.
+    """
+    from . import modelbudget
+    total, each = modelbudget.split("interactive", MAX_CONTEXT_NOTES)
+    out, used = [], 0
+
+    if pinned:
+        text = (pinned.get("text") or "").strip()
+        if text:
+            # The source gets a larger slice than a ranked hit: it is the
+            # thing being read, and its job is to settle which SENSE of an
+            # ambiguous term the card should define.
+            head = text[:max(int(total * 0.5), each)]
+            out.append({"path": pinned.get("path") or pinned.get("label") or "",
+                        "text": head, "pinned": True})
+            used = len(head)
+
     try:
         hits = vault.search(term, limit=MAX_CONTEXT_NOTES) or []
     except Exception:
         return out
     for h in hits[:MAX_CONTEXT_NOTES]:
+        if used >= total:
+            break
         text = (h.get("text") or h.get("chunk") or "").strip()
-        if text:
-            out.append({"path": h.get("path") or "",
-                        "text": text[:MAX_CONTEXT_CHARS]})
+        if not text:
+            continue
+        room = min(each, total - used)
+        out.append({"path": h.get("path") or "", "text": text[:room]})
+        used += min(len(text), room)
     return out
 
 
@@ -412,9 +456,23 @@ def _validate(raw, term):
 def _compose(term, context):
     block = ""
     if context:
-        block = ("\nFROM THE OWNER'S OWN NOTES (use where it sharpens the "
-                 "card; ignore where irrelevant):\n"
-                 + "\n".join(f"- {c['text']}" for c in context) + "\n")
+        pin = [c for c in context if c.get("pinned")]
+        rest = [c for c in context if not c.get("pinned")]
+        parts = []
+        if pin:
+            # Named separately because it means something different: this is
+            # the passage the term was selected IN, so it decides the sense.
+            parts.append(
+                "\nTHE PASSAGE THIS TERM WAS SELECTED IN (define the sense "
+                "this text uses; say so in one clause if the term is "
+                "ambiguous):\n"
+                + "\n".join(f"- {c['text']}" for c in pin))
+        if rest:
+            parts.append(
+                "\nFROM THE OWNER'S OWN NOTES (use where it sharpens the "
+                "card; ignore where irrelevant):\n"
+                + "\n".join(f"- {c['text']}" for c in rest))
+        block = "\n".join(parts) + "\n"
     raw = suggest.complete(PROMPT.format(term=term, context=block,
                                          max_related=MAX_RELATED))
     return _validate(_extract_json(raw), term)
@@ -548,7 +606,7 @@ def _bump(term):
 
 # ------------------------------------------------------------------ ladder
 
-def lookup(term, write=True):
+def lookup(term, write=True, source=None):
     """The card for `term`, by the cheapest rung that can answer.
 
     `write` is False on a passive instance and in tests that must not touch
@@ -587,7 +645,7 @@ def lookup(term, write=True):
         return card
 
     # rung 3 — one model call, seeded with whatever the vault knows
-    card = _compose(term, _context(term))
+    card = _compose(term, _context(term, source))
     if write and not _passive():
         try:
             card = save(card)
