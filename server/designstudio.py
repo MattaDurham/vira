@@ -265,6 +265,20 @@ def _save_files(repo: Path, theme: str, files: dict, target: str = "foundation")
         if path.read_text() != text:
             path.write_text(text)
             wrote.append(rel)
+    # A vira save changes the app's own :root, and the base skin manifest is a
+    # complete copy of those tokens - skins.ShippedStateInvariant asserts the
+    # two agree. The studio is the only writer of style.css, so it is the only
+    # place that can keep them agreeing; leaving it to a documented manual step
+    # is what let three saves take main's CI red on 2026-08-28. Same commit, so
+    # the pair can never land apart.
+    if target == "vira" and "static/style.css" in wrote:
+        from . import skins
+        try:
+            if skins.sync_base_from_style(files["static/style.css"]):
+                wrote.append(f"static/skins/{skins.BASE_ID}.json")
+        except (HTTPException, ValueError, OSError) as e:
+            raise HTTPException(500, f"saved the stylesheet but the base skin "
+                                     f"could not be synced: {e}")
     if not wrote:
         return {"ok": True, "committed": False, "note": "no changes"}
     try:

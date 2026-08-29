@@ -15,13 +15,17 @@ is a deliberate git commit, not a side effect of a click.
 
 Because a skin leaves the tracked stylesheet modified, the in-app updater
 will decline to fast-forward until the skin is reset — applying the Dark Mode
-floor restores the pristine files (see update.py, which names this).
+base restores the pristine files (see update.py, which names this).
 
 Skins ship as tracked data under ``static/skins/<id>.json`` (+ optional
-``<id>.css``), so a new skin is added by dropping files in. Dark Mode (the
-Taurid Capital skin) is the FLOOR: every apply merges the target skin's
-overrides over it, so applying is idempotent and applying it resets Vira to
-stock.
+``<id>.css``), so a new skin is added by dropping files in. Dark Mode is
+the BASE: every apply merges the target skin's overrides over it, so
+applying is idempotent and applying it resets Vira to stock. A partial skin
+(Light Mode carries 64 of the 69 tokens) inherits the rest from here, which
+is what stops a previously applied skin bleeding through. It is the one skin
+that cannot be removed - ``apply_skin`` loads it unconditionally. (This was
+called the FLOOR until 2026-08-28; the word read as a minimum value, which
+it never was, and cost a real misdiagnosis.)
 
 The picker lives at the top of the Design Studio module: pick a skin up top,
 tweak it in the studio below.
@@ -46,14 +50,14 @@ STYLE_CSS = APP_ROOT / "static" / "style.css"
 SKIN_ACTIVE = APP_ROOT / "static" / "skin-active.css"
 STATE = APP_ROOT / "data" / "active-skin.json"   # per-instance (data/ is ignored)
 
-FLOOR_ID = "taurid"                              # the base every apply resets to
+BASE_ID = "darkmode"                             # the base every apply resets to
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 EXTRAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\.css$")
 MAX_MANIFEST_BYTES = 128 * 1024
 MAX_EXTRAS_BYTES = designstudio.MAX_FILE_BYTES   # 512 KB, same ceiling as a saved stylesheet
 
-# The default (glass-free) content of skin-active.css. Applying Dark Mode
-# floor writes exactly this, so a reset-to-stock leaves no git diff. Kept in
+# The default (glass-free) content of skin-active.css. Applying the Dark
+# Mode base writes exactly this, so a reset-to-stock leaves no git diff. Kept in
 # sync with the shipped static/skin-active.css. Comments only, no rules.
 _ACTIVE_HEADER = (
     "/* skin-active.css — the glass layer of the currently applied skin.\n"
@@ -140,13 +144,20 @@ def _meta(m: dict) -> dict:
 
 
 def active_id() -> str:
-    s = jsonstore.read(STATE, {"id": FLOOR_ID})
+    """The applied skin, or the base. A stored id whose manifest is gone
+    reads as the base: skins are renamed and retired (this store carried
+    "taurid" before Dark Mode took its own name), and an id that survives
+    its manifest would mark no card active and 404 every caller that loads
+    it. A missing manifest is the honest signal that skin no longer exists."""
+    s = jsonstore.read(STATE, {"id": BASE_ID})
     got = s.get("id") if isinstance(s, dict) else None
-    return got if isinstance(got, str) and ID_RE.match(got) else FLOOR_ID
+    if isinstance(got, str) and ID_RE.match(got) and _manifest_path(got).is_file():
+        return got
+    return BASE_ID
 
 
 def list_skins() -> dict:
-    """Every skin on disk, floor/default first, then the rest by name."""
+    """Every skin on disk, base/default first, then the rest by name."""
     metas = []
     for p in sorted(SKINS_DIR.glob("*.json")):
         skin_id = p.stem
@@ -179,6 +190,60 @@ def _rewrite_root(text: str, tokens: dict) -> str:
     return "\n".join(lines)
 
 
+def read_root_tokens(text: str) -> dict:
+    """Every ``--token: value`` in the plain ``:root`` block. Same block and
+    same line shape ``_rewrite_root`` writes, so the reader and the writer
+    cannot disagree about which declarations are tokens."""
+    lines = text.split("\n")
+    try:
+        open_i, close_i = designstudio._root_block(lines)
+    except ValueError:
+        return {}                                 # no :root block: nothing to read
+    line_re = re.compile(r"^(\s*--)([a-z0-9-]+)(\s*:\s*)([^;]+)(;.*)$")
+    out = {}
+    for i in range(open_i, close_i + 1):
+        m = line_re.match(lines[i])
+        if m:
+            out["--" + m.group(2)] = m.group(4).strip()
+    return out
+
+
+def sync_base_from_style(style_text: str) -> bool:
+    """Fold the stylesheet's :root values into the base manifest. Returns
+    True if the manifest changed on disk.
+
+    THIS IS WHAT KEEPS THE DESIGN STUDIO FROM BREAKING ITS OWN INVARIANT.
+    The studio writes static/style.css and nothing else, so before this every
+    token the owner changed and saved left the shipped stylesheet disagreeing
+    with the base - and ShippedStateInvariant, which exists to catch a skin
+    left applied after visual verification, cannot tell that apart from a
+    deliberate edit. It fired on three Design Studio commits on 2026-08-28
+    and blocked every merge on the machine until the base was hand-edited.
+    The manual "keep taurid.json in sync" rule is exactly the kind that fails.
+
+    Only ADDITIVE and UPDATING: a base token absent from :root is left alone,
+    because a skin may legitimately override a token the stock sheet does not
+    declare. That is enough for both invariants - every :root token exists in
+    the base (so the coverage test passes) and carries the same value (so
+    applying the base is a no-op).
+    """
+    live = read_root_tokens(style_text)
+    if not live:
+        return False                              # no :root block found; write nothing
+    m = load_manifest(BASE_ID)
+    tokens = dict(m.get("tokens") or {})
+    changed = {k: v for k, v in live.items() if tokens.get(k) != v}
+    if not changed:
+        return False
+    for k, v in changed.items():
+        _check_token(k, v)                        # never write a manifest we would refuse to read
+    tokens.update(changed)
+    m["tokens"] = tokens
+    _write_text_atomic(_manifest_path(BASE_ID),
+                       json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+    return True
+
+
 def _extras_css(m: dict) -> str:
     name = m.get("extras")
     if not name:
@@ -200,12 +265,12 @@ def _write_text_atomic(path: Path, text: str) -> None:
 
 
 def apply_skin(skin_id: str) -> dict:
-    """Rewrite :root to this skin (floor + overrides), swap the glass layer,
+    """Rewrite :root to this skin (base + overrides), swap the glass layer,
     record the choice. A LOCAL action — no git; the app reloads wearing it.
     Writes are atomic so a hard kill can never leave a truncated stylesheet."""
     skin = load_manifest(skin_id)
-    floor = load_manifest(FLOOR_ID)
-    merged = dict(floor["tokens"])
+    base = load_manifest(BASE_ID)
+    merged = dict(base["tokens"])
     merged.update(skin.get("tokens") or {})
     for k, v in merged.items():                   # revalidate the merged surface
         try:

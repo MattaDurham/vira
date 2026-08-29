@@ -5,10 +5,13 @@ a throwaway repo (push expected to fail without a remote).
 
 Run: .venv/bin/python -m unittest tests.test_designstudio
 """
+import json
+import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from server import designstudio as ds
 
@@ -183,6 +186,64 @@ class CommitTests(unittest.TestCase):
             # nothing staged -> second commit reports not-committed
             again = ds.commit_and_push(repo, rel, "taurid: adjust bg")
             self.assertFalse(again["committed"])
+
+
+class ViraSaveSyncsTheBaseSkin(unittest.TestCase):
+    """THE JOIN. skins.sync_base_from_style is unit-tested on its own, but the
+    defect it fixes was that nothing CALLED it: the studio wrote style.css and
+    the base manifest was left to a documented manual step. So this drives the
+    real _save_files and asserts both files were written and both were handed
+    to the commit."""
+    def setUp(self):
+        from server import skins
+        self.skins = skins
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (self.tmp / "static" / "skins").mkdir(parents=True)
+        (self.tmp / "static/style.css").write_text(VIRA_STYLE, encoding="utf-8")
+        real = Path(skins.APP_ROOT) / "static" / "skins"
+        shutil.copy(real / f"{skins.BASE_ID}.json",
+                    self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json")
+        # point skins at the throwaway tree, and record what gets committed
+        self.enterContext(mock.patch.object(skins, "SKINS_DIR",
+                                            self.tmp / "static" / "skins"))
+        self.committed = []
+        def fake_commit(repo, relpath, message):
+            self.committed.extend(relpath if isinstance(relpath, list) else [relpath])
+            return {"committed": True, "sha": "deadbee", "pushed": False}
+        self.enterContext(mock.patch.object(ds, "commit_and_push", fake_commit))
+
+    def _base(self):
+        return json.loads((self.tmp / "static" / "skins" /
+                           f"{self.skins.BASE_ID}.json").read_text(encoding="utf-8"))["tokens"]
+
+    def test_a_vira_save_writes_and_commits_both_files(self):
+        self.assertEqual(self._base()["--radius"], "13px")   # the shipped value
+        new = VIRA_STYLE.replace("--radius: 2px;", "--radius: 21px;")
+        out = ds._save_files(self.tmp, "taurid", {"static/style.css": new}, target="vira")
+        self.assertTrue(out["ok"])
+        self.assertEqual(self._base()["--radius"], "21px")   # manifest followed
+        self.assertIn("static/style.css", self.committed)
+        self.assertIn(f"static/skins/{self.skins.BASE_ID}.json", self.committed)
+
+    def test_the_saved_sheet_and_the_base_agree_afterwards(self):
+        # the invariant ShippedStateInvariant enforces, checked on the pair
+        # this save actually produced
+        new = VIRA_STYLE.replace("--accent: #8a8478;", "--accent: #d9a441;")
+        ds._save_files(self.tmp, "taurid", {"static/style.css": new}, target="vira")
+        written = (self.tmp / "static/style.css").read_text(encoding="utf-8")
+        self.assertEqual(self.skins._rewrite_root(written, self._base()), written)
+
+    def test_a_foundation_save_never_touches_the_base(self):
+        before = (self.tmp / "static" / "skins" /
+                  f"{self.skins.BASE_ID}.json").read_bytes()
+        repo = self.tmp / "fnd"
+        (repo / "foundation").mkdir(parents=True)
+        (repo / "foundation/base.css").write_text("x { color: red; }", encoding="utf-8")
+        ds._save_files(repo, "taurid", {"foundation/base.css": "x { color: blue; }"})
+        self.assertEqual((self.tmp / "static" / "skins" /
+                          f"{self.skins.BASE_ID}.json").read_bytes(), before)
+        self.assertNotIn(f"static/skins/{self.skins.BASE_ID}.json", self.committed)
+
 
 
 if __name__ == "__main__":

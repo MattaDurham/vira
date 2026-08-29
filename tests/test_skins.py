@@ -14,7 +14,7 @@ from unittest import mock
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from server import skins
+from server import jsonstore, skins
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -50,10 +50,10 @@ class RewriteRootTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    def test_real_floor_loads_and_is_default(self):
-        m = skins.load_manifest("taurid")
+    def test_real_base_loads_and_is_default(self):
+        m = skins.load_manifest("darkmode")
         self.assertTrue(m.get("default"))
-        self.assertEqual(m["id"], "taurid")
+        self.assertEqual(m["id"], "darkmode")
         self.assertEqual(m["name"], "Dark Mode")
         self.assertEqual(m["genre"], "Taurid Capital")
         self.assertGreaterEqual(len(m["tokens"]), 60)
@@ -75,15 +75,15 @@ class ManifestTests(unittest.TestCase):
         for k, v in m["tokens"].items():
             skins._check_token(k, v)                     # raises on anything bad
 
-    def test_phosphor_overrides_all_exist_in_the_floor(self):
-        floor = set(skins.load_manifest("taurid")["tokens"])
+    def test_phosphor_overrides_all_exist_in_the_base(self):
+        base = set(skins.load_manifest("darkmode")["tokens"])
         over = set(skins.load_manifest("phosphor-console")["tokens"])
-        self.assertTrue(over <= floor, over - floor)
+        self.assertTrue(over <= base, over - base)
 
-    def test_light_overrides_all_exist_in_the_floor(self):
-        floor = set(skins.load_manifest("taurid")["tokens"])
+    def test_light_overrides_all_exist_in_the_base(self):
+        base = set(skins.load_manifest("darkmode")["tokens"])
         over = set(skins.load_manifest("light")["tokens"])
-        self.assertTrue(over <= floor, over - floor)
+        self.assertTrue(over <= base, over - base)
 
     def test_bad_id_and_unknown_id(self):
         with self.assertRaises(HTTPException) as e:
@@ -114,14 +114,14 @@ class _Tree:
         (tmp / "static" / "skins").mkdir(parents=True)
         (tmp / "data").mkdir()
         real = REPO / "static" / "skins"
-        for name in ("taurid.json", "light.json", "light.css",
+        for name in ("darkmode.json", "light.json", "light.css",
                      "phosphor-console.json", "phosphor-console.css"):
             shutil.copy(real / name, tmp / "static" / "skins" / name)
-        # a style.css whose :root carries the floor values for the tokens we assert on
-        floor = json.loads((real / "taurid.json").read_text(encoding="utf-8"))["tokens"]
+        # a style.css whose :root carries the base values for the tokens we assert on
+        base = json.loads((real / "darkmode.json").read_text(encoding="utf-8"))["tokens"]
         lines = [":root {"]
         for k in ("--bg", "--text", "--radius", "--accent"):
-            lines.append(f"  {k}: {floor[k]};")
+            lines.append(f"  {k}: {base[k]};")
         lines += ["}", "", "body { color: var(--text); }", ""]
         # utf-8 explicitly, matching what _write_text_atomic writes: the fixture
         # stands in for the tracked stylesheets, and _ACTIVE_HEADER carries an
@@ -166,14 +166,14 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("pc-flicker", glass)               # the glass animation
         self.assertEqual(skins.active_id(), "phosphor-console")
 
-    def test_apply_taurid_resets_to_stock(self):
+    def test_apply_darkmode_resets_to_stock(self):
         skins.apply_skin("phosphor-console")
-        out = skins.apply_skin("taurid")
-        self.assertEqual(out["active"], "taurid")
-        self.assertIn("--bg: #0d0d0d;", self._style())   # floor value restored
+        out = skins.apply_skin("darkmode")
+        self.assertEqual(out["active"], "darkmode")
+        self.assertIn("--bg: #0d0d0d;", self._style())   # base value restored
         self.assertIn("--radius: 13px;", self._style())
         self.assertEqual(skins.SKIN_ACTIVE.read_text(encoding="utf-8"), skins._ACTIVE_HEADER)
-        self.assertEqual(skins.active_id(), "taurid")
+        self.assertEqual(skins.active_id(), "darkmode")
 
     def test_apply_light_rewrites_paper_tokens_and_structure_layer(self):
         out = skins.apply_skin("light")
@@ -198,9 +198,91 @@ class ApplyTests(unittest.TestCase):
         listing = skins.list_skins()
         self.assertEqual(listing["active"], "phosphor-console")
         ids = [s["id"] for s in listing["skins"]]
-        self.assertEqual(ids[0], "taurid")               # floor/default first
+        self.assertEqual(ids[0], "darkmode")               # base/default first
         self.assertIn("light", ids)
         self.assertIn("phosphor-console", ids)
+
+    def test_a_stored_id_whose_manifest_is_gone_reads_as_the_base(self):
+        # skins get renamed and retired - this store held "taurid" before Dark
+        # Mode took its own name. "taurid" still matches ID_RE, so without the
+        # manifest check active_id would hand back an id that marks no card
+        # active and 404s every caller that loads it.
+        jsonstore.write_atomic(skins.STATE, {"id": "taurid"})
+        self.assertEqual(skins.active_id(), skins.BASE_ID)
+        listing = skins.list_skins()
+        self.assertEqual(listing["active"], skins.BASE_ID)
+        self.assertIn(listing["active"], [sk["id"] for sk in listing["skins"]])
+
+    def test_a_stored_id_whose_manifest_exists_is_kept(self):
+        # the guard above must not swallow a real applied skin
+        jsonstore.write_atomic(skins.STATE, {"id": "phosphor-console"})
+        self.assertEqual(skins.active_id(), "phosphor-console")
+
+
+
+class SyncBaseTests(unittest.TestCase):
+    """The Design Studio writes style.css; this is what keeps the base skin
+    manifest from drifting away from it. Before it existed, every token the
+    owner changed and saved broke ShippedStateInvariant."""
+    def setUp(self):
+        self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
+        self.tree = _Tree(self.tmp)
+        self.enterContext(self.tree.patches())
+
+    def _base(self):
+        return json.loads((self.tmp / "static" / "skins" /
+                           f"{skins.BASE_ID}.json").read_text(encoding="utf-8"))["tokens"]
+
+    def _style(self):
+        return (self.tmp / "static" / "style.css").read_text(encoding="utf-8")
+
+    def test_a_changed_value_lands_in_the_base(self):
+        new = self._style().replace("--radius: 13px;", "--radius: 21px;")
+        self.assertTrue(skins.sync_base_from_style(new))
+        self.assertEqual(self._base()["--radius"], "21px")
+
+    def test_the_sync_makes_the_invariant_hold_again(self):
+        # the whole point: applying the base to the new sheet is a no-op
+        new = self._style().replace("--radius: 13px;", "--radius: 21px;")
+        self.assertNotEqual(skins._rewrite_root(new, self._base()), new)   # broken first
+        skins.sync_base_from_style(new)
+        self.assertEqual(skins._rewrite_root(new, self._base()), new)      # and repaired
+
+    def test_a_token_new_to_root_is_added(self):
+        new = self._style().replace(":root {", ":root {\n  --brand-new: #123456;")
+        self.assertTrue(skins.sync_base_from_style(new))
+        self.assertEqual(self._base()["--brand-new"], "#123456")
+
+    def test_a_base_token_absent_from_root_is_left_alone(self):
+        # the fixture sheet declares 4 of the 69; a skin may override tokens
+        # the stock sheet does not carry, so absence must never mean delete
+        before = self._base()
+        skins.sync_base_from_style(self._style().replace("--bg: #0d0d0d;", "--bg: #010203;"))
+        after = self._base()
+        self.assertGreater(len(after), 60)
+        for k in before:
+            if k not in ("--bg",):
+                self.assertEqual(after[k], before[k])
+
+    def test_no_change_writes_nothing(self):
+        path = self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json"
+        before = path.read_bytes()
+        self.assertFalse(skins.sync_base_from_style(self._style()))
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_sheet_with_no_root_block_writes_nothing(self):
+        path = self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json"
+        before = path.read_bytes()
+        self.assertFalse(skins.sync_base_from_style("body { color: red; }"))
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_value_we_would_refuse_to_read_is_never_written(self):
+        path = self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json"
+        before = path.read_bytes()
+        bad = self._style().replace("--bg: #0d0d0d;", "--bg: red /* wipe;")
+        with self.assertRaises(ValueError):
+            skins.sync_base_from_style(bad)
+        self.assertEqual(path.read_bytes(), before)   # nothing half-written
 
 
 class NoGitTests(unittest.TestCase):
@@ -234,7 +316,7 @@ class RouteTests(unittest.TestCase):
     def test_get_lists(self):
         r = self.client.get("/api/skins")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["active"], "taurid")
+        self.assertEqual(r.json()["active"], "darkmode")
         self.assertGreaterEqual(len(r.json()["skins"]), 3)
 
     def test_post_apply_and_unknown(self):
@@ -245,16 +327,16 @@ class RouteTests(unittest.TestCase):
 
 
 class ShippedStateInvariant(unittest.TestCase):
-    """The repo must never ship a skinned style.css: applying the floor to the
+    """The repo must never ship a skinned style.css: applying the base to the
     committed stylesheet is a no-op, and the committed skin-active.css carries
     no rules. This fails loudly if a visual-verification apply was not reset."""
-    def test_shipped_style_is_the_floor(self):
+    def test_shipped_style_is_the_base(self):
         style = (REPO / "static" / "style.css").read_text(encoding="utf-8")
-        floor = skins.load_manifest("taurid")["tokens"]
-        self.assertEqual(skins._rewrite_root(style, floor), style)
+        base = skins.load_manifest("darkmode")["tokens"]
+        self.assertEqual(skins._rewrite_root(style, base), style)
 
-    def test_floor_covers_every_shipped_root_token(self):
-        # the reset/idempotency guarantee rests on the floor carrying every
+    def test_base_covers_every_shipped_root_token(self):
+        # the reset/idempotency guarantee rests on the base carrying every
         # token line in the shipped :root — enforce it, don't assume it.
         import re
         style = (REPO / "static" / "style.css").read_text(encoding="utf-8")
@@ -270,8 +352,8 @@ class ShippedStateInvariant(unittest.TestCase):
                 names.add("--" + m.group(1))
             if depth == 0 and j > open_i:
                 break
-        floor = set(skins.load_manifest("taurid")["tokens"])
-        self.assertTrue(names <= floor, names - floor)
+        base = set(skins.load_manifest("darkmode")["tokens"])
+        self.assertTrue(names <= base, names - base)
 
     def test_shipped_skin_active_has_no_rules(self):
         active = (REPO / "static" / "skin-active.css").read_text(encoding="utf-8")
