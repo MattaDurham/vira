@@ -61,6 +61,45 @@
     loadedGen: null,
   };
 
+  // ---------- the 3D renderer ----------
+
+  // The module is three-dimensional wherever WebGL will have us:
+  // static/atlas3d.js owns the layout, the meshes, the picking and the
+  // camera, and its navigation is a transcription of the Image Atlas's.
+  // This file keeps the data, the state and every piece of chrome, and
+  // keeps its flat canvas as the honest fallback for a browser with no
+  // WebGL - a module that renders nothing is worse than one that renders
+  // flat. R3 is null until asked, then the renderer or false.
+  let R3 = null;
+
+  async function ensure3D() {
+    if (R3 !== null) return R3;
+    R3 = false;
+    try {
+      const mod = await import("/atlas3d.js");
+      const r = mod.create({
+        stage, S,
+        reducedMotion: REDUCED_MOTION,
+        isShown, matchDim, tileColor, initials, firstLast,
+        onHover: hitHover,
+        onSelect: hitSelect,
+        onOpen: hitOpen,
+        onContext: hitContext,
+        onEmpty: hitEmpty,
+      });
+      if (r) {
+        R3 = r;
+        canvas.style.display = "none";     // the flat fallback stands down
+        stage.classList.add("atlas-3d");
+        // diagnostics handle, the Image Atlas's __atlas by another name
+        window.__network3d = r;
+      }
+    } catch (e) {
+      console.warn("Visual Network: staying flat -", e && e.message);
+    }
+    return R3;
+  }
+
   // ---------- data ----------
 
   async function atlasLoad(force) {
@@ -70,6 +109,7 @@
     }
     S.loading = true;
     try {
+      await ensure3D();
       const g = await api("/api/atlas" + (vaultOn() ? "?vault=1" : ""));
       if (g.status === "empty") {
         showEmpty(g.building);
@@ -264,19 +304,26 @@
       + (g.vault?.people ? ` · ${g.vault.people} from your notes` : "")
       + ` · built ` + fmtTime(g.generated);
 
-    const fit = Math.min(stage.clientWidth || 1100,
-                         stage.clientHeight || 700);
-    S.cam = { k: Math.max(0.16, Math.min(1, (fit / 2 - 24) / ring(3))),
-              x: 0, y: 0 };
-    resize();
-    if (REDUCED_MOTION) {
-      S.alpha = 1;
-      for (let i = 0; i < 420; i++) tick(1 / 60);
-      S.alpha = 0;
-      draw();
+    if (R3) {
+      // the renderer seeds its own layout on the sphere, settles it and
+      // frames the graph's actual extent
+      R3.setGraph();
+      R3.setRunning(true);   // the observer stops it again if hidden
     } else {
-      S.alpha = 1;
-      wake();
+      const fit = Math.min(stage.clientWidth || 1100,
+                           stage.clientHeight || 700);
+      S.cam = { k: Math.max(0.16, Math.min(1, (fit / 2 - 24) / ring(3))),
+                x: 0, y: 0 };
+      resize();
+      if (REDUCED_MOTION) {
+        S.alpha = 1;
+        for (let i = 0; i < 420; i++) tick(1 / 60);
+        S.alpha = 0;
+        draw();
+      } else {
+        S.alpha = 1;
+        wake();
+      }
     }
     loadFaces();
   }
@@ -292,7 +339,11 @@
         const img = new Image();
         const entry = { img, ok: false };
         S.imgs.set(node.id, entry);
-        img.onload = () => { entry.ok = true; if (!S.running) draw(); };
+        img.onload = () => {
+          entry.ok = true;
+          if (R3) R3.faceLoaded(node.id);
+          else if (!S.running) draw();
+        };
         img.src = "/api/atlas/face/" + node.id;
       }
     });
@@ -300,7 +351,11 @@
       const img = new Image();
       const entry = { img, ok: false };
       S.imgs.set("ego", entry);
-      img.onload = () => { entry.ok = true; if (!S.running) draw(); };
+      img.onload = () => {
+        entry.ok = true;
+        if (R3) R3.faceLoaded("ego");
+        else if (!S.running) draw();
+      };
       img.src = "/api/atlas/face/" + S.graph.owner.pid;
     }
   }
@@ -366,6 +421,7 @@
   }
 
   function wake(heat = 0.6) {
+    if (R3) { R3.wake(heat); return; }
     S.alpha = Math.max(S.alpha, heat);
     if (REDUCED_MOTION) {
       for (let i = 0; i < 200; i++) tick(1 / 60);
@@ -498,6 +554,7 @@
   // ---------- drawing ----------
 
   function resize() {
+    if (R3) { R3.resize(); return; }
     const dpr = devicePixelRatio || 1;
     const w = stage.clientWidth, h = stage.clientHeight;
     if (!w || !h) return;
@@ -513,6 +570,7 @@
   }
 
   function draw() {
+    if (R3) { R3.paint(); return; }
     if (!S.graph) return;
     const W = canvas.clientWidth, H = canvas.clientHeight;
     ctx.clearRect(0, 0, W, H);
@@ -1216,12 +1274,87 @@
   }
 
   function centerOn(p) {
+    if (R3) { R3.focusOn(p); return; }
     S.cam.x = p.x; S.cam.y = p.y;
     S.cam.k = Math.max(S.cam.k, 1.1);
     draw();
   }
 
-  // ---------- input ----------
+  // ---------- what a hit means ----------
+
+  // Both renderers find the node under the cursor their own way - the flat
+  // one in two dimensions, the 3D one by projection - but what a hover, a
+  // click, a double-click, a right-click and a click on empty space MEAN is
+  // one implementation, so the two surfaces cannot drift on behaviour.
+
+  function hitHover(p, sx, sy, moveOnly) {
+    if (moveOnly) {
+      if (!p || p.ego) return;
+      tip.style.left = Math.min(sx + 14, stage.clientWidth - 180) + "px";
+      tip.style.top = (sy + 14) + "px";
+      return;
+    }
+    if (p && !p.ego) {
+      tip.style.display = "";
+      tip.style.left = Math.min(sx + 14, stage.clientWidth - 180) + "px";
+      tip.style.top = (sy + 14) + "px";
+      tip.innerHTML = "";
+      tip.appendChild(el("div", "atlas-tip-name", p.name));
+      const clab = S.bands.find((b) => b.id === p.band);
+      const bits = [p.vault && "in your notes",
+                    p.degree && ["1st", "2nd", "3rd"][p.degree - 1],
+                    clab?.label, p.company].filter(Boolean);
+      if (bits.length)
+        tip.appendChild(el("div", "atlas-tip-sub", bits.join(" \u00b7 ")));
+      if (p.vault && p.qualifier)
+        tip.appendChild(el("div", "atlas-tip-sub", p.qualifier));
+    } else {
+      tip.style.display = "none";
+    }
+  }
+
+  function hitSelect(p) {
+    if (editorId) editorToggle(p);
+    else toggleSelect(p);
+  }
+
+  function hitOpen(p) {
+    if (p.vault) openNote(p.ref, p.name);
+    else openPerson(p.id);
+  }
+
+  function hitEmpty() {
+    if (editorId) closeGroupEditor();
+    else clearSel();
+  }
+
+  function hitContext(p, e) {
+    const ctxObj = { component: "Visual Network",
+                     person: p.vault ? null : { pid: p.id, name: p.name },
+                     snippet: p.vault
+                       ? `${p.name} \u2014 vault wiki page ${p.ref}` : "" };
+    showContextMenu(e.clientX, e.clientY, [
+      { head: "Network \u00b7 " + p.name },
+      p.vault
+        ? { label: "Open wiki page", run: () => openNote(p.ref, p.name) }
+        : { label: "Open profile", run: () => openPerson(p.id) },
+      { label: "Feature connections", run: () => setSelection([p]) },
+      { label: S.sel.has(p) ? "Remove from selection"
+                            : "Add to selection",
+        run: () => toggleSelect(p) },
+      // group assignments key on CRM pids; a vault id has no row to hold
+      // one, so the chooser is CRM-only
+      !p.vault && { label: "Set group\u2026",
+        run: () => groupChooser(e.clientX, e.clientY, p) },
+      { sep: true },
+      { label: "New idea about this\u2026",
+        run: () => ctxIdeaComposer(e.clientX, e.clientY, ctxObj) },
+      { label: "Ask Vira about " + (p.name || "").split(" ")[0] + "\u2026",
+        run: () => ctxAskVira(e.clientX, e.clientY, ctxObj) },
+    ]);
+  }
+
+  // ---------- input (the flat fallback's own gestures) ----------
 
   let panning = null;
   S.dragNode = null;
@@ -1261,27 +1394,10 @@
     if (p !== S.hover) {
       S.hover = p;
       canvas.style.cursor = p ? "pointer" : "";
-      if (p && !p.ego) {
-        tip.style.display = "";
-        tip.style.left = Math.min(sx + 14, stage.clientWidth - 180) + "px";
-        tip.style.top = (sy + 14) + "px";
-        tip.innerHTML = "";
-        tip.appendChild(el("div", "atlas-tip-name", p.name));
-        const clab = S.bands.find((b) => b.id === p.band);
-        const bits = [p.vault && "in your notes",
-                      p.degree && ["1st", "2nd", "3rd"][p.degree - 1],
-                      clab?.label, p.company].filter(Boolean);
-        if (bits.length)
-          tip.appendChild(el("div", "atlas-tip-sub", bits.join(" · ")));
-        if (p.vault && p.qualifier)
-          tip.appendChild(el("div", "atlas-tip-sub", p.qualifier));
-      } else {
-        tip.style.display = "none";
-      }
+      hitHover(p, sx, sy);
       draw();
     } else if (p) {
-      tip.style.left = Math.min(sx + 14, stage.clientWidth - 180) + "px";
-      tip.style.top = (sy + 14) + "px";
+      hitHover(p, sx, sy, true);
     }
   });
 
@@ -1294,8 +1410,7 @@
       p.pin = false;
       S.dragNode = null;
       if (!S.dragMoved) {
-        if (editorId) editorToggle(p);
-        else toggleSelect(p);
+        hitSelect(p);
       } else {
         wake(0.3);
       }
@@ -1305,10 +1420,7 @@
       const moved = Math.hypot(sx - panning.sx, sy - panning.sy) > 4;
       const hitEgo = panning.hitEgo;
       panning = null;
-      if (!moved && !hitEgo) {
-        if (editorId) closeGroupEditor();
-        else clearSel();
-      }
+      if (!moved && !hitEgo) hitEmpty();
     }
   });
   canvas.addEventListener("pointercancel", () => {
@@ -1320,8 +1432,7 @@
     const rect = canvas.getBoundingClientRect();
     const p = nodeAt(e.clientX - rect.left, e.clientY - rect.top);
     if (!p || p.ego) return;
-    if (p.vault) openNote(p.ref, p.name);
-    else openPerson(p.id);
+    hitOpen(p);
   });
 
   canvas.addEventListener("wheel", (e) => {
@@ -1343,29 +1454,7 @@
     const p = nodeAt(e.clientX - rect.left, e.clientY - rect.top);
     if (!p || p.ego) return;             // fall through to the Vira menu
     e.preventDefault();
-    const ctxObj = { component: "Visual Network",
-                     person: p.vault ? null : { pid: p.id, name: p.name },
-                     snippet: p.vault
-                       ? `${p.name} — vault wiki page ${p.ref}` : "" };
-    showContextMenu(e.clientX, e.clientY, [
-      { head: "Network · " + p.name },
-      p.vault
-        ? { label: "Open wiki page", run: () => openNote(p.ref, p.name) }
-        : { label: "Open profile", run: () => openPerson(p.id) },
-      { label: "Feature connections", run: () => setSelection([p]) },
-      { label: S.sel.has(p) ? "Remove from selection"
-                            : "Add to selection",
-        run: () => toggleSelect(p) },
-      // group assignments key on CRM pids; a vault id has no row to hold
-      // one, so the chooser is CRM-only
-      !p.vault && { label: "Set group…",
-        run: () => groupChooser(e.clientX, e.clientY, p) },
-      { sep: true },
-      { label: "New idea about this…",
-        run: () => ctxIdeaComposer(e.clientX, e.clientY, ctxObj) },
-      { label: "Ask Vira about " + (p.name || "").split(" ")[0] + "…",
-        run: () => ctxAskVira(e.clientX, e.clientY, ctxObj) },
-    ]);
+    hitContext(p, e);
   });
 
   // ---------- toolbar ----------
@@ -1457,7 +1546,9 @@
         if (!S.graph) atlasLoad();
         resize();
         wake(0.2);
+        if (R3) R3.setRunning(true);
       } else {
+        if (R3) R3.setRunning(false);
         S.running = false;
         cancelAnimationFrame(S.raf);
       }
@@ -1465,8 +1556,14 @@
   });
   io.observe(stage);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { S.running = false; cancelAnimationFrame(S.raf); }
-    else if (S.visible) wake(0.15);
+    if (document.hidden) {
+      if (R3) R3.setRunning(false);
+      S.running = false;
+      cancelAnimationFrame(S.raf);
+    } else if (S.visible) {
+      if (R3) R3.setRunning(true);
+      wake(0.15);
+    }
   });
   new ResizeObserver(() => resize()).observe(stage);
 })();
