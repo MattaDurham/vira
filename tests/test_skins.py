@@ -171,7 +171,7 @@ class ApplyTests(unittest.TestCase):
         out = skins.apply_skin("taurid")
         self.assertEqual(out["active"], "taurid")
         self.assertIn("--bg: #0d0d0d;", self._style())   # floor value restored
-        self.assertIn("--radius: 2px;", self._style())
+        self.assertIn("--radius: 13px;", self._style())
         self.assertEqual(skins.SKIN_ACTIVE.read_text(encoding="utf-8"), skins._ACTIVE_HEADER)
         self.assertEqual(skins.active_id(), "taurid")
 

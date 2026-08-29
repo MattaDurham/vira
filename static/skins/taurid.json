@@ -80,7 +80,7 @@
     "--term-tool": "#d8c3af",
     "--term-code": "#eab68f",
     "--term-dot": "#4b463f",
-    "--radius": "2px",
+    "--radius": "13px",
     "--pad": "16px",
     "--mdock-h": "calc(58px + env(safe-area-inset-bottom))",
     "--sans": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
