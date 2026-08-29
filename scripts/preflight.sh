@@ -158,13 +158,58 @@ desc_pii="no personal data in the tracked tree — and the scan says how strong 
 incident_pii="2026-07-24: a docstring naming a contact and two employers shipped to
       the PUBLIC repo. data/pii-patterns.txt is gitignored, so CI ran with only the
       generic patterns and passed — a green CI was NOT evidence the tree was clean.
-      The false comfort was the real bug, so this check now REFUSES to be silent
-      about which mode it ran in."
+      The false comfort was the real bug, so this check REFUSES to be silent about
+      which mode it ran in.
+      2026-08-29: and stating the mode was not enough, because the FULL scan was
+      pointed at the wrong tree. --pre-merge runs the LIVE copy of this script, so
+      ROOT is the live checkout and the branch's new files are not in it yet; the
+      branch's own worktree has the files but no patterns file (gitignored, so it
+      exists only in live). The two never met, so a name INTRODUCED by a branch was
+      invisible to the merge gate - every branch, every merge. It caught up one
+      merge late, which on a public repo is after the push: a first name reached
+      public main that way. The branch tree is scanned too now, with live's
+      patterns."
 fix_pii="scrub the line; if this is CI, note that a full scan needs the patterns file"
+# The worktree holding claude/<slug>, ASKED OF GIT rather than assumed: the
+# canonical location has already moved once (siblings -> .worktrees/) and
+# agent-made worktrees live somewhere else again.
+branch_worktree() {
+  local slug="$1" wt="" k v
+  while read -r k v; do
+    case "$k" in
+      worktree) wt="$v" ;;
+      branch)   if [[ "$v" == "refs/heads/claude/$slug" ]]; then printf '%s\n' "$wt"; return 0; fi ;;
+    esac
+  done < <(git worktree list --porcelain 2>/dev/null)
+  return 1
+}
+
 check_pii() {
-  local mode out rc
+  local mode out rc wt bout brc
   if [[ -f "$ROOT/data/pii-patterns.txt" ]]; then mode="FULL (generic + instance identifiers)"
   else mode="REDUCED (generic patterns only — names and companies are NOT checked)"; fi
+
+  # THE BRANCH TREE, AT THE LIVE TREE'S STRENGTH -- the half that was missing.
+  # --pre-merge scans $ROOT, which for a merge is the LIVE checkout, and the
+  # branch's new files are not there until after the merge. check-pii resolves
+  # its own ROOT from cwd, so running it inside the worktree scans the branch;
+  # PII_PATTERNS_FILE carries live's patterns in. BOTH trees are scanned,
+  # because either can hold a hit the other cannot see.
+  if [[ -n "$SLUG" && -f "$ROOT/data/pii-patterns.txt" ]]; then
+    if wt="$(branch_worktree "$SLUG")" && [[ -n "$wt" && -f "$wt/scripts/check-pii.sh" ]]; then
+      bout=$(cd "$wt" && PII_PATTERNS_FILE="$ROOT/data/pii-patterns.txt" sh ./scripts/check-pii.sh --tree 2>&1)
+      brc=$?
+      if [[ $brc -ne 0 ]]; then
+        bad pii "the BRANCH tree has personal data [$mode, scanned claude/$SLUG]"
+        printf '%s\n' "$bout" | head -8 | sed 's/^/        /'
+        return 1
+      fi
+    else
+      warn pii "no worktree for claude/$SLUG - only the live tree was scanned, so a"
+      say  "        name this branch introduces would not be seen. Merge from a worktree."
+    fi
+  fi
+
   out=$(sh "$ROOT/scripts/check-pii.sh" --tree 2>&1); rc=$?
   if [[ $rc -ne 0 ]]; then
     bad pii "tracked tree has personal data [$mode]"
