@@ -345,6 +345,7 @@ class PiiHonesty(unittest.TestCase):
 
 
 
+@posix_only
 class PiiBranchScan(unittest.TestCase):
     """2026-08-29: a name INTRODUCED by a branch was invisible to the merge
     gate. --pre-merge runs the LIVE copy of preflight, so ROOT is the live
