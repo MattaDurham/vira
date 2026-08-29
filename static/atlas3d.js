@@ -508,22 +508,38 @@ export function create(host) {
     return near;
   }
 
-  // Every press re-anchors the orbit under the cursor: the node you pressed,
-  // else the front-most node near it, else the plane through the graph's
-  // centre - so a click-hold drag always rotates around where you grabbed,
-  // never the screen centre.
+  // Every press re-anchors the orbit under the cursor, so a click-hold drag
+  // rotates around the node you grabbed rather than the screen centre. Two
+  // guards, and each is a property the first transcription of this function
+  // lost. The viewer it came from is chaska's Image Atlas.
+  //
+  // (a) A SELECTION IS THE ORBIT POINT, and is never re-anchored away. The
+  //     viewer spells this `if (anchorId !== null) return;` and its comment
+  //     says exactly what dropping it costs: re-anchoring under the cursor
+  //     "would swing the pinned image off its spot on the very next drag".
+  //     Measured on the real 200-node graph without it: with a person
+  //     selected, a 60px drag on empty sky moved the orbit point 810 world
+  //     units and swung that person 303px across the screen, taking every
+  //     name plate with it. With it, the same drag moves them 4.9px.
+  //
+  // (b) EMPTY SKY KEEPS THE ORBIT POINT IT ALREADY HAD. The viewer falls
+  //     back to where the cursor ray crosses a plane through the cloud, which
+  //     is fine for a cloud that fills the frame - the hit lands inside it.
+  //     A Vira graph is a ball with empty sky all around, so that fallback
+  //     anchors the orbit far outside the graph and the next drag swings the
+  //     whole thing through an enormous arc. Measured without this guard:
+  //     three presses on empty sky walked the orbit point to 1,120 units from
+  //     a centre whose radius is 380 and inflated the camera distance from
+  //     774 to 1,524, each press compounding the last. Clamping the hit into
+  //     the ball was tried and is not enough - it still jumped between
+  //     opposite poles of the sphere and still climbed 473 -> 780 -> 889.
+  //     Keeping the existing point is the honest answer and needs no magic
+  //     radius: you grabbed nothing, so there is nothing new to rotate about,
+  //     and the gesture still orbits a real point.
   function anchorOrbit(x, y) {
+    if (S.sel.size) return;                     // (a)
     const p = pickAt(x, y, 150);
-    if (p) { controls.setOrbitPoint(p.x, p.y, p.z); return; }
-    const rc = new THREE.Raycaster();
-    rc.setFromCamera(new THREE.Vector2((x / W) * 2 - 1, -(y / H) * 2 + 1), camera);
-    const c = bounds.center;
-    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
-      camera.getWorldDirection(new THREE.Vector3()),
-      new THREE.Vector3(c[0], c[1], c[2]));
-    const hit = new THREE.Vector3();
-    if (rc.ray.intersectPlane(plane, hit))
-      controls.setOrbitPoint(hit.x, hit.y, hit.z);
+    if (p) controls.setOrbitPoint(p.x, p.y, p.z);   // (b): no node, no change
   }
 
   // ---------- paint (the flat build's draw(), in three dimensions) -------
@@ -684,6 +700,13 @@ export function create(host) {
   function frame() {
     if (!running) return;
     raf = requestAnimationFrame(frame);
+    // the loop can be started before setGraph() has built the camera and
+    // controls - the IntersectionObserver calls setRunning(true) on its own
+    // schedule, and atlasLoad() is async - so this frame has nothing to draw
+    // yet. paint() already guards `camera`; without the same guard here the
+    // loop threw on controls.update() every frame instead (observed: a stage
+    // of console errors and a permanently black graph).
+    if (!controls || !camera) return;
     const dt = Math.min(0.05, clock.getDelta());
     idleT += dt;
     if (S.alpha > 0.005) { tick(dt); paintNodes(); paintEdges(); needsRender = true; }

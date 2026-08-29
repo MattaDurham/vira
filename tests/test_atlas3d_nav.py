@@ -221,3 +221,95 @@ class TheFlatFallbackSurvives(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _body(name, src=SRC):
+    """One function's body, comments stripped.
+
+    Comments are stripped because every guard here is explained by a comment
+    directly above it, and a scan that matched the explanation instead of the
+    code would pass against a file that had lost the code (the turn-closeout
+    trap this repo has been bitten by).
+    """
+    start = src.index(f"function {name}(")
+    depth, i, opened = 0, src.index("{", start), False
+    while i < len(src):
+        if src[i] == "{":
+            depth, opened = depth + 1, True
+        elif src[i] == "}":
+            depth -= 1
+            if opened and depth == 0:
+                break
+        i += 1
+    body = src[start:i + 1]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    return "\n".join(re.sub(r"//.*$", "", ln) for ln in body.splitlines())
+
+
+class TheOrbitAnchorIsGuarded(unittest.TestCase):
+    """Two properties the first transcription of anchorOrbit lost.
+
+    Both were measured on the real 200-node graph before they were restored,
+    and both present as the same thing to the eye: every name plate on the
+    stage flying to a new place on a press that should not have moved the
+    camera at all.
+    """
+
+    def test_a_live_selection_is_never_re_anchored_away(self):
+        # The viewer's own `if (anchorId !== null) return;`, whose comment
+        # says re-anchoring "would swing the pinned image off its spot on the
+        # very next drag". Measured without it: a 60px drag on empty sky moved
+        # the selected person 303px across the screen. With it: 4.9px.
+        body = _body("anchorOrbit")
+        head = body[:body.index("pickAt")]
+        self.assertRegex(
+            head, r"if\s*\(\s*S\.sel\.size\s*\)\s*return",
+            "anchorOrbit must leave the orbit point alone while a selection "
+            "owns it, before it goes looking for a new one")
+
+    def test_empty_sky_leaves_the_orbit_point_alone(self):
+        # A graph is a ball surrounded by empty sky, so the viewer's
+        # ray-plane fallback anchors the orbit far OUTSIDE the graph and the
+        # next drag swings the whole thing through an enormous arc. Measured:
+        # three presses on empty sky walked the orbit point to 1,120 units
+        # from a centre of radius 380 and inflated the camera distance from
+        # 774 to 1,524, each press compounding the last.
+        body = _body("anchorOrbit")
+        self.assertNotIn(
+            "intersectPlane", body,
+            "anchorOrbit must not fall back to a point on a plane through the "
+            "graph - off the graph that point is unbounded")
+        self.assertEqual(
+            1, body.count("setOrbitPoint"),
+            "the only thing that may become the orbit point is a node")
+
+    def test_the_only_anchor_is_a_picked_node(self):
+        # Guards the two cases above against a future rewrite that keeps the
+        # spellings but reaches setOrbitPoint by some other route.
+        body = _body("anchorOrbit")
+        anchor_line = next(ln for ln in body.splitlines()
+                           if "setOrbitPoint" in ln)
+        self.assertRegex(
+            anchor_line, r"if\s*\(\s*p\s*\)",
+            "setOrbitPoint must be reached only when pickAt returned a node")
+
+
+class TheLoopSurvivesAnEarlyStart(unittest.TestCase):
+    """setRunning(true) can beat setGraph(), and did.
+
+    The IntersectionObserver starts the loop on its own schedule while
+    atlasLoad() is still awaiting; camera and controls are built later, in
+    setGraph(). Observed before the guard: frame() threw on controls.update()
+    every frame and the graph stayed black behind a stage of console errors.
+    """
+
+    def test_frame_checks_controls_before_using_them(self):
+        body = _body("frame")
+        guard = re.search(r"if\s*\(\s*!controls\s*\|\|\s*!camera\s*\)\s*return",
+                          body)
+        self.assertIsNotNone(
+            guard, "frame() must bail out before it touches controls/camera")
+        first_use = re.search(r"\bcontrols\.", body)
+        self.assertLess(
+            guard.start(), first_use.start(),
+            "the guard has to come before the first controls deref")
