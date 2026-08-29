@@ -2674,13 +2674,25 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   overflow: hidden;
 }
 .atlas-label {
-  position: absolute; top: 0; left: 0; white-space: nowrap;
-  font-size: 11px; font-weight: 500; line-height: 14px;
-  padding: 0 3px; border-radius: 2px;
-  color: var(--text); background: var(--scrim-strong);
+  position: absolute; top: 0; left: 0;
+  display: flex; flex-direction: column; align-items: center;
+  white-space: nowrap; text-align: center;
+  line-height: 1.25; letter-spacing: .01em;
+  /* No background plate: a box around the text reads as a separate object
+     floating near the circle, which is exactly what these replaced. The
+     shadow is what keeps it legible over a bright avatar or a bundle of
+     edges, and it lets the name sit ON the graph as part of its node. */
+  text-shadow: 0 1px 3px rgba(0,0,0,.95), 0 0 8px rgba(0,0,0,.75),
+               0 0 2px rgba(0,0,0,.9);
 }
-.atlas-label.ego { font-weight: 700; color: var(--accent-bright); }
-.atlas-label.sel { color: var(--text-head); }
+.atlas-label b { font-weight: 600; color: var(--text-head); }
+.atlas-label i {
+  font-style: normal; font-weight: 400; font-size: .82em;
+  line-height: 1.05; color: var(--text-dim); opacity: .92;
+}
+.atlas-label.ego b { color: var(--accent-bright); font-weight: 700; }
+.atlas-label.sel b { color: var(--text-head); }
+.atlas-label.sel i { color: var(--text); }
 
 .atlas-tip {
   position: absolute; z-index: 5; pointer-events: none; max-width: 200px;

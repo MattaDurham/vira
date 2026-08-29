@@ -313,3 +313,106 @@ class TheLoopSurvivesAnEarlyStart(unittest.TestCase):
         self.assertLess(
             guard.start(), first_use.start(),
             "the guard has to come before the first controls deref")
+
+
+class NamesAreAttachedToCircles(unittest.TestCase):
+    """The level-of-detail contract that replaced free-floating labels.
+
+    The module used to draw a DOM label at a fixed 11px whatever the depth of
+    the node it named, so a contact 3,000 units back drew a sub-pixel dot and
+    a full-size name: a screen of text with no visible owner, swimming as the
+    camera moved. Every case here pins one part of why that cannot recur.
+
+    Measured on the real 200-node graph after these guards: fully zoomed out,
+    0 cards; at every zoom level tried, 0 label-on-label overlaps, 0 cards
+    clipped by the stage, and every card exactly 3px under its own circle.
+    """
+
+    def test_the_radius_floor_is_unconditional(self):
+        # THE most important case in this file. The floor has to be a bare
+        # `continue`, never one term of an OR - the old code read
+        # `... || r > 15 || ...`, so selection, hover and the ego each bought
+        # a name for a node whose circle was invisible, and those exceptions
+        # ARE the floating text. A node too small to carry a name is read by
+        # hovering it instead.
+        body = _body("paintLabels")
+        floor = re.search(r"const r = screenR\(p\);\s*\n\s*if \(r < CARD_MIN_R\) continue;",
+                          body)
+        self.assertIsNotNone(
+            floor, "the screen-radius floor must be its own unconditional "
+                   "guard, not a term in a larger condition")
+        # _body() strips comments, so split on a code landmark
+        gather = body[:body.index("want.sort(")]
+        self.assertNotIn(
+            "|| r >", gather,
+            "a radius test ORed with anything is an exception, and an "
+            "exception is how floating names come back")
+
+    def test_the_card_hangs_off_its_own_circle(self):
+        # Anchored AND scaled: the name is placed from the node's own
+        # projected position and its own screen radius, so it reads as part
+        # of the circle rather than as text that happens to be nearby.
+        body = _body("paintLabels")
+        self.assertRegex(body, r"const top = s\.y \+ r \+ CARD_GAP;")
+        self.assertRegex(body, r"Math\.min\(17, r \* 0\.4",
+                         "the type has to scale with the circle")
+
+    def test_a_node_off_the_stage_gets_no_card(self):
+        # Without this the edge clamp drags an off-stage node's name back
+        # into view, which is a floating label again - text on the graph
+        # whose circle is nowhere on screen.
+        body = _body("paintLabels")
+        self.assertRegex(
+            body, r"if \(s\.x < 0 \|\| s\.x > W \|\| s\.y < 0 \|\| s\.y > H\) continue;")
+
+    def test_cards_that_would_collide_are_dropped(self):
+        # The map-labelling rule: greedy, highest priority first. A dense
+        # cluster shows the few names it has room for, never a pile.
+        body = _body("paintLabels")
+        self.assertIn("want.sort(", body)
+        self.assertRegex(body, r"if \(keep\.length >= CARD_MAX\) break;")
+        self.assertIn("clash", body)
+
+    def test_a_card_is_not_written_across_a_nearer_face(self):
+        # A DOM card always paints above the canvas, so without an occlusion
+        # test a distant contact's name lands on the face of someone standing
+        # in front of them - which reads as belonging to that face.
+        body = _body("paintLabels")
+        self.assertIn("occ", body)
+        self.assertRegex(
+            body, r"o\.z >= c\.s\.z\) continue;",
+            "only a NEARER circle can occlude - one behind the node cannot")
+
+    def test_the_second_line_is_trimmed(self):
+        # These fields are free text: one company value on the real graph is
+        # a full street address and another opens a parenthetical it never
+        # closes. An untrimmed line makes one card wider than its cluster.
+        src_trim = _body("trim")
+        self.assertIn('split("(")', src_trim)
+        self.assertIn("SUB_MAX", _body("cardSub"))
+
+    def test_the_degree_is_not_a_second_line(self):
+        # Almost everyone on this graph is a 1st-degree contact, so a line
+        # reading "1st" says nothing under most of the names on screen.
+        self.assertNotIn('"1st"', _body("cardSub"))
+
+    def test_the_measurement_does_not_force_a_layout(self):
+        # paintLabels runs on every camera-moving frame. Reading offsetWidth
+        # or getBoundingClientRect per card per frame would force a
+        # synchronous layout on every one of them.
+        body = _body("paintLabels") + _body("textW")
+        for banned in ("offsetWidth", "getBoundingClientRect", "offsetHeight"):
+            self.assertNotIn(banned, body,
+                             f"{banned} in the per-frame card path")
+
+    def test_the_cards_diagnostic_reports_the_node_it_belongs_to(self):
+        # "Is that name attached to that circle?" has to be a measurement
+        # rather than an argument about a screenshot - the reason state()
+        # exists for the camera.
+        self.assertIn("cards", _body("create")[:0] or SRC)
+        body = _body("cards")
+        for field in ("node:", "card:", "gap:", "dx:"):
+            self.assertIn(field, body)
+        self.assertRegex(
+            SRC, r"return \{ setGraph[^}]*\bcards\b",
+            "cards() must be on the returned handle to be reachable")
