@@ -190,6 +190,60 @@ def _rewrite_root(text: str, tokens: dict) -> str:
     return "\n".join(lines)
 
 
+def read_root_tokens(text: str) -> dict:
+    """Every ``--token: value`` in the plain ``:root`` block. Same block and
+    same line shape ``_rewrite_root`` writes, so the reader and the writer
+    cannot disagree about which declarations are tokens."""
+    lines = text.split("\n")
+    try:
+        open_i, close_i = designstudio._root_block(lines)
+    except ValueError:
+        return {}                                 # no :root block: nothing to read
+    line_re = re.compile(r"^(\s*--)([a-z0-9-]+)(\s*:\s*)([^;]+)(;.*)$")
+    out = {}
+    for i in range(open_i, close_i + 1):
+        m = line_re.match(lines[i])
+        if m:
+            out["--" + m.group(2)] = m.group(4).strip()
+    return out
+
+
+def sync_base_from_style(style_text: str) -> bool:
+    """Fold the stylesheet's :root values into the base manifest. Returns
+    True if the manifest changed on disk.
+
+    THIS IS WHAT KEEPS THE DESIGN STUDIO FROM BREAKING ITS OWN INVARIANT.
+    The studio writes static/style.css and nothing else, so before this every
+    token the owner changed and saved left the shipped stylesheet disagreeing
+    with the base - and ShippedStateInvariant, which exists to catch a skin
+    left applied after visual verification, cannot tell that apart from a
+    deliberate edit. It fired on three Design Studio commits on 2026-08-28
+    and blocked every merge on the machine until the base was hand-edited.
+    The manual "keep taurid.json in sync" rule is exactly the kind that fails.
+
+    Only ADDITIVE and UPDATING: a base token absent from :root is left alone,
+    because a skin may legitimately override a token the stock sheet does not
+    declare. That is enough for both invariants - every :root token exists in
+    the base (so the coverage test passes) and carries the same value (so
+    applying the base is a no-op).
+    """
+    live = read_root_tokens(style_text)
+    if not live:
+        return False                              # no :root block found; write nothing
+    m = load_manifest(BASE_ID)
+    tokens = dict(m.get("tokens") or {})
+    changed = {k: v for k, v in live.items() if tokens.get(k) != v}
+    if not changed:
+        return False
+    for k, v in changed.items():
+        _check_token(k, v)                        # never write a manifest we would refuse to read
+    tokens.update(changed)
+    m["tokens"] = tokens
+    _write_text_atomic(_manifest_path(BASE_ID),
+                       json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+    return True
+
+
 def _extras_css(m: dict) -> str:
     name = m.get("extras")
     if not name:

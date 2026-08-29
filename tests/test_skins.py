@@ -220,6 +220,71 @@ class ApplyTests(unittest.TestCase):
 
 
 
+class SyncBaseTests(unittest.TestCase):
+    """The Design Studio writes style.css; this is what keeps the base skin
+    manifest from drifting away from it. Before it existed, every token the
+    owner changed and saved broke ShippedStateInvariant."""
+    def setUp(self):
+        self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
+        self.tree = _Tree(self.tmp)
+        self.enterContext(self.tree.patches())
+
+    def _base(self):
+        return json.loads((self.tmp / "static" / "skins" /
+                           f"{skins.BASE_ID}.json").read_text(encoding="utf-8"))["tokens"]
+
+    def _style(self):
+        return (self.tmp / "static" / "style.css").read_text(encoding="utf-8")
+
+    def test_a_changed_value_lands_in_the_base(self):
+        new = self._style().replace("--radius: 13px;", "--radius: 21px;")
+        self.assertTrue(skins.sync_base_from_style(new))
+        self.assertEqual(self._base()["--radius"], "21px")
+
+    def test_the_sync_makes_the_invariant_hold_again(self):
+        # the whole point: applying the base to the new sheet is a no-op
+        new = self._style().replace("--radius: 13px;", "--radius: 21px;")
+        self.assertNotEqual(skins._rewrite_root(new, self._base()), new)   # broken first
+        skins.sync_base_from_style(new)
+        self.assertEqual(skins._rewrite_root(new, self._base()), new)      # and repaired
+
+    def test_a_token_new_to_root_is_added(self):
+        new = self._style().replace(":root {", ":root {\n  --brand-new: #123456;")
+        self.assertTrue(skins.sync_base_from_style(new))
+        self.assertEqual(self._base()["--brand-new"], "#123456")
+
+    def test_a_base_token_absent_from_root_is_left_alone(self):
+        # the fixture sheet declares 4 of the 69; a skin may override tokens
+        # the stock sheet does not carry, so absence must never mean delete
+        before = self._base()
+        skins.sync_base_from_style(self._style().replace("--bg: #0d0d0d;", "--bg: #010203;"))
+        after = self._base()
+        self.assertGreater(len(after), 60)
+        for k in before:
+            if k not in ("--bg",):
+                self.assertEqual(after[k], before[k])
+
+    def test_no_change_writes_nothing(self):
+        path = self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json"
+        before = path.read_bytes()
+        self.assertFalse(skins.sync_base_from_style(self._style()))
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_sheet_with_no_root_block_writes_nothing(self):
+        path = self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json"
+        before = path.read_bytes()
+        self.assertFalse(skins.sync_base_from_style("body { color: red; }"))
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_value_we_would_refuse_to_read_is_never_written(self):
+        path = self.tmp / "static" / "skins" / f"{skins.BASE_ID}.json"
+        before = path.read_bytes()
+        bad = self._style().replace("--bg: #0d0d0d;", "--bg: red /* wipe;")
+        with self.assertRaises(ValueError):
+            skins.sync_base_from_style(bad)
+        self.assertEqual(path.read_bytes(), before)   # nothing half-written
+
+
 class NoGitTests(unittest.TestCase):
     """Applying a skin is local only — it must never invoke git, so a
     downloaded copy (whose origin is a repo it can't push to) is never asked
