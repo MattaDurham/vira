@@ -344,5 +344,84 @@ class PiiHonesty(unittest.TestCase):
         self.assertIn("does NOT mean", r.stdout)
 
 
+
+class PiiBranchScan(unittest.TestCase):
+    """2026-08-29: a name INTRODUCED by a branch was invisible to the merge
+    gate. --pre-merge runs the LIVE copy of preflight, so ROOT is the live
+    checkout and the branch's new files are not in it yet; the branch's own
+    worktree has the files but no data/pii-patterns.txt (gitignored, so it
+    lives only in live). The full-strength scan and the new files never met.
+
+    The fixture name is deliberately invented - planting a real one here would
+    trip this repo's own guard on this very file.
+    """
+    NAME = "Zoltan Kovacs"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "repo"
+        (self.root / "scripts").mkdir(parents=True)
+        (self.root / "data").mkdir()
+        (self.root / "tests").mkdir()
+        for f in ("preflight.sh", "preflight-baseline.txt", "preflight_deps.py",
+                  "preflight_encoding.py", "check-pii.sh"):
+            shutil.copy(ROOT / "scripts" / f, self.root / "scripts" / f)
+        (self.root / "data" / "pii-patterns.txt").write_text(
+            "\\b%s\\b\n" % self.NAME, encoding="utf-8")
+        self._git("init", "-q", "-b", "main")
+        self._git("config", "user.email", "t@example.com")
+        self._git("config", "user.name", "T")
+        (self.root / "clean.txt").write_text("nothing here\n", encoding="utf-8")
+        self._git("add", "-A")
+        self._git("commit", "-qm", "base")
+        # the branch, in its own worktree - the real shape
+        self.wt = self.root / ".worktrees" / "feat"
+        self._git("worktree", "add", "-q", "-b", "claude/feat", str(self.wt), "main")
+
+    def _git(self, *a, cwd=None):
+        return subprocess.run(["git", *a], cwd=str(cwd or self.root),
+                              capture_output=True, text=True)
+
+    def _commit_on_branch(self, relpath, text):
+        f = self.wt / relpath
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+        self._git("add", "-A", cwd=self.wt)
+        self._git("commit", "-qm", "add", cwd=self.wt)
+
+    def _preflight(self, slug="feat"):
+        return subprocess.run(
+            ["bash", str(self.root / "scripts" / "preflight.sh"), "pii"],
+            cwd=str(self.root), capture_output=True, text=True,
+            env={**os.environ, "PREFLIGHT_SLUG": slug})
+
+    def test_a_name_only_on_the_branch_is_caught(self):
+        self._commit_on_branch("tests/fixture.py", 'owner = "%s"\n' % self.NAME)
+        r = self._preflight()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("BRANCH tree", r.stdout)
+        self.assertIn("tests/fixture.py", r.stdout)
+
+    def test_the_live_tree_alone_would_have_passed(self):
+        """Pins WHY the branch scan is needed: the live tree is clean the whole
+        time. Without this, the case above could pass for the wrong reason."""
+        self._commit_on_branch("tests/fixture.py", 'owner = "%s"\n' % self.NAME)
+        live = subprocess.run(["sh", str(self.root / "scripts" / "check-pii.sh"), "--tree"],
+                              cwd=str(self.root), capture_output=True, text=True)
+        self.assertEqual(live.returncode, 0, live.stdout + live.stderr)
+
+    def test_a_clean_branch_passes(self):
+        self._commit_on_branch("tests/fixture.py", "owner = 'nobody'\n")
+        r = self._preflight()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("clean", r.stdout)
+
+    def test_a_missing_worktree_warns_rather_than_silently_passing(self):
+        r = self._preflight(slug="no-such-branch")
+        self.assertIn("only the live tree was scanned", r.stdout)
+
+
+
 if __name__ == "__main__":
     unittest.main()
