@@ -90,6 +90,7 @@ export function create(host) {
   let stars = null;
 
   const requestRender = () => { needsRender = true; };
+  let lastCards = [];   // what the last pass laid out, for cards()
 
   // ---------- geometry + materials -------------------------------------
 
@@ -508,22 +509,38 @@ export function create(host) {
     return near;
   }
 
-  // Every press re-anchors the orbit under the cursor: the node you pressed,
-  // else the front-most node near it, else the plane through the graph's
-  // centre - so a click-hold drag always rotates around where you grabbed,
-  // never the screen centre.
+  // Every press re-anchors the orbit under the cursor, so a click-hold drag
+  // rotates around the node you grabbed rather than the screen centre. Two
+  // guards, and each is a property the first transcription of this function
+  // lost. The viewer it came from is chaska's Image Atlas.
+  //
+  // (a) A SELECTION IS THE ORBIT POINT, and is never re-anchored away. The
+  //     viewer spells this `if (anchorId !== null) return;` and its comment
+  //     says exactly what dropping it costs: re-anchoring under the cursor
+  //     "would swing the pinned image off its spot on the very next drag".
+  //     Measured on the real 200-node graph without it: with a person
+  //     selected, a 60px drag on empty sky moved the orbit point 810 world
+  //     units and swung that person 303px across the screen, taking every
+  //     name plate with it. With it, the same drag moves them 4.9px.
+  //
+  // (b) EMPTY SKY KEEPS THE ORBIT POINT IT ALREADY HAD. The viewer falls
+  //     back to where the cursor ray crosses a plane through the cloud, which
+  //     is fine for a cloud that fills the frame - the hit lands inside it.
+  //     A Vira graph is a ball with empty sky all around, so that fallback
+  //     anchors the orbit far outside the graph and the next drag swings the
+  //     whole thing through an enormous arc. Measured without this guard:
+  //     three presses on empty sky walked the orbit point to 1,120 units from
+  //     a centre whose radius is 380 and inflated the camera distance from
+  //     774 to 1,524, each press compounding the last. Clamping the hit into
+  //     the ball was tried and is not enough - it still jumped between
+  //     opposite poles of the sphere and still climbed 473 -> 780 -> 889.
+  //     Keeping the existing point is the honest answer and needs no magic
+  //     radius: you grabbed nothing, so there is nothing new to rotate about,
+  //     and the gesture still orbits a real point.
   function anchorOrbit(x, y) {
+    if (S.sel.size) return;                     // (a)
     const p = pickAt(x, y, 150);
-    if (p) { controls.setOrbitPoint(p.x, p.y, p.z); return; }
-    const rc = new THREE.Raycaster();
-    rc.setFromCamera(new THREE.Vector2((x / W) * 2 - 1, -(y / H) * 2 + 1), camera);
-    const c = bounds.center;
-    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
-      camera.getWorldDirection(new THREE.Vector3()),
-      new THREE.Vector3(c[0], c[1], c[2]));
-    const hit = new THREE.Vector3();
-    if (rc.ray.intersectPlane(plane, hit))
-      controls.setOrbitPoint(hit.x, hit.y, hit.z);
+    if (p) controls.setOrbitPoint(p.x, p.y, p.z);   // (b): no node, no change
   }
 
   // ---------- paint (the flat build's draw(), in three dimensions) -------
@@ -625,49 +642,205 @@ export function create(host) {
     col.needsUpdate = alp.needsUpdate = true;
   }
 
-  // Labels are DOM, not textures: they inherit the module's own type and
-  // whatever skin is on, and only a handful are ever up at once.
+  // ---------- name cards -------------------------------------------------
+  //
+  // A NAME BELONGS TO ITS CIRCLE, NEVER TO THE AIR BESIDE IT. Free-floating
+  // labels were this module's worst artefact: a DOM label is a fixed 11px
+  // whatever the depth of the node it names, so a contact 3,000 units back
+  // drew a sub-pixel dot and a full-size name - a screen of text with no
+  // visible owner, each name swimming independently as the camera moved.
+  //
+  // The contract is the standard level-of-detail one for 3D graphs, and its
+  // three parts are all load-bearing:
+  //
+  //   LOD        a node earns its name only once its own circle is big
+  //              enough to carry it (CARD_MIN_R), fading up over CARD_FADE
+  //              so nothing pops in. There is NO exception - not selection,
+  //              not the ego. An exception is exactly how floating text
+  //              comes back, and nothing needs one: a circle too small to
+  //              carry a name is read by hovering it, and the tooltip is
+  //              anchored to the CURSOR, so it cannot float either.
+  //   ANCHOR     the card hangs off the circle's own rim and scales with it,
+  //              so it reads as part of the node rather than beside it.
+  //   DECLUTTER  cards that would overlap are dropped by the map-labelling
+  //              rule - greedy, highest priority first - so a dense cluster
+  //              shows the few names it has room for instead of a pile.
+  //
+  // A second line (company, circle, or how you know them) appears only once
+  // the circle is bigger still, so the card grows into the room it has.
+
+  const CARD_MIN_R = 11;   // screen radius (px) at which a node earns a name
+  const CARD_FADE = 7;     // radius over which it fades up
+  const CARD_SUB_R = 24;   // radius at which the second line has room
+  const CARD_MAX = 44;     // hard ceiling; the greedy pass rarely gets here
+  const CARD_GAP = 3;      // px between the circle's rim and its name
+
+  // Text width WITHOUT a layout pass: measured once per string at a
+  // reference size in a 2D context and scaled from there. Reading
+  // offsetWidth per card per frame would force a synchronous layout on every
+  // camera move, which is the one thing a per-frame path must not do.
+  const _measure = document.createElement("canvas").getContext("2d");
+  const _wCache = new Map();
+  let _cardFont = "";
+
+  function textW(s, weight) {
+    const key = weight + " " + s;
+    let w = _wCache.get(key);
+    if (w === undefined) {
+      _measure.font = weight + " 100px " + _cardFont;
+      w = _measure.measureText(s).width / 100;
+      _wCache.set(key, w);
+    }
+    return w;
+  }
+
+  // A card is a caption, not a record. These fields are free text and some
+  // of them are long - a company field on this graph holds a full street
+  // address, and another holds a parenthesised description of the firm - so
+  // an untrimmed second line makes one card wider than the cluster it sits
+  // in and pushes every neighbour's card out of the greedy pass.
+  const SUB_MAX = 30;
+  const NAME_MAX = 22;
+
+  function trim(t, max) {
+    // Cut at the first "(" rather than stripping a balanced pair: one real
+    // company field on this graph opens a parenthetical and never closes it,
+    // and a balanced-pair strip leaves that one untouched - it came out as
+    // the truncated head of the parenthetical instead - the wide, ugly card
+    // this trimming exists to prevent, on the one row that most needed it.
+    t = String(t || "").split("(")[0];
+    t = t.split(/\s*[,|\u00b7]\s*/)[0].trim();   // the head, not the address
+    return t.length > max ? t.slice(0, max - 1).trimEnd() + "\u2026" : t;
+  }
+
+  // What the card says under the name, when it has room for a second line.
+  // Deliberately nothing rather than the contact's DEGREE: almost everyone
+  // on this graph is 1st, so a line reading "1st" is a line that says
+  // nothing under most of the names on screen.
+  function cardSub(p) {
+    if (p.ego) return "";
+    if (p.company) return trim(p.company, SUB_MAX);
+    const band = S.bands && S.bands.find((b) => b.id === p.band);
+    if (band && band.label) return trim(band.label, SUB_MAX);
+    if (p.vault) return trim(p.qualifier || "in your notes", SUB_MAX);
+    return "";
+  }
+
   function paintLabels() {
-    const wanted = [];
+    if (!_cardFont)
+      _cardFont = getComputedStyle(labelHost).fontFamily || "sans-serif";
+
+    // --- every node that clears the level-of-detail floor ---
+    const want = [];
     const all = S.ego ? [...S.nodes, S.ego] : S.nodes;
     for (const p of all) {
       if (!visible(p)) continue;
       const a = nodeAlpha(p);
       if (a <= 0.25) continue;
       const r = screenR(p);
-      const want = p.ego || p === S.hover || S.sel.has(p)
-        || S.selPathNodes.has(p.id) || S.shared.has(p.id)
-        || (S.sel.size === 1 && S.neighbors.has(p.id))
-        || r > 15                       // the 3D reading of "zoomed in enough"
-        || (S.match && !host.matchDim(p));
-      if (!want) continue;
+      if (r < CARD_MIN_R) continue;             // the whole fix, in one line
       const s = screenOf(p);
-      if (!s || s.x < -80 || s.x > W + 80 || s.y < -40 || s.y > H + 40) continue;
-      wanted.push({ p, s, a, r });
+      if (!s) continue;
+      const fs = Math.max(10, Math.min(17, r * 0.42));
+      const name = trim(p.ego ? p.name : host.firstLast(p.name), NAME_MAX);
+      const sub = r >= CARD_SUB_R ? cardSub(p) : "";
+      const w = Math.max(textW(name, 600) * fs,
+                         sub ? textW(sub, 400) * (fs * 0.82) : 0);
+      const h = fs * 1.25 + (sub ? fs * 1.05 : 0);
+      const top = s.y + r + CARD_GAP;
+      if (top > H || top + h < 0) continue;
+      // A card is for a node you can SEE. Without this the clamp below drags
+      // an off-stage node's name back into view, which is a floating label
+      // again - it sits over the graph with its circle nowhere on screen.
+      if (s.x < 0 || s.x > W || s.y < 0 || s.y > H) continue;
+      // Held inside the stage. The card is clipped by .atlas-labels, so a
+      // node near an edge would otherwise show a half-name cut off mid-word
+      // at the border; the vertical anchor is untouched, so the card still
+      // plainly belongs to the circle directly above it.
+      const cx = w / 2 + 2 > W - w / 2 - 2
+        ? W / 2 : Math.max(w / 2 + 2, Math.min(W - w / 2 - 2, s.x));
+      // priority decides who survives a collision, never who is drawn first
+      const rank = S.sel.has(p) ? 3 : (p === S.hover || p.ego ? 2 : 0);
+      want.push({ p, s, r, fs, name, sub, a, rank, cx,
+                  x0: cx - w / 2, x1: cx + w / 2, y0: top, y1: top + h });
     }
-    wanted.sort((x, y) => x.s.z - y.s.z);
-    const keep = wanted.slice(0, LABEL_MAX);
+
+    // Circles a card must not be written across. A DOM card always paints
+    // above the canvas, so without this a distant contact's name lands on
+    // the FACE of someone standing in front of them - which reads as the
+    // floating text this replaced, only worse, because it now looks like it
+    // belongs to the face underneath.
+    const occ = [];
+    for (const p of all) {
+      if (!visible(p) || nodeAlpha(p) <= 0.08) continue;
+      const r = screenR(p);
+      if (r < 6) continue;
+      const s = screenOf(p);
+      if (!s) continue;
+      occ.push({ p, z: s.z,
+                 x0: s.x - r, x1: s.x + r, y0: s.y - r, y1: s.y + r });
+    }
+
+    // --- the map-labelling rule: greedy, highest priority first ---
+    want.sort((m, n) => (n.rank - m.rank) || (n.r - m.r) || (m.s.z - n.s.z));
+    const keep = [];
+    const hits = (a, b) =>
+      a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+    for (const c of want) {
+      if (keep.length >= CARD_MAX) break;
+      let clash = false;
+      for (const k of keep) {
+        if (hits(c, k)) { clash = true; break; }
+      }
+      if (!clash) {
+        for (const o of occ) {
+          if (o.p === c.p || o.z >= c.s.z) continue;   // behind us, or us
+          // the card written across a nearer face, or the node itself
+          // standing behind one - either way there is nothing to label
+          if (hits(c, o)
+              || (c.s.x > o.x0 && c.s.x < o.x1
+                  && c.s.y > o.y0 && c.s.y < o.y1)) {
+            clash = true;
+            break;
+          }
+        }
+      }
+      if (!clash) keep.push(c);
+    }
+
+    // --- paint ---
     const live = new Set();
-    for (const { p, s, a, r } of keep) {
+    for (const c of keep) {
+      const p = c.p;
       live.add(p.id);
       let node = labels.get(p.id);
       if (!node) {
         node = document.createElement("span");
         node.className = "atlas-label";
+        node.appendChild(document.createElement("b"));
+        node.appendChild(document.createElement("i"));
         labelHost.appendChild(node);
         labels.set(p.id, node);
       }
-      const txt = p.ego ? p.name : host.firstLast(p.name);
-      if (node.textContent !== txt) node.textContent = txt;
+      const nm = node.firstChild, sb = node.lastChild;
+      if (nm.textContent !== c.name) nm.textContent = c.name;
+      if (sb.textContent !== c.sub) sb.textContent = c.sub;
+      sb.style.display = c.sub ? "" : "none";
       node.classList.toggle("ego", !!p.ego);
       node.classList.toggle("sel", S.sel.has(p));
-      node.style.transform =
-        "translate(-50%,0) translate(" + s.x + "px," + (s.y + r + 4) + "px)";
-      node.style.opacity = String(Math.min(1, a));
+      node.style.fontSize = c.fs.toFixed(1) + "px";
+      node.style.transform = "translate(-50%,0) translate("
+        + c.cx.toFixed(1) + "px," + c.y0.toFixed(1) + "px)";
+      // fade up with the circle, so a name never arrives at full strength on
+      // a node that has only just become big enough to own one
+      const grow = Math.min(1, (c.r - CARD_MIN_R) / CARD_FADE);
+      node.style.opacity = (Math.min(1, c.a) * grow).toFixed(2);
+      node.style.zIndex = String(1000 - Math.round(c.s.z * 900));
     }
     for (const [id, node] of labels) {
       if (!live.has(id)) { node.remove(); labels.delete(id); }
     }
+    lastCards = keep;
   }
 
   function paint() {
@@ -684,6 +857,13 @@ export function create(host) {
   function frame() {
     if (!running) return;
     raf = requestAnimationFrame(frame);
+    // the loop can be started before setGraph() has built the camera and
+    // controls - the IntersectionObserver calls setRunning(true) on its own
+    // schedule, and atlasLoad() is async - so this frame has nothing to draw
+    // yet. paint() already guards `camera`; without the same guard here the
+    // loop threw on controls.update() every frame instead (observed: a stage
+    // of console errors and a permanently black graph).
+    if (!controls || !camera) return;
     const dt = Math.min(0.05, clock.getDelta());
     idleT += dt;
     if (S.alpha > 0.005) { tick(dt); paintNodes(); paintEdges(); needsRender = true; }
@@ -879,7 +1059,20 @@ export function create(host) {
     };
   }
 
+  // Every card laid out on the last pass, with the node it belongs to, so
+  // "is that name attached to that circle?" is a measurement rather than an
+  // argument about a screenshot - the same reason state() exists.
+  function cards() {
+    return lastCards.map((c) => ({
+      name: c.name, sub: c.sub, r: +c.r.toFixed(1),
+      node: [+c.s.x.toFixed(1), +c.s.y.toFixed(1)],
+      card: [+c.cx.toFixed(1), +c.y0.toFixed(1)],
+      gap: +(c.y0 - (c.s.y + c.r)).toFixed(1),
+      dx: +(c.cx - c.s.x).toFixed(1),
+    }));
+  }
+
   resize();
-  return { setGraph, paint, wake, resize, focusOn, setRunning,
-           faceLoaded, dispose, canvas, state, NAV, ACTION: CameraControls.ACTION };
+  return { setGraph, paint, wake, resize, focusOn, setRunning, faceLoaded,
+           dispose, canvas, state, cards, NAV, ACTION: CameraControls.ACTION };
 }

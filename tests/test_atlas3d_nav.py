@@ -221,3 +221,198 @@ class TheFlatFallbackSurvives(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _body(name, src=SRC):
+    """One function's body, comments stripped.
+
+    Comments are stripped because every guard here is explained by a comment
+    directly above it, and a scan that matched the explanation instead of the
+    code would pass against a file that had lost the code (the turn-closeout
+    trap this repo has been bitten by).
+    """
+    start = src.index(f"function {name}(")
+    depth, i, opened = 0, src.index("{", start), False
+    while i < len(src):
+        if src[i] == "{":
+            depth, opened = depth + 1, True
+        elif src[i] == "}":
+            depth -= 1
+            if opened and depth == 0:
+                break
+        i += 1
+    body = src[start:i + 1]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    return "\n".join(re.sub(r"//.*$", "", ln) for ln in body.splitlines())
+
+
+class TheOrbitAnchorIsGuarded(unittest.TestCase):
+    """Two properties the first transcription of anchorOrbit lost.
+
+    Both were measured on the real 200-node graph before they were restored,
+    and both present as the same thing to the eye: every name plate on the
+    stage flying to a new place on a press that should not have moved the
+    camera at all.
+    """
+
+    def test_a_live_selection_is_never_re_anchored_away(self):
+        # The viewer's own `if (anchorId !== null) return;`, whose comment
+        # says re-anchoring "would swing the pinned image off its spot on the
+        # very next drag". Measured without it: a 60px drag on empty sky moved
+        # the selected person 303px across the screen. With it: 4.9px.
+        body = _body("anchorOrbit")
+        head = body[:body.index("pickAt")]
+        self.assertRegex(
+            head, r"if\s*\(\s*S\.sel\.size\s*\)\s*return",
+            "anchorOrbit must leave the orbit point alone while a selection "
+            "owns it, before it goes looking for a new one")
+
+    def test_empty_sky_leaves_the_orbit_point_alone(self):
+        # A graph is a ball surrounded by empty sky, so the viewer's
+        # ray-plane fallback anchors the orbit far OUTSIDE the graph and the
+        # next drag swings the whole thing through an enormous arc. Measured:
+        # three presses on empty sky walked the orbit point to 1,120 units
+        # from a centre of radius 380 and inflated the camera distance from
+        # 774 to 1,524, each press compounding the last.
+        body = _body("anchorOrbit")
+        self.assertNotIn(
+            "intersectPlane", body,
+            "anchorOrbit must not fall back to a point on a plane through the "
+            "graph - off the graph that point is unbounded")
+        self.assertEqual(
+            1, body.count("setOrbitPoint"),
+            "the only thing that may become the orbit point is a node")
+
+    def test_the_only_anchor_is_a_picked_node(self):
+        # Guards the two cases above against a future rewrite that keeps the
+        # spellings but reaches setOrbitPoint by some other route.
+        body = _body("anchorOrbit")
+        anchor_line = next(ln for ln in body.splitlines()
+                           if "setOrbitPoint" in ln)
+        self.assertRegex(
+            anchor_line, r"if\s*\(\s*p\s*\)",
+            "setOrbitPoint must be reached only when pickAt returned a node")
+
+
+class TheLoopSurvivesAnEarlyStart(unittest.TestCase):
+    """setRunning(true) can beat setGraph(), and did.
+
+    The IntersectionObserver starts the loop on its own schedule while
+    atlasLoad() is still awaiting; camera and controls are built later, in
+    setGraph(). Observed before the guard: frame() threw on controls.update()
+    every frame and the graph stayed black behind a stage of console errors.
+    """
+
+    def test_frame_checks_controls_before_using_them(self):
+        body = _body("frame")
+        guard = re.search(r"if\s*\(\s*!controls\s*\|\|\s*!camera\s*\)\s*return",
+                          body)
+        self.assertIsNotNone(
+            guard, "frame() must bail out before it touches controls/camera")
+        first_use = re.search(r"\bcontrols\.", body)
+        self.assertLess(
+            guard.start(), first_use.start(),
+            "the guard has to come before the first controls deref")
+
+
+class NamesAreAttachedToCircles(unittest.TestCase):
+    """The level-of-detail contract that replaced free-floating labels.
+
+    The module used to draw a DOM label at a fixed 11px whatever the depth of
+    the node it named, so a contact 3,000 units back drew a sub-pixel dot and
+    a full-size name: a screen of text with no visible owner, swimming as the
+    camera moved. Every case here pins one part of why that cannot recur.
+
+    Measured on the real 200-node graph after these guards: fully zoomed out,
+    0 cards; at every zoom level tried, 0 label-on-label overlaps, 0 cards
+    clipped by the stage, and every card exactly 3px under its own circle.
+    """
+
+    def test_the_radius_floor_is_unconditional(self):
+        # THE most important case in this file. The floor has to be a bare
+        # `continue`, never one term of an OR - the old code read
+        # `... || r > 15 || ...`, so selection, hover and the ego each bought
+        # a name for a node whose circle was invisible, and those exceptions
+        # ARE the floating text. A node too small to carry a name is read by
+        # hovering it instead.
+        body = _body("paintLabels")
+        floor = re.search(r"const r = screenR\(p\);\s*\n\s*if \(r < CARD_MIN_R\) continue;",
+                          body)
+        self.assertIsNotNone(
+            floor, "the screen-radius floor must be its own unconditional "
+                   "guard, not a term in a larger condition")
+        # _body() strips comments, so split on a code landmark
+        gather = body[:body.index("want.sort(")]
+        self.assertNotIn(
+            "|| r >", gather,
+            "a radius test ORed with anything is an exception, and an "
+            "exception is how floating names come back")
+
+    def test_the_card_hangs_off_its_own_circle(self):
+        # Anchored AND scaled: the name is placed from the node's own
+        # projected position and its own screen radius, so it reads as part
+        # of the circle rather than as text that happens to be nearby.
+        body = _body("paintLabels")
+        self.assertRegex(body, r"const top = s\.y \+ r \+ CARD_GAP;")
+        self.assertRegex(body, r"Math\.min\(17, r \* 0\.4",
+                         "the type has to scale with the circle")
+
+    def test_a_node_off_the_stage_gets_no_card(self):
+        # Without this the edge clamp drags an off-stage node's name back
+        # into view, which is a floating label again - text on the graph
+        # whose circle is nowhere on screen.
+        body = _body("paintLabels")
+        self.assertRegex(
+            body, r"if \(s\.x < 0 \|\| s\.x > W \|\| s\.y < 0 \|\| s\.y > H\) continue;")
+
+    def test_cards_that_would_collide_are_dropped(self):
+        # The map-labelling rule: greedy, highest priority first. A dense
+        # cluster shows the few names it has room for, never a pile.
+        body = _body("paintLabels")
+        self.assertIn("want.sort(", body)
+        self.assertRegex(body, r"if \(keep\.length >= CARD_MAX\) break;")
+        self.assertIn("clash", body)
+
+    def test_a_card_is_not_written_across_a_nearer_face(self):
+        # A DOM card always paints above the canvas, so without an occlusion
+        # test a distant contact's name lands on the face of someone standing
+        # in front of them - which reads as belonging to that face.
+        body = _body("paintLabels")
+        self.assertIn("occ", body)
+        self.assertRegex(
+            body, r"o\.z >= c\.s\.z\) continue;",
+            "only a NEARER circle can occlude - one behind the node cannot")
+
+    def test_the_second_line_is_trimmed(self):
+        # These fields are free text: one company value on the real graph is
+        # a full street address and another opens a parenthetical it never
+        # closes. An untrimmed line makes one card wider than its cluster.
+        src_trim = _body("trim")
+        self.assertIn('split("(")', src_trim)
+        self.assertIn("SUB_MAX", _body("cardSub"))
+
+    def test_the_degree_is_not_a_second_line(self):
+        # Almost everyone on this graph is a 1st-degree contact, so a line
+        # reading "1st" says nothing under most of the names on screen.
+        self.assertNotIn('"1st"', _body("cardSub"))
+
+    def test_the_measurement_does_not_force_a_layout(self):
+        # paintLabels runs on every camera-moving frame. Reading offsetWidth
+        # or getBoundingClientRect per card per frame would force a
+        # synchronous layout on every one of them.
+        body = _body("paintLabels") + _body("textW")
+        for banned in ("offsetWidth", "getBoundingClientRect", "offsetHeight"):
+            self.assertNotIn(banned, body,
+                             f"{banned} in the per-frame card path")
+
+    def test_the_cards_diagnostic_reports_the_node_it_belongs_to(self):
+        # "Is that name attached to that circle?" has to be a measurement
+        # rather than an argument about a screenshot - the reason state()
+        # exists for the camera.
+        self.assertIn("cards", _body("create")[:0] or SRC)
+        body = _body("cards")
+        for field in ("node:", "card:", "gap:", "dx:"):
+            self.assertIn(field, body)
+        self.assertRegex(
+            SRC, r"return \{ setGraph[^}]*\bcards\b",
+            "cards() must be on the returned handle to be reachable")
