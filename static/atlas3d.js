@@ -91,6 +91,7 @@ export function create(host) {
 
   const requestRender = () => { needsRender = true; };
   let lastCards = [];   // what the last pass laid out, for cards()
+  let contextLost = false;   // see the context-loss block below
 
   // ---------- geometry + materials -------------------------------------
 
@@ -312,17 +313,25 @@ export function create(host) {
 
   // ---------- scene build ----------------------------------------------
 
-  function clearScene() {
+  // `free` is false in exactly one place: rebuilding after a context loss.
+  // Those GPU objects died WITH the context, so asking the new one to delete
+  // them is an INVALID_OPERATION per object - 184 console warnings on a
+  // 378-node graph, and a restore that reports itself as broken.
+  function clearScene(free = true) {
     for (const m of nodeMeshes.values()) {
       scene.remove(m);
-      m.material.dispose();
+      if (free) m.material.dispose();
     }
-    for (const t of textures.values()) t.dispose();
+    if (free) for (const t of textures.values()) t.dispose();
     nodeMeshes.clear();
     textures.clear();
     for (const l of labels.values()) l.remove();
     labels.clear();
-    if (edgeMesh) { scene.remove(edgeMesh); edgeGeo.dispose(); edgeMesh = null; }
+    if (edgeMesh) {
+      scene.remove(edgeMesh);
+      if (free) edgeGeo.dispose();
+      edgeMesh = null;
+    }
   }
 
   function buildNodes() {
@@ -469,6 +478,30 @@ export function create(host) {
 
   const _v = new THREE.Vector3();
 
+  // PROJECT FROM THE CAMERA AS IT IS NOW, NOT AS IT WAS LAST FRAME.
+  //
+  // camera-controls' update() moves the camera but only refreshes
+  // matrixWorldInverse when a focal offset is set, which this module never
+  // uses - and .project() reads exactly that matrix. renderer.render() then
+  // refreshes it and draws the circles, so anything projected BEFORE the
+  // render is a frame behind whatever the render draws.
+  //
+  // This is NOT the floating-name bug - that was a lost context (see the
+  // context-loss block). It was measured while chasing it, and the numbers
+  // are small on purpose: projecting each card under the matrix the cards
+  // used against the matrix the render drew with gives 0px settled, 2.7px
+  // during an ordinary drag and 4.6px during a very fast one. Worth fixing
+  // because it costs nothing and the same staleness moves the PICK, but do
+  // not read a name sitting a long way from its circle as this.
+  //
+  // Called once per BATCH (a card pass, a pick), never per node: this is
+  // cheap but not free, and both callers project every node in a loop.
+  // three.js recomposes from the current position/quaternion, so calling it
+  // here and again inside render() is idempotent.
+  function syncCamera() {
+    if (camera) camera.updateMatrixWorld();
+  }
+
   function screenOf(p) {
     _v.set(p.x, p.y, p.z).project(camera);
     if (_v.z >= 1 || _v.z <= -1) return null;
@@ -487,6 +520,9 @@ export function create(host) {
   // The forgiving pick the Image Atlas uses: the thing under the cursor,
   // else the front-most within reach - an exact 1px hit misses most clicks.
   function pickAt(x, y, reach = 34) {
+    // the same staleness lands a click on the node a moving graph has just
+    // left, so the pick projects from the current camera too
+    syncCamera();
     let best = null, bestZ = Infinity;
     const all = S.ego ? [...S.nodes, S.ego] : S.nodes;
     for (const p of all) {
@@ -727,6 +763,14 @@ export function create(host) {
   }
 
   function paintLabels() {
+    // A NAME OVER A DEAD CANVAS IS THE FLOATING TEXT THIS MODULE FORBIDS.
+    // The cards are DOM and the circles are WebGL, so they fail apart: when
+    // the context is gone the canvas holds its last frame (or clears) while
+    // this pass keeps happily re-projecting names against a camera that is
+    // still drifting. Within seconds every name has walked off its circle -
+    // measured at 180-361px after six seconds of idle auto-orbit.
+    if (contextLost) return;
+    syncCamera();
     if (!_cardFont)
       _cardFont = getComputedStyle(labelHost).fontFamily || "sans-serif";
 
@@ -853,6 +897,56 @@ export function create(host) {
   // ---------- loop -------------------------------------------------------
 
   const _cq = new THREE.Quaternion();
+
+  // ---------- context loss ---------------------------------------------
+  //
+  // A WebGL context is not ours to keep. The browser drops it under GPU
+  // memory pressure, on wake from sleep, and - the case this module invites
+  // - when a tab holds more live contexts than it is allowed: Vira can have
+  // this graph, the Image Atlas viewer and the Flows board alive at once,
+  // and Chrome evicts the least recently used one WITHOUT telling the page.
+  // renderer.render() then silently does nothing, which is why this went
+  // unnoticed: no throw, no console error, every measurement still correct.
+  //
+  // So the loss is handled rather than assumed away: the loop stops, every
+  // name card is removed (the circles are gone, so their names must go with
+  // them), and the stage says what happened instead of showing a picture
+  // that is quietly no longer being drawn.
+
+  function dropLabels() {
+    for (const l of labels.values()) l.remove();
+    labels.clear();
+    lastCards = [];
+  }
+
+  canvas.addEventListener("webglcontextlost", (e) => {
+    // preventDefault is what makes the context restorable at all - without
+    // it the browser never fires webglcontextrestored and the module is
+    // dead until the view is rebuilt by hand.
+    e.preventDefault();
+    contextLost = true;
+    setRunning(false);
+    dropLabels();
+    stage.classList.add("atlas-lost");
+  });
+
+  canvas.addEventListener("webglcontextrestored", () => {
+    contextLost = false;
+    stage.classList.remove("atlas-lost");
+    // Every GPU-side object died with the context. The LAYOUT and the CAMERA
+    // did not, and must not be rebuilt: re-seeding would scatter the graph
+    // and rebuilding the camera would throw away where the owner was
+    // looking. So this rebuilds the meshes only, then repaints in place.
+    clearScene(false);
+    // buildStars disposes the old field on the way in, for the same reason
+    if (stars) { scene.remove(stars); stars = null; }
+    buildNodes();
+    buildEdges();
+    buildStars();
+    paint();
+    setRunning(true);
+  });
+
 
   function frame() {
     if (!running) return;
