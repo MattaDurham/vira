@@ -8261,42 +8261,42 @@ mark.doc-term {
 }
 
 /* The Showroom - parallel candidate builds off the Queue. Cards follow
-   the house flex rules: .sr-text is the flexible min-width:0 column so an
+   the house flex rules: .shr-text is the flexible min-width:0 column so an
    unbreakable branch name can never widen the document (the 402px rule);
    buttons wrap in the foot rather than clipping. */
-.sr-bar {
+.shr-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin: 4px 0 12px;
 }
-.sr-card {
+.shr-card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg-raised);
   padding: 10px 12px;
   margin-bottom: 8px;
 }
-.sr-top { display: flex; align-items: baseline; gap: 8px; }
-.sr-led {
+.shr-top { display: flex; align-items: baseline; gap: 8px; }
+.shr-led {
   flex: none;
   width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--text-faint);
   align-self: center;
 }
-.sr-led.ok { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
-.sr-led.bad { background: var(--red); box-shadow: 0 0 6px var(--red-glow); }
-.sr-led.live { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
-.sr-text {
+.shr-led.ok { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
+.shr-led.bad { background: var(--red); box-shadow: 0 0 6px var(--red-glow); }
+.shr-led.live { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
+.shr-text {
   flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
   color: var(--text);
   overflow-wrap: anywhere;
 }
-.sr-grade {
+.shr-grade {
   flex: none;
   font-family: var(--mono);
   font-size: 11px;
@@ -8305,39 +8305,39 @@ mark.doc-term {
   border-radius: 9px;
   color: var(--accent-bright);
 }
-.sr-meta {
+.shr-meta {
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--text-dim);
   margin-top: 4px;
   overflow-wrap: anywhere;
 }
-.sr-judge, .sr-note-line {
+.shr-judge, .shr-note-line {
   font-size: 12px;
   color: var(--text-dim);
   margin-top: 5px;
 }
-.sr-err {
+.shr-err {
   font-size: 12px;
   color: var(--red);
   margin-top: 5px;
   overflow-wrap: anywhere;
 }
-.sr-foot {
+.shr-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-top: 8px;
 }
-.sr-warn { font-size: 12px; color: var(--text-dim); min-width: 0; }
-.sr-open { text-decoration: none; }
+.shr-warn { font-size: 12px; color: var(--text-dim); min-width: 0; }
+.shr-open { text-decoration: none; }
 .fchip.primary {
   border-color: var(--accent-line);
   color: var(--accent-bright);
   background: var(--accent-soft);
 }
-.sr-note {
+.shr-note {
   width: 100%;
   min-height: 56px;
   margin-top: 8px;
@@ -8349,13 +8349,13 @@ mark.doc-term {
   padding: 8px;
   resize: vertical;
 }
-.sr-out { margin-top: 6px; }
-.sr-out summary {
+.shr-out { margin-top: 6px; }
+.shr-out summary {
   font-size: 11px;
   color: var(--text-faint);
   cursor: pointer;
 }
-.sr-out pre {
+.shr-out pre {
   font: 10.5px var(--mono);
   color: var(--text-dim);
   white-space: pre-wrap;
@@ -8363,3 +8363,7 @@ mark.doc-term {
   max-height: 200px;
   overflow-y: auto;
 }
+/* The status line wraps: .radar-sub pins its first child nowrap for the
+   short window subheads, but this one carries four counted segments and
+   overflowed a 402px document by 240px (measured - the shrink-to-fit rule). */
+#shr-status { white-space: normal; overflow-wrap: anywhere; }

@@ -11060,7 +11060,7 @@ const SR_STATE_CLASS = {
 };
 
 async function loadShowroom() {
-  const list = $("#sr-list");
+  const list = $("#shr-list");
   if (!list) return;
   try {
     renderShowroom(await api("/api/showroom"));
@@ -11094,7 +11094,7 @@ async function srAct(path, body, okMsg) {
 // expensive runs on one click.
 function srArm(foot, question, confirmLabel, run) {
   foot.innerHTML = "";
-  foot.appendChild(el("span", "sr-warn", question));
+  foot.appendChild(el("span", "shr-warn", question));
   const yes = el("button", "fchip sm warn", confirmLabel);
   yes.addEventListener("click", run);
   const no = el("button", "fchip sm", "Cancel");
@@ -11105,7 +11105,7 @@ function srArm(foot, question, confirmLabel, run) {
 
 function srIterateForm(foot, c) {
   foot.innerHTML = "";
-  const box = el("textarea", "sr-note");
+  const box = el("textarea", "shr-note");
   box.placeholder = "What should change? This note is the instruction the "
                     + "session runs on.";
   const send = el("button", "fchip sm", "Send to a session");
@@ -11118,7 +11118,7 @@ function srIterateForm(foot, c) {
   const no = el("button", "fchip sm", "Cancel");
   no.addEventListener("click", () => loadShowroom().catch(() => {}));
   foot.appendChild(box);
-  const row = el("div", "sr-foot");
+  const row = el("div", "shr-foot");
   row.appendChild(send);
   row.appendChild(no);
   foot.appendChild(row);
@@ -11126,15 +11126,15 @@ function srIterateForm(foot, c) {
 }
 
 function srCard(c, passive) {
-  const card = el("div", "sr-card");
-  const top = el("div", "sr-top");
+  const card = el("div", "shr-card");
+  const top = el("div", "shr-top");
   const led = el("span",
-                 "sr-led " + (SR_STATE_CLASS[c.state] || "dim"));
+                 "shr-led " + (SR_STATE_CLASS[c.state] || "dim"));
   led.title = c.state;
   top.appendChild(led);
-  top.appendChild(el("div", "sr-text", c.text || "(untitled idea)"));
+  top.appendChild(el("div", "shr-text", c.text || "(untitled idea)"));
   if (c.grade) {
-    const g = el("span", "sr-grade", c.grade);
+    const g = el("span", "shr-grade", c.grade);
     g.title = c.judge_summary || "fresh-session judge grade";
     top.appendChild(g);
   }
@@ -11145,15 +11145,15 @@ function srCard(c, passive) {
   if (c.ahead != null) bits.push(`${c.ahead} commit${c.ahead === 1 ? "" : "s"}`);
   if (c.dirty) bits.push(`${c.dirty} uncommitted`);
   if (c.port) bits.push(`serving :${c.port}`);
-  card.appendChild(el("div", "sr-meta", bits.join(" — ")));
+  card.appendChild(el("div", "shr-meta", bits.join(" — ")));
   if (c.judge_summary)
-    card.appendChild(el("div", "sr-judge", c.judge_summary));
-  if (c.error) card.appendChild(el("div", "sr-err", c.error));
-  if (c.note) card.appendChild(el("div", "sr-note-line", c.note));
+    card.appendChild(el("div", "shr-judge", c.judge_summary));
+  if (c.error) card.appendChild(el("div", "shr-err", c.error));
+  if (c.note) card.appendChild(el("div", "shr-note-line", c.note));
   if (c.serve_status && c.serve_status.startsWith("failed"))
-    card.appendChild(el("div", "sr-err", c.serve_status));
+    card.appendChild(el("div", "shr-err", c.serve_status));
 
-  const foot = el("div", "sr-foot");
+  const foot = el("div", "shr-foot");
   const btn = (label, run, cls) => {
     const b = el("button", "fchip sm" + (cls ? " " + cls : ""), label);
     b.addEventListener("click", run);
@@ -11168,7 +11168,7 @@ function srCard(c, passive) {
   } else if (!passive) {
     if (["built", "failed", "conflict"].includes(c.state)) {
       if (c.port) {
-        const a = el("a", "fchip sm sr-open", `Open :${c.port}`);
+        const a = el("a", "fchip sm shr-open", `Open :${c.port}`);
         a.href = `http://localhost:${c.port}/`;
         a.target = "_blank";
         a.rel = "noopener";
@@ -11176,7 +11176,7 @@ function srCard(c, passive) {
         btn("Stop instance",
             () => srAct(`/api/showroom/${c.idea_id}/stop-serve`));
       } else if (c.serve_status === "starting") {
-        foot.appendChild(el("span", "sr-warn", "starting a test instance…"));
+        foot.appendChild(el("span", "shr-warn", "starting a test instance…"));
       } else {
         btn("Try", () => srAct(`/api/showroom/${c.idea_id}/serve`, null,
                                "Starting a local test instance…"));
@@ -11203,7 +11203,7 @@ function srCard(c, passive) {
   }
   if (foot.childNodes.length) card.appendChild(foot);
   if (c.land_output && c.state !== "landed") {
-    const det = el("details", "sr-out");
+    const det = el("details", "shr-out");
     det.appendChild(el("summary", null, "last landing output"));
     det.appendChild(el("pre", null, c.land_output));
     card.appendChild(det);
@@ -11212,10 +11212,10 @@ function srCard(c, passive) {
 }
 
 function renderShowroom(d) {
-  const list = $("#sr-list");
+  const list = $("#shr-list");
   if (!list) return;
   srMaybePoll(d);
-  const st = $("#sr-status");
+  const st = $("#shr-status");
   if (st) {
     const parts = [];
     const cn = d.counts || {};
@@ -11228,11 +11228,11 @@ function renderShowroom(d) {
       ? parts.join(" — ")
       : "No candidates yet — build the queue to start a fleet";
   }
-  const bar = $("#sr-bar");
+  const bar = $("#shr-bar");
   if (bar) {
     bar.innerHTML = "";
     if (d.passive) {
-      bar.appendChild(el("span", "sr-warn",
+      bar.appendChild(el("span", "shr-warn",
                          "passive test instance — the fleet only runs on "
                          + "the live Vira"));
     } else {
@@ -11259,7 +11259,7 @@ function renderShowroom(d) {
                         + "button as before."));
 }
 
-$("#sr-refresh")?.addEventListener("click", () => loadShowroom().catch(() => {}));
+$("#shr-refresh")?.addEventListener("click", () => loadShowroom().catch(() => {}));
 
 function renderBrief(b) {
   const body = $("#brief-body");
