@@ -2673,6 +2673,19 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   position: absolute; inset: 0; z-index: 2; pointer-events: none;
   overflow: hidden;
 }
+/* The graph's WebGL context can be taken away by the browser (GPU pressure,
+   sleep, or too many live contexts across Vira's 3D modules). The canvas
+   then holds a picture nothing is drawing any more, so the stage says so
+   rather than letting a stale image pass for a live one. */
+.atlas-stage.atlas-lost canvas { opacity: .18; }
+.atlas-stage.atlas-lost::after {
+  content: "The 3D view lost its graphics context. It comes back on its own; reopen the window if it does not.";
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  z-index: 3; max-width: 320px; text-align: center;
+  font-size: 12px; line-height: 1.5; color: var(--text-dim);
+  background: var(--bg-hud-panel); border: 1px solid var(--line);
+  border-radius: 2px; padding: 10px 14px;
+}
 .atlas-label {
   position: absolute; top: 0; left: 0;
   display: flex; flex-direction: column; align-items: center;
