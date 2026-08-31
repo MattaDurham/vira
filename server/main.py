@@ -76,6 +76,7 @@ from . import (
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings,
                genreroutes,
+               showroom,
                skins,
                subs_visuals, worldgraph,
                subscriptions, suggest, threadread, triage, uistate, update, vault,
@@ -194,6 +195,9 @@ async def _startup():
     vault_indexer.start()
     circuits.driver.start()
     routines.scheduler.start()
+    # The Showroom fleet driver: launches queued candidate builds a few at
+    # a time, judges finished ones, copies verdicts (server/showroom.py).
+    showroom.driver.start()
     # The deterministic AI-backend health watcher: probes the model login on a
     # cadence and iMessages the owner on a green->red edge, so a Claude-auth
     # lapse surfaces out-of-band instead of as a silently dead cockpit job.
@@ -3986,6 +3990,83 @@ def api_world_refresh():
     threading.Thread(target=vault.scan_once, daemon=True,
                      name="vira-world-vault-refresh").start()
     return {"refreshing": True}
+
+
+# ---------- the Showroom (parallel candidate builds off the Queue) ----------
+
+class ShowroomBuildReq(BaseModel):
+    idea_ids: list[str] | None = None
+    limit: int | None = None
+
+
+class ShowroomIterateReq(BaseModel):
+    note: str = ""
+
+
+def _showroom_call(fn, *args):
+    """Every Showroom action maps its refusals the same way: passive is a
+    403, an unknown candidate a 404, a state refusal a 409 - each with the
+    engine's own named reason."""
+    try:
+        return fn(*args)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/showroom")
+def api_showroom():
+    return showroom.compose()
+
+
+@app.post("/api/showroom/build")
+def api_showroom_build(req: ShowroomBuildReq | None = None):
+    return _showroom_call(showroom.build_queue,
+                          (req.idea_ids if req else None),
+                          (req.limit if req else None))
+
+
+@app.post("/api/showroom/{idea_id}/serve")
+def api_showroom_serve(idea_id: str):
+    return _showroom_call(showroom.serve, idea_id)
+
+
+@app.post("/api/showroom/{idea_id}/stop-serve")
+def api_showroom_stop_serve(idea_id: str):
+    return _showroom_call(showroom.stop_serve, idea_id)
+
+
+@app.post("/api/showroom/{idea_id}/land")
+def api_showroom_land(idea_id: str):
+    return _showroom_call(showroom.land, idea_id)
+
+
+@app.post("/api/showroom/{idea_id}/discard")
+def api_showroom_discard(idea_id: str):
+    return _showroom_call(showroom.discard, idea_id)
+
+
+@app.post("/api/showroom/{idea_id}/iterate")
+def api_showroom_iterate(idea_id: str, req: ShowroomIterateReq):
+    return _showroom_call(showroom.iterate, idea_id, req.note)
+
+
+@app.post("/api/showroom/{idea_id}/cancel")
+def api_showroom_cancel(idea_id: str):
+    return _showroom_call(showroom.cancel, idea_id)
+
+
+@app.post("/api/showroom/{idea_id}/retry")
+def api_showroom_retry(idea_id: str):
+    return _showroom_call(showroom.retry, idea_id)
+
+
+@app.post("/api/showroom/clear-settled")
+def api_showroom_clear_settled():
+    return showroom.clear_settled()
 
 
 # ---------- contact atlas (legacy API + materialized CRM projection) -----

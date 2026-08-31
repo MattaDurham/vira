@@ -290,6 +290,17 @@ def sweep():
     whole way; a failed sub-command degrades that one item away rather
     than raising the sweep out."""
     from . import update
+    # A Showroom CANDIDATE is not orphan work: the fleet built it minutes
+    # ago and its one surface is the Showroom until the owner's verdict
+    # (land / discard), after which its branch is tidied or released back
+    # here. Without this exclusion, "build the whole queue" floods this
+    # sweep - and Runs/Attention with it - with rows that read as
+    # abandoned, which is the confusion the Showroom exists to end.
+    try:
+        from . import showroom
+        candidate_branches = showroom.candidate_branches()
+    except Exception:  # noqa: BLE001 - a broken store costs the exclusion only
+        candidate_branches = set()
     ledger_by_branch = {}
     for r in joblog.list_records():         # ascending -> last write wins == newest
         b = r.get("branch")
@@ -303,6 +314,9 @@ def sweep():
             continue                        # the primary checkout itself
         if not branch:
             continue                        # detached HEAD — nothing to act on
+        if branch in candidate_branches:
+            seen.add(branch)
+            continue
         it = _make_item(branch, wt, _dirty_lines(wt), ledger_by_branch)
         if it:
             items.append(it)
@@ -313,7 +327,7 @@ def sweep():
     if out.returncode == 0:
         for branch in (out.stdout or "").splitlines():
             branch = branch.strip()
-            if not branch or branch in seen:
+            if not branch or branch in seen or branch in candidate_branches:
                 continue
             it = _make_item(branch, None, None, ledger_by_branch)
             if it:

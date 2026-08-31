@@ -128,6 +128,9 @@ DEFAULTS = {
     "lesson_promote_at": 3,              # distinct sessions before a tier-2 rule
                                          # proposes building its mechanism
     "lesson_candidates_per_rule": 12,    # rung-2 adjudication cost ceiling per rule
+    "showroom_max_building": 3,          # Showroom fleet: build sessions in flight
+                                         # at once (under session_max_live, so one
+                                         # slot stays free for the owner)
     "lessons_script_path": "",           # the corrections-ledger CLI the review
                                          # queue shells out to (it owns every
                                          # ledger write); empty =

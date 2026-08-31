@@ -116,6 +116,18 @@ class Classification(_RepoCase):
         self.assertEqual(it["dirty"], 1)
         self.assertEqual(it["ahead"], 0)
 
+    def test_a_showroom_candidate_branch_is_not_orphan_work(self):
+        """A fleet-built candidate's one surface is the Showroom until the
+        owner's verdict — twenty builds in flight must not flood this
+        sweep with rows that read as abandoned (server/showroom.py)."""
+        self.make_worktree("cand-one", dirty=True)
+        self.make_worktree("plain-one", dirty=True)
+        with mock.patch("server.showroom.candidate_branches",
+                        return_value={"claude/cand-one"}):
+            items = orphanwork.sweep()
+        self.assertEqual([it["branch"] for it in items],
+                         ["claude/plain-one"])
+
     def test_clean_unmerged_worktree_is_an_item(self):
         self.make_worktree("has-commits", commits=2)
         items = orphanwork.sweep()

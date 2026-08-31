@@ -11040,6 +11040,227 @@ function renderReview(q) {
 $("#review-refresh")?.addEventListener("click",
                                        () => loadReview().catch(() => {}));
 
+// ==================== The Showroom — parallel candidate builds ====================
+// "Build the queue" dispatches every open Vira idea as a fleet of build
+// sessions (server/showroom.py drives them a few at a time); each finished
+// build is judged by a fresh session, and this surface is where the owner
+// delivers the verdict: Try / Land / Iterate / Discard. Candidate branches
+// stay OUT of the orphan-work sweep until that verdict, so a fleet in
+// flight never reads as abandoned work.
+let srPoll = null;
+
+const SR_STATE_LABEL = {
+  queued: "queued", building: "building", built: "ready to review",
+  failed: "build failed", conflict: "rebase conflict", landing: "landing…",
+  landed: "landed", discarded: "discarded",
+};
+const SR_STATE_CLASS = {
+  built: "ok", landed: "ok", failed: "bad", conflict: "bad",
+  building: "live", landing: "live", queued: "dim", discarded: "dim",
+};
+
+async function loadShowroom() {
+  const list = $("#sr-list");
+  if (!list) return;
+  try {
+    renderShowroom(await api("/api/showroom"));
+  } catch (e) {
+    list.innerHTML = "";
+    list.appendChild(el("div", "brief-empty",
+                        "Showroom unavailable: " + errText(e)));
+  }
+}
+
+function srMaybePoll(d) {
+  const active = (d.candidates || []).some(
+    (c) => ["queued", "building", "landing"].includes(c.state)
+           || c.serve_status === "starting");
+  if (active && !srPoll) srPoll = startPoll(() => loadShowroom(), 5000);
+  if (!active && srPoll) { srPoll.stop(); srPoll = null; }
+}
+
+async function srAct(path, body, okMsg) {
+  try {
+    await post(path, body || {});
+    if (okMsg) toast(okMsg);
+  } catch (e) {
+    toast(errText(e));
+  }
+  loadShowroom().catch(() => {});
+}
+
+// The inline armed confirm (the armSkinApply pattern): the consequence is
+// named on the card itself, and Cancel repaints — nothing irreversible or
+// expensive runs on one click.
+function srArm(foot, question, confirmLabel, run) {
+  foot.innerHTML = "";
+  foot.appendChild(el("span", "sr-warn", question));
+  const yes = el("button", "fchip sm warn", confirmLabel);
+  yes.addEventListener("click", run);
+  const no = el("button", "fchip sm", "Cancel");
+  no.addEventListener("click", () => loadShowroom().catch(() => {}));
+  foot.appendChild(yes);
+  foot.appendChild(no);
+}
+
+function srIterateForm(foot, c) {
+  foot.innerHTML = "";
+  const box = el("textarea", "sr-note");
+  box.placeholder = "What should change? This note is the instruction the "
+                    + "session runs on.";
+  const send = el("button", "fchip sm", "Send to a session");
+  send.addEventListener("click", () => {
+    const note = box.value.trim();
+    if (!note) { box.focus(); return; }
+    srAct(`/api/showroom/${c.idea_id}/iterate`, { note },
+          "Iteration session dispatched");
+  });
+  const no = el("button", "fchip sm", "Cancel");
+  no.addEventListener("click", () => loadShowroom().catch(() => {}));
+  foot.appendChild(box);
+  const row = el("div", "sr-foot");
+  row.appendChild(send);
+  row.appendChild(no);
+  foot.appendChild(row);
+  box.focus();
+}
+
+function srCard(c, passive) {
+  const card = el("div", "sr-card");
+  const top = el("div", "sr-top");
+  const led = el("span",
+                 "sr-led " + (SR_STATE_CLASS[c.state] || "dim"));
+  led.title = c.state;
+  top.appendChild(led);
+  top.appendChild(el("div", "sr-text", c.text || "(untitled idea)"));
+  if (c.grade) {
+    const g = el("span", "sr-grade", c.grade);
+    g.title = c.judge_summary || "fresh-session judge grade";
+    top.appendChild(g);
+  }
+  card.appendChild(top);
+
+  const bits = [SR_STATE_LABEL[c.state] || c.state];
+  if (c.branch) bits.push(c.branch);
+  if (c.ahead != null) bits.push(`${c.ahead} commit${c.ahead === 1 ? "" : "s"}`);
+  if (c.dirty) bits.push(`${c.dirty} uncommitted`);
+  if (c.port) bits.push(`serving :${c.port}`);
+  card.appendChild(el("div", "sr-meta", bits.join(" — ")));
+  if (c.judge_summary)
+    card.appendChild(el("div", "sr-judge", c.judge_summary));
+  if (c.error) card.appendChild(el("div", "sr-err", c.error));
+  if (c.note) card.appendChild(el("div", "sr-note-line", c.note));
+  if (c.serve_status && c.serve_status.startsWith("failed"))
+    card.appendChild(el("div", "sr-err", c.serve_status));
+
+  const foot = el("div", "sr-foot");
+  const btn = (label, run, cls) => {
+    const b = el("button", "fchip sm" + (cls ? " " + cls : ""), label);
+    b.addEventListener("click", run);
+    foot.appendChild(b);
+    return b;
+  };
+  const watch = () => { if (c.job_id) openSession(c.job_id); };
+  if (c.state === "queued") {
+    btn("Cancel", () => srAct(`/api/showroom/${c.idea_id}/cancel`));
+  } else if (c.state === "building" || c.state === "landing") {
+    if (c.job_id) btn("Watch", watch);
+  } else if (!passive) {
+    if (["built", "failed", "conflict"].includes(c.state)) {
+      if (c.port) {
+        const a = el("a", "fchip sm sr-open", `Open :${c.port}`);
+        a.href = `http://localhost:${c.port}/`;
+        a.target = "_blank";
+        a.rel = "noopener";
+        foot.appendChild(a);
+        btn("Stop instance",
+            () => srAct(`/api/showroom/${c.idea_id}/stop-serve`));
+      } else if (c.serve_status === "starting") {
+        foot.appendChild(el("span", "sr-warn", "starting a test instance…"));
+      } else {
+        btn("Try", () => srAct(`/api/showroom/${c.idea_id}/serve`, null,
+                               "Starting a local test instance…"));
+      }
+      if (c.state !== "conflict")
+        btn("Land", () => srArm(
+          foot, "Merge this branch into main and push?", "Land it",
+          () => srAct(`/api/showroom/${c.idea_id}/land`, null,
+                      "Landing…")), "primary");
+      btn("Iterate", () => srIterateForm(foot, c));
+      if (c.state !== "built")
+        btn("Retry", () => srAct(`/api/showroom/${c.idea_id}/retry`));
+      if (c.job_id) btn("Session", watch);
+      btn("Discard", () => srArm(
+        foot, "Delete this branch and its work for good?", "Discard it",
+        () => srAct(`/api/showroom/${c.idea_id}/discard`, null,
+                    "Candidate discarded")));
+    } else if (c.state === "landed" || c.state === "discarded") {
+      if (c.job_id) btn("Session", watch);
+      btn("Clear", () => srAct("/api/showroom/clear-settled"));
+    }
+  } else if (c.job_id) {
+    btn("Session", watch);
+  }
+  if (foot.childNodes.length) card.appendChild(foot);
+  if (c.land_output && c.state !== "landed") {
+    const det = el("details", "sr-out");
+    det.appendChild(el("summary", null, "last landing output"));
+    det.appendChild(el("pre", null, c.land_output));
+    card.appendChild(det);
+  }
+  return card;
+}
+
+function renderShowroom(d) {
+  const list = $("#sr-list");
+  if (!list) return;
+  srMaybePoll(d);
+  const st = $("#sr-status");
+  if (st) {
+    const parts = [];
+    const cn = d.counts || {};
+    if (cn.building) parts.push(`${cn.building} building`);
+    if (cn.queued) parts.push(`${cn.queued} queued`);
+    if (cn.built) parts.push(`${cn.built} ready for your verdict`);
+    if (cn.failed || cn.conflict)
+      parts.push(`${(cn.failed || 0) + (cn.conflict || 0)} need attention`);
+    st.textContent = parts.length
+      ? parts.join(" — ")
+      : "No candidates yet — build the queue to start a fleet";
+  }
+  const bar = $("#sr-bar");
+  if (bar) {
+    bar.innerHTML = "";
+    if (d.passive) {
+      bar.appendChild(el("span", "sr-warn",
+                         "passive test instance — the fleet only runs on "
+                         + "the live Vira"));
+    } else {
+      const b = el("button", "fchip sm primary",
+                   `Build the queue (${d.eligible || 0})`);
+      b.disabled = !d.eligible;
+      b.addEventListener("click", () => srArm(
+        bar, `Dispatch build sessions for ${d.eligible} open ideas, `
+             + `${d.fleet?.max_building || 3} at a time?`,
+        "Build them",
+        () => srAct("/api/showroom/build", {}, "Fleet staged")));
+      bar.appendChild(b);
+      bar.appendChild(el("span", "hint",
+                         "each idea builds on its own branch, gets judged, "
+                         + "then waits here for your verdict"));
+    }
+  }
+  list.innerHTML = "";
+  (d.candidates || []).forEach((c) => list.appendChild(srCard(c, d.passive)));
+  if (!(d.candidates || []).length)
+    list.appendChild(el("div", "brief-empty",
+                        "Nothing in the showroom. Build the queue, or "
+                        + "stage single ideas from the Queue's Implement "
+                        + "button as before."));
+}
+
+$("#sr-refresh")?.addEventListener("click", () => loadShowroom().catch(() => {}));
+
 function renderBrief(b) {
   const body = $("#brief-body");
   body.innerHTML = "";
@@ -13838,6 +14059,7 @@ function viewLoad(id) {
   if (id === "applications") loadApplications().catch(() => {});
   if (id === "research") window.loadResearch?.().catch(() => {});
   if (id === "journal") loadJournal().catch(() => {});
+  if (id === "showroom") loadShowroom().catch(() => {});
   if (id === "attention") attentionTabLoad(attentionTab);
   if (id === "subs") loadSubs().catch(() => {});
   if (id === "find") loadFindStatus().catch(() => {});
@@ -19370,6 +19592,8 @@ const WINDOWS = [
     icon: "M5 5h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 7.5h2.5c1 0 1.5-.5 1.5-1M10 7.5h1.5c2.5 0 2.5 10 2.5 10" },
   { id: "attention", title: "Attention", w: 720,
     icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
+  { id: "showroom", title: "Showroom", w: 640,
+    icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13.5 16.5l2 2 3.5-3.8" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
   { id: "applications", title: "Applications", w: 780,

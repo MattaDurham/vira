@@ -8259,3 +8259,107 @@ mark.doc-term {
 @media (max-width: 1099px) {
   .app-row.draft-over { outline: none; }
 }
+
+/* The Showroom - parallel candidate builds off the Queue. Cards follow
+   the house flex rules: .sr-text is the flexible min-width:0 column so an
+   unbreakable branch name can never widen the document (the 402px rule);
+   buttons wrap in the foot rather than clipping. */
+.sr-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+}
+.sr-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.sr-top { display: flex; align-items: baseline; gap: 8px; }
+.sr-led {
+  flex: none;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  align-self: center;
+}
+.sr-led.ok { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
+.sr-led.bad { background: var(--red); box-shadow: 0 0 6px var(--red-glow); }
+.sr-led.live { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
+.sr-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.sr-grade {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: 9px;
+  color: var(--accent-bright);
+}
+.sr-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.sr-judge, .sr-note-line {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+.sr-err {
+  font-size: 12px;
+  color: var(--red);
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.sr-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sr-warn { font-size: 12px; color: var(--text-dim); min-width: 0; }
+.sr-open { text-decoration: none; }
+.fchip.primary {
+  border-color: var(--accent-line);
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+}
+.sr-note {
+  width: 100%;
+  min-height: 56px;
+  margin-top: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: 13px var(--sans);
+  padding: 8px;
+  resize: vertical;
+}
+.sr-out { margin-top: 6px; }
+.sr-out summary {
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.sr-out pre {
+  font: 10.5px var(--mono);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 200px;
+  overflow-y: auto;
+}

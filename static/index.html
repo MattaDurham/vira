@@ -154,6 +154,21 @@
     </aside>
   </section>
 
+  <!-- SHOWROOM — parallel candidate builds off the Queue (server/showroom.py).
+       "Build the queue" dispatches a fleet; each finished build is judged,
+       then reviewed here: Try (a local test instance on demand), Land,
+       Iterate, or Discard. Candidate branches are excluded from the
+       orphan-work sweep until the verdict. -->
+  <section id="view-showroom" class="view">
+    <div class="section-head">
+      <h2>Showroom</h2>
+      <button class="fchip sm" id="sr-refresh" style="margin-left:auto">Refresh</button>
+    </div>
+    <div class="radar-sub"><span id="sr-status">Loading…</span></div>
+    <div class="sr-bar" id="sr-bar"></div>
+    <div id="sr-list"></div>
+  </section>
+
   <!-- JOURNAL (the record of everything told to Vira, moved out of the brief) -->
   <section id="view-journal" class="view">
     <div class="section-head"><h2>Journal</h2>
