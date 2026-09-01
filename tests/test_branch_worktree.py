@@ -35,9 +35,13 @@ def git(*args, cwd):
 
 
 def run_in(live: Path, body: str) -> subprocess.CompletedProcess:
-    """Source branch.sh from inside `live` so it resolves that checkout."""
+    """Source branch.sh from inside `live` so it resolves that checkout.
+
+    VIRA_SKIP_PR: these sandboxes have no PRs and test other gates; the
+    required-PR door is covered by test_branch_pr.PrRequire."""
     return subprocess.run(
-        ["/bin/zsh", "-c", f'source "{BRANCH_SH}"\n{body}\n'],
+        ["/bin/zsh", "-c",
+         f'export VIRA_SKIP_PR=1\nsource "{BRANCH_SH}"\n{body}\n'],
         cwd=live, capture_output=True, text=True)
 
 

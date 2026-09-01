@@ -65,6 +65,10 @@ class LiveTreeGate(unittest.TestCase):
         LIVE={self.live}
         source {BRANCH_SH} >/dev/null 2>&1 || true
         LIVE={self.live}
+        # These sandboxes test the TREE gate; the required-PR door in front
+        # of it is its own suite (test_branch_pr.PrRequire) — pass it with
+        # the same conscious override a real PR-less merge needs.
+        export VIRA_SKIP_PR=1
         wt_dir() {{ echo ""; }}
         instance_pid() {{ echo ""; }}
         stop_test_process() {{ :; }}

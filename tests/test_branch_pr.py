@@ -298,6 +298,37 @@ class SyncHead(PrLayerBase):
 
 
 @posix_only
+class PrRequire(PrLayerBase):
+    """The PR step is REQUIRED before merge (owner ruling 2026-09-01):
+    pr_require is the door cmd_merge opens with. Unlike the rest of the
+    layer it is deliberately NOT best-effort — a dead gh refuses rather
+    than waives, and only an explicit VIRA_SKIP_PR=1 passes without one."""
+
+    def test_an_open_pr_lets_the_merge_proceed(self):
+        out = self.run_zsh('pr_require slug claude/slug && echo PROCEED')
+        self.assertIn("PROCEED", out.stdout)
+
+    def test_no_pr_refuses_the_merge(self):
+        out = self.run_zsh('pr_require slug claude/slug || echo REFUSED',
+                           pr_exists=False)
+        self.assertIn("REFUSED", out.stdout)
+        self.assertIn("branch.sh pr slug", out.stderr)
+
+    def test_dead_gh_refuses_rather_than_waives(self):
+        out = self.run_zsh('pr_require slug claude/slug || echo REFUSED',
+                           gh_alive=False)
+        self.assertIn("REFUSED", out.stdout)
+        self.assertIn("VIRA_SKIP_PR=1", out.stderr)
+
+    def test_the_override_is_explicit_and_says_so(self):
+        out = self.run_zsh(
+            'export VIRA_SKIP_PR=1; pr_require slug claude/slug && echo PROCEED',
+            pr_exists=False, gh_alive=False)
+        self.assertIn("PROCEED", out.stdout)
+        self.assertIn("WITHOUT a PR", out.stdout)
+
+
+@posix_only
 class GuardWiring(unittest.TestCase):
     """The joins, as source contracts — the shell harness cannot drive
     cmd_merge/cmd_discard whole (they touch worktrees and launchd), so pin
@@ -310,6 +341,15 @@ class GuardWiring(unittest.TestCase):
         self.assertLess(at_sync, at_merge,
                         "the head must be on origin BEFORE the sha it will "
                         "merge as exists, or GitHub cannot connect the PR")
+
+    def test_cmd_merge_requires_the_pr_before_anything_else(self):
+        src = BRANCH_SH.read_text(encoding="utf-8")
+        merge_at = src.index("cmd_merge()")
+        req_at = src.index('pr_require "$1" "$branch" || exit 1', merge_at)
+        preflight_at = src.index("preflight.sh", merge_at)
+        self.assertLess(req_at, preflight_at,
+                        "the required-PR door must be reached before the "
+                        "preflight gate, so a PR-less merge cannot start")
 
     def test_cmd_discard_honours_the_keep_remote_flag(self):
         src = BRANCH_SH.read_text(encoding="utf-8")
