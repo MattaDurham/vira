@@ -597,8 +597,14 @@ cmd_list() {
 # with a written body; `merge` then runs exactly as before, and because merges
 # are --no-ff, pushing main flips the PR to Merged on its own. `discard`
 # closes an open PR without merging, so a rejected experiment keeps its diff
-# and write-up as the record. Everything here except cmd_pr itself is
+# and write-up as the record. Everything here except cmd_pr and pr_require is
 # BEST-EFFORT: a GitHub nicety must never wedge or fail a finished merge.
+#
+# THE PR STEP ITSELF IS NOT OPTIONAL (owner ruling 2026-09-01, filed in the
+# 2026-08-27 1349 retro's addendum): people review this work on GitHub as
+# PRs, so a PR-less merge defeats the layer's purpose. pr_require is the
+# door cmd_merge opens with — no open PR, no merge; a gh outage does not
+# waive it silently, only an explicit VIRA_SKIP_PR=1 does.
 
 gh_ok() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
 
@@ -609,6 +615,27 @@ gh_ok() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
 pr_info() {
   ( cd "$LIVE" && gh pr view "$1" --json number,state,isDraft,headRefOid,url \
       --jq '"\(.number) \(.state) \(.isDraft) \(.headRefOid) \(.url)"' ) 2>/dev/null
+}
+
+pr_require() {   # pr_require <slug> <branch> — 0 to proceed, 1 to refuse
+  if [[ "${VIRA_SKIP_PR:-}" == "1" ]]; then
+    echo "VIRA_SKIP_PR=1 — merging WITHOUT a PR (conscious override)."
+    return 0
+  fi
+  if ! gh_ok; then
+    echo "error: the PR step is required and gh is missing or unauthenticated." >&2
+    echo "       fix gh (gh auth login), then: scripts/branch.sh pr $1" >&2
+    echo "       outage override (conscious): VIRA_SKIP_PR=1 scripts/branch.sh merge $1" >&2
+    return 1
+  fi
+  local info state
+  if ! info=$(pr_info "$2") || { read -r _ state _ _ _ <<<"$info"; [[ "$state" != "OPEN" ]]; }; then
+    echo "error: no open PR for $2 — the PR step is required before merge." >&2
+    echo "       run: scripts/branch.sh pr $1    then merge again" >&2
+    echo "       outage override (conscious): VIRA_SKIP_PR=1 scripts/branch.sh merge $1" >&2
+    return 1
+  fi
+  return 0
 }
 
 cmd_pr() {
@@ -781,6 +808,7 @@ cmd_merge() {
   local dir branch="claude/$1"; dir=$(wt_dir "$1")
   git -C "$LIVE" show-ref --verify --quiet "refs/heads/$branch" || {
     echo "error: no branch $branch" >&2; exit 1; }
+  pr_require "$1" "$branch" || exit 1
 
   # Preflight: both trees clean, instance down.
   #
