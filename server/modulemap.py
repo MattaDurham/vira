@@ -767,7 +767,7 @@ def refresh_prompt():
     s = _load()
     log_lines = []
     for g in changelog.groups()[:10]:
-        head = g["date"] or "recent"
+        head = g["date"]
         for e in g["entries"]:
             log_lines.append(f"[{head}] ({e['kind']}) {e['text']}")
     return (

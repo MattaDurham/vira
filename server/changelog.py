@@ -1,37 +1,42 @@
-"""Change log — every shipped change per session, all the way back to the
-first Vira session.
+"""Change log — every shipped change, keyed by the day it actually happened.
 
-The per-session record already exists as the Vira session retros in
-`~/TC-IL/Sessions/* vira.md` (each retro's `## Shipped` section is that
-session's changes), so the change log is DERIVED from them at read time —
-no parallel store to keep in sync, and it always reaches back to the
-beginning. Resolved backlog items from the ideas store (status done /
-dropped) are folded in too, so marking an idea done/dropped in the Ideas
-tab shows up here immediately (under its session date, or a "recent /
-unfiled" bucket until close-session writes that session's retro).
+Entries OWN the timeline; retros NARRATE it (redesigned 2026-09-01, plan:
+TC-IL/plans/2026-09-01-1042-forge-changelog-redesign-retros-as-overlays.md).
+The original 2026-07-09 design derived the log from session retros and
+folded ideas/jobs into whichever retro shared their date — sound while
+every session ended in a retro, but Forge jobs and mobile-resolved ideas
+never close a session, so anything on a retro-less day landed in a
+dateless "unfiled" bucket forever and the client rendered it "Today ·
+shipped 0s ago". Inverted model:
 
-Claude jobs launched through Vira (Plan / Implement / cockpit runs) fold in
-the same way from the durable job ledger (server/joblog.py) — prompt head,
-target repo, outcome, and the claude session id that names the on-disk
-transcript — so every agent-driven change is on the record even after the
-in-memory jobs list is gone.
+- Every entry carries its own timestamp: a retro bullet gets the retro's
+  date+time, a resolved idea its `updated`, a job its `finished or
+  started`. Timestamps are PARSED AND CONVERTED to local time, never
+  string-sliced — the ideas store writes UTC, the job ledger writes local,
+  and `[:10]` across that mix filed entries a day off.
+- Groups are LOCAL CALENDAR DAYS derived from the entries. A day with a
+  retro takes its goal as the header; a day without one is `no_retro` and
+  says so honestly. No entry can be unfiled, so nothing goes stale.
+- Retros are overlays: zero-entry retros still contribute their goal (and
+  session_id) as narrative. A job whose session_id matches a retro's
+  frontmatter links to it (`entry.retro`).
 
-PROJECT-SCOPED (2026-07-12): this change log is Vira's only. The ideas
-store and the job ledger both carry cross-project entries (ideas have a
-`project` field; jobs run against any target repo), so both are filtered
-before folding in — ideas to `project == "Vira"`, jobs to those that ran
-in the Vira checkout or were dispatched from a Vira-project idea. Other
-projects get their own changelogs in their own homes; nothing foreign
-lands here.
+PROJECT-SCOPED (2026-07-12): this change log is Vira's only. Ideas filter
+to `project == "Vira"`; jobs to those run in the Vira checkout (or one of
+its worktrees), or dispatched from a Vira-project idea.
 
-Read-only: `GET /api/changelog` → { groups: [ {date, time, goal, entries:
-[{text, kind}]} ] }, newest first. kind ∈ {ship, done, dropped, job}.
-A kind-"job" entry also carries `job_id` (the full ledger id) so a client
-rendering the ledger BESIDE the changelog — the Work window's merged
-Record stream — can drop the changelog's copy of a job it is already
-showing as a ledger row, instead of rendering one job twice.
+Read-only: `GET /api/changelog` → { groups: [ {date, time, goal, no_retro,
+retros: [{stem, time, goal, session_id}], entries: [{text, kind, ts, day,
+session_id, source, job_id?, idea_id?, retro?}]} ], warnings: [str] },
+newest first. kind ∈ {ship, done, dropped, job}; source ∈ {retro, idea,
+job}. A kind-"job" entry carries `job_id` so a client rendering the ledger
+BESIDE the changelog — the Work window's merged Record stream — can drop
+the changelog's copy of a job it already shows as a ledger row. Exclusions
+are never silent: skipped files and unparseable timestamps land in
+`warnings`.
 """
 import re
+from datetime import datetime
 from pathlib import Path
 
 from . import ideas as ideasstore
@@ -40,6 +45,8 @@ from . import joblog
 SESSIONS = Path.home() / "TC-IL" / "Sessions"
 PROJECT = ideasstore.DEFAULT_PROJECT          # "Vira"
 REPO = Path(__file__).resolve().parent.parent  # this checkout
+
+_STEM_DATE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
 def _is_project_idea(it):
@@ -73,17 +80,49 @@ def _clean(s):
     return s
 
 
+def _local_ts(iso):
+    """(local ISO seconds, local YYYY-MM-DD) for a stored timestamp, or
+    ("", "") when unparseable. Zone-aware values are converted to local;
+    naive values are taken as local already."""
+    if not iso:
+        return ("", "")
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return ("", "")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return (dt.isoformat(timespec="seconds"), dt.strftime("%Y-%m-%d"))
+
+
 def _parse_retro(path):
     text = path.read_text(errors="ignore")
     m = re.search(r"^date:\s*(.+)$", text, re.M)
     date = m.group(1).strip() if m else ""
+    if not date:
+        # Retro filenames lead with the day (`YYYY-MM-DD HHMM vira.md`,
+        # `YYYY-MM-DD <slug>.md`); a hand-written file missing `date:`
+        # frontmatter is still datable from its name, then `created:`.
+        m = _STEM_DATE.match(path.stem)
+        date = m.group(1) if m else ""
+    if not date:
+        m = re.search(r"^created:\s*(\d{4}-\d{2}-\d{2})", text, re.M)
+        date = m.group(1) if m else ""
     m = re.search(r'^time:\s*"?([0-9:]+)"?', text, re.M)
     time = m.group(1).strip() if m else ""
+    m = re.search(r"^session_id:\s*(\S+)", text, re.M)
+    session_id = m.group(1).strip() if m else ""
 
     goal = ""
     gm = re.search(r"^##\s+Goal\s*\n+(.+?)(?=\n\n|\n##|\Z)", text, re.S | re.M)
     if gm:
         goal = _clean(gm.group(1))
+    if not goal:
+        # Day retros have no `## Goal`; their one-line title sits alone
+        # under the `# …` heading and serves the same narrative purpose.
+        gm = re.search(r"^#\s[^\n]+\n+([^#\n-][^\n]*)", text, re.M)
+        if gm:
+            goal = _clean(gm.group(1))
 
     entries = []
     sm = re.search(r"^##\s+Shipped\s*\n(.*?)(?=^##\s|\Z)", text, re.S | re.M)
@@ -101,7 +140,8 @@ def _parse_retro(path):
         if cur is not None:
             entries.append(cur)
     entries = [{"text": _clean(e), "kind": "ship"} for e in entries if _clean(e)]
-    return {"date": date, "time": time, "goal": goal, "entries": entries}
+    return {"date": date, "time": time, "goal": goal,
+            "session_id": session_id, "entries": entries}
 
 
 def _job_entry(r, idea_texts):
@@ -127,52 +167,129 @@ def _job_entry(r, idea_texts):
     return {"text": " · ".join(bits), "kind": "job", "job_id": r["id"]}
 
 
-def groups():
+def _retro_files():
+    """Both retro naming families: `YYYY-MM-DD HHMM vira.md` (auto and
+    plain hand-written) and `YYYY-MM-DD HHMM vira — <slug>.md`
+    (/close-session and named hand-written retros — 6 entry-bearing files
+    the old glob never read). The `… vira (N).md` duplicate generations
+    from the nightly writer's no-clobber suffix stay excluded — they are
+    near-copies of a session already counted — but are counted in
+    `warnings` rather than vanishing silently."""
+    return sorted(SESSIONS.glob("* vira.md")) + \
+        sorted(SESSIONS.glob("* vira — *.md"))
+
+
+def build():
+    """(groups, warnings) — the day-keyed ledger described in the module
+    docstring."""
+    warnings = []
+
     retros = []
     if SESSIONS.exists():
-        for f in sorted(SESSIONS.glob("* vira.md")):
+        for f in _retro_files():
             g = _parse_retro(f)
-            if g["entries"]:
-                retros.append(g)
-    retros.sort(key=lambda g: (g["date"], g["time"]), reverse=True)
+            if not g["date"]:
+                warnings.append(
+                    f"retro skipped: no recoverable date ({f.name})")
+                continue
+            g["stem"] = f.stem
+            retros.append(g)
+        dups = len(list(SESSIONS.glob("* vira ([0-9]*).md")))
+        if dups:
+            warnings.append(
+                f"{dups} retro files skipped as duplicate generations")
 
-    # fold resolved backlog items into the session whose date matches their
-    # updated date; anything with no matching session lands in an "unfiled"
-    # bucket that sorts to the very top. Vira-project ideas only.
-    unfiled = []
+    days = {}
+
+    def bucket(day):
+        return days.setdefault(day, {"entries": [], "retros": []})
+
+    session_to_stem = {}
+    for g in sorted(retros, key=lambda g: (g["date"], g["time"])):
+        b = bucket(g["date"])
+        b["retros"].append({"stem": g["stem"], "time": g["time"],
+                            "goal": g["goal"],
+                            "session_id": g["session_id"]})
+        ts = g["date"] + "T" + (g["time"] or "00:00")
+        for e in g["entries"]:
+            b["entries"].append({**e, "ts": ts, "day": g["date"],
+                                 "session_id": g["session_id"],
+                                 "source": "retro"})
+        if g["session_id"]:
+            session_to_stem[g["session_id"]] = g["stem"]
+
+    # Resolved ideas date themselves by `updated` (stored UTC → local).
     project_ideas = {}      # id -> text, for job labels + membership
+    idea_entries = []
     for it in ideasstore.list_items():
         if not _is_project_idea(it):
             continue
         project_ideas[it["id"]] = it["text"]
         if it["status"] not in ("done", "dropped"):
             continue
-        d = (it.get("updated") or "")[:10]
-        entry = {"text": it["text"], "kind": it["status"]}
-        match = next((g for g in retros if g["date"] == d), None)
-        if match:
-            match["entries"].insert(0, entry)
-        else:
-            unfiled.append(entry)
+        ts, day = _local_ts(it.get("updated") or "")
+        if not day:
+            warnings.append(
+                f"idea skipped: no parseable updated ({it['id']})")
+            continue
+        idea_entries.append({"text": it["text"], "kind": it["status"],
+                             "ts": ts, "day": day, "idea_id": it["id"],
+                             "session_id": "", "source": "idea"})
 
-    # fold claude jobs in from the durable ledger, by launch date — only
-    # jobs that ran in this checkout or came off a Vira-project idea
+    # Jobs date themselves by `finished or started` (already local).
+    job_idea_days = set()
+    job_entries = []
     for r in joblog.list_records():
         if not (_is_project_cwd(r.get("cwd"))
                 or (r.get("idea_id") and r["idea_id"] in project_ideas)):
             continue
-        d = (r.get("started") or "")[:10]
-        entry = _job_entry(r, project_ideas)
-        match = next((g for g in retros if g["date"] == d), None)
-        if match:
-            match["entries"].insert(0, entry)
-        else:
-            unfiled.append(entry)
+        ts, day = _local_ts(r.get("finished") or r.get("started") or "")
+        if not day:
+            warnings.append(
+                f"job skipped: no parseable timestamp (job {r['id'][:8]})")
+            continue
+        e = _job_entry(r, project_ideas)
+        e.update({"ts": ts, "day": day,
+                  "session_id": r.get("session_id") or "", "source": "job"})
+        if r.get("idea_id"):
+            e["idea_id"] = r["idea_id"]
+            job_idea_days.add((r["idea_id"], day))
+        stem = session_to_stem.get(e["session_id"])
+        if stem:
+            e["retro"] = stem
+        job_entries.append(e)
+
+    # idea × job dedupe: joblog.name() titles an idea-dispatched job with
+    # the idea's own text, so a resolved idea and its job on the same day
+    # would render the same sentence twice — keep the job's telling.
+    for e in idea_entries:
+        if (e.get("idea_id"), e["day"]) in job_idea_days:
+            continue
+        bucket(e["day"])["entries"].append(e)
+    for e in job_entries:
+        bucket(e["day"])["entries"].append(e)
 
     out = []
-    if unfiled:
-        out.append({"date": "", "time": "",
-                    "goal": "Recent — not yet in a session retro",
-                    "entries": unfiled})
-    out.extend(retros)
-    return out
+    for day in sorted(days, reverse=True):
+        b = days[day]
+        if not b["entries"]:
+            continue    # overlays only matter on days something happened
+        b["entries"].sort(key=lambda e: e["ts"], reverse=True)
+        goal, time = "", ""
+        for r in sorted(b["retros"], key=lambda r: r["time"], reverse=True):
+            if r["goal"]:
+                goal, time = r["goal"], r["time"]
+                break
+        out.append({"date": day, "time": time, "goal": goal,
+                    "no_retro": not b["retros"],
+                    "retros": b["retros"], "entries": b["entries"]})
+    return out, warnings
+
+
+def groups():
+    return build()[0]
+
+
+def api():
+    g, w = build()
+    return {"groups": g, "warnings": w}
