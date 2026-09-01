@@ -11,11 +11,13 @@ frames) and cached in data/media-thumbs/; favicons for link rows are fetched
 once per domain and cached in data/favicon-cache/ so the client never talks
 to a third party directly.
 
-Attachments macOS has offloaded to iCloud (Messages in iCloud evicts the
-oldest files when true free space runs low) are still listed — flagged
-`evicted`, never silently dropped — and their cached thumbnails keep serving,
-so a conversation's media history doesn't appear to shrink just because the
-originals moved to the cloud.
+Attachments macOS has offloaded to iCloud (Messages in iCloud evicts under
+storage pressure — measured 2026-09-01, 92% of this machine's attachments,
+spread evenly across every year rather than oldest-first) are still listed,
+never silently dropped. Where server/mediaarchive.py holds Vira's own copy
+the item serves in full; where it does not, the item is flagged `evicted`
+and the best cached derivative still serves, so a conversation's media
+history never appears to shrink just because the originals moved.
 """
 import bisect
 import hashlib
@@ -29,6 +31,7 @@ import urllib.request
 from pathlib import Path
 
 from . import data as crm
+from . import mediaarchive
 from .imessage import _connect, apple_dt, msg_text
 
 ATTACH_ROOT = Path.home() / "Library" / "Messages" / "Attachments"
@@ -222,14 +225,19 @@ def media_for_chats(chat_ids):
 
     photos, docs = [], []
     meta = _load_meta()
+    rows = _attachment_rows(chat_ids)
+    # One archive query for the whole conversation, not a lookup per row:
+    # the busiest thread on this machine carries ~4,500 attachments.
+    archived = mediaarchive.have_many(r[0] for r in rows)
     for rowid, fname, mime, tname, size, from_me, date_ns, msg_rowid, \
-            mtext, mblob in _attachment_rows(chat_ids):
+            mtext, mblob in rows:
         name = (tname or Path(fname).name or "")
         if name.lower().endswith(SKIP_NAMES):
             continue
         path = Path(fname).expanduser()
-        # not on disk = offloaded to iCloud, not gone — keep it listed
-        evicted = not path.exists()
+        # Evicted now means Apple dropped it AND Vira never got a copy —
+        # an archived attachment is still fully serveable.
+        evicted = not path.exists() and rowid not in archived
         when = apple_dt(date_ns)
         caption = msg_text(mtext, mblob)
         if caption:  # sent in the same message as the attachment
@@ -540,6 +548,22 @@ def _resolve_media(att_id, allow_missing=False):
     return indexed_file(att_id)
 
 
+def _bytes_path(att_id, recorded):
+    """The file to actually READ for an attachment.
+
+    Distinct from the recorded path on purpose: the thumbnail cache is keyed
+    on chat.db's path (_cache_key), which must stay stable across an
+    eviction, while the bytes may now only exist in Vira's archive. Callers
+    key on `recorded` and read from this."""
+    if recorded is not None:
+        try:
+            if recorded.exists():
+                return recorded
+        except OSError:
+            pass
+    return mediaarchive.file_for(att_id)
+
+
 def _cache_key(path, suffix):
     """Keyed on path alone: attachment files never change in place, and an
     mtime-based key becomes uncomputable the moment macOS evicts the original
@@ -593,7 +617,8 @@ def thumbnail(att_id, size=480):
     hit = _cached(path, f"thumb{size}")
     if hit:
         return hit
-    if not path.exists():   # evicted before a thumb was ever generated
+    src = _bytes_path(att_id, path)
+    if src is None:   # evicted before a thumb was made, and never archived
         return None
     out = _cache_key(path, f"thumb{size}")
     THUMBS.mkdir(parents=True, exist_ok=True)
@@ -601,10 +626,10 @@ def thumbnail(att_id, size=480):
     try:
         if (mime or "").startswith("video/"):
             subprocess.run(
-                ["ffmpeg", "-y", "-v", "quiet", "-ss", "0.3", "-i", str(path),
+                ["ffmpeg", "-y", "-v", "quiet", "-ss", "0.3", "-i", str(src),
                  "-frames:v", "1", "-vf", f"scale={size}:-2", str(tmp)],
                 capture_output=True, timeout=30)
-            dur = _probe_duration(path)
+            dur = _probe_duration(src)
             if dur is not None:
                 with _meta_lock:
                     meta = _load_meta()
@@ -613,7 +638,7 @@ def thumbnail(att_id, size=480):
         else:
             subprocess.run(
                 ["sips", "-s", "format", "jpeg", "--resampleHeightWidthMax",
-                 str(size), str(path), "--out", str(tmp)],
+                 str(size), str(src), "--out", str(tmp)],
                 capture_output=True, timeout=30)
         if tmp.exists() and tmp.stat().st_size > 0:
             tmp.replace(out)
@@ -631,7 +656,10 @@ def preview_file(att_id):
     path, mime, name = _resolve_media(att_id, allow_missing=True)
     if not path:
         return None, None, None
-    if not path.exists():
+    src = _bytes_path(att_id, path)
+    if src is None:
+        # Evicted by macOS and never archived. A cached derivative is a
+        # smaller picture than the original, but it beats an empty frame.
         for suffix in ("full", "thumb480"):
             hit = _cached(path, suffix)
             if hit:
@@ -644,7 +672,7 @@ def preview_file(att_id):
             tmp = out.with_suffix(".tmp.jpg")
             try:
                 subprocess.run(
-                    ["sips", "-s", "format", "jpeg", str(path), "--out",
+                    ["sips", "-s", "format", "jpeg", str(src), "--out",
                      str(tmp)],
                     capture_output=True, timeout=60)
             except OSError:  # no sips off-Mac; serve the original as-is
@@ -653,9 +681,9 @@ def preview_file(att_id):
                 tmp.replace(out)
             else:
                 tmp.unlink(missing_ok=True)
-                return path, mime, name
+                return src, mime, name
         return out, "image/jpeg", Path(name).stem + ".jpg"
-    return path, mime, name
+    return src, mime, name
 
 
 # ---------- favicons (server-side fetch + cache; the client never leaves

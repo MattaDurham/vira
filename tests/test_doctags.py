@@ -355,7 +355,8 @@ class Wiring(unittest.TestCase):
     def test_every_worker_main_builds_is_also_started(self):
         src = self._main_src()
         built = set(re.findall(
-            r"^(\w+)\s*=\s*\w+\.(?:Indexer|Watcher|Poller|Scheduler|Sweeper)\(",
+            r"^(\w+)\s*=\s*\w+\.(?:Indexer|Watcher|Poller|Scheduler"
+            r"|Sweeper|Archiver)\(",
             src, re.M))
         self.assertTrue(built, "no workers found — has main.py moved?")
         unstarted = {n for n in built if f"{n}.start()" not in src}

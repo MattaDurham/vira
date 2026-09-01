@@ -719,18 +719,40 @@ def backfill_transcripts(log=print, limit=None):
 # ---------- reconcile + status ----------
 
 def reconcile(log=print):
-    """Mark purged files; keep index rows (still searchable by context)."""
+    """Mark purged files; keep index rows (still searchable by context).
+
+    Archive-aware in both directions: an attachment macOS evicted but
+    server/mediaarchive.py holds a copy of is NOT purged (Vira can still
+    serve it), and one already marked purged that has since been recovered
+    and archived is restored. `purged` means 'no bytes anywhere', which is
+    what the dimmed off-device rendering in search is claiming."""
+    from . import mediaarchive
     con = _db()
-    n = 0
-    for seq, path in con.execute(
-            "SELECT seq, path FROM items WHERE purged=0 AND path IS NOT NULL"
-    ).fetchall():
-        if not Path(path).exists():
-            con.execute("UPDATE items SET purged=1 WHERE seq=?", (seq,))
-            n += 1
+    rows = con.execute(
+        "SELECT seq, path, id, source, purged FROM items "
+        "WHERE path IS NOT NULL").fetchall()
+    on_disk = {seq: Path(path).exists() for seq, path, _i, _s, _p in rows}
+    att = [iid for seq, _p, iid, src, _pu in rows
+           if src == "imessage" and not on_disk[seq]]
+    archived = mediaarchive.have_many(att)
+
+    def serveable(seq, iid, src):
+        return on_disk[seq] or (src == "imessage" and iid in archived)
+
+    n = back = 0
+    for seq, _path, iid, src, was in rows:
+        now = 0 if serveable(seq, iid, src) else 1
+        if now == was:
+            continue
+        con.execute("UPDATE items SET purged=? WHERE seq=?", (now, seq))
+        n += now
+        back += 1 - now
     con.commit()
     con.close()
-    log(f"reconcile: {n} newly purged")
+    msg = f"reconcile: {n} newly purged"
+    if back:
+        msg += f", {back} restored from the archive"
+    log(msg)
     return n
 
 
@@ -758,6 +780,8 @@ def status():
     out["gallery"] = con.execute(
         "SELECT COUNT(*) FROM face_gallery").fetchone()[0]
     con.close()
+    from . import mediaarchive
+    out["archived"] = mediaarchive.stats().get("files", 0)
     return out
 
 
