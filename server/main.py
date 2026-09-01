@@ -624,7 +624,7 @@ def api_plan_remove(pid: str):
 
 @app.get("/api/changelog")
 def api_changelog():
-    return {"groups": changelog.groups()}
+    return changelog.api()
 
 
 # ----- Evidence Ledger (build provenance -> interview case studies) -----

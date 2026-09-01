@@ -6842,30 +6842,30 @@ function runItems() {
     });
   });
 
-  // The Shipped changelog — session groups from the retros, plus the
-  // done/dropped ideas the server folded into them. A kind-"job" entry
-  // whose job is already on this list (its `job_id`, stamped server-side)
-  // is the same work seen from another angle and is dropped; a job-shaped
-  // entry with no id (an older server) is dropped outright, which is what
-  // the old merged-All timeline did with skipJobs.
+  // The Shipped changelog — day groups (2026-09-01: entries own the
+  // timeline, retros narrate it), plus the done/dropped ideas and jobs
+  // the server dated from their own stores. A kind-"job" entry whose job
+  // is already on this list (its `job_id`, stamped server-side) is the
+  // same work seen from another angle and is dropped; a job-shaped entry
+  // with no id (an older server) is dropped outright, which is what the
+  // old merged-All timeline did with skipJobs.
   runsState.shipped.forEach((g) => {
     const entries = (g.entries || []).filter((e) =>
       e.kind !== "job" || (e.job_id && !covered.has(e.job_id)));
     if (!entries.length) return;
-    const ts = g.date
-      ? runTs(g.date + "T" + (g.time || "00:00"))
-      : Date.now() / 1000;   // the "recent / unfiled" bucket IS recent
+    // Every group is a calendar day and carries its date. A dateless
+    // group is malformed and is SKIPPED — never dated "now", which is
+    // how seven weeks of unfiled work once read "Today · shipped 0s ago".
+    if (!g.date) return;
+    const ts = runTs(g.date + "T" + (g.time || "00:00"));
     out.push({
-      // The goal joins the key: a retro missing its date frontmatter and
-      // the server's own unfiled bucket are BOTH date-less, and two cards
-      // must not share one key.
       kind: "shipped",
-      key: "cl:" + (g.date || "unfiled") + (g.time || "")
-        + ":" + (g.goal || "").slice(0, 32),
+      key: "cl:" + g.date,       // one group per day
       src: g, entries, ts, tsWord: "shipped",
-      title: g.goal || (g.date ? "Session" : "Recent — not yet in a retro"),
+      title: g.goal || (g.no_retro ? "No retro yet" : "Session"),
       state: "done",
-      stateLabel: entries.length + " change" + (entries.length === 1 ? "" : "s"),
+      stateLabel: entries.length + " change" + (entries.length === 1 ? "" : "s")
+        + (g.no_retro ? " · no retro yet" : ""),
       sig: entries.length + "|" + (entries[0] ? entries[0].text : ""),
       hay: searchFold([g.goal, entries.map((e) => e.text).join(" ")]
         .join(" ")),
