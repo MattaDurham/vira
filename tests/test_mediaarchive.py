@@ -298,7 +298,11 @@ class UnreachableRoot(unittest.TestCase):
 
     def setUp(self):
         os.environ.pop("VIRA_PASSIVE", None)
-        gone = Path("/nonexistent-volume-xyz/archive")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        blocked = Path(self.tmp.name) / "not-a-directory"
+        blocked.write_text("blocks mkdir on every platform", encoding="utf-8")
+        gone = blocked / "archive"
         p = mock.patch.object(mediaarchive, "root", lambda: gone)
         p.start()
         self.addCleanup(p.stop)
