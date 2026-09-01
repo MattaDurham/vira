@@ -58,6 +58,7 @@ from . import (
                mail,
                mailread,
                media,
+               mediaarchive,
                mediaindex, mercury, models, modulemap, modulestory, msgraph,
                notify, onboard,
                orphanwork,
@@ -147,6 +148,8 @@ idea_indexer = ideatags.Indexer(                  # backlog tags + vectors
 doc_indexer = doctags.Indexer(                    # document tags for the Reader
     settings.get("doc_tag_interval_min") or 10)
 doc_thumb_sweeper = docthumbs.Sweeper()           # rendered faces for the grid
+media_archiver = mediaarchive.Archiver()          # Vira's own copy of every
+                                                  # attachment macOS may evict
 
 
 @app.on_event("startup")
@@ -176,6 +179,10 @@ async def _startup():
     idea_indexer.start()       # keeps the backlog's tags/vectors current
     doc_indexer.start()        # and the Reader's documents, one batch a tick
     doc_thumb_sweeper.start()  # captures document faces for the library grid
+    # macOS evicts ~/Library/Messages/Attachments under storage pressure and
+    # keeps the chat.db row, so the media history decays into a list of
+    # filenames. This keeps Vira's own copy (server/mediaarchive.py).
+    media_archiver.start()
     backup.start()
     mercury_poller.start()
     receipts_sweeper.start()

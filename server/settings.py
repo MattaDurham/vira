@@ -90,6 +90,15 @@ DEFAULTS = {
     "atlas_anchor_org": "",              # pinned anchor-org cluster in the Contact Atlas
     "atlas_max_nodes": 200,              # atlas node cap (most-active contacts)
     "atlas_min_edge_weight": 0.15,       # edges below this fused weight are dropped
+    # Vira's own copy of every iMessage attachment (server/mediaarchive.py).
+    # macOS evicts ~/Library/Messages/Attachments under storage pressure and
+    # keeps the chat.db row, so without this the media history decays into a
+    # list of filenames. Point the root at an external volume to keep the
+    # archive off the boot disk whose fullness causes the eviction.
+    "media_archive_enabled": True,
+    "media_archive_root": "",            # empty = data/media-archive
+    "media_archive_max_gb": 0,           # 0 = no cap; a cap is REPORTED, never silent
+    "media_archive_interval_min": 30,    # background sweep cadence
     "atlas_vaults": [],                  # extra Image Atlas vaults: [{id, name, root}]
                                          # (the primary is always vault_root; see
                                          # imageatlas.vaults / atlasops.create rules)
