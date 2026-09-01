@@ -182,6 +182,7 @@ def _m365_events():
                         email, lo.isoformat(), hi.isoformat()):
                     s, e = ev["start"], ev["end"]
                     _m365_cache[key].append({
+                        "id": ev.get("id") or "",
                         "title": ev["title"],
                         "calendar": "M365 " + email.split("@")[0],
                         "family": False,
@@ -199,6 +200,10 @@ def _m365_events():
                         "remote": (bool(ev.get("online"))
                                    or _is_remote(ev["title"], rts)),
                         "work": True,
+                        "location": ev.get("location") or "",
+                        "organizer": ev.get("organizer") or "",
+                        "body_preview": ev.get("body_preview") or "",
+                        "web_link": ev.get("web_link") or "",
                     })
             _m365_cache["status"] = "ok"
         except Exception as e:  # noqa: BLE001 — surface, never break the brief
@@ -512,6 +517,7 @@ def _subs_section():
             days = (dt.date.fromisoformat(m["next_renewal"]) - today).days
             if 0 <= days <= 14:
                 out["renewals"].append({
+                    "id": m["id"],
                     "merchant": m["display_name"], "in_days": days,
                     "date": m["next_renewal"], "monthly": m["monthly"],
                     "cadence": m["cadence"],
@@ -523,7 +529,8 @@ def _subs_section():
                   "cancel_confirmed", "change_pending", "change_not_applied",
                   "change_unexpected")]
         if flags or unresolved:
-            entry = {"merchant": m["display_name"], "flags": flags,
+            entry = {"id": m["id"], "merchant": m["display_name"],
+                     "flags": flags,
                      "evidence": unresolved}
             pc = m.get("pending_change")
             if pc and pc.get("verification") in ("pending", "failed", "review"):
@@ -563,21 +570,6 @@ def _radar_top():
         return []
 
 
-def _review_section():
-    """Decisions waiting on the owner, aggregated across every registered
-    source (server/reviewqueue.py). None while nothing is waiting — the
-    brief stays quiet rather than printing an empty heading every morning.
-
-    This section is the whole reason the review queue exists: 113 lesson
-    proposals sat undecided for two weeks because no surface ever showed
-    them. A pending decision that is not in the brief is not pending."""
-    try:
-        from . import reviewqueue
-        return reviewqueue.summary()
-    except Exception:  # noqa: BLE001 — the brief never breaks on a section
-        return None
-
-
 def compose(feed_items=None):
     now = dt.datetime.now()
     return {
@@ -591,7 +583,6 @@ def compose(feed_items=None):
         "loops": _consolidate_loops(_open_loops(limit=None))[:LOOPS_CAP],
         "quiet": _not_dismissed(_going_quiet()),
         "radar": _radar_top(),
-        "review": _review_section(),
         "drafts": {k: _drafts_queued()[k] for k in ("items", "status")},
         "subs": _subs_section(),
         "triage": _triage_summary(),

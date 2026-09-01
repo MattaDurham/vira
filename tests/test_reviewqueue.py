@@ -1,4 +1,4 @@
-"""The needs-review queue: the aggregator behind the brief's picker.
+"""The durable decision registry behind Attention's Decide lane.
 
 Covers the registry contract (a source that raises costs only its own
 rows), each source reader including its missing-file and empty cases, the
@@ -217,6 +217,47 @@ class RegistryTests(_Case):
         self.assertEqual(q["total"], 1)
         self.assertIn("inbox", q["errors"])
         self.assertIn("store on fire", q["errors"]["inbox"])
+
+
+class ContextTests(_Case):
+
+    def test_an_inbox_card_reads_the_exact_full_source_on_demand(self):
+        path = self.record / "inbox" / "notes" / "2026-08-31-source.md"
+        text = "# Source\n\nThe full deciding context.\n\nA second paragraph."
+        path.write_text(text, encoding="utf-8")
+        [row] = self.by_source("inbox")
+        context = reviewqueue.context(row["id"])
+        self.assertEqual(context["text"], text)
+        self.assertEqual(context["ref"], str(path.resolve()))
+
+    def test_a_lesson_context_reads_unclipped_source_text(self):
+        reason = "r" * (reviewqueue.WHY_MAX + 80)
+        row = proposal("L1", PROPOSAL_A)
+        row["why"] = reason
+        self.write_proposals([row])
+        [card] = self.by_source("lessons")
+        context = reviewqueue.context(card["id"])
+        self.assertIn(reason, context["text"])
+        self.assertEqual(context["ref"], str(reviewqueue.lessons_proposed()))
+
+    def test_a_flag_context_reads_the_complete_canon_section(self):
+        path = self.record / "canon" / "MASTER_HISTORY.md"
+        path.write_text(HISTORY_DOC, encoding="utf-8")
+        [card, *_] = self.by_source("flags")
+        context = reviewqueue.context(card["id"])
+        self.assertIn("These issues remain visible.", context["text"])
+        self.assertIn("Second live flag", context["text"])
+        self.assertNotIn("# Part VI", context["text"])
+
+    def test_visuals_are_same_origin_and_typed(self):
+        good = reviewqueue.item("future", "1", "Visual",
+                                visual={"kind": "video", "src": "/docs/a.mp4",
+                                        "alt": "Animated context"})
+        self.assertEqual(good["visual"]["src"], "/docs/a.mp4")
+        bad = reviewqueue.item("future", "2", "Remote",
+                               visual={"kind": "image",
+                                       "src": "https://example.com/a.png"})
+        self.assertIsNone(bad["visual"])
 
     def test_summary_leads_with_the_oldest_and_caps_the_top(self):
         self.write_proposals([
@@ -557,6 +598,7 @@ class SenderSourceTests(_Case):
         self.assertEqual(rows[0]["why"], "intro'd by Eric")
         self.assertEqual(rows[0]["actions"], [])
         self.assertEqual(rows[0]["ref"], "People > Triage")
+        self.assertEqual(rows[0]["open"], "#triage/%2B12125550142")
 
     def test_the_cap_holds(self):
         self.cands = [cand(f"+121255501{i:02d}") for i in range(9)]
@@ -595,6 +637,9 @@ class PickerSourceTests(_Case):
         self.assertEqual(rows[0]["date"], "2026-08-27")
         self.assertIn("batch-0627", rows[0]["why"])
         self.assertNotIn("not built", rows[0]["why"])
+        context = reviewqueue.context(rows[0]["id"])
+        self.assertIn("Video 0", context["text"])
+        self.assertIn("batch-0627", context["ref"])
 
     def test_an_unbuilt_picker_is_named_on_the_row(self):
         self.write_picker_state(ready=False)
@@ -621,27 +666,6 @@ class PickerSourceTests(_Case):
         (self.root / "subs-visuals-state.json").write_text(
             json.dumps({"pending": {"batch_dir": ""}}), encoding="utf-8")
         self.assertEqual(self.by_source("picker"), [])
-
-
-class BriefSectionTests(_Case):
-
-    def test_the_brief_section_is_quiet_when_nothing_waits(self):
-        from server import brief
-        self.assertIsNone(brief._review_section())
-
-    def test_the_brief_never_breaks_on_this_section(self):
-        from server import brief
-        with mock.patch.object(reviewqueue, "summary",
-                               side_effect=RuntimeError("boom")):
-            self.assertIsNone(brief._review_section())
-
-    def test_the_brief_section_carries_the_head_of_the_queue(self):
-        from server import brief
-        self.write_proposals([proposal("L1", PROPOSAL_A)])
-        section = brief._review_section()
-        self.assertEqual(section["total"], 1)
-        self.assertEqual(section["top"][0]["title"], PROPOSAL_A)
-        self.assertEqual([s["key"] for s in section["sources"]], ["lessons"])
 
 
 if __name__ == "__main__":

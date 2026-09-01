@@ -107,11 +107,11 @@ class StoryTests(Base):
 
     def test_registry_blurb_joins_when_present(self):
         modulemap.STORE.write_text(json.dumps({"modules": [
-            {"id": "brief-win", "name": "Daily Brief",
-             "what": "The morning answer."}]}), encoding="utf-8")
-        s = modulestory.story("brief")
-        self.assertEqual(s["title"], "Daily Brief")
-        self.assertEqual(s["what"], "The morning answer.")
+            {"id": "attention-win", "name": "Attention",
+             "what": "The visual focus cockpit."}]}), encoding="utf-8")
+        s = modulestory.story("attention")
+        self.assertEqual(s["title"], "Attention")
+        self.assertEqual(s["what"], "The visual focus cockpit.")
 
     def test_a_fresh_install_answers_from_the_seeded_registry(self):
         # No modules.json on disk: modulemap seeds DEFAULT_MODULES, so the

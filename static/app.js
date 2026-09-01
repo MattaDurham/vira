@@ -608,6 +608,7 @@ $("#add-save").addEventListener("click", async () => {
 
 // ---------- unknown-sender triage ----------
 let triageMode = false;
+let triageRevealKey = "";
 $("#triage-toggle").addEventListener("click", async () => {
   triageMode = !triageMode;
   $("#triage-toggle").classList.toggle("on", triageMode);
@@ -617,6 +618,7 @@ $("#triage-toggle").addEventListener("click", async () => {
 
 function triageCard(c) {
   const card = el("div", "card triage-row");
+  card.dataset.triageKey = String(c.person_id || c.handle || "");
   const top = el("div", "feed-top");
   const nm = el("div", "feed-name", c.name || c.company_guess || c.handle);
   if (c.business) {
@@ -666,6 +668,22 @@ async function loadTriage() {
     return;
   }
   appendTriageCards(list, candidates);
+  if (triageRevealKey) {
+    const key = triageRevealKey;
+    triageRevealKey = "";
+    const target = [...list.querySelectorAll(".triage-row")]
+      .find((row) => row.dataset.triageKey === key);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("pulse");
+      setTimeout(() => target.classList.remove("pulse"), 1600);
+    }
+  }
+}
+
+function revealTriage(key) {
+  triageRevealKey = String(key || "");
+  openApp("triage");
 }
 
 // Businesses sort to the end server-side; head their band with a divider.
@@ -6987,6 +7005,33 @@ function renderRuns() {
   }
 }
 
+// Open one exact unlanded item, never the generic Record landing page. This
+// is the source-link contract Attention rows follow: clear any filter that
+// could hide the object, fetch the owning surface, then scroll and mark it.
+async function revealOrphan(key) {
+  setWorkTab("live", { defer: true });
+  setRunsFilter("unlanded");
+  openApp("work");
+  await loadRuns().catch(() => {});
+  const want = "orphan:" + key;
+  const node = [...document.querySelectorAll("[data-run-key]")]
+    .find((n) => n.dataset.runKey === want);
+  if (!node) { toast("That branch is no longer waiting"); return; }
+  node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
+  node.classList.add("idea-flash");
+  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+}
+
+async function revealBoardsHealth() {
+  openApp("applications");
+  await loadBoardsStrip().catch(() => {});
+  const node = $("#app-boards");
+  if (!node) return;
+  node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
+  node.classList.add("idea-flash");
+  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+}
+
 // ONE shell for the run kinds. Dot = STATE (what matters), title, then a
 // quiet mono kind tag (the "minor distinction"), then the kind's own body.
 // The exception is deliberate: a HISTORY item renders the ledger row
@@ -8911,9 +8956,8 @@ function renderAlerts() {
 // One short list of what Vira is doing right now and what is waiting on
 // the owner right now (server/attention.py) — the generalization of the
 // decision cascade into a window with a home. Two tiers, deliberately
-// separate: decisions that KEEP live in Needs Review and appear here only
-// as the foot line (plus the server's aging-escalation row); this window
-// carries the LIVE tier only, so it stays short by construction.
+// separate: decisions that KEEP live in the Decide lane; this pane carries
+// the LIVE tier only, so it stays short by construction.
 //
 // AUTO-REOPEN IS EDGE-TRIGGERED. Closing the window marks every current
 // trigger token seen (per device, localStorage — closing it at the desk
@@ -8939,6 +8983,7 @@ function attnMaybeOpen() {
   });
   const fresh = live.filter((t) => !attnSeen.has(t));
   const open = !!winState.attention?.open;
+  if (fresh.length && open) setAttentionTab("now");
   if (open || !isDesktop) {
     // on screen (or on a phone, where the badge + drawer carry it and
     // there is no window to pop) — everything current counts as seen
@@ -8946,6 +8991,7 @@ function attnMaybeOpen() {
   } else if (fresh.length
              && !document.body.classList.contains("focus-mode")
              && !(typeof editing !== "undefined" && editing)) {
+    setAttentionTab("now", { defer: true });
     openWindow("attention");
     live.forEach((t) => attnSeen.add(t));
     changed = true;
@@ -8986,8 +9032,8 @@ function attnVerb(r) {
              run: () => traceFlowRun(r.run_id) };
   if (r.kind === "orphan")
     return { label: "review",
-             title: "Open the Record stream — Land / Resume / Discard live there",
-             run: () => { openApp("work"); setWorkTab("live"); } };
+             title: "Open this exact unlanded branch with its full context",
+             run: () => revealOrphan(r.orphan_key) };
   if (r.id === "health:ai")
     return { label: "recheck",
              title: "Probe the AI backend again right now",
@@ -8999,8 +9045,8 @@ function attnVerb(r) {
              } };
   if (r.kind === "health")
     return { label: "open",
-             title: "Open the boards strip in Applications",
-             run: () => openApp("applications") };
+             title: "Open the exact job-board health strip in Applications",
+             run: () => revealBoardsHealth() };
   if (r.kind === "review")
     return { label: "open", title: "Open Needs Review",
              run: () => openApp("review") };
@@ -9039,7 +9085,6 @@ function renderAttention() {
   if (!body || !attnData) return;
   const rows = attnData.rows || [];
   const cards = attnData.cards || [];
-  const rev = attnData.review;
   // Keyed rebuild — the cards hold half-typed answers, so a blind repaint
   // every poll would wipe them (the cascade's own rule, inherited).
   // Flow stage states join the key but NEVER the tokens: a stage
@@ -9047,7 +9092,6 @@ function renderAttention() {
   // owner just closed (the edge-trigger contract is membership-only).
   const key = (attnData.tokens || []).join("|") + "#"
     + cards.map((c) => c.card.req_id).join(",") + "#"
-    + (rev ? rev.total + ":" + rev.oldest_days : "") + "#"
     + rows.filter((r) => r.kind === "flow")
       .map((r) => (r.stages || [])
         .map((s) => s.status + (s.grade || "")).join(""))
@@ -9062,6 +9106,14 @@ function renderAttention() {
   if (count) count.textContent = !rows.length ? "Nothing needs you"
     : [need ? need + " waiting on you" : "",
        working ? working + " working" : ""].filter(Boolean).join(" · ");
+  const heroTitle = $("#attn-hero-title");
+  const heroSub = $("#attn-hero-sub");
+  if (heroTitle) heroTitle.textContent = need ? need + " need you"
+    : (working ? working + " in motion" : "Clear");
+  if (heroSub) heroSub.textContent = need
+    ? "owner input is the bottleneck"
+    : (working ? "progress without interruption"
+      : "Vira is watching the edges");
 
   const cardIds = new Set(cards.map((c) => c.card.req_id));
   const needRows = rows.filter((r) => r.needs_you && !cardIds.has(r.req_id));
@@ -9079,20 +9131,6 @@ function renderAttention() {
   if (!rows.length)
     body.appendChild(el("div", "brief-empty",
       "Nothing is running and nothing is waiting on you."));
-  // The tier-2 reference: a count, never the list — Needs Review is the
-  // batch surface and merging it here would make this list long, which is
-  // the one thing it must not be.
-  if (rev && rev.total) {
-    const foot = el("button", "attn-review-foot",
-      "Needs Review: " + rev.total + " decision"
-      + (rev.total === 1 ? "" : "s")
-      + (rev.oldest_days >= 1
-        ? " · oldest " + Math.floor(rev.oldest_days) + "d" : ""));
-    foot.title = "Open Needs Review — the batch tier: proposals, staged "
-      + "ideas, inbox stubs";
-    foot.addEventListener("click", () => openApp("review"));
-    body.appendChild(foot);
-  }
 }
 
 // ----- the durable job ledger's row + the two swap views -----
@@ -9865,6 +9903,7 @@ function watchBriefNote(id) {
 
 function journalNode(e) {
   const d = el("div", "jn");
+  d.dataset.journalId = e.id;
   const head = el("div", "jn-head");
   head.appendChild(el("span", "jn-time", fmtTime(e.created)));
   if (e.person_name) head.appendChild(el("span", "jn-about",
@@ -9935,6 +9974,17 @@ async function loadJournal() {
   if ((j.entries || []).some((e) => e.status === "pending")) pollJournal();
 }
 
+async function revealJournal(id) {
+  openApp("journal");
+  await loadJournal().catch(() => {});
+  const node = [...document.querySelectorAll("[data-journal-id]")]
+    .find((n) => n.dataset.journalId === id);
+  if (!node) { toast("That Journal entry is no longer available"); return; }
+  node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
+  node.classList.add("idea-flash");
+  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+}
+
 function pollJournal() {
   if (journalTimer) return;
   journalTimer = startPoll(async (h) => {
@@ -9956,11 +10006,7 @@ function pollJournal() {
 // open the Journal: dock window on desktop, the view takes over on mobile
 function openJournal() { openApp("journal"); }
 
-function goToTriage() {
-  if (isDesktop) { openWindow("triage"); return; }
-  openApp("people");
-  if (!triageMode) $("#triage-toggle").click();
-}
+function goToTriage() { openApp("triage"); }
 
 // ---------- needs review: the picker the brief links to ----------
 // One list of every decision waiting on the owner (server/reviewqueue.py).
@@ -9980,6 +10026,7 @@ async function reviewAct(btn, row, it, action, after) {
   try {
     await post("/api/review/act", { id: it.id, action });
     row.classList.add("gone");
+    closeReviewContext();
     setTimeout(() => row.remove(), 250);
     toast(action === "approve" ? "Approved" : "Dropped");
     if (after) after();
@@ -9995,8 +10042,98 @@ async function reviewAct(btn, row, it, action, after) {
 // read-only source (the self-record inbox, the open canon flags) ships
 // `actions: []` and gets no buttons, because ruling on those is a canon
 // edit made with the document in view, not a tap in a brief.
+let reviewContextScroll = null;
+let reviewContextEpoch = 0;
+
+function closeReviewContext() {
+  reviewContextEpoch += 1;
+  const panel = $("#attention-source");
+  if (panel) panel.hidden = true;
+  if (reviewContextScroll) {
+    reviewContextScroll.root.scrollTop = reviewContextScroll.top;
+    reviewContextScroll = null;
+  }
+}
+
+function renderAttentionSource(c) {
+  $("#attention-source-kicker").textContent = c.source || "Source";
+  $("#attention-source-title").textContent = c.title || "Source context";
+  $("#attention-source-ref").textContent = c.ref || "";
+  $("#attention-source-text").textContent = c.text || "No additional text on file.";
+  $("#attention-source-media").innerHTML = "";
+  $("#attention-source-actions").innerHTML = "";
+  if (c.visual?.src) {
+    const wrap = el("div", "review-visual");
+    const media = document.createElement(c.visual.kind === "video" ? "video" : "img");
+    media.src = c.visual.src;
+    if (media.tagName === "VIDEO") {
+      media.muted = true; media.loop = true; media.autoplay = true; media.playsInline = true;
+      media.setAttribute("aria-label", c.visual.alt || c.title);
+    } else media.alt = c.visual.alt || c.title;
+    wrap.appendChild(media);
+    $("#attention-source-media").appendChild(wrap);
+  }
+  if (c.open) {
+    const open = el("button", "btn small", "Open exact source");
+    open.addEventListener("click", () => {
+      closeReviewContext();
+      if (/^https?:\/\//i.test(c.open)) {
+        window.open(c.open, "_blank", "noopener");
+      } else if (location.hash === c.open) routeHash();
+      else location.hash = c.open;
+    });
+    $("#attention-source-actions").appendChild(open);
+  }
+}
+
+function beginAttentionSource(c) {
+  const panel = $("#attention-source");
+  if (!panel) return null;
+  if (!reviewContextScroll) {
+    const root = panel.closest(".fwin-body") || document.scrollingElement;
+    reviewContextScroll = { root, top: root.scrollTop };
+  }
+  reviewContextScroll.root.scrollTop = 0;
+  panel.scrollTop = 0;
+  panel.hidden = false;
+  renderAttentionSource(c);
+  return ++reviewContextEpoch;
+}
+
+function openDayContext(c) {
+  beginAttentionSource(c);
+}
+
+async function openReviewContext(it) {
+  const epoch = beginAttentionSource({
+    source: it.source_label || "Source", title: it.title || "Source context",
+    ref: it.ref || "", text: "Reading the exact source…",
+  });
+  if (!epoch) return;
+  try {
+    const c = await api("/api/review/context?id=" + encodeURIComponent(it.id));
+    if (epoch !== reviewContextEpoch) return;
+    renderAttentionSource(c);
+  } catch (e) {
+    if (epoch !== reviewContextEpoch) return;
+    $("#attention-source-text").textContent = "Could not read the source: " + e.message;
+  }
+}
+
+$("#attention-source-close")?.addEventListener("click", closeReviewContext);
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#attention-source")?.hidden) {
+    e.stopPropagation();
+    closeReviewContext();
+  }
+}, true);
+
 function reviewRow(sec, it, after) {
-  const actions = (it.actions || []).map((a) => ({
+  const actions = [{
+    label: "context",
+    title: "Read the exact source context before deciding",
+    run: () => openReviewContext(it),
+  }, ...(it.actions || []).map((a) => ({
     label: a,
     cls: a === "approve" ? "" : "x",
     title: (a === "approve"
@@ -10004,7 +10141,7 @@ function reviewRow(sec, it, after) {
       : "Drop — recorded as decided, never shown again")
       + (it.note ? " (" + it.note + ")" : ""),
     run: (btn, row) => reviewAct(btn, row, it, a, after),
-  }));
+  }))];
   const row = briefRow(sec, {
     time: it.age_days == null ? "" : briefDays(it.age_days),
     title: it.title,
@@ -10012,6 +10149,29 @@ function reviewRow(sec, it, after) {
     tag: it.ref || null,
     actions,
   });
+  // A source can attach one same-origin image or looping video. This is the
+  // extension seam for visual-generating processes: the source owns the
+  // asset, while Attention owns its consistent card treatment.
+  if (it.visual?.src) {
+    const media = el("div", "review-visual");
+    if (it.visual.kind === "video") {
+      const video = document.createElement("video");
+      video.src = it.visual.src;
+      video.muted = true;
+      video.loop = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      video.setAttribute("aria-label", it.visual.alt || it.title);
+      media.appendChild(video);
+    } else {
+      const img = document.createElement("img");
+      img.src = it.visual.src;
+      img.alt = it.visual.alt || it.title;
+      img.loading = "lazy";
+      media.appendChild(img);
+    }
+    row.insertBefore(media, row.querySelector(".brief-acts"));
+  }
   // A row carrying `open` is a POINTER at the surface where the ruling
   // happens (today: the Morning Picker's #subs-visuals deep link). The
   // server decides which rows point; this only routes the hash — setting
@@ -10057,6 +10217,10 @@ function renderReview(q) {
       ? q.total + " waiting on you"
       : "Nothing waiting on you";
   }
+  const hero = $("#review-hero-title");
+  if (hero) hero.textContent = q.total
+    ? q.total + " decision" + (q.total === 1 ? "" : "s")
+    : "Nothing waiting";
   (q.sources || []).forEach((s) => {
     const rows = (q.items || []).filter((i) => i.source === s.key);
     if (!rows.length) return;
@@ -10104,40 +10268,10 @@ function renderBrief(b) {
   narWrap.appendChild(rewrite);
   body.appendChild(narWrap);
 
-  // Needs review leads the brief's sections. The whole defect it fixes is
-  // invisibility, so it sits above the calendar rather than below the
-  // triage count, and it is absent entirely when nothing is waiting.
-  if (b.review && b.review.total) {
-    const rv = briefSection(body, "Needs review",
-                            b.review.total + " waiting on your decision");
-    const open = el("button", "brief-act sweep", "open the picker…");
-    open.title = "Open Needs Review — every pending decision in one list";
-    open.addEventListener("click", openReview);
-    rv.querySelector(".brief-sec-head").appendChild(open);
-    (b.review.top || []).forEach((it) => reviewRow(rv, it, () => loadBrief()));
-    const rest = b.review.total - (b.review.top || []).length;
-    if (rest > 0) {
-      const more = briefRow(rv, {
-        title: rest + " more waiting",
-        sub: (b.review.sources || [])
-          .map((s) => s.count + " " + s.label.toLowerCase()).join(" · "),
-      });
-      more.classList.add("click");
-      more.addEventListener("click", openReview);
-    }
-  }
-
-  if ((b.radar || []).length) {
-    const rd = briefSection(body, "Who to talk to",
-                            "scored live — People > Networking has the full list");
-    b.radar.forEach((r) => briefRow(rd, {
-      time: String(Math.round(r.score)),
-      title: r.person_name,
-      sub: (r.reasons || []).slice(0, 2).join(" · "),
-      personId: r.person_id,
-    }));
-  }
-
+  const contextAction = (context) => [{
+    label: "context", title: "Open the deciding context",
+    run: () => openDayContext(context),
+  }];
   const cal = b.calendar || {};
   const evRow = (sec, e) => briefRow(sec, {
     time: e.all_day ? "all day" : e.start_hm,
@@ -10146,6 +10280,13 @@ function renderBrief(b) {
       : (e.family ? "family" : (e.work ? "work" : null))),
     tagCls: e.conflict ? "conflict" : (e.remote ? "remote"
       : (e.family ? "family" : "work")),
+    actions: contextAction({
+      source: "Calendar", title: e.title,
+      ref: [e.calendar, e.start].filter(Boolean).join(" · "),
+      text: [e.all_day ? "All day" : [e.start_hm, e.end_hm].filter(Boolean).join("–"),
+             e.location, e.organizer, e.body_preview].filter(Boolean).join("\n\n"),
+      open: e.web_link || "",
+    }),
   });
 
   const today = briefSection(body, "Today");
@@ -10163,78 +10304,9 @@ function renderBrief(b) {
     cal.birthdays.forEach((e) => briefRow(bd, {
       time: new Date(e.date + "T12:00").toLocaleDateString([], { weekday: "short" }),
       title: e.title,
+      actions: contextAction({ source: "Calendar", title: e.title,
+        ref: e.date || "Birthday calendar", text: "Birthday reminder" }),
     }));
-  }
-
-  const wait = briefSection(body, "Waiting on you");
-  (b.waiting?.imessage || []).forEach((w) => briefRow(wait, {
-    time: briefAge(w.hours), title: w.person_name, sub: w.preview,
-    // "1 real ask · 2 self-released": N messages waiting is not N obligations
-    tag: w.asks?.note || null,
-    personId: w.person_id, dismissKey: w.dismiss_key,
-  }));
-  (b.waiting?.email || []).forEach((w) => briefRow(wait, {
-    time: fmtTime(w.when), title: w.person_name, sub: w.preview,
-    tag: "email", personId: w.person_id, dismissKey: w.dismiss_key,
-  }));
-  if (!(b.waiting?.imessage || []).length && !(b.waiting?.email || []).length)
-    briefEmpty(wait, "Nobody is waiting on a reply.");
-
-  const loops = briefSection(body, "Open loops", "stalest first");
-  (b.loops || []).forEach((l) => {
-    if (l.bundle) {
-      briefRow(loops, {
-        time: briefDays(l.days), title: l.person_name,
-        sub: `${l.count} things — ${l.items[0].what}`,
-        tag: "you owe ×" + l.count, tagCls: "owe",
-        personId: l.person_id,
-        actions: [
-          { label: "show", title: "Show each loop in this bundle",
-            run: (btn, row) => toggleLoopBundle(btn, row, l) },
-          { label: "tell", title: "Tell Vira what you know about this",
-            run: (btn) => tellFromRow(btn, l.person_id, l.person_name,
-                                       l.items.map((i) => i.what).join("; ")) },
-        ],
-      });
-      return;
-    }
-    briefRow(loops, {
-      time: briefDays(l.days), title: l.person_name, sub: l.what,
-      tag: l.owed_by === "me" ? "you owe" : (l.owed_by ? "theirs" : null),
-      tagCls: l.owed_by === "me" ? "owe" : "",
-      personId: l.person_id,
-      actions: [
-        { label: "done", title: "Resolve — closes the loop on the profile",
-          run: (btn, row) => closeBriefLoop(row, l) },
-        { label: "edit", title: "Rewrite this loop in place",
-          run: (btn, row) => editBriefLoop(row, l) },
-        { label: "tell", title: "Tell Vira what you know about this",
-          run: (btn) => tellFromRow(btn, l.person_id, l.person_name, l.what) },
-      ],
-    });
-  });
-  if (!(b.loops || []).length) briefEmpty(loops, "No open loops on file.");
-  else {
-    const sweep = el("button", "brief-act sweep", "clear all shown…");
-    sweep.title = "Close every loop listed above";
-    sweep.addEventListener("click", async () => {
-      const items = (b.loops || []).flatMap((l) => l.items || [l]);
-      if (!confirm(`Close all ${items.length} loops shown? They stay on `
-                   + "each profile, struck through.")) return;
-      sweep.disabled = true;
-      sweep.textContent = "closing…";
-      let ok = 0;
-      for (const l of items) {
-        try {
-          await post("/api/brief/loop",
-                     { person_id: l.person_id, what: l.what, action: "close" });
-          ok++;
-        } catch { /* stale row — the reload below reconciles */ }
-      }
-      toast(`Closed ${ok} of ${items.length} loops`);
-      loadBrief();
-    });
-    loops.querySelector(".brief-sec-head").appendChild(sweep);
   }
 
   if (b.drafts && (b.drafts.items?.length || b.drafts.status)) {
@@ -10244,6 +10316,10 @@ function renderBrief(b) {
       title: d.to,
       sub: d.subject,
       tag: (d.account || "").split("@")[0] || null,
+      actions: contextAction({ source: "Mail draft", title: d.subject,
+        ref: [d.account, d.id].filter(Boolean).join(" · "),
+        text: ["To: " + d.to, d.body_preview].filter(Boolean).join("\n\n"),
+        open: d.web_link || "" }),
     }));
     if (!(b.drafts.items || []).length)
       briefEmpty(dr, b.drafts.status === "ok"
@@ -10260,6 +10336,11 @@ function renderBrief(b) {
         + (r.source === "receipt" ? " · receipt" : ""),
       tag: r.cadence,
       tagCls: r.in_days <= 7 ? "owe" : "",
+      actions: contextAction({ source: "Subscriptions", title: r.merchant,
+        ref: r.date || "Upcoming renewal",
+        text: [subMoney(r.monthly) + "/month", r.cadence,
+               r.source ? "Evidence: " + r.source : ""].filter(Boolean).join("\n\n"),
+        open: r.id ? "#subscriptions/" + encodeURIComponent(r.id) : "#subscriptions" }),
     }));
     (b.subs.attention || []).forEach((a) => briefRow(subs, {
       time: "",
@@ -10270,30 +10351,16 @@ function renderBrief(b) {
         .filter(Boolean).join(" · "),
       tag: "review",
       tagCls: "owe",
+      actions: contextAction({ source: "Subscriptions", title: a.merchant,
+        ref: "Evidence and account history",
+        text: [a.change,
+               ...a.flags.map((f) => f.replace(/_/g, " ")),
+               a.evidence ? a.evidence + " items to verify" : ""]
+          .filter(Boolean).join("\n\n"),
+        open: a.id ? "#subscriptions/" + encodeURIComponent(a.id) : "#subscriptions" }),
     }));
   }
 
-  const quiet = briefSection(body, "Going quiet",
-    "active relationships, " + "21+ days silent");
-  (b.quiet || []).forEach((q) => briefRow(quiet, {
-    time: q.days + "d", title: q.person_name, sub: "last " + q.last_contact,
-    personId: q.person_id, dismissKey: q.dismiss_key,
-    actions: [
-      { label: "tell", title: "Tell Vira what you know about them",
-        run: (btn) => tellFromRow(btn, q.person_id, q.person_name,
-                                  "going quiet — last " + q.last_contact) },
-    ],
-  }));
-  if (!(b.quiet || []).length) briefEmpty(quiet, "Everyone active is warm.");
-
-  const tri = briefSection(body, "Triage");
-  const t = b.triage || {};
-  const row = briefRow(tri, {
-    title: (t.count || 0) + " unknown senders queued",
-    sub: (t.contact_worthy || 0) + " look contact-worthy",
-  });
-  row.classList.add("click");
-  row.addEventListener("click", goToTriage);
 }
 
 async function loadBrief() {
@@ -10533,6 +10600,7 @@ async function subUpdate(m, body) {
 function subCard(m) {
   const card = el("div", "sub-card" +
     (m.flags.length || m.evidence_needed.length ? " flagged" : ""));
+  card.dataset.sub = m.id;
 
   const head = el("div", "sub-head");
   let name;
@@ -10865,6 +10933,19 @@ function renderSubs() {
     details.appendChild(grid);
     root.appendChild(details);
   }
+}
+
+async function revealSubscription(id) {
+  openApp("subs");
+  await loadSubs();
+  const target = [...document.querySelectorAll("#subs-root .sub-card")]
+    .find((card) => card.dataset.sub === id);
+  if (!target) return;
+  const details = target.closest("details");
+  if (details) details.open = true;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.add("pulse");
+  setTimeout(() => target.classList.remove("pulse"), 1600);
 }
 
 document.getElementById("subs-refresh")?.addEventListener("click", async (e) => {
@@ -12804,6 +12885,48 @@ const PEOPLE_ALIAS = { radar: "networking" };
 // alias only has to redirect the window id.
 const READER_ALIAS = { plans: "reader" };
 
+// Daily Brief, Needs Review and Morning Picker are no longer peer apps.
+// They are three cadences inside Attention: temporal context, durable
+// decisions, and a source-owned decision workflow. Old ids still describe
+// the destination a caller wants, but all navigation lands in one shell.
+const ATTENTION_ALIAS = { brief: "day", review: "decide", subsviz: "picker" };
+
+let attentionTab = "now";      // now | day | decide | picker
+
+function attentionTabLoad(tab) {
+  if (tab === "now") { renderAttention(); refreshAlerts(); }
+  if (tab === "day" && Date.now() - briefLoadedAt > 300000)
+    loadBrief().catch(() => {});
+  if (tab === "decide") loadReview().catch(() => {});
+  if (tab === "picker") loadSubsViz().catch(() => {});
+}
+
+function setAttentionTab(tab, opts = {}) {
+  if (!["now", "day", "decide", "picker"].includes(tab)) tab = "now";
+  if (tab !== attentionTab && !$("#attention-source")?.hidden)
+    closeReviewContext();
+  attentionTab = tab;
+  const selected = tab === "picker" ? "decide" : tab;
+  $("#attention-tabs")?.querySelectorAll(".seg-btn").forEach((b) =>
+    b.classList.toggle("on", b.dataset.tab === selected));
+  ["now", "day", "decide", "picker"].forEach((name) => {
+    const pane = $("#attention-" + name + "-pane");
+    if (pane) pane.style.display = name === tab ? "" : "none";
+  });
+  $("#win-attention")?.classList.toggle("attention-picker-active",
+                                          tab === "picker");
+  if (!opts.defer) attentionTabLoad(tab);
+}
+
+$("#attention-tabs")?.querySelectorAll(".seg-btn").forEach((b) =>
+  b.addEventListener("click", () => setAttentionTab(b.dataset.tab)));
+document.querySelectorAll("[data-attention-back]").forEach((b) =>
+  b.addEventListener("click", () => {
+    if (location.hash.replace(/^#/, "").toLowerCase() === "subs-visuals")
+      history.replaceState(null, "", "#review");
+    setAttentionTab(b.dataset.attentionBack);
+  }));
+
 let peopleTab = "contacts";   // contacts | networking
 
 function setPeopleTab(tab, opts = {}) {
@@ -12904,16 +13027,12 @@ $("#people-tabs")?.querySelectorAll(".seg-btn").forEach((b) =>
   b.addEventListener("click", () => setPeopleTab(b.dataset.tab)));
 
 function viewLoad(id) {
-  if (id === "brief" && Date.now() - briefLoadedAt > 300000)
-    loadBrief().catch(() => {});
-  if (id === "triage") loadTriageWindow().catch(() => {});
   if (id === "work") workTabLoad(workTab);
   if (id === "evidence") loadEvidence().catch(() => {});
   if (id === "applications") loadApplications().catch(() => {});
   if (id === "research") window.loadResearch?.().catch(() => {});
   if (id === "journal") loadJournal().catch(() => {});
-  if (id === "review") loadReview().catch(() => {});
-  if (id === "attention") { renderAttention(); refreshAlerts(); }
+  if (id === "attention") attentionTabLoad(attentionTab);
   if (id === "subs") loadSubs().catch(() => {});
   if (id === "find") loadFindStatus().catch(() => {});
   if (id === "find-cloud" || id === "find-related") {
@@ -12938,7 +13057,6 @@ function viewLoad(id) {
     loadDesignSkins().catch(() => {});     // the skins picker above the frame
   }
   if (id === "reader") loadReader().catch(() => {});
-  if (id === "subsviz") loadSubsViz().catch(() => {});
   if (id === "launchpad") renderLaunchpad();
   if (id === "setup") loadSetup().catch(() => {});
   // A module that is not set up yet answers with its front door rather
@@ -12957,6 +13075,19 @@ function viewLoad(id) {
 // A folded cockpit id (ideas/actions/jobs/circuits/routines) opens Work on
 // the right tab.
 function openApp(id) {
+  const attention = ATTENTION_ALIAS[id];
+  if (attention) {
+    setAttentionTab(attention, { defer: true });
+    id = "attention";
+  }
+  // Triage is identity work, so its canonical home is People. The retired
+  // app id opens Contacts with the existing triage mode already engaged.
+  if (id === "triage") {
+    setPeopleTab("contacts", { defer: true });
+    if (!triageMode) $("#triage-toggle")?.click();
+    else loadTriage().catch(() => {});
+    id = "people";
+  }
   const alias = WORK_ALIAS[id];
   if (alias) {
     setWorkTab(alias.tab, { defer: true });
@@ -18388,16 +18519,10 @@ const WINDOWS = [
     icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3.5 19c.5-3.4 2.7-5 5.5-5s5 1.6 5.5 5M15.5 11.4a2.7 2.7 0 1 0-1.2-5.2M15.8 14.2c2.4.3 4.2 1.8 4.7 4.8" },
   { id: "work", title: "The Forge", w: 1180,
     icon: "M5 5h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 7.5h2.5c1 0 1.5-.5 1.5-1M10 7.5h1.5c2.5 0 2.5 10 2.5 10" },
-  { id: "brief", title: "Daily Brief", w: 520,
-    icon: "M12 3v3M5.3 6.3l2.1 2.1M2.5 13.5h3M18.5 13.5h3M16.6 8.4l2.1-2.1M7.5 15.5a4.5 4.5 0 0 1 9 0M3.5 19h17" },
-  { id: "attention", title: "Attention", w: 480,
+  { id: "attention", title: "Attention", w: 720,
     icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
-  { id: "review", title: "Needs Review", w: 560,
-    icon: "M5 4h14v16H5zM8.5 9.5h7M8.5 13h7M9 16.5l1.5 1.5 3-3" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
-  { id: "triage", title: "Triage", w: 440,
-    icon: "M4 5h16M7.5 12h9M10.5 19h3" },
   { id: "applications", title: "Applications", w: 780,
     icon: "M4 8.5h16V19H4zM9.5 8.5V6.8a1.8 1.8 0 0 1 1.8-1.8h1.4a1.8 1.8 0 0 1 1.8 1.8v1.7M4 12.5h16M10.5 12.5v2.2h3v-2.2" },
   { id: "research", title: "Research", w: 1180,
@@ -18432,8 +18557,6 @@ const WINDOWS = [
     icon: "M12 12m-1.6 0a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0M12 12m-5.2 0a5.2 5.2 0 1 0 10.4 0a5.2 5.2 0 1 0-10.4 0M12 12m-8.8 0a8.8 8.8 0 1 0 17.6 0a8.8 8.8 0 1 0-17.6 0M6.6 8.4l1.5 1.2M17.4 15.6l-1.5-1.2M15.9 6.9l-1.1 1.5M8.1 17.1l1.1-1.5" },
   { id: "subs", title: "Subscriptions", w: 660,
     icon: "M3 6.5h18v11H3zM3 10h18M6 14.5h5M15.5 14.5h2.5" },
-  { id: "subsviz", title: "Morning Picker", w: 1040,
-    icon: "M3 5h18v14H3zM6.5 5v14M17.5 5v14M3 9.5h3.5M3 14.5h3.5M17.5 9.5H21M17.5 14.5H21M10 9.5h4v5h-4z" },
   { id: "design", title: "Design Studio", w: 1360,
     icon: "M4 7h16M4 12h16M4 17h16M9 5v4M15 10v4M7 15v4" },
   { id: "reader", title: "Reader", w: 780,
@@ -19082,7 +19205,7 @@ const WIN_ACTIONS = {
     if (btn) { btn.click(); toast("Marked all read"); }
     else toast("Nothing unread");
   } }],
-  brief: [{ label: "Rewrite today's narrative", run: async () => {
+  attention: [{ label: "Rewrite today's narrative", run: async () => {
     toast("Rewriting the narrative…");
     try {
       await post("/api/brief/narrative?force=true", {});
@@ -20128,6 +20251,7 @@ function openWindow(id) {
 function closeWindow(id) {
   const st = winState[id];
   if (!st || !st.open) return;
+  if (id === "attention") closeReviewContext();
   // The companions are windows ONTO Find's session, so closing Find closes
   // them (owner, 2026-08-04) — left behind they are panels reporting on a
   // conversation that is no longer on screen, and they were what held the
@@ -20754,7 +20878,7 @@ function initNavDrawer() {
 // order, so a new origin (the Tailscale name, a test port) opens with the
 // owner's five instead of the defaults.
 const MDOCK_MAX = 5;
-const MDOCK_DEFAULT = ["feed", "people", "work", "brief", "find"];
+const MDOCK_DEFAULT = ["feed", "people", "work", "attention", "find"];
 let mdockEl = null;
 
 function mdockIds() {
@@ -20768,7 +20892,8 @@ function mdockIds() {
     // windows collapses to one, so the freed slot is refilled below
     // rather than leaving the owner with a four-app bar.
     const id = FIND_ALIAS[raw] ? "find"
-      : (PEOPLE_ALIAS[raw] ? "people" : (READER_ALIAS[raw] || raw));
+      : (PEOPLE_ALIAS[raw] ? "people"
+        : (ATTENTION_ALIAS[raw] ? "attention" : (READER_ALIAS[raw] || raw)));
     if (appLive(id) && !out.includes(id) && out.length < MDOCK_MAX) out.push(id);
   });
   const target = Math.min(want.length, MDOCK_MAX);
@@ -21963,9 +22088,25 @@ function atlasNoteToFind(q) {
 // once a day.
 const HASH_ROUTES = {
   "subs-visuals": "subsviz",
+  "brief": "brief",
+  "review": "review",
+  "attention": () => { setAttentionTab("now", { defer: true }); openApp("attention"); },
+  "triage": (rest) => revealTriage(decodeURIComponent(rest.join("/"))),
+  "subscriptions": (rest) => {
+    if (rest[0]) revealSubscription(decodeURIComponent(rest.join("/"))).catch(() => {});
+    else openApp("subs");
+  },
   "design": "design",
   "reader": "reader",
-  "journal": "journal",
+  "journal": (rest) => {
+    if (rest[0]) revealJournal(rest[0]); else openApp("journal");
+  },
+  "idea": (rest) => {
+    if (!rest[0]) { openApp("work"); setWorkTab("queue"); return; }
+    openApp("work");
+    setWorkTab("queue");
+    loadIdeas().then(() => revealIdea(rest[0])).catch(() => {});
+  },
   "atlas": "atlas",
   "network": "atlas",
   "imageatlas": "imageatlas",
@@ -22003,9 +22144,10 @@ const HASH_ROUTES = {
 };
 
 function routeHash() {
-  const h = (location.hash || "").toLowerCase().replace(/^#/, "");
+  const h = (location.hash || "").replace(/^#/, "");
   if (!h) return;
-  const [base, ...rest] = h.split("/");
+  const [rawBase, ...rest] = h.split("/");
+  const base = rawBase.toLowerCase();
   const target = HASH_ROUTES[base];
   if (!target) return;
   if (typeof target === "function") target(rest);
@@ -26596,7 +26738,11 @@ async function boot() {
   // Desktop: the badge is the Attention window's closed-state face, so
   // clicking it opens the window. The phone keeps the cascade raise.
   $("#alerts-btn")?.addEventListener("click",
-    () => (isDesktop ? openApp("attention") : alertRaiseAll()));
+    () => {
+      if (!isDesktop) return alertRaiseAll();
+      setAttentionTab("now", { defer: true });
+      openApp("attention");
+    });
   $("#attn-refresh")?.addEventListener("click", () => refreshAlerts());
   startPoll(() => {
     // the sent log lives in Setup's Notifications card now; the node
