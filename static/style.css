@@ -3054,6 +3054,16 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   .dock.dragging .dock-item::after { opacity: 0 !important; }
   .dock.dragging .dock-item:not(.drag):hover { transform: none; }
 
+  /* the omni focus sink — an invisible parking spot for keyboard focus so
+     dictation always has a field to land in (see the Omni section in
+     app.js). pointer-events none is load-bearing: it may never eat a
+     click; focus only ever arrives programmatically via claim(). */
+  .omni-sink {
+    position: fixed; left: 0; top: 0; width: 2px; height: 2px;
+    opacity: 0; border: 0; padding: 0; background: none;
+    pointer-events: none;
+  }
+
   /* command palette */
   .palette {
     position: fixed; inset: 0; z-index: 1100; display: none;
