@@ -53,7 +53,7 @@ class ChangelogScopeTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         sessions = Path(self.tmp.name)
-        (sessions / "2026-07-11 vira.md").write_text(RETRO)
+        (sessions / "2026-07-11 vira.md").write_text(RETRO, encoding="utf-8")
         self.sessions_patch = mock.patch.object(
             changelog, "SESSIONS", sessions)
         self.sessions_patch.start()
@@ -177,7 +177,7 @@ class DayLedgerTests(unittest.TestCase):
             return changelog.build()
 
     def _retro(self, name, text):
-        (self.sessions / name).write_text(text)
+        (self.sessions / name).write_text(text, encoding="utf-8")
 
     # ---- the regression guard for the whole redesign ----
 

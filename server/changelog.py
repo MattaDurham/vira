@@ -96,7 +96,7 @@ def _local_ts(iso):
 
 
 def _parse_retro(path):
-    text = path.read_text(errors="ignore")
+    text = path.read_text(encoding="utf-8", errors="ignore")
     m = re.search(r"^date:\s*(.+)$", text, re.M)
     date = m.group(1).strip() if m else ""
     if not date:
