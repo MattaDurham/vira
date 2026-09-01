@@ -21269,10 +21269,183 @@ function initConstellation() {
   });
 }
 
+// ==================== Omni — talk (or type) to Vira ====================
+// The desktop's dictation door (2026-09-01, branch claude/omni-voice).
+// Wispr Flow — or any dictation tool — is just a keyboard: it inserts the
+// transcript into whatever field holds focus. So this is two pieces. A
+// FOCUS SINK makes the active Vira window a place dictation can always
+// land: a visually hidden input quietly holds focus while nothing else
+// does (the terminal-emulator pattern), and the first character arriving
+// opens Cmd-K's palette seeded with the text. The palette IS the omni
+// bar: a spoken label ("this is a tell…", "ask…", "open…", "start a
+// session…") pins a routed intent row first, pre-selected, and Enter
+// runs it. The row is the confirmation — you see where the words go
+// before they go.
+//
+// Rung 1 only, deliberately (the find.py split): the label grammar below
+// is deterministic and instant. A model classify for unprefixed prose
+// (rung 2) is filed, not built — a palette interaction cannot wait
+// seconds, and unprefixed text still gets every intent row to arrow-pick.
+
+const OMNI_ROUTES = {
+  tell: {
+    label: "Tell Vira", kind: "journal",
+    // Mirrors ctxTellVira's save: verbatim journal note + the background
+    // integration pass; the context names this door for the pass.
+    run: (text) => post("/api/brief/note",
+        { text, person_id: null, context: "Omni — spoken into the palette" })
+      .then(({ entry }) => {
+        toast("Saved — Vira is reading your note…",
+              [["Journal", () => openJournal()]]);
+        if ($("#journal-list")) loadJournal().catch(() => {});
+        watchBriefNote(entry.id);
+      })
+      .catch(() => toast("Couldn't save the note — is the server up?")),
+  },
+  ask: {
+    label: "Ask Vira", kind: "find",
+    // A question is search, not a session (the ASK-vs-TELL framing):
+    // Find answers it over the four corpora and opens showing its work.
+    run: (text) => { openApp("find"); findSetQuery?.(text, { ask: true }); },
+  },
+  idea: {
+    label: "Add to the Queue", kind: "idea",
+    run: (text) => post("/api/ideas", { text, source: "omni" })
+      .then((it) => {
+        ideasCache.unshift(it);
+        renderIdeas();
+        toast("Idea added — see The Forge · Cues");
+      })
+      .catch(() => toast("Couldn't file the idea — is the server up?")),
+  },
+  session: {
+    label: "Start a session", kind: "session",
+    // The same bare dispatch as the Forge's free-prompt bar — one
+    // behavior, no second prompt composer to drift.
+    run: (text) => Promise.resolve(launchJob(text))
+      .then(() => toast("Vira is on it — session opened"))
+      .catch(() => toast("Couldn't start the session")),
+  },
+};
+
+// Dictation renders labels as prose — "This is a tell. The rent went up…" — so each
+// intent accepts the spoken sentence form and the bare label, case-folded,
+// with whatever punctuation the label arrives wearing. Order is
+// load-bearing once: "tell me…" is a QUESTION, so the ask row carries it
+// and sits above tell (whose own pattern refuses it too, so order alone
+// never decides). `open` routes back into the normal matcher over the
+// RESIDUAL — see paletteMatches.
+const OMNI_PREFIXES = [
+  { intent: "ask",
+    re: /^(?:this is an ask\b|ask vira\b|tell me\b|ask\b)[\s.,:;!—–-]*/i },
+  { intent: "tell",
+    re: /^(?:this is a tell\b|tell vira\b|tell\b(?!\s+me\b))[\s.,:;!—–-]*/i },
+  { intent: "idea",
+    re: /^(?:this is (?:a )?to[\s-]?do(?: something)?\b|do something\b|to[\s-]?do\b|idea\b|queue\b)[\s.,:;!—–-]*/i },
+  { intent: "session",
+    re: /^(?:start a session\b|session\b)[\s.,:;!—–-]*/i },
+  { intent: "open",
+    re: /^open\b[\s.,:;!—–-]*/i },
+];
+
+const omniQuote = (t) =>
+  "“" + (t.length > 64 ? t.slice(0, 64).trimEnd() + "…" : t) + "”";
+
+function omniRow(intent, text) {
+  const r = OMNI_ROUTES[intent];
+  return { label: r.label + " — " + omniQuote(text), kind: r.kind,
+           run: () => r.run(text) };
+}
+
+// What the typed (or dictated) text MEANS for the palette:
+// {pinned} — a labeled intent, shown first and pre-selected;
+// {open} — the "open …" residual, matched against windows + people;
+// {trailing} — unprefixed prose (3+ words: no command will
+// substring-match a sentence), every intent offered, tell first as the
+// safest write.
+function omniRows(q) {
+  const none = { pinned: [], trailing: [], open: null };
+  const t = q.trim();
+  if (!t) return none;
+  for (const p of OMNI_PREFIXES) {
+    const m = t.match(p.re);
+    if (!m || !m[0]) continue;
+    const rest = t.slice(m[0].length).trim();
+    if (p.intent === "open")
+      return { pinned: [], trailing: [],
+               open: rest.replace(/[\s.,;!?]+$/, "") };
+    if (!rest) return none;   // the bare label — the content is still coming
+    return { pinned: [omniRow(p.intent, rest)], trailing: [], open: null };
+  }
+  if (t.split(/\s+/).length >= 3)
+    return { pinned: [], open: null,
+             trailing: ["tell", "ask", "idea", "session"]
+               .map((k) => omniRow(k, t)) };
+  return none;
+}
+
+// The focus sink. While the Vira window is active and no real field holds
+// focus, this invisible input does — so dictation ALWAYS has a target,
+// whether the tool simulates keystrokes or pastes the transcript whole
+// (both surface as one `input` event on a focused field). The first text
+// arriving hands off to the palette and the sink goes back to waiting.
+//
+// It NEVER steals. `claim` runs only when focus has fallen to the floor
+// (body/html — on macOS clicking a button does not focus it, so ordinary
+// clicking around leaves the floor focused), never while the palette, a
+// sheet, or the customize grid is open (a sheet's capture-phase Escape
+// would fight the palette's), and never while a text selection is live —
+// focusing an input can collapse the selection the owner is about to copy.
+function initOmniSink() {
+  if (!isDesktop) return;
+  const sink = el("input", "omni-sink");
+  sink.id = "omni-sink";
+  sink.type = "text";
+  sink.autocomplete = "off";
+  sink.setAttribute("aria-label", "Talk or type to Vira");
+  document.body.appendChild(sink);
+
+  const idle = () => {
+    const a = document.activeElement;
+    return !a || a === document.body || a === document.documentElement
+      || a === sink;
+  };
+  const eligible = () => {
+    if (paletteOpen || openSheets.length) return false;
+    if (document.body.classList.contains("lp-open")) return false;
+    const sel = document.getSelection();
+    if (sel && !sel.isCollapsed) return false;
+    return true;
+  };
+  const claim = () => {
+    if (document.hasFocus() && idle() && eligible())
+      sink.focus({ preventScroll: true });
+  };
+  // focus falls to the floor a beat AFTER the field that had it lets go
+  const claimSoon = () => setTimeout(claim, 0);
+  document.addEventListener("focusout", claimSoon);
+  document.addEventListener("selectionchange", claimSoon);
+  window.addEventListener("focus", claimSoon);
+  sink.addEventListener("blur", claimSoon);
+  claimSoon();
+
+  sink.addEventListener("input", () => {
+    const text = sink.value;
+    sink.value = "";
+    if (!text.trim()) return;
+    togglePalette(true, text);
+    // seeding is not typing: put the caret at the end so continued
+    // dictation appends instead of replacing a selected seed
+    const inp = $("#palette-input");
+    inp?.setSelectionRange(inp.value.length, inp.value.length);
+  });
+}
+
 // command palette (Cmd-K / Ctrl-K)
 let paletteOpen = false, paletteIdx = 0;
 
 function paletteMatches(q) {
+  const omni = omniRows(q);   // the dictation door's reading of the text
   // every registered window is a command — new WINDOWS entries come free
   const cmds = WINDOWS.map((w) => ({
     label: "Open " + w.title, kind: "window",
@@ -21332,7 +21505,31 @@ function paletteMatches(q) {
       .forEach((p) => out.push({ label: p.name, kind: "open person",
                                  run: () => openPerson(p.id) }));
   }
-  return out.slice(0, 12);
+  // "Open …" (spoken or typed) matches the RESIDUAL, both directions —
+  // "open the daily brief" contains "daily brief", and a first name is
+  // contained by the contact's full name — because the full string ("open the …")
+  // substring-matches nothing above.
+  if (omni.open !== null) {
+    const res = omni.open.toLowerCase();
+    const hits = [];
+    if (res) {
+      WINDOWS.forEach((w) => {
+        const wt = w.title.toLowerCase();
+        if (wt.includes(res) || res.includes(wt))
+          hits.push({ label: "Open " + w.title, kind: "window",
+            run: () => w.companion ? openFindChatCompanion(w.id)
+                                   : openWindow(w.id) });
+      });
+      peopleCache.filter((p) => {
+        const n = (p.name || "").toLowerCase();
+        return n && (n.includes(res) || res.includes(n));
+      }).slice(0, 8).forEach((p) =>
+        hits.push({ label: p.name, kind: "open person",
+                    run: () => openPerson(p.id) }));
+    }
+    return hits.concat(out).slice(0, 12);
+  }
+  return omni.pinned.concat(out, omni.trailing).slice(0, 12);
 }
 
 function renderPalette() {
@@ -21353,13 +21550,16 @@ function renderPalette() {
   });
 }
 
-function togglePalette(show) {
+// `seed` is the omni sink's hand-off: open already holding the dictated
+// text, matched and pre-selected. Ordinary callers pass none and get the
+// empty bar they always did.
+function togglePalette(show, seed) {
   const wrap = $("#palette");
   if (!wrap) return;
   paletteOpen = show ?? !paletteOpen;
   wrap.classList.toggle("open", paletteOpen);
   if (paletteOpen) {
-    $("#palette-input").value = "";
+    $("#palette-input").value = seed || "";
     paletteIdx = 0;
     renderPalette();
     $("#palette-input").focus();
@@ -21373,7 +21573,8 @@ function buildPalette() {
   const input = el("input", "palette-input");
   input.id = "palette-input";
   input.type = "text";
-  input.placeholder = "Type a command or a name…";
+  input.placeholder =
+    "Type or talk — a command, a name, “tell…”, “ask…”, “open…”";
   input.autocomplete = "off";
   const list = el("div", "palette-list");
   list.id = "palette-list";
@@ -26107,6 +26308,7 @@ function initDesktop() {
   buildDock();
   dockRefresh();
   buildPalette();
+  initOmniSink();   // the dictation door — see the Omni section
   // the person and job panels behave like windows too:
   // drag + focus-raise + edge resize + content zoom
   ["#person-panel", "#group-panel", "#email-panel", "#job-panel",
