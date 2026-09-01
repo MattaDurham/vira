@@ -1494,6 +1494,18 @@ def api_review():
     return reviewqueue.items()
 
 
+@app.get("/api/review/context")
+def api_review_context(id: str):
+    """Full source context for one exact decision card. Read lazily so the
+    overview remains fast and source documents are never silently clipped."""
+    try:
+        return reviewqueue.context(id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except OSError as e:
+        raise HTTPException(502, str(e)[:400])
+
+
 class ReviewActReq(BaseModel):
     id: str
     action: str            # "approve" | "drop"

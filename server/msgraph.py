@@ -270,8 +270,8 @@ def calendar_events(email, start_iso, end_iso, tz="America/New_York"):
              f"?startDateTime={urllib.parse.quote(start_iso)}"
              f"&endDateTime={urllib.parse.quote(end_iso)}"
              "&$orderby=start/dateTime&$top=50"
-             "&$select=subject,start,end,isAllDay,location,organizer,"
-             "isOnlineMeeting")
+             "&$select=id,subject,start,end,isAllDay,location,organizer,"
+             "isOnlineMeeting,webLink,bodyPreview")
         out = _graph_request(email, q, scope=SCOPE_CAL,
                              headers={"Prefer": f'outlook.timezone="{tz}"'})
     except RuntimeError as e:
@@ -281,11 +281,17 @@ def calendar_events(email, start_iso, end_iso, tz="America/New_York"):
     events = []
     for ev in out.get("value", []):
         events.append({
+            "id": ev.get("id") or "",
             "title": ev.get("subject") or "(no title)",
             "all_day": bool(ev.get("isAllDay")),
             "start": (ev.get("start") or {}).get("dateTime", "")[:19],
             "end": (ev.get("end") or {}).get("dateTime", "")[:19],
             "online": bool(ev.get("isOnlineMeeting")),
+            "location": ((ev.get("location") or {}).get("displayName") or ""),
+            "organizer": (((ev.get("organizer") or {}).get("emailAddress")
+                            or {}).get("name") or ""),
+            "body_preview": ev.get("bodyPreview") or "",
+            "web_link": ev.get("webLink") or "",
         })
     return events
 
@@ -295,16 +301,20 @@ def list_drafts(email, limit=10):
     out = _graph_request(
         email, "/me/mailFolders/drafts/messages"
                f"?$orderby=lastModifiedDateTime%20desc&$top={limit}"
-               "&$select=subject,toRecipients,lastModifiedDateTime")
+               "&$select=id,subject,toRecipients,lastModifiedDateTime,"
+               "webLink,bodyPreview")
     drafts = []
     for d in out.get("value", []):
         tos = [((r.get("emailAddress") or {}).get("name")
                 or (r.get("emailAddress") or {}).get("address") or "")
                for r in d.get("toRecipients", [])]
         drafts.append({
+            "id": d.get("id") or "",
             "subject": d.get("subject") or "(no subject)",
             "to": ", ".join(t for t in tos if t) or "(no recipient)",
             "modified": d.get("lastModifiedDateTime"),
             "account": email,
+            "body_preview": d.get("bodyPreview") or "",
+            "web_link": d.get("webLink") or "",
         })
     return drafts

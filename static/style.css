@@ -1716,6 +1716,177 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
   text-align: left;
 }
 .attn-review-foot:hover { color: var(--text); border-color: var(--accent); }
+.attention-tabs { display: flex; gap: 6px; margin: 2px 0 12px; }
+.attention-tabs .seg-btn { flex: 1; }
+.attention-pane-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 2px 0 12px; min-width: 0;
+}
+.attention-pane-head > div { min-width: 0; }
+.attention-pane-title {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--text-dim); margin-right: 10px;
+}
+.attention-back { margin-right: auto; }
+.attention-hero {
+  min-height: 132px; margin: 4px 0 16px; padding: 18px 20px;
+  display: flex; align-items: center; gap: 22px; overflow: hidden;
+  position: relative; border: 1px solid var(--line-warm);
+  border-radius: 6px;
+  background:
+    radial-gradient(circle at 18% 35%, var(--accent-soft), transparent 42%),
+    linear-gradient(135deg, var(--bg-card), var(--bg-raised));
+}
+.attention-hero::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(110deg, transparent 25%, var(--accent-veil), transparent 70%);
+  transform: translateX(-110%); animation: attention-sheen 9s ease-in-out infinite;
+}
+.attention-hero-copy { display: flex; flex-direction: column; min-width: 0; z-index: 1; }
+.attention-hero-copy > span {
+  color: var(--accent); font-family: var(--mono); font-size: 10px;
+  letter-spacing: .18em; text-transform: uppercase;
+}
+.attention-hero-copy > strong {
+  color: var(--text); font-size: clamp(20px, 3.4vw, 34px); font-weight: 500;
+  letter-spacing: -.025em; line-height: 1.1; margin: 5px 0;
+}
+.attention-hero-copy > small { color: var(--text-dim); font-size: 12px; }
+.attention-orbit, .attention-day-arc, .attention-card-stack {
+  position: relative; width: 92px; height: 92px; flex: 0 0 92px;
+}
+.attention-orbit i {
+  position: absolute; inset: 0; border: 1px solid var(--accent-line);
+  border-radius: 50%; animation: attention-orbit 12s linear infinite;
+}
+.attention-orbit i:nth-child(2) { inset: 15px; animation-duration: 8s; animation-direction: reverse; }
+.attention-orbit i:nth-child(3) { inset: 31px; animation-duration: 5s; }
+.attention-orbit i::after {
+  content: ""; position: absolute; width: 7px; height: 7px; top: -4px; left: 50%;
+  border-radius: 50%; background: var(--accent); box-shadow: 0 0 14px var(--accent);
+}
+.attention-orbit span {
+  position: absolute; inset: 40px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 22px var(--accent); animation: attention-pulse 2.8s ease-in-out infinite;
+}
+.attention-day-arc { border-bottom: 1px solid var(--line-warm); }
+.attention-day-arc::before {
+  content: ""; position: absolute; left: 7px; right: 7px; bottom: 12px; height: 54px;
+  border: 1px solid var(--accent-line); border-bottom: 0;
+  border-radius: 80px 80px 0 0;
+}
+.attention-day-arc i {
+  position: absolute; width: 17px; height: 17px; border-radius: 50%;
+  left: 9px; bottom: 7px; background: var(--accent); box-shadow: 0 0 18px var(--accent);
+  animation: attention-day 8s ease-in-out infinite alternate;
+}
+.attention-day-arc span {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 7px;
+  background: linear-gradient(90deg, transparent, var(--accent-soft), transparent);
+}
+.attention-card-stack i {
+  position: absolute; width: 58px; height: 72px; left: 17px; top: 10px;
+  border: 1px solid var(--accent-line); border-radius: 5px;
+  background: var(--bg-raised); transform-origin: 50% 100%;
+}
+.attention-card-stack i:nth-child(1) { transform: rotate(-15deg); }
+.attention-card-stack i:nth-child(2) { transform: rotate(13deg); }
+.attention-card-stack i:nth-child(3) {
+  background: linear-gradient(145deg, var(--accent-soft), var(--bg-card));
+  animation: attention-card-breathe 4s ease-in-out infinite;
+}
+.attention-card-stack i:nth-child(3)::before,
+.attention-card-stack i:nth-child(3)::after {
+  content: ""; position: absolute; height: 3px; left: 10px; right: 10px;
+  top: 17px; background: var(--accent-line); box-shadow: 0 12px 0 var(--line-warm);
+}
+.attention-card-stack i:nth-child(3)::after { top: 45px; right: 23px; box-shadow: none; }
+
+#attention-now-pane #attention-body,
+#attention-day-pane #brief-body,
+#attention-decide-pane #review-body {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px; align-items: start;
+}
+#attention-now-pane #attention-body > .brief-sec,
+#attention-day-pane #brief-body > .brief-sec,
+#attention-decide-pane #review-body > .brief-sec {
+  margin: 0; padding: 14px; min-width: 0; border: 1px solid var(--line-warm);
+  border-radius: 5px; background: var(--bg-card);
+}
+#attention-day-pane #brief-body > .brief-narrative,
+#attention-now-pane #attention-body > .brief-empty,
+#attention-decide-pane #review-body > .brief-empty {
+  grid-column: 1 / -1;
+}
+.review-visual {
+  flex: 1 1 100%; overflow: hidden; margin: 8px 0 2px;
+  border-radius: 4px; background: var(--bg-raised); min-height: 110px;
+}
+.review-visual img, .review-visual video {
+  display: block; width: 100%; max-height: 260px; object-fit: cover;
+}
+#view-attention { position: relative; min-height: 100%; }
+.attention-source {
+  position: absolute; inset: 0; z-index: 20; min-height: 100%;
+  box-sizing: border-box;
+  padding: 18px; overflow: auto; background: var(--bg);
+  border: 1px solid var(--line-warm); border-radius: 5px;
+  box-shadow: 0 18px 55px var(--line-warm);
+}
+.attention-source[hidden] { display: none; }
+.attention-source-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line-warm);
+}
+.attention-source-head h3 { margin: 3px 0 0; font-size: 22px; font-weight: 500; }
+.attention-source-kicker, .attention-source-ref {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--accent);
+}
+.attention-source-ref {
+  margin: 12px 0; color: var(--text-faint); text-transform: none;
+  letter-spacing: .04em; overflow-wrap: anywhere;
+}
+.attention-source-text {
+  margin: 0; padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: inherit; font-size: 14px; line-height: 1.7; color: var(--text);
+  background: var(--bg-card); border: 1px solid var(--line-warm);
+  border-radius: 5px;
+}
+.attention-source-actions {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;
+  margin-top: 12px;
+}
+.attention-source .review-visual { margin-bottom: 12px; }
+
+@keyframes attention-orbit { to { transform: rotate(360deg); } }
+@keyframes attention-pulse { 50% { transform: scale(1.7); opacity: .55; } }
+@keyframes attention-day {
+  0% { transform: translate(0, 0); }
+  50% { transform: translate(29px, -51px); }
+  100% { transform: translate(58px, 0); }
+}
+@keyframes attention-card-breathe { 50% { transform: translateY(-4px) rotate(1deg); } }
+@keyframes attention-sheen { 0%, 60% { transform: translateX(-110%); } 85%, 100% { transform: translateX(110%); } }
+
+@media (max-width: 720px) {
+  .attention-source {
+    position: fixed; inset: 47px 0 57px; min-height: 0;
+    border-width: 0; border-radius: 0;
+  }
+  .attention-hero { min-height: 112px; padding: 14px; gap: 14px; }
+  .attention-orbit, .attention-day-arc, .attention-card-stack {
+    width: 72px; height: 72px; flex-basis: 72px; transform: scale(.78);
+  }
+  #attention-now-pane #attention-body,
+  #attention-day-pane #brief-body,
+  #attention-decide-pane #review-body { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .attention-hero::after, .attention-orbit i, .attention-orbit span,
+  .attention-day-arc i, .attention-card-stack i { animation: none; }
+}
 /* Where the waiting count lives is a per-width decision, the way the layout
    button is desktop-only: at the desk it is a topbar count, on a phone the
    brand wears a dot and the drawer carries the list. A "3 waiting" button in
@@ -2968,10 +3139,17 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   .rz-sw { bottom: 0; left: 0; width: 18px; height: 18px; cursor: nesw-resize; }
   .fwin-body { flex: 1; overflow-y: auto; padding: 12px 16px 18px; min-height: 0; }
   .fwin .view { display: block; padding-top: 2px; }
-  /* the morning-picker iframe fills its window the same way */
-  #win-subsviz .fwin-body { display: flex; flex-direction: column; overflow: hidden; }
-  #win-subsviz #view-subsviz { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  #win-subsviz .subsviz-frame { flex: 1; height: auto; min-height: 220px; }
+  /* The source-owned Morning Picker fills Attention while drilled in. */
+  #win-attention.attention-picker-active .fwin-body {
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #win-attention.attention-picker-active #view-attention,
+  #win-attention.attention-picker-active #attention-picker-pane {
+    display: flex; flex-direction: column; flex: 1; min-height: 0;
+  }
+  #win-attention.attention-picker-active .subsviz-frame {
+    flex: 1; height: auto; min-height: 220px;
+  }
   /* the atlas canvas fills its window the same way */
   #win-atlas .fwin-body { display: flex; flex-direction: column; overflow: hidden; }
   #win-atlas #view-atlas { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -3282,16 +3460,16 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
    lesson proposal, which is a full sentence the owner has to read before
    approving it. Inside the picker the text takes the width and wraps; in
    the brief the rows stay clamped, because there it is a teaser. */
-#view-review .brief-sec-head { flex-wrap: wrap; }
+#attention-decide-pane .brief-sec-head { flex-wrap: wrap; }
 /* the hint is a sentence here, not a label — it wraps onto its own line
    instead of running off a 375px phone */
-#view-review .brief-hint { flex: 1 1 100%; white-space: normal; }
-#view-review .brief-row { align-items: flex-start; flex-wrap: wrap; }
-#view-review .brief-title {
+#attention-decide-pane .brief-hint { flex: 1 1 100%; white-space: normal; }
+#attention-decide-pane .brief-row { align-items: flex-start; flex-wrap: wrap; }
+#attention-decide-pane .brief-title {
   flex: 1 1 100%; max-width: none; white-space: normal;
 }
-#view-review .brief-sub { flex: 1 1 100%; white-space: normal; }
-#view-review .brief-acts { opacity: 1; }
+#attention-decide-pane .brief-sub { flex: 1 1 100%; white-space: normal; }
+#attention-decide-pane .brief-acts { opacity: 1; }
 /* A caveat that changes what a button does rides its own line, always
    visible — the duplicated-proposal-id case (server/reviewqueue.py). */
 .brief-row.review-flagged { flex-wrap: wrap; }

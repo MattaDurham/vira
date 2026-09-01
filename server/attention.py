@@ -2,19 +2,14 @@
 is waiting on the owner RIGHT NOW.
 
 THE SPLIT THIS MODULE ENFORCES. There are two kinds of waiting and they have
-opposite properties. Decisions that KEEP — lesson proposals, proposed ideas,
-inbox stubs, a pending Morning Picker batch — belong to the review queue
-(server/reviewqueue.py) and are read in batches; nothing degrades if the
-owner rules tomorrow. This module carries only the LIVE tier: sessions
+opposite properties. Decisions that KEEP belong to the Attention shell's
+Decide lane (server/reviewqueue.py) and are read in batches; nothing degrades
+if the owner rules tomorrow. This module carries only the Now lane: sessions
 working or parked on a question, decision cards, resumable dead sessions,
 unlanded branches, running flows, and the small set of derived health states
-that otherwise fail silently (the 2026-07-27 audit's theme). Merging the two
-tiers would make the urgent list long, which kills the one property the
-owner asked for — short, clean, visible. The join between them is a
-REFERENCE: `review` in the payload is a count + oldest-age line, and one
-escalation rule promotes an aging review backlog into a real attention row
-so the 113-rotting-proposals failure cannot recur even if the brief goes
-unread.
+that otherwise fail silently (the 2026-07-27 audit's theme). The common shell,
+not this payload, joins Now with Decide and Day; that keeps the live list short
+without making three cadences look like three peer products.
 
 THE SOURCE DISCIPLINE IS reviewqueue's: every reader runs inside `_safe`,
 a raised exception becomes an entry in `errors` and an empty list, and a
@@ -37,15 +32,9 @@ flow must not pop a window the owner just closed.
 from __future__ import annotations
 
 import os
-import time
 from datetime import datetime
 
 from . import jobfiles, joblog
-
-# A review item older than this stops being "a decision that keeps" and
-# earns a real attention row. Weekly-bucketed in the trigger so the row
-# re-announces itself once a week, not once a day.
-REVIEW_ESCALATE_DAYS = 7
 
 # The boards poller ticks every boards_poll_minutes (default 15); a snapshot
 # this old means the loop is wedged or dead, which is exactly the class of
@@ -56,12 +45,6 @@ BOARDS_STALE_H = 4
 # unanswered resumable session is a decision that keeps, not a live state,
 # and the compose box in its terminal still offers the resume forever.
 RESUMABLE_MAX_H = 48
-
-# reviewqueue.items() walks several stores including canon files in the
-# self-record; at a 5s poll that is real work for a number that moves a few
-# times a day. Cached in-process, invalidated by time alone.
-_REVIEW_CACHE_S = 60
-_review_cache = {"at": 0.0, "data": None}
 
 
 def _passive():
@@ -317,37 +300,6 @@ def _health_rows():
     return rows
 
 
-# ---------------------------------------------------------------- review
-
-def _review_note():
-    """The tier-2 reference: a count + oldest-age line, cached because the
-    queue walks canon files. Returns (note, escalation_row_or_None)."""
-    now = time.time()
-    if _review_cache["data"] is not None \
-            and now - _review_cache["at"] < _REVIEW_CACHE_S:
-        note = _review_cache["data"]
-    else:
-        from . import reviewqueue
-        q = reviewqueue.items()
-        oldest = max((r.get("age_days") or 0 for r in q["items"]),
-                     default=0)
-        note = {"total": q["total"], "oldest_days": round(oldest, 1),
-                "counts": q["counts"]}
-        _review_cache["data"] = note
-        _review_cache["at"] = now
-    if not note["total"]:
-        return None, None
-    esc = None
-    if note["oldest_days"] >= REVIEW_ESCALATE_DAYS:
-        week = int(note["oldest_days"] // 7)
-        esc = _row(
-            "review:aging", "review", f"w{week}", True,
-            f"{note['total']} decisions waiting in Needs Review",
-            f"the oldest has waited {int(note['oldest_days'])} days",
-            verb="open review")
-    return note, esc
-
-
 # --------------------------------------------------------------- compose
 
 def _names(registry):
@@ -396,14 +348,6 @@ def compose(registry=None):
     rows += _safe(_orphan_rows, errors, "orphans")
     rows += _safe(_health_rows, errors, "health")
 
-    review, esc = None, None
-    try:
-        review, esc = _review_note()
-    except Exception as e:  # noqa: BLE001
-        errors["review"] = f"{type(e).__name__}: {e}"
-    if esc:
-        rows.append(esc)
-
     # Needs-you first, oldest waiting first inside that (the decision that
     # has blocked longest leads); working rows after, in source order.
     rows.sort(key=lambda r: (0 if r["needs_you"] else 1,
@@ -411,7 +355,6 @@ def compose(registry=None):
     return {
         "rows": rows,
         "cards": cards,
-        "review": review,
         "errors": errors,
         "counts": {
             "needs_you": sum(1 for r in rows if r["needs_you"]),

@@ -2,9 +2,9 @@
 
 The module is an AGGREGATOR, so these tests pin the classification, the
 edge-trigger tokens, the sort, and the never-break-on-a-source contract —
-with every source pinned at its seam. Attention reads SIX things outside
+with every source pinned at its seam. Attention reads FIVE things outside
 its own code (the session registry's job dirs, the joblog ledger, circuit
-runs, the orphan-work store, the health stores, the review queue), so the
+runs, the orphan-work store, and the health stores), so the
 base case pins all of them to empty and every test overrides only what it
 is about; `test_an_empty_world_composes_nothing` is the isolation guard —
 a source added later that reads the machine instead of a seam fails it on
@@ -51,8 +51,7 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
-        from server import (aihealth, circuits, jobboards, joblog,
-                            orphanwork, reviewqueue)
+        from server import aihealth, circuits, jobboards, joblog, orphanwork
         patches = [
             mock.patch.object(joblog, "list_records", return_value=[]),
             mock.patch.object(circuits, "list_runs", return_value=[]),
@@ -63,18 +62,12 @@ class Base(unittest.TestCase):
             mock.patch.object(jobboards, "health",
                               return_value={"registered": 0, "fetched": "",
                                             "errors": {}}),
-            mock.patch.object(reviewqueue, "items",
-                              return_value={"items": [], "total": 0,
-                                            "counts": {}}),
             mock.patch.dict(os.environ, {}, clear=False),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
         os.environ.pop("VIRA_PASSIVE", None)
-        # the review note is time-cached in-process; a test must never read
-        # the previous test's answer
-        attention._review_cache.update({"at": 0.0, "data": None})
 
     def handle(self, jid, state, spec=None):
         jdir = self.dir / jid
@@ -93,7 +86,7 @@ class Membership(Base):
         p = self.compose()
         self.assertEqual(p["rows"], [])
         self.assertEqual(p["cards"], [])
-        self.assertIsNone(p["review"])
+        self.assertNotIn("review", p)
         self.assertEqual(p["errors"], {})
         self.assertEqual(p["tokens"], [])
 
@@ -306,29 +299,15 @@ class Health(Base):
             self.assertEqual(self.compose()["rows"], [])
 
 
-class Review(Base):
+class ReviewBoundary(Base):
 
-    def _queue(self, age):
-        return {"items": [{"age_days": age}], "total": 12,
-                "counts": {"lessons": 12}}
-
-    def test_a_fresh_backlog_is_a_note_not_a_row(self):
+    def test_durable_decisions_are_not_polled_by_the_now_lane(self):
         from server import reviewqueue
-        reviewqueue.items.return_value = self._queue(2.0)
-        p = self.compose()
+        with mock.patch.object(reviewqueue, "items",
+                               side_effect=AssertionError("wrong lane")) as read:
+            p = self.compose()
         self.assertEqual(p["rows"], [])
-        self.assertEqual(p["review"]["total"], 12)
-
-    def test_an_aging_backlog_escalates_into_a_row(self):
-        from server import reviewqueue
-        reviewqueue.items.return_value = self._queue(33.0)
-        p = self.compose()
-        [r] = p["rows"]
-        self.assertEqual(r["kind"], "review")
-        self.assertTrue(r["needs_you"])
-        self.assertIn("12 decisions", r["title"])
-        # weekly-bucketed trigger: re-announces once a week, not once a day
-        self.assertEqual(r["trigger"], "review:aging@w4")
+        read.assert_not_called()
 
 
 class Contract(Base):

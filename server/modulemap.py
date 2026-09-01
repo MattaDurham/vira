@@ -246,16 +246,38 @@ DEFAULT_MODULES = [
      "updated": TODAY},
     {"id": "brief-engine", "name": "Brief engine", "layer": "engine",
      "group": "rhythm", "kind": "deterministic composer",
-     "what": "Assembles the daily brief: today and tomorrow's calendar, "
-             "who is waiting on a reply, open loops, contacts going quiet, "
-             "renewals, queued drafts, triage count. Deterministic "
-             "sections; the model only narrates on request.",
+     "what": "Composes the Attention Day lane: today and tomorrow's "
+             "calendar, birthdays, renewals, and queued drafts. Its broad "
+             "relationship reads still ground the optional narrative, but "
+             "their actionable rows live in People rather than being "
+             "rendered twice.",
      "links": [{"to": "calendars-src", "how": "reads"},
                {"to": "crm-data", "how": "reads loops + cadence from"},
                {"to": "subs-engine", "how": "gets renewals from"},
                {"to": "watcher", "how": "gets waiting-on-reply from"}],
      "endpoints": ["/api/brief"],
      "keywords": ["brief", "waiting", "quiet", "journal"],
+     "updated": TODAY},
+    {"id": "review-engine", "name": "Decision registry", "layer": "engine",
+     "group": "rhythm", "kind": "source registry + delegated actors",
+     "what": "Normalizes durable owner decisions from lessons, canon, "
+             "ideas, Journal, unknown senders, and the Morning Picker. "
+             "Each source owns its writes and exposes exact source context "
+             "on demand.",
+     "links": [{"to": "triage-engine", "how": "reads sender decisions from"},
+               {"to": "picker-engine", "how": "reads pending batches from"}],
+     "endpoints": ["/api/review", "/api/review/context", "/api/review/act"],
+     "keywords": ["review", "decide", "decision", "source context"],
+     "updated": TODAY},
+    {"id": "attention-engine", "name": "Live attention engine", "layer": "engine",
+     "group": "rhythm", "kind": "edge-triggered live aggregator",
+     "what": "Keeps the Now lane short: live sessions, exact question and "
+             "approval cards, running flows, unlanded branches, and silent "
+             "worker failures. Every verb targets the exact owning object.",
+     "links": [{"to": "sessions", "how": "reads live work from"},
+               {"to": "circuits-engine", "how": "reads running flows from"}],
+     "endpoints": ["/api/attention"],
+     "keywords": ["attention", "now", "live", "urgent"],
      "updated": TODAY},
     {"id": "radar-engine", "name": "Radar engine", "layer": "engine",
      "group": "rhythm", "kind": "scoring",
@@ -329,6 +351,15 @@ DEFAULT_MODULES = [
                {"to": "chat-db", "how": "finds unknowns in"}],
      "endpoints": ["/api/triage", "/api/crm/add"],
      "keywords": ["triage", "unknown", "unidentified"],
+     "updated": TODAY},
+    {"id": "picker-engine", "name": "Morning Picker pipeline", "layer": "engine",
+     "group": "rhythm", "kind": "external batch adapter",
+     "what": "Reads TC-IL's pending visual batch in place, serves its "
+             "image-rich picker, validates selections, and dispatches the "
+             "source-owned apply workflow.",
+     "links": [{"to": "sessions", "how": "dispatches the apply run through"}],
+     "endpoints": ["/api/subs-visuals/status", "/api/subs-visuals/apply"],
+     "keywords": ["morning picker", "keyframe", "subs visuals"],
      "updated": TODAY},
     {"id": "changelog-engine", "name": "Change log", "layer": "engine",
      "group": "operate", "kind": "derived at read time",
@@ -473,6 +504,7 @@ DEFAULT_MODULES = [
              "corpus": "CRM registry (who someone is)",
              "engine": "instant filter in the page"},
      "links": [{"to": "crm-data", "how": "renders + writes back to"},
+               {"to": "triage-engine", "how": "resolves unknown senders through"},
                {"to": "vault-engine", "how": "pulls person notes from"},
                {"to": "suggest", "how": "drafts via"}],
      "keywords": ["people", "person page", "profile", "focus mode"],
@@ -513,20 +545,18 @@ DEFAULT_MODULES = [
                {"to": "library-src", "how": "lists cards from"}],
      "keywords": ["actions", "cockpit", "run"],
      "updated": TODAY},
-    {"id": "brief-win", "name": "Daily Brief", "layer": "surface",
-     "group": "rhythm", "kind": "dock window",
-     "what": "The morning read: schedule, who is waiting, open loops, "
-             "renewals — every row interactive: clear it, note it, or tell "
-             "Vira what you know.",
-     "links": [{"to": "brief-engine", "how": "renders"}],
-     "keywords": ["daily brief"],
-     "updated": TODAY},
-    {"id": "triage-win", "name": "Triage", "layer": "surface",
-     "group": "communicate", "kind": "dock window",
-     "what": "The unknown-senders queue: identify, add to the CRM, or "
-             "dismiss.",
-     "links": [{"to": "triage-engine", "how": "drives"}],
-     "keywords": ["triage window"],
+    {"id": "attention-win", "name": "Attention", "layer": "surface",
+     "group": "rhythm", "kind": "visual cockpit / mobile tab",
+     "what": "One visual focus cockpit with three cognitive lanes: Now for "
+             "live owner blocks, Day for temporal orientation, and Decide "
+             "for durable rulings. Cards can carry local images or looping "
+             "video and open the exact source text, session, branch, dossier, "
+             "or specialized workflow.",
+     "links": [{"to": "attention-engine", "how": "renders Now from"},
+               {"to": "brief-engine", "how": "renders Day from"},
+               {"to": "review-engine", "how": "renders Decide from"},
+               {"to": "picker-engine", "how": "drills into"}],
+     "keywords": ["attention", "daily brief", "needs review", "visual cockpit"],
      "updated": TODAY},
     {"id": "jobs-win", "name": "The Forge / Runs", "layer": "surface",
      "group": "operate", "kind": "Forge tab (legacy window alias)",
@@ -577,13 +607,6 @@ DEFAULT_MODULES = [
              "receipts attached.",
      "links": [{"to": "subs-engine", "how": "renders"}],
      "keywords": ["subscriptions window"],
-     "updated": TODAY},
-    {"id": "picker-win", "name": "Morning Picker", "layer": "surface",
-     "group": "money", "kind": "dock window (once-a-day)",
-     "what": "The keyframe picker that arrives with the 06:00 message — "
-             "pick, apply headlessly, done.",
-     "links": [{"to": "subs-engine", "how": "feeds picks to"}],
-     "keywords": ["morning picker", "keyframe"],
      "updated": TODAY},
     {"id": "map-win", "name": "System Map", "layer": "surface",
      "group": "know", "kind": "dock window + atlas page",

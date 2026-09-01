@@ -67,42 +67,88 @@
 </div>
 
 <main id="main">
-  <!-- DAILY BRIEF -->
-  <section id="view-brief" class="view">
-    <div class="section-head">
-      <h2>Daily Brief</h2>
-      <button class="fchip" id="brief-refresh" style="margin-left:auto">Refresh</button>
-    </div>
-    <div class="brief-date" id="brief-date"></div>
-    <div id="brief-body"></div>
-  </section>
-
-  <!-- ATTENTION — the tier-1 surface: what Vira is doing right now and
-       what is waiting on the owner right now (server/attention.py). The
-       window auto-reopens on genuinely NEW membership (edge-triggered,
-       so closing it means "seen" until something new arrives); Needs
-       Review stays the batch tier and is only referenced from the foot. -->
+  <!-- ATTENTION — one front door for focus. The engines stay separate by
+       cadence and authority: Now is live runtime state, Day is temporal
+       context, Decide is durable review, and source-owned workflows drill
+       in without becoming peer modules. -->
   <section id="view-attention" class="view">
     <div class="section-head">
       <h2>Attention</h2>
       <button class="fchip sm" id="attn-refresh" style="margin-left:auto">Refresh</button>
     </div>
-    <div class="radar-sub"><span id="attn-count">Nothing needs you</span>
-      <span class="hint">closes until something new starts or asks</span></div>
-    <div id="attention-body"></div>
-  </section>
-
-  <!-- NEEDS REVIEW — the picker the brief's Needs review section links to.
-       One list of every decision waiting on the owner, from every source
-       registered in server/reviewqueue.py. -->
-  <section id="view-review" class="view">
-    <div class="section-head">
-      <h2>Needs Review</h2>
-      <button class="fchip sm" id="review-refresh" style="margin-left:auto">Refresh</button>
+    <div class="seg-tabs attention-tabs" id="attention-tabs">
+      <button class="seg-btn on" data-tab="now">Now</button>
+      <button class="seg-btn" data-tab="day">Day</button>
+      <button class="seg-btn" data-tab="decide">Decide</button>
     </div>
-    <div class="radar-sub"><span id="review-count">Waiting on you</span>
-      <span class="hint">oldest first — approve or drop, or open the source to read it</span></div>
-    <div id="review-body"></div>
+    <div class="attention-pane" id="attention-now-pane">
+      <div class="attention-hero attention-hero-now" aria-hidden="true">
+        <div class="attention-orbit"><i></i><i></i><i></i><span></span></div>
+        <div class="attention-hero-copy">
+          <span>Live field</span>
+          <strong id="attn-hero-title">Clear</strong>
+          <small id="attn-hero-sub">Vira is watching the edges</small>
+        </div>
+      </div>
+      <div class="radar-sub"><span id="attn-count">Nothing needs you</span>
+        <span class="hint">Vira needs you, or Vira is working</span></div>
+      <div id="attention-body"></div>
+    </div>
+    <div class="attention-pane" id="attention-day-pane" style="display:none">
+      <div class="attention-hero attention-hero-day" aria-hidden="true">
+        <div class="attention-day-arc"><i></i><span></span></div>
+        <div class="attention-hero-copy">
+          <span>Time field</span>
+          <strong>Shape of the day</strong>
+          <small>anchors, transitions, money</small>
+        </div>
+      </div>
+      <div class="attention-pane-head">
+        <div><span class="attention-pane-title">Your day</span>
+          <span class="brief-date" id="brief-date"></span></div>
+        <button class="fchip sm" id="brief-refresh">Refresh</button>
+      </div>
+      <div id="brief-body"></div>
+    </div>
+    <div class="attention-pane" id="attention-decide-pane" style="display:none">
+      <div class="attention-hero attention-hero-decide" aria-hidden="true">
+        <div class="attention-card-stack"><i></i><i></i><i></i></div>
+        <div class="attention-hero-copy">
+          <span>Decision field</span>
+          <strong id="review-hero-title">Nothing waiting</strong>
+          <small>oldest and highest-consequence first</small>
+        </div>
+      </div>
+      <div class="attention-pane-head">
+        <div><span class="attention-pane-title">Needs a decision</span>
+          <span class="hint" id="review-count">Waiting on you</span></div>
+        <button class="fchip sm" id="review-refresh">Refresh</button>
+      </div>
+      <div id="review-body"></div>
+    </div>
+    <div class="attention-pane" id="attention-picker-pane" style="display:none">
+      <div class="attention-pane-head">
+        <button class="fchip sm attention-back" data-attention-back="decide">Back</button>
+        <span class="attention-pane-title">Morning Picker</span>
+        <button class="fchip sm" id="subsviz-refresh">Refresh</button>
+      </div>
+      <div class="subsviz-meta hint" id="subsviz-meta"></div>
+      <div class="subsviz-empty" id="subsviz-empty" style="display:none"></div>
+      <iframe class="subsviz-frame" id="subsviz-frame" style="display:none"
+              title="Subscription keyframe picker"></iframe>
+    </div>
+    <aside class="attention-source" id="attention-source" hidden
+           aria-label="Source context">
+      <div class="attention-source-head">
+        <div><span class="attention-source-kicker" id="attention-source-kicker"></span>
+          <h3 id="attention-source-title">Source context</h3></div>
+        <button class="fchip sm" id="attention-source-close">Close</button>
+      </div>
+      <div class="attention-source-ref" id="attention-source-ref"></div>
+      <div id="attention-source-media"></div>
+      <pre class="attention-source-text" id="attention-source-text"></pre>
+      <div class="attention-source-actions" id="attention-source-actions"></div>
+    </aside>
   </section>
 
   <!-- JOURNAL (the record of everything told to Vira, moved out of the brief) -->
@@ -409,15 +455,6 @@
     </div>
   </section>
 
-  <!-- TRIAGE (desktop mini-app window; mobile reaches triage via People) -->
-  <section id="view-triage" class="view">
-    <div class="section-head">
-      <h2>Triage</h2>
-      <button class="fchip sm" id="triage-win-refresh" style="margin-left:auto">Refresh</button>
-    </div>
-    <div id="triage-list" class="list"></div>
-  </section>
-
   <!-- FIND (one search over notes, media, people and messages — the
        merge of the old Search and Brain windows) -->
   <section id="view-find" class="view">
@@ -559,20 +596,6 @@
               title="Poll Mercury now and re-reconcile">Refresh</button>
     </div>
     <div id="subs-root"><p class="hint">Loading the ledger…</p></div>
-  </section>
-
-  <!-- MORNING PICKER (subs-visuals: TC-IL keyframe picker -> headless apply).
-       Desktop dock window; on mobile it opens via the #subs-visuals deep link
-       from the 06:00 iMessage (no bottom tab — a once-a-day surface). -->
-  <section id="view-subsviz" class="view">
-    <div class="section-head"><h2>Morning Picker</h2>
-      <button class="btn small" id="subsviz-refresh"
-              title="Re-check for a pending batch">Refresh</button>
-    </div>
-    <div class="subsviz-meta hint" id="subsviz-meta"></div>
-    <div class="subsviz-empty" id="subsviz-empty" style="display:none"></div>
-    <iframe class="subsviz-frame" id="subsviz-frame" style="display:none"
-            title="Subscription keyframe picker"></iframe>
   </section>
 
   <!-- CONFIG (the status dashboard: AI, data sources, channels, system).
