@@ -83,6 +83,18 @@ class ChangelogScopeTests(unittest.TestCase):
         self.assertNotIn("do j2", texts)
         self.assertNotIn("do j3", texts)
 
+    def test_a_worktree_job_counts_as_vira(self):
+        # Feature-branch jobs run in .worktrees/<slug> inside the checkout
+        # (or, pre-2026-07-29, in a sibling named vira-<slug>); both are
+        # Vira work and must not be dropped by the cwd scope.
+        inside = str(changelog.REPO / ".worktrees" / "some-branch")
+        sibling = str(changelog.REPO.parent
+                      / (changelog.REPO.name + "-old-style"))
+        groups = self._groups([], [_job("j1", inside), _job("j2", sibling)])
+        texts = " ".join(self._texts(groups))
+        self.assertIn("do j1", texts)
+        self.assertIn("do j2", texts)
+
     def test_vira_idea_job_counts_even_from_foreign_cwd(self):
         groups = self._groups(
             [_idea("i1", "vira idea", "Vira", status="open")],

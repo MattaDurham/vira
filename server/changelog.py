@@ -47,12 +47,23 @@ def _is_project_idea(it):
 
 
 def _is_project_cwd(cwd):
+    """The Vira checkout, anything inside it (worktrees live at
+    .worktrees/<slug> since 2026-07-29), or a legacy sibling worktree
+    named vira-<slug>. Exact-equality alone silently dropped every job
+    that ran on a feature branch."""
     if not cwd:
         return False
     try:
-        return Path(cwd).expanduser().resolve() == REPO.resolve()
+        p = Path(cwd).expanduser().resolve()
+        repo = REPO.resolve()
     except OSError:
         return False
+    if p == repo or repo in p.parents:
+        return True
+    for anc in (p, *p.parents):
+        if anc.parent == repo.parent and anc.name.startswith(repo.name + "-"):
+            return True
+    return False
 
 
 def _clean(s):
