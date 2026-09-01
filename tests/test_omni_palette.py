@@ -160,5 +160,54 @@ class TheSinkCssCannotEatAClick(unittest.TestCase):
         self.assertIn("opacity: 0", m.group(1))
 
 
+class TheRouterOnlyEverAddsARow(unittest.TestCase):
+    """Rung 2 (claude/omni-router). The routed row pins first when it
+    lands; the deterministic rows must survive it untouched - a null
+    route, an error, a dead backend leave the palette exactly as rung 1
+    shipped it."""
+
+    def setUp(self):
+        self.assertIn("function omniRouteKick", SRC)
+        self.kick = _block("function omniRouteKick")
+        self.rows = _block("function omniRows")
+        self.routed = _block("function omniRoutedRow")
+
+    def test_the_deterministic_rows_survive_the_router(self):
+        # the trailing branch still offers every intent - the router can
+        # only PREPEND, and only when its route resolved
+        self.assertIn('["tell", "ask", "idea", "session"]', self.rows)
+        self.assertIn("omniRouteKick(t)", self.rows)
+
+    def test_the_routed_row_reuses_the_house_routes(self):
+        # OMNI_ROUTES is the one composer; a second dispatch path here
+        # would drift from the deterministic rows' behaviour
+        self.assertIn("OMNI_ROUTES[r.intent]", self.routed)
+        self.assertIn("base.run(text)", self.routed)
+
+    def test_a_held_route_renders_nothing(self):
+        self.assertIn("return null", self.routed)
+        self.assertIn("if (!base || !text) return null;", self.routed)
+
+    def test_an_unresolvable_open_is_held_not_a_dead_row(self):
+        resolve = _block("function omniResolveOpen")
+        self.assertIn("return null", resolve)
+        # resolved both directions against windows AND people, like the
+        # spoken "open ..." prefix
+        self.assertIn("wt.includes(res) || res.includes(wt)", resolve)
+        self.assertIn("peopleCache", resolve)
+
+    def test_the_call_is_debounced_and_cached_per_text(self):
+        self.assertIn("setTimeout", self.kick)
+        # a repeat of the same text never re-spends the call
+        self.assertIn("omniRouted.text === text && omniRouted.state",
+                      self.kick)
+        # a stale answer is dropped when the input moved on
+        self.assertIn("omniRouted.text !== text", self.kick)
+
+    def test_the_pending_state_is_shown_never_blocking(self):
+        palette = _block("function renderPalette")
+        self.assertIn("omniRoutePending", palette)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1292,6 +1292,20 @@ def api_find_ask(body: AskBody):
     return find.ask(q)
 
 
+class OmniRouteBody(BaseModel):
+    text: str
+
+
+@app.post("/api/omni/route")
+def api_omni_route(body: OmniRouteBody):
+    """The dictation door's rung 2 - one model call classifying
+    unprefixed palette prose into a validated route (omniroute.route).
+    A null route is a HELD answer, never an error: the palette keeps
+    its deterministic rows."""
+    from . import omniroute
+    return {"route": omniroute.route(body.text)}
+
+
 @app.get("/api/find/status")
 def api_find_status():
     """One header for four corpora — what is indexed, and what is not."""
