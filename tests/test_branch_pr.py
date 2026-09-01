@@ -29,21 +29,30 @@ class PrLayerBase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_zsh(self, body, pr_exists=True, gh_alive=True):
+    def run_zsh(self, body, pr_exists=True, gh_alive=True,
+                merged_local=False, merged_origin=False, pr_flips=False):
         """Source branch.sh, replace git/gh with recorders, run `body`.
 
-        The gh stub answers `pr view` from pr_exists (a draft, OPEN PR #12)
-        and appends every other call — including a comment body read from
-        stdin via `--body-file -` — to the recorder file.
+        The gh stub answers `pr view` from pr_exists (a draft, OPEN PR #12,
+        head sha abc123) and appends every other call — including a comment
+        body read from stdin via `--body-file -` — to the recorder file.
+        merged_local/merged_origin answer the discard guard's two
+        merge-base --is-ancestor probes (head vs main, head vs origin/main);
+        pr_flips makes the SECOND `pr view` report MERGED, modelling
+        GitHub's async merge detection landing mid-poll.
         """
         stubs = f'''
 source "{BRANCH_SH}"
 REC="{self.rec}"
+PR_FLIP_TRIES=2
+PR_FLIP_WAIT_S=0
 git() {{
   # record mutating calls; answer the reads the code needs
   case "$*" in
     *show-ref*refs/heads/*)          return 0;;
     *show-ref*refs/remotes/origin/*) return {0 if pr_exists else 1};;
+    *merge-base*origin/main*)        return {0 if merged_origin else 1};;
+    *merge-base*)                    return {0 if merged_local else 1};;
     *" log "*|*log\\ --reverse*)      echo "First commit subject"; return 0;;
     *) echo "GIT $*" >> "$REC"; return 0;;
   esac
@@ -54,7 +63,13 @@ gh() {{
     "auth status") return 0;;
     "pr view")
       if {"true" if pr_exists else "false"}; then
-        echo "12 OPEN true https://github.com/x/y/pull/12"; return 0
+        if {"true" if pr_flips else "false"} && [[ -f "$REC.seen" ]]; then
+          echo "12 MERGED false abc123 https://github.com/x/y/pull/12"
+        else
+          touch "$REC.seen"
+          echo "12 OPEN true abc123 https://github.com/x/y/pull/12"
+        fi
+        return 0
       else
         return 1
       fi;;
@@ -208,6 +223,102 @@ class DiscardHook(PrLayerBase):
                            gh_alive=False)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("HOOK-DONE", out.stdout)
+
+
+@posix_only
+class MergedPrIsNeverClosed(PrLayerBase):
+    """The PR #17 incident (2026-09-01): the push landed FIRST and the close
+    still won, because GitHub's merge detection is async and the hook beat
+    it. Closed-not-Merged is permanent (GitHub refuses to reopen a PR whose
+    head is already in its base), so the guard keys on the head sha, never
+    on call ordering."""
+
+    def test_a_merged_pr_waits_for_the_flip_and_is_never_closed(self):
+        out = self.run_zsh(
+            "pr_discard_hook claude/demo; echo KEEP=$PR_KEEP_REMOTE",
+            merged_local=True, merged_origin=True, pr_flips=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("pr close", self.recorded())
+        self.assertIn("reads Merged", out.stdout)
+        # flipped -> the remote branch may be tidied as usual
+        self.assertIn("KEEP=0", out.stdout)
+
+    def test_a_merged_pr_that_never_flips_keeps_the_remote_branch(self):
+        out = self.run_zsh(
+            "pr_discard_hook claude/demo; echo KEEP=$PR_KEEP_REMOTE",
+            merged_local=True, merged_origin=True, pr_flips=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("pr close", self.recorded())
+        self.assertIn("has not flipped it", out.stdout)
+        self.assertIn("KEEP=1", out.stdout)
+
+    def test_an_unpushed_merge_refuses_to_close_and_says_push_first(self):
+        out = self.run_zsh(
+            "pr_discard_hook claude/demo; echo KEEP=$PR_KEEP_REMOTE",
+            merged_local=True, merged_origin=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("pr close", self.recorded())
+        self.assertIn("main is NOT pushed", out.stdout)
+        self.assertIn("KEEP=1", out.stdout)
+
+    def test_a_genuinely_dropped_pr_still_closes(self):
+        # head NOT reachable from main = real drop-it — the old behaviour.
+        out = self.run_zsh("pr_discard_hook claude/demo",
+                           merged_local=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("pr close", self.recorded())
+
+
+@posix_only
+class SyncHead(PrLayerBase):
+    """The PR #5 lesson: a branch rebased after its PR opened lands under a
+    sha the PR head does not carry, and the PR reads Closed instead of
+    Merged. cmd_merge syncs the head first, best-effort."""
+
+    def test_a_branch_with_a_pr_gets_its_head_pushed(self):
+        out = self.run_zsh("pr_sync_head claude/demo")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rec = self.recorded()
+        self.assertIn("push --force-with-lease origin claude/demo", rec)
+        self.assertIn("synced origin/claude/demo", out.stdout)
+
+    def test_no_pr_means_no_push(self):
+        out = self.run_zsh("pr_sync_head claude/demo; echo SYNC-DONE",
+                           pr_exists=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("SYNC-DONE", out.stdout)
+        self.assertNotIn("push", self.recorded())
+
+    def test_dead_gh_never_fails_the_sync(self):
+        out = self.run_zsh("pr_sync_head claude/demo; echo SYNC-DONE",
+                           gh_alive=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("SYNC-DONE", out.stdout)
+        self.assertNotIn("push", self.recorded())
+
+
+@posix_only
+class GuardWiring(unittest.TestCase):
+    """The joins, as source contracts — the shell harness cannot drive
+    cmd_merge/cmd_discard whole (they touch worktrees and launchd), so pin
+    that the guarded pieces are actually reached from them."""
+
+    def test_cmd_merge_syncs_the_pr_head_before_merging(self):
+        src = BRANCH_SH.read_text(encoding="utf-8")
+        at_sync = src.index('pr_sync_head "$branch" || true')
+        at_merge = src.index('git -C "$LIVE" merge --no-ff')
+        self.assertLess(at_sync, at_merge,
+                        "the head must be on origin BEFORE the sha it will "
+                        "merge as exists, or GitHub cannot connect the PR")
+
+    def test_cmd_discard_honours_the_keep_remote_flag(self):
+        src = BRANCH_SH.read_text(encoding="utf-8")
+        hook_at = src.index("pr_discard_hook", src.index("cmd_discard()"))
+        keep_at = src.index('"${PR_KEEP_REMOTE:-0}" == 1',
+                            src.index("cmd_discard()"))
+        self.assertLess(hook_at, keep_at,
+                        "the flag is set by the hook and must be consulted "
+                        "AFTER it, before the origin branch deletion")
 
 
 @posix_only

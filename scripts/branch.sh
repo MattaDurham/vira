@@ -15,7 +15,7 @@
 #                              (draft by default; --title T --body-file F --ready)
 #   branch.sh merge <slug>     fast, clean merge into live main (aborts on conflict)
 #   branch.sh discard <slug>   remove worktree + branch (refuses if dirty;
-#                              closes an open PR without merging)
+#                              closes an unmerged PR; never a merged one)
 
 set -eu
 
@@ -602,11 +602,13 @@ cmd_list() {
 
 gh_ok() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
 
-# "number state isDraft url" for the branch's PR, rc 1 when there is none.
-# gh resolves the repo from the cwd's remotes, hence the subshell cd.
+# "number state isDraft headSha url" for the branch's PR, rc 1 when there is
+# none. gh resolves the repo from the cwd's remotes, hence the subshell cd.
+# The head sha is what lets the discard hook tell a merged PR from a dropped
+# one — the fact the whole never-close-a-merged-PR guard keys on.
 pr_info() {
-  ( cd "$LIVE" && gh pr view "$1" --json number,state,isDraft,url \
-      --jq '"\(.number) \(.state) \(.isDraft) \(.url)"' ) 2>/dev/null
+  ( cd "$LIVE" && gh pr view "$1" --json number,state,isDraft,headRefOid,url \
+      --jq '"\(.number) \(.state) \(.isDraft) \(.headRefOid) \(.url)"' ) 2>/dev/null
 }
 
 cmd_pr() {
@@ -634,8 +636,8 @@ cmd_pr() {
 
   git -C "$LIVE" push -u origin "$branch"
 
-  local info num state draft url
-  if info=$(pr_info "$branch") && { read -r num state draft url <<<"$info"; [[ "$state" == "OPEN" ]]; }; then
+  local info num state draft head url
+  if info=$(pr_info "$branch") && { read -r num state draft head url <<<"$info"; [[ "$state" == "OPEN" ]]; }; then
     # The push above already updated the PR's commits; apply any edits.
     [[ -n "$title" ]]     && ( cd "$LIVE" && gh pr edit "$branch" --title "$title" ) >/dev/null
     [[ -n "$body_file" ]] && ( cd "$LIVE" && gh pr edit "$branch" --body-file "$body_file" ) >/dev/null
@@ -664,10 +666,10 @@ cmd_pr() {
 PR_NOTE=""
 pr_merge_hook() {
   local branch=$1 pf_log=${2:-} pf_pass=${3:-0}
-  local info num state draft url rows verdict body
+  local info num state draft head url rows verdict body
   gh_ok || return 0
   info=$(pr_info "$branch") || return 0
-  read -r num state draft url <<<"$info"
+  read -r num state draft head url <<<"$info"
   [[ "$state" == "OPEN" ]] || return 0
   if [[ "$draft" == "true" ]]; then
     ( cd "$LIVE" && gh pr ready "$branch" ) >/dev/null 2>&1 \
@@ -698,15 +700,71 @@ Merged locally by \`branch.sh merge\`; this PR flips to **Merged** when main is 
   PR_NOTE="   # flips PR #$num to Merged"
 }
 
+# Called by cmd_merge BEFORE the merge: origin/<branch> must hold the exact
+# sha about to land, or GitHub cannot connect the PR to the merge and it ends
+# CLOSED instead of MERGED (the PR #5 lesson: a branch rebased after its PR
+# opened lands under a sha the PR head does not carry). force-with-lease,
+# because a rebase is exactly the case being synced. Best-effort — a dead gh
+# or refused push must never block a finished local merge, but it says so,
+# because a stale PR head is a merged PR that will read Closed.
+pr_sync_head() {
+  local branch=$1
+  gh_ok || return 0
+  pr_info "$branch" >/dev/null || return 0
+  if git -C "$LIVE" push --force-with-lease origin "$branch" >/dev/null 2>&1; then
+    echo "  synced origin/$branch to the local head (its PR merges by sha)"
+  else
+    echo "  NOTE: could not push origin/$branch — a rebased branch's PR may read"
+    echo "        Closed instead of Merged; push it by hand before pushing main"
+  fi
+}
+
 # Discard closes an open PR WITHOUT merging — "considered and rejected" is
 # part of the record, and the closed PR is what keeps the diff visible after
 # the branch is deleted (GitHub retains refs/pull/N/head).
+#
+# A MERGED PR MUST NEVER BE CLOSED, and the guard is structural, not a
+# sequencing rule — learned twice: PR #3 (2026-08-27, a pipeline hid a failed
+# push and discard closed a merged PR) and PR #17 (2026-09-01, the push
+# landed FIRST and the close still won, because GitHub's merge detection is
+# async and the hook beat it). Closed-not-Merged is permanent: GitHub refuses
+# to reopen a PR whose head is already reachable from its base. So the hook
+# keys on the head sha, not on ordering: work that is in main ends MERGED or
+# stays OPEN — it is never closed, and origin's branch is kept until GitHub
+# has actually flipped it (PR_KEEP_REMOTE, read by cmd_discard).
+# PR_FLIP_TRIES / PR_FLIP_WAIT_S exist for the tests, which cannot wait 30s.
+PR_KEEP_REMOTE=0
 pr_discard_hook() {
-  local branch=$1 info num state draft url
+  local branch=$1 info num state draft head url i
   gh_ok || return 0
   info=$(pr_info "$branch") || return 0
-  read -r num state draft url <<<"$info"
+  read -r num state draft head url <<<"$info"
   [[ "$state" == "OPEN" ]] || return 0
+
+  if [[ -n "$head" ]] && git -C "$LIVE" merge-base --is-ancestor "$head" main 2>/dev/null; then
+    # This PR's work IS in main — it must end Merged, never Closed.
+    if ! git -C "$LIVE" merge-base --is-ancestor "$head" origin/main 2>/dev/null; then
+      PR_KEEP_REMOTE=1
+      echo "NOTE: PR #$num is merged locally but main is NOT pushed — leaving the"
+      echo "      PR open and origin/$branch in place. Push main (which flips it"
+      echo "      to Merged), then discard again to finish the teardown."
+      return 0
+    fi
+    # main is pushed; give GitHub's async merge detection time to flip it.
+    for i in $(seq 1 "${PR_FLIP_TRIES:-10}"); do
+      info=$(pr_info "$branch") || break
+      read -r num state draft head url <<<"$info"
+      [[ "$state" == "MERGED" ]] && { echo "PR #$num reads Merged"; return 0; }
+      sleep "${PR_FLIP_WAIT_S:-3}"
+    done
+    PR_KEEP_REMOTE=1
+    echo "NOTE: PR #$num is merged into pushed main but GitHub has not flipped it"
+    echo "      to Merged yet. Leaving the PR open and origin/$branch in place —"
+    echo "      the next push to main re-triggers detection. Never close it by"
+    echo "      hand: Closed-not-Merged is permanent."
+    return 0
+  fi
+
   ( cd "$LIVE" && gh pr comment "$branch" --body "Closed without merging — this line of work was discarded. The diff and write-up stay here as the record of what was considered." ) >/dev/null 2>&1 || true
   if ( cd "$LIVE" && gh pr close "$branch" ) >/dev/null 2>&1; then
     echo "closed PR #$num without merging (the diff stays visible on GitHub)"
@@ -789,6 +847,7 @@ cmd_merge() {
     fi
   fi
 
+  pr_sync_head "$branch" || true
   echo "merging $branch into main..."
   if ! git -C "$LIVE" merge --no-ff "$branch" -m "Merge branch '$branch'"; then
     git -C "$LIVE" merge --abort
@@ -860,8 +919,14 @@ cmd_discard() {
         git -C "$LIVE" branch -D "$branch"; }
   fi
   # Tidy the remote copy too — the PR (merged or closed) keeps the diff via
-  # refs/pull/N/head, so deleting origin's branch loses nothing.
-  if git -C "$LIVE" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+  # refs/pull/N/head, so deleting origin's branch loses nothing. UNLESS the
+  # discard hook is still waiting on GitHub's merge detection: deleting the
+  # head branch then may break the flip and strand the PR Open-forever (or
+  # worse, Closed if anything ever closed it — Closed-not-Merged is
+  # permanent).
+  if [[ "${PR_KEEP_REMOTE:-0}" == 1 ]]; then
+    echo "kept origin/$branch — its PR has not flipped to Merged yet; discard again once it has"
+  elif git -C "$LIVE" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
     if git -C "$LIVE" push origin --delete "$branch" 2>/dev/null; then
       echo "deleted origin/$branch (its PR keeps the diff)"
     else
