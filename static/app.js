@@ -3241,6 +3241,23 @@ function findAnswer(d) {
   if (d.relaxed?.length)
     wrap.appendChild(el("div", "search-hint",
       "Relaxed: " + d.relaxed.join(", ")));
+  // The vault-chat dead-end, ended (2026-09-01, claude/omni-router): a
+  // chat answer the vault could not ground offers the four-corpus Ask
+  // instead of stopping - vault chat is vault-only BY DESIGN, and the
+  // honest "not in your notes" needs a door to where the answer may
+  // actually live. Chat turns carry .question; the one-shot ask payload
+  // does not, and it already spans every corpus.
+  if (d.question && !(d.citations || []).length) {
+    const row = el("div", "search-hint");
+    const jump = el("button", "fchip sm",
+                    "Not in your notes — search messages, photos and mail");
+    jump.addEventListener("click", () => {
+      hideFindChat();
+      if (findSetQuery) findSetQuery(d.question, { ask: true });
+    });
+    row.appendChild(jump);
+    wrap.appendChild(row);
+  }
   return wrap;
 }
 
@@ -21351,6 +21368,73 @@ const OMNI_PREFIXES = [
 const omniQuote = (t) =>
   "“" + (t.length > 64 ? t.slice(0, 64).trimEnd() + "…" : t) + "”";
 
+// Rung 2 - the AI router (2026-09-01, branch claude/omni-router). One
+// small model call reads unprefixed prose and returns a validated route
+// ({intent, text, target, why} from /api/omni/route); the palette
+// renders it as the pinned top row the moment it lands. Deterministic
+// rows always remain - the router only ever ADDS a sharper first row
+// (grounded-or-held: a null route, an error, a dead backend change
+// nothing). The call is debounced and cached per exact text, so one
+// dictation burst costs one call and a keystroke can never storm the
+// backend.
+let omniRouted = { text: "", state: "", route: null };
+
+function omniRouteKick(text) {
+  if (omniRouted.text === text && omniRouted.state) return;
+  omniRouted = { text, state: "pending", route: null };
+  clearTimeout(omniRouteKick.t);
+  omniRouteKick.t = setTimeout(async () => {
+    try {
+      const { route } = await post("/api/omni/route", { text });
+      if (omniRouted.text !== text) return;   // the input moved on
+      omniRouted = { text, state: "done", route: route || null };
+    } catch {
+      if (omniRouted.text === text)
+        omniRouted = { text, state: "failed", route: null };
+    }
+    if (paletteOpen) renderPalette();
+  }, 600);
+}
+
+// "Open X" resolved the way the deterministic open matcher resolves -
+// both directions, windows then people - so the routed row and the
+// spoken "open ..." prefix cannot disagree about what a name means.
+function omniResolveOpen(res) {
+  res = (res || "").toLowerCase().trim();
+  if (!res) return null;
+  for (const w of WINDOWS) {
+    const wt = w.title.toLowerCase();
+    if (wt.includes(res) || res.includes(wt))
+      return { label: "Open " + w.title,
+               run: () => w.companion ? openFindChatCompanion(w.id)
+                                      : openWindow(w.id) };
+  }
+  const p = peopleCache.find((q) => {
+    const n = (q.name || "").toLowerCase();
+    return n && (n.includes(res) || res.includes(n));
+  });
+  if (p) return { label: p.name, run: () => openPerson(p.id) };
+  return null;   // held - an unresolvable open row would be a dead row
+}
+
+function omniRoutedRow(r) {
+  if (!r) return null;
+  if (r.intent === "open") {
+    const hit = omniResolveOpen(r.target || r.text);
+    if (!hit) return null;
+    return { label: "Vira: " + hit.label, kind: "vira routes",
+             run: hit.run };
+  }
+  const base = OMNI_ROUTES[r.intent];
+  const text = (r.text || "").trim();
+  if (!base || !text) return null;
+  return { label: "Vira: " + base.label + " — " + omniQuote(text),
+           kind: "vira routes", run: () => base.run(text) };
+}
+
+const omniRoutePending = (q) =>
+  omniRouted.text === q.trim() && omniRouted.state === "pending";
+
 function omniRow(intent, text) {
   const r = OMNI_ROUTES[intent];
   return { label: r.label + " — " + omniQuote(text), kind: r.kind,
@@ -21377,10 +21461,20 @@ function omniRows(q) {
     if (!rest) return none;   // the bare label — the content is still coming
     return { pinned: [omniRow(p.intent, rest)], trailing: [], open: null };
   }
-  if (t.split(/\s+/).length >= 3)
-    return { pinned: [], open: null,
+  if (t.split(/\s+/).length >= 3) {
+    // rung 2: ask the router; its row pins FIRST when it lands, and
+    // until then (or on a held/failed route) the deterministic rows
+    // stand exactly as before
+    omniRouteKick(t);
+    const pinned = [];
+    if (omniRouted.text === t) {
+      const routed = omniRoutedRow(omniRouted.route);
+      if (routed) pinned.push(routed);
+    }
+    return { pinned, open: null,
              trailing: ["tell", "ask", "idea", "session"]
                .map((k) => omniRow(k, t)) };
+  }
   return none;
 }
 
@@ -21534,9 +21628,13 @@ function paletteMatches(q) {
 
 function renderPalette() {
   const list = $("#palette-list");
-  const items = paletteMatches($("#palette-input").value.trim());
+  const q = $("#palette-input").value.trim();
+  const items = paletteMatches(q);
   if (paletteIdx >= items.length) paletteIdx = Math.max(0, items.length - 1);
   list.innerHTML = "";
+  if (omniRoutePending(q))
+    list.appendChild(el("div", "palette-empty",
+                        "Vira is reading the request…"));
   if (!items.length) list.appendChild(el("div", "palette-empty", "No matches."));
   items.forEach((it, i) => {
     const row = el("div", "palette-row" + (i === paletteIdx ? " active" : ""));

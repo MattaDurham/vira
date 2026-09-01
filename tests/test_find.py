@@ -6,6 +6,7 @@ Every case pins a FIXED today, so "last March" means the same thing in
 
 Run: .venv/bin/python -m unittest tests.test_find
 """
+import json
 import unittest
 from datetime import date
 from unittest import mock
@@ -241,7 +242,12 @@ class RungTwo(PlanFixture):
             p = find.plan_llm("did someone send a snowmobile picture",
                               today=TODAY)
         self.assertEqual(p["rung"], 2)
-        self.assertEqual(p["databases"], ["media"])
+        # the model's list REORDERS the corpora, it never excludes them
+        # (the module rule; only an explicit db: narrows) - the rest of
+        # the databases ride behind its preference
+        self.assertEqual(p["primary"], "media")
+        self.assertEqual(p["databases"][0], "media")
+        self.assertEqual(set(p["databases"]), set(find.DATABASES))
         self.assertEqual(p["filters"]["person"], "p_dana")
         self.assertEqual(p["text"], "snowmobile")
 
@@ -382,6 +388,167 @@ class AskRouting(PlanFixture):
         self.assertIsNone(out["answer"])
         self.assertIn("backend down", out["answer_error"])
         self.assertEqual(out["counts"]["notes"], 1)
+
+
+class TrailingWindows(PlanFixture):
+    """"this month" is a RECENCY qualifier, never the calendar bucket:
+    read month-to-date it is a near-empty window on the 1st (the
+    owner-reported insurance miss, 2026-09-01)."""
+
+    def test_this_month_is_a_trailing_window(self):
+        f = self.plan("insurance this month")["filters"]
+        self.assertEqual((f["since"], f["until"]), ("2026-06-21", None))
+
+    def test_this_month_on_the_first_still_reaches_back(self):
+        f = find.plan("insurance this month",
+                      today=date(2026, 9, 1))["filters"]
+        self.assertEqual((f["since"], f["until"]), ("2026-08-01", None))
+
+    def test_this_week_trails_seven_days(self):
+        f = self.plan("what shipped this week")["filters"]
+        self.assertEqual((f["since"], f["until"]), ("2026-07-15", None))
+
+    def test_last_month_stays_the_calendar_month(self):
+        # "last X" names a COMPLETED unit; only "this X" trails
+        f = self.plan("invoices last month")["filters"]
+        self.assertEqual((f["since"], f["until"]),
+                         ("2026-06-01", "2026-07-01"))
+
+
+class AskRelaxAndFallback(PlanFixture):
+    """The corpora that never had an answer contract (messages, people)
+    answer over their filtered rows now, relax an empty query one
+    constraint at a time, and fall back to a corpus that has something
+    to say - the insurance dead-end of 2026-09-01, ended."""
+
+    ZERO = staticmethod(lambda p, n: {"rows": [], "count": 0})
+
+    def _plan_payload(self, **extra):
+        got = {"databases": ["messages"], "sender": "p_kim",
+               "query": "insurance", "wants": "the text"}
+        got.update(extra)
+        return json.dumps(got)
+
+    def test_messages_relax_drops_the_date_window_and_answers(self):
+        rows = [{"seq": 1, "when": "2026-07-01T10:00", "person_id": "p_kim",
+                 "text": "new insurance member ids attached",
+                 "source": "imessage", "from_me": False}]
+
+        def messages(p, n):
+            if p["filters"]["since"]:
+                return {"rows": [], "count": 0}
+            return {"rows": rows, "count": 1}
+
+        adapters = {"messages": messages, "notes": self.ZERO,
+                    "media": self.ZERO, "people": self.ZERO}
+        with mock.patch.object(find, "ADAPTERS", adapters), \
+             mock.patch("server.suggest.complete",
+                        side_effect=[self._plan_payload(since="2026-07-22"),
+                                     "answered from the rows"]), \
+             mock.patch("server.search._people_for_prompt",
+                        return_value=""):
+            out = find.ask("did Kim text me the insurance recently",
+                           today=TODAY)
+        self.assertEqual(out["answer"], "answered from the rows")
+        self.assertIn("the date window", out["relaxed"])
+        # the list beside the answer shows the SAME relaxed hit set
+        self.assertEqual(out["counts"]["messages"], 1)
+        self.assertNotIn("fallback", out)
+
+    def test_relaxation_widens_sender_to_the_conversation(self):
+        def messages(p, n):
+            f = p["filters"]
+            if f["sender"] is None and f["person"] == "p_kim":
+                return {"rows": [{"seq": 2, "text": "here", "from_me": True,
+                                  "when": "2026-07-02T09:00"}], "count": 1}
+            return {"rows": [], "count": 0}
+
+        adapters = {"messages": messages, "notes": self.ZERO,
+                    "media": self.ZERO, "people": self.ZERO}
+        with mock.patch.object(find, "ADAPTERS", adapters), \
+             mock.patch("server.suggest.complete",
+                        side_effect=[self._plan_payload(), "got it"]), \
+             mock.patch("server.search._people_for_prompt",
+                        return_value=""):
+            out = find.ask("did Kim send the thing", today=TODAY)
+        self.assertEqual(out["answer"], "got it")
+        self.assertIn("either direction with them", out["relaxed"])
+
+    def test_empty_primary_falls_back_to_a_corpus_with_hits(self):
+        hits = [{"path": "n.md"}]
+        adapters = {"messages": self.ZERO, "media": self.ZERO,
+                    "people": self.ZERO,
+                    "notes": lambda p, n: {"rows": [{"path": "n.md"}],
+                                           "count": 1, "hits": hits}}
+
+        def fake_vault_ask(question, k=10, hits=None):
+            return {"answer": "it is in your notes", "citations": []}
+
+        with mock.patch.object(find, "ADAPTERS", adapters), \
+             mock.patch("server.suggest.complete",
+                        side_effect=[self._plan_payload(
+                            databases=["messages", "notes"])]), \
+             mock.patch("server.search._people_for_prompt",
+                        return_value=""), \
+             mock.patch("server.vault.ask", fake_vault_ask):
+            out = find.ask("where is the insurance info", today=TODAY)
+        self.assertEqual(out["fallback"],
+                         {"from": "messages", "to": "notes"})
+        self.assertEqual(out["answer"], "it is in your notes")
+
+    def test_the_answer_sees_sibling_corpora_rows_labelled(self):
+        # the insurance-question shape: the primary (messages) has rows,
+        # but the thing itself is a PHOTO - the answer prompt carries
+        # the media rows under a labelled header so it can point there
+        msg_rows = [{"seq": 1, "when": "2026-06-01T10:00",
+                     "person_id": "p_kim", "text": "insurance chat",
+                     "from_me": False}]
+        media_rows = [{"seq": 7, "kind": "photo", "name": "card.png",
+                       "when": "2026-06-02T11:00", "person_id": "p_kim",
+                       "caption": "an insurance card", "from_me": False}]
+        adapters = {"messages": lambda p, n: {"rows": msg_rows,
+                                              "count": 1},
+                    "media": lambda p, n: {"rows": media_rows,
+                                           "count": 1},
+                    "notes": self.ZERO, "people": self.ZERO}
+        prompts = []
+
+        def fake_complete(prompt):
+            if not prompts:          # rung 2's plan call
+                prompts.append(prompt)
+                return self._plan_payload()
+            prompts.append(prompt)
+            return "the card is the photo"
+
+        with mock.patch.object(find, "ADAPTERS", adapters), \
+             mock.patch("server.suggest.complete", fake_complete), \
+             mock.patch("server.search._people_for_prompt",
+                        return_value=""):
+            out = find.ask("where are the insurance account numbers",
+                           today=TODAY)
+        self.assertEqual(out["answer"], "the card is the photo")
+        answer_prompt = prompts[-1]
+        self.assertIn("Also retrieved from media", answer_prompt)
+        self.assertIn("card.png", answer_prompt)
+        self.assertIn("insurance chat", answer_prompt)
+
+    def test_nothing_anywhere_is_an_honest_sentence_never_a_blank(self):
+        adapters = {db: self.ZERO for db in find.DATABASES}
+
+        def fake_media_ask(question, plan=None):
+            return {"answer": None, "relaxed": [], "results": []}
+
+        with mock.patch.object(find, "ADAPTERS", adapters), \
+             mock.patch("server.suggest.complete",
+                        side_effect=[self._plan_payload()]), \
+             mock.patch("server.search._people_for_prompt",
+                        return_value=""), \
+             mock.patch("server.search.ask", fake_media_ask):
+            out = find.ask("did Kim send the zorp file", today=TODAY)
+        self.assertTrue(out["answer"])
+        self.assertIn("Nothing matched", out["answer"])
+        # the sentence names the person, not a pid
+        self.assertIn("Kim Vantongeren", out["answer"])
 
 
 if __name__ == "__main__":

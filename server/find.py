@@ -218,18 +218,26 @@ def _dates(text, today=None):
     if m:
         which, unit = m[1].lower(), m[2].lower()
         residual = _cut(text, m.span())
+        if which == "this":
+            # "this month" is a RECENCY qualifier, never the calendar
+            # bucket: read as month-to-date it is a near-empty window on
+            # the 1st (the owner-reported insurance miss, 2026-09-01 - "recently,
+            # like this month" parsed to since=today and matched
+            # nothing). A trailing window always contains the calendar
+            # reading, and ranking absorbs the extra recall.
+            days = {"week": 7, "month": 31, "year": 365}[unit]
+            return (today - timedelta(days=days)).isoformat(), None, \
+                residual
         if unit == "week":
-            start = today - timedelta(days=today.weekday()
-                                      + (7 if which == "last" else 0))
+            start = today - timedelta(days=today.weekday() + 7)
             return start.isoformat(), \
                 (start + timedelta(days=7)).isoformat(), residual
         if unit == "month":
             mo, yr = today.month, today.year
-            if which == "last":
-                mo, yr = (12, yr - 1) if mo == 1 else (mo - 1, yr)
+            mo, yr = (12, yr - 1) if mo == 1 else (mo - 1, yr)
             s, u = _month_window(mo, yr)
             return s, u, residual
-        yr = today.year - (which == "last")
+        yr = today.year - 1
         return date(yr, 1, 1).isoformat(), date(yr + 1, 1, 1).isoformat(), \
             residual
 
@@ -533,7 +541,7 @@ Reply with ONLY a JSON object, no prose:
  "query": "<the content words to match on, or null>",
  "wants": "<one line: what would count as the answer>"
 }}
-Rules: dates belong in since/until, never in query. Omit people's names from query when person, sender or face_person already covers them. face_person is only for people visible in an image, never the sender. Prefer fewer databases when the question clearly names one."""
+Rules: dates belong in since/until, never in query. "recently", "lately", "this month" and similar mean a TRAILING window measured back from today (since about 30-45 days ago, until null) - never the start of the current calendar week/month, which is a near-empty window early in the period. Omit people's names from query when person, sender or face_person already covers them. face_person is only for people visible in an image, never the sender. Put the best database first; ordering expresses preference, and every database is still searched."""
 
 
 def plan_llm(q, today=None):
@@ -557,7 +565,13 @@ def plan_llm(q, today=None):
     f = dict(base["filters"])
     dbs = [d for d in (got.get("databases") or []) if d in DATABASES]
     if dbs:
-        p["databases"] = dbs
+        # Signals REORDER the corpora, they never exclude them (the
+        # module rule; only an explicit db: narrows). The model's list
+        # is its preference order; the rest of the corpora ride behind
+        # it - the first live ask excluded media while the answer
+        # was a photo, and the lists beside the answer went dark with it.
+        p["databases"] = dbs + [d for d in base["databases"]
+                                if d not in dbs]
         p["primary"] = dbs[0]
     for key in ("person", "sender", "direction", "since", "until",
                 "face_person"):
@@ -646,7 +660,10 @@ def a_media(p, limit):
         kind=f["kind"], direction=f["direction"],
         face_pid=f.get("face_person"),
         since=_apple_ns(f["since"]), until=_apple_ns(f["until"]),
-        limit=limit, exact=f["exact"])
+        limit=limit, exact=f["exact"],
+        # order was silently dropped here since the module shipped - a
+        # recency sort reached every other corpus and never this one
+        order=f["order"])
     return {"rows": rows, "count": len(rows)}
 
 
@@ -723,37 +740,243 @@ def find(q, limit=20, today=None):
     return run(plan(q, today=today), limit=limit)
 
 
+# ---------- the ask layer's relaxation + answer contracts ----------
+
+# What an empty filtered query drops, one constraint at a time - the
+# media ask's ladder (search.ask) brought to the corpora that never had
+# one. Dates go first: they are the most misparsed signal ("this month"
+# asked on the 1st was a near-empty window - the owner-reported insurance miss,
+# 2026-09-01), and a memory's date is wrong far more often than its
+# person. `sender` WIDENS to the whole conversation with that person
+# before the person constraint itself is surrendered last.
+RELAX_LADDER = ("until", "since", "direction", "kind", "sender", "person")
+
+_RELAX_LABEL = {"until": "the end date", "since": "the date window",
+                "direction": "the direction", "kind": "the kind filter",
+                "person": "the person filter"}
+
+
+def _relax(p, primary, limit):
+    """Re-run the primary corpus with constraints dropped in ladder
+    order until something matches. Mutates the plan's filters so the
+    answer and the list beside it describe the SAME query. Returns
+    (group_or_None, relaxed_labels)."""
+    relaxed = []
+    f = p["filters"]
+    for key in RELAX_LADDER:
+        if key == "sender":
+            if not f.get("sender") or f["sender"] == "me":
+                continue
+            if not f.get("person"):
+                f["person"] = f["sender"]
+            f["sender"] = None
+            relaxed.append("either direction with them")
+        elif f.get(key):
+            f[key] = None
+            if key in ("since", "until"):
+                # the window was evidence of a RECENCY intent ("recently,
+                # like this month"); dropping it must not drop the
+                # intent, so it survives as the sort - the newest match
+                # leads instead of whatever bm25 likes (the 2023 card
+                # outranking the 2026 one)
+                f["order"] = "recent"
+            relaxed.append(_RELAX_LABEL[key])
+        else:
+            continue
+        got = ADAPTERS[primary](p, limit)
+        if got.get("count"):
+            return got, relaxed
+    return None, relaxed
+
+
+def _pid_name(pid):
+    if not pid or pid == "me":
+        return "you" if pid == "me" else ""
+    try:
+        person = crm._load()["by_id"].get(pid) or {}
+        return person.get("name") or pid
+    except Exception:      # noqa: BLE001 — a name is decoration here
+        return pid
+
+
+# Each context row is cut so ASK_LIMIT rows of mail bodies (which run to
+# tens of KB) cannot crowd each other out of the answer prompt; 24 rows
+# at this size stay far inside modelbudget's interactive class.
+ANSWER_ROW_CHARS = 700
+
+ROWS_PROMPT = """You answer a question from the owner's own indexed data. Below are the retrieved rows, newest first. Answer ONLY from these rows - never invent a fact, figure or date that is not in them. Cite the row's date and sender inline where it grounds the answer. If the rows do not contain the answer, say so plainly and describe the closest thing they do contain.
+{relaxed_note}
+Question: {question}
+
+Rows:
+{rows}
+
+Answer in a few plain sentences, no preamble."""
+
+
+def _row_line(i, r):
+    when = str(r.get("when") or "")[:16]
+    if r.get("from_me"):
+        who = "me"
+    else:
+        who = _pid_name(r.get("person_id") or r.get("person")) \
+            or r.get("sender") or ""
+    body = r.get("text") or r.get("summary") or r.get("caption") or ""
+    ctx = r.get("context")
+    if not body and isinstance(ctx, dict):
+        body = ctx.get("text") or ""
+    if r.get("subject"):
+        body = f"[{r['subject']}] {body}"
+    if r.get("kind") and r.get("name"):
+        # a media row: say what the item IS, then whatever text rode
+        # with it (its caption, or the message beside it)
+        body = f"a {r['kind']} '{r['name']}'" + (f" - {body}" if body
+                                                 else "")
+    if not body:
+        body = " - ".join(str(r[k]) for k in ("name", "title", "company")
+                          if r.get(k))
+    src = r.get("source") or ""
+    head = " ".join(x for x in (when, f"from {who}" if who else "",
+                                f"({src})" if src else "") if x)
+    return f"[{i}] {head}: {body[:ANSWER_ROW_CHARS]}"
+
+
+# Sibling-corpus rows shown to the answer beside the primary's - a
+# cross-corpus question ("the insurance with the account numbers") is
+# often answered by a PHOTO while the primary is messages, and an
+# answer blind to the list beside it re-creates the vault-chat
+# dead-end. Capped so pointers never crowd out the grounding rows.
+SIBLING_ROWS = 6
+
+
+def _answer_rows(question, rows, relaxed, groups=None, primary=None):
+    """One grounded model pass over the filtered rows - the answer
+    contract messages and people never had (ask() used to return
+    answer=None for both, which the UI rendered as a blank). Rows from
+    the OTHER corpora ride along under a labelled header, so the answer
+    can point at the photo or note that actually holds the thing."""
+    from .suggest import complete
+    note = ""
+    if relaxed:
+        note = ("Note: the strict query matched nothing, so these "
+                "constraints were loosened: " + ", ".join(relaxed)
+                + ". Say so if it matters to the answer.\n")
+    lines = [_row_line(i + 1, r) for i, r in enumerate(rows[:ASK_LIMIT])]
+    n = len(lines)
+    for db, g in (groups or {}).items():
+        if db == primary or not g.get("rows"):
+            continue
+        lines.append(f"Also retrieved from {db}:")
+        for r in g["rows"][:SIBLING_ROWS]:
+            n += 1
+            lines.append(_row_line(n, r))
+    return (complete(ROWS_PROMPT.format(question=question,
+                                        rows="\n".join(lines),
+                                        relaxed_note=note)) or "").strip()
+
+
+def _no_hits_text(p, relaxed, orig_filters=None):
+    """The deterministic honest-empty answer - never a blank, never a
+    model call over nothing. Speaks about the ORIGINAL query - the
+    relaxation mutates the live filters, and a sentence describing the
+    already-loosened query would omit the very person it searched for."""
+    f = orig_filters or p["filters"]
+    bits = []
+    if p.get("text"):
+        bits.append(f"'{p['text']}'")
+    who = _pid_name(f.get("sender") or f.get("person"))
+    if who:
+        bits.append("from " + who if f.get("sender") else "with " + who)
+    if f.get("since") or f.get("until"):
+        span = " to ".join(x for x in (f.get("since"), f.get("until")) if x)
+        bits.append("in " + span)
+    what = " ".join(bits) or "that"
+    msg = f"Nothing matched {what} in " + ", ".join(p["databases"]) + "."
+    if relaxed:
+        msg += (" I also loosened " + ", ".join(relaxed)
+                + " and still found nothing.")
+    return msg
+
+
 def ask(question, limit=ASK_LIMIT, today=None):
     """The answer path: rung 2, then the owning corpus's own ask.
 
-    The two ask contracts stay distinct on purpose (the 2026-07-21 audit
+    The ask contracts stay distinct on purpose (the 2026-07-21 audit
     call: converge the engine, not the contracts) — notes answers are
     grounded and cited, media answers relax constraints and narrate the
-    near-misses. Both now answer over the FILTERED hit set, so the prose
-    can no longer contradict the list beside it.
+    near-misses, and messages/people answer over their filtered rows
+    via _answer_rows. All answer over the FILTERED hit set, so the
+    prose can no longer contradict the list beside it. An empty primary
+    relaxes (RELAX_LADDER) and then FALLS BACK to the next corpus in
+    the plan that has something to say — `fallback` on the payload
+    names the step, because an answer from the wrong corpus presented
+    as the right one is the vault-chat dead-end this exists to end.
     """
     p = plan_llm(question, today=today)
+    orig_filters = dict(p["filters"])
     out = run(p, limit=limit)
     out["answer"] = None
     out["citations"] = []
+    out["relaxed"] = []
     primary = p["primary"]
+
+    # media retrieves and relaxes inside search.ask; the other corpora
+    # relax here before anything answers.
+    if primary in ("messages", "people") and \
+            not out["groups"].get(primary, {}).get("count"):
+        got, relaxed = _relax(p, primary, limit)
+        out["relaxed"] = relaxed
+        if got:
+            # re-run the WHOLE fan-out under the relaxed filters, not
+            # just the primary: the strict date window that emptied the
+            # primary emptied the siblings too, and the owner-reported insurance
+            # answer was a PHOTO the media group only finds once the
+            # window opens. The lists beside the answer must describe
+            # the same relaxed query the answer does.
+            rerun = run(p, limit=limit)
+            out["groups"] = rerun["groups"]
+            out["counts"] = rerun["counts"]
+
+    answer_db = primary
+    if primary in ("messages", "people") and \
+            not out["groups"].get(primary, {}).get("count"):
+        for db in p["databases"]:
+            if db == primary:
+                continue
+            # media qualifies even at count 0: its ask retrieves and
+            # relaxes on its own, so it can find what run() did not.
+            if db == "media" or out["groups"].get(db, {}).get("count"):
+                answer_db = db
+                out["fallback"] = {"from": primary, "to": db}
+                break
+
     try:
-        if primary == "notes":
+        if answer_db == "notes":
             from . import vault
             hits = out["groups"].get("notes", {}).get("hits") or None
             got = vault.ask(question, hits=hits)
             out["answer"] = got.get("answer")
             out["citations"] = got.get("citations") or []
-        elif primary == "media":
+        elif answer_db == "media":
             from . import search as msearch
             got = msearch.ask(question, plan=_media_plan(p))
             out["answer"] = got.get("answer")
-            out["relaxed"] = got.get("relaxed") or []
+            out["relaxed"] = (out["relaxed"] or []) + (got.get("relaxed")
+                                                       or [])
             if got.get("results"):
                 out["groups"]["media"] = {"rows": got["results"],
                                           "count": len(got["results"])}
+        else:
+            rows = out["groups"].get(answer_db, {}).get("rows") or []
+            if rows:
+                out["answer"] = _answer_rows(question, rows,
+                                             out["relaxed"],
+                                             out["groups"], answer_db)
     except Exception as e:      # noqa: BLE001 — the lists still stand
         out["answer_error"] = str(e)[:200]
+
+    if not out["answer"] and not out.get("answer_error"):
+        out["answer"] = _no_hits_text(p, out["relaxed"], orig_filters)
     return out
 
 
