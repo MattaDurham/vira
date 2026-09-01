@@ -751,7 +751,10 @@ pr_discard_hook() {
       return 0
     fi
     # main is pushed; give GitHub's async merge detection time to flip it.
-    for i in $(seq 1 "${PR_FLIP_TRIES:-10}"); do
+    # 40 x 3s = ~2 minutes. Measured on PR #18 (2026-09-01): the flip took
+    # over 40s after the push, so the old 30s window would have hit the
+    # safe-but-manual timeout path in the COMMON case, not the rare one.
+    for i in $(seq 1 "${PR_FLIP_TRIES:-40}"); do
       info=$(pr_info "$branch") || break
       read -r num state draft head url <<<"$info"
       [[ "$state" == "MERGED" ]] && { echo "PR #$num reads Merged"; return 0; }
