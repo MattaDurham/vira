@@ -23462,16 +23462,27 @@ const INF_GROUPS = [
   ["month", "Month"], ["source", "Source"], ["topic", "Topic"],
   ["", "Nothing (flat, newest first)"],
 ];
-const INF_READS = [["unread", "To read"], ["read", "Read"], ["all", "Everything"]];
 const MONTHS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
 
+// Cards render in PAGES of this size, continued by a sentinel at the foot —
+// the shelf holds thousands of captures with everything switched on, and a
+// DOM carrying all of them at once is what made the scroll lag. The sentinel
+// is a real counted button (never a silent cap) that ALSO auto-fires when
+// scrolled near, so grazing never has to click it.
+const INF_PAGE = 60;
+
 let infFeed = null;
 let infSrc = lsGet("vira-inflow-src", null);      // null = the server default
-let infRead = lsGet("vira-inflow-read", "all");
+// The old three-way Show dropdown collapsed to one pill (owner's call,
+// 2026-09-01): the stored key keeps its historical values — "unread" means
+// the pill is on, anything else off — so a saved choice survives the change.
+let infUnread = lsGet("vira-inflow-read", "all") === "unread";
 let infGroup = lsGet("vira-inflow-group", "month");
 let infQ = lsGet("vira-inflow-q", "");
 let infObs = null;
+let infMoreObs = null;
+let infPageState = null;
 let infLoading = false;
 
 async function loadInflow(force) {
@@ -23503,8 +23514,7 @@ function infFiltered() {
   const terms = (infQ.match(/"[^"]+"|\S+/g) || [])
     .map((x) => searchFold(x.replace(/^"|"$/g, ""))).filter(Boolean);
   return items.filter((it) => {
-    if (infRead === "unread" && it.done) return false;
-    if (infRead === "read" && !it.done) return false;
+    if (infUnread && it.done) return false;
     if (!terms.length) return true;
     const hay = searchFold([it.title, it.blurb, it.kind, it.date,
       (it.topics || []).join(" "), (it.images || [])
@@ -23550,28 +23560,36 @@ function renderInflow() {
   bar.innerHTML = "";
   list.innerHTML = "";
 
-  // --- source chips: what is on, and honestly what is off ---
-  const chips = el("div", "inf-chips");
-  (infFeed.sources || []).forEach((s) => {
-    if (!s.count) return;                         // a source with nothing
-    const c = el("button", "inf-chip" + (s.on ? " on" : ""),
-      s.label + " " + s.count);
-    c.title = s.on ? "Showing — click to hide" : "Hidden — click to include";
-    c.addEventListener("click", () => {
-      const on = (infFeed.sources || []).filter((x) => x.on).map((x) => x.id);
-      const next = s.on ? on.filter((id) => id !== s.id) : on.concat([s.id]);
-      infSrc = next;
-      lsSet("vira-inflow-src", next);
-      loadInflow();
-    });
-    chips.appendChild(c);
-  });
-  bar.appendChild(chips);
-
   const row = el("div", "inf-controls");
-  row.appendChild(infSelect("Show", INF_READS, infRead, (v) => {
-    infRead = v; lsSet("vira-inflow-read", v); renderInflow(); renderReaderHead();
-  }));
+
+  // --- sources: a multi-select dropdown, not a chip band (owner's call,
+  // 2026-09-01 — the Queue's tag-filter rule: a chip row for a fixed
+  // vocabulary is a band of vertical space above the thing it filters). The
+  // button names what is on; the picker holds the rest, off sources and
+  // their honest counts included.
+  const srcPair = el("label", "inf-pair");
+  srcPair.appendChild(el("span", "inf-plabel", "Sources"));
+  const srcBtn = el("button", "fchip sm", infSrcLabel());
+  srcBtn.title = "Choose which capture sources show";
+  srcBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    infSourcePicker(srcBtn);
+  });
+  srcPair.appendChild(srcBtn);
+  row.appendChild(srcPair);
+
+  const unread = el("button", "fchip sm" + (infUnread ? " on" : ""),
+    "Unread only");
+  unread.title = infUnread ? "Showing unread — click to show everything"
+    : "Show only what you have not read yet";
+  unread.addEventListener("click", () => {
+    infUnread = !infUnread;
+    lsSet("vira-inflow-read", infUnread ? "unread" : "all");
+    renderInflow();
+    renderReaderHead();
+  });
+  row.appendChild(unread);
+
   row.appendChild(infSelect("Group by", INF_GROUPS, infGroup, (v) => {
     infGroup = v; lsSet("vira-inflow-group", v); renderInflow();
   }));
@@ -23626,8 +23644,139 @@ function renderInflow() {
   }, { threshold: 0 });
 
   const wrap = el("div", "inf-wrap" + (reduce ? "" : " anim"));
-  infGroups(items).forEach((g) => wrap.appendChild(infSection(g)));
+  infPageState = {
+    groups: infGroups(items), gi: 0, ii: 0, wrap, grid: null,
+    rendered: 0, total: items.length,
+  };
   list.appendChild(wrap);
+  infAppendChunk();
+
+  // The load-more sentinel: content, not decoration, so a miss only costs
+  // the auto-fire — the button still loads the rest by hand. rootMargin is
+  // the "fire early" mechanism (a distance stays satisfiable at any height;
+  // a nonzero threshold does not — the 2026-08-11 rule).
+  if (infMoreObs) infMoreObs.disconnect();
+  const more = el("button", "inf-sentinel");
+  more.addEventListener("click", () => infAppendChunk());
+  list.appendChild(more);
+  infMoreObs = new IntersectionObserver((ents) => {
+    if (ents.some((en) => en.isIntersecting)) infAppendChunk();
+  }, { threshold: 0, rootMargin: "1200px 0px" });
+  infPageState.more = more;
+  infSyncSentinel();
+}
+
+// Append up to one page of cards, continuing wherever the last chunk
+// stopped — mid-group included: a section's header states the group's WHOLE
+// count, and its grid fills in as the pages arrive.
+function infAppendChunk() {
+  const st = infPageState;
+  if (!st) return;
+  let budget = INF_PAGE;
+  while (budget > 0 && st.gi < st.groups.length) {
+    const g = st.groups[st.gi];
+    if (st.ii === 0) {
+      const sec = infSection(g);
+      st.grid = sec.querySelector(".inf-grid");
+      st.wrap.appendChild(sec);
+    }
+    while (budget > 0 && st.ii < g.items.length) {
+      st.grid.appendChild(infCard(g.items[st.ii], st.ii));
+      st.ii += 1;
+      st.rendered += 1;
+      budget -= 1;
+    }
+    if (st.ii >= g.items.length) { st.gi += 1; st.ii = 0; st.grid = null; }
+  }
+  infSyncSentinel();
+}
+
+function infSyncSentinel() {
+  const st = infPageState;
+  if (!st || !st.more) return;
+  const left = st.total - st.rendered;
+  if (left <= 0) {
+    if (infMoreObs) infMoreObs.disconnect();
+    st.more.remove();
+    st.more = null;
+    return;
+  }
+  st.more.textContent = "Show more — " + left + " more capture"
+    + (left === 1 ? "" : "s");
+  if (infMoreObs) {
+    // Re-observe so the callback fires again once the new page has pushed
+    // the sentinel back out of range.
+    infMoreObs.unobserve(st.more);
+    infMoreObs.observe(st.more);
+  }
+}
+
+// The button names what is on. All on = "All sources"; one on = its own
+// name; otherwise the count — the Queue tag-button rule.
+function infSrcLabel() {
+  const srcs = (infFeed && infFeed.sources) || [];
+  const real = srcs.filter((s) => s.count || s.on);
+  const on = real.filter((s) => s.on);
+  if (!real.length || on.length === real.length) return "All sources";
+  if (on.length === 1) return on[0].label;
+  return on.length + " sources";
+}
+
+function infSourcePicker(anchor) {
+  closeCtxPops();
+  const srcs = ((infFeed && infFeed.sources) || [])
+    .filter((s) => s.count || s.on);   // never offer a row that yields nothing
+  const pop = el("div", "ctx-pop tag-pop");
+  const body = el("div", "tag-pop-body");
+  pop.appendChild(body);
+
+  const commit = () => {
+    const next = srcs.filter((s) => s.on).map((s) => s.id);
+    if (!next.length) return false;    // an empty shelf helps nobody
+    infSrc = next;
+    lsSet("vira-inflow-src", next);
+    loadInflow();                      // off sources live server-side
+    return true;
+  };
+
+  srcs.forEach((s) => {
+    const row = el("label", "tag-pop-row" + (s.on ? " on" : ""));
+    const cb = el("input", "tag-pop-check");
+    cb.type = "checkbox";
+    cb.checked = !!s.on;
+    cb.addEventListener("change", () => {
+      s.on = cb.checked;
+      if (!commit()) {
+        s.on = true;
+        cb.checked = true;
+        toast("At least one source stays on.");
+        return;
+      }
+      row.classList.toggle("on", cb.checked);
+    });
+    row.appendChild(cb);
+    row.appendChild(el("span", "tag-pop-name", s.label));
+    row.appendChild(el("span", "tag-pop-n", String(s.count)));
+    body.appendChild(row);
+  });
+
+  const foot = el("div", "tag-pop-foot");
+  const clear = el("button", "btn small", "Default");
+  clear.title = "Back to the five nightly routines";
+  clear.addEventListener("click", () => {
+    infSrc = null;
+    lsSet("vira-inflow-src", null);
+    pop.remove();
+    loadInflow();
+  });
+  const done = el("button", "btn small primary", "Done");
+  done.addEventListener("click", () => pop.remove());
+  foot.appendChild(clear);
+  foot.appendChild(done);
+  pop.appendChild(foot);
+
+  const r = anchor.getBoundingClientRect();
+  placeCtxPop(pop, r.left, r.bottom + 4);
 }
 
 function infSelect(label, opts, val, onChange) {
@@ -23661,9 +23810,9 @@ function infSection(g) {
     head.appendChild(el("div", "inf-rule"));
     sec.appendChild(head);
   }
-  const grid = el("div", "inf-grid");
-  g.items.forEach((it, i) => grid.appendChild(infCard(it, i)));
-  sec.appendChild(grid);
+  // The shell only — cards are appended page by page (infAppendChunk), so
+  // the header's count speaks for the whole group while the grid fills in.
+  sec.appendChild(el("div", "inf-grid"));
   if (infObs) infObs.observe(sec); else sec.classList.add("rv");
   return sec;
 }
@@ -23803,15 +23952,30 @@ function spawnOrPeek(path, title) {
 async function infMark(it) {
   const want = !it.done;
   it.done = want;                                  // optimistic
-  renderInflow();
+  infRefreshCard(it);
   renderReaderHead();
   try {
     await post("/api/reading/inflow/done", { id: it.id, done: want });
   } catch (e) {
     it.done = !want;
-    renderInflow();
+    infRefreshCard(it);
     toast(errText(e));
   }
+}
+
+// A mark repaints ONE card, never the shelf — a full render would tear down
+// every rendered page and throw the scroll position away mid-triage. Under
+// the unread pill a card just marked read leaves instead (that is what the
+// filter means); the group header's count describes the group in the data
+// and is refreshed on the next full render.
+function infRefreshCard(it) {
+  const list = $("#inf-list");
+  const old = list && list.querySelector(
+    '[data-inf-id="' + (window.CSS && CSS.escape ? CSS.escape(it.id) : it.id)
+    + '"]');
+  if (!old) return;
+  if (infUnread && it.done) { old.remove(); return; }
+  old.replaceWith(infCard(it, 0));
 }
 
 // ---- the lightbox: an extracted chart, whole ----
@@ -23911,10 +24075,10 @@ function renderReaderDefs() {
       if (off.length) {
         host.appendChild(el("p", "rdr-def-p",
           "Not shown: " + off.map((s) => s.count + " " + s.label).join(", ")
-          + ". Those are real ingest too — the chips above turn any of them "
-          + "on. They are off because Instagram alone is several times the "
-          + "size of the five routines this shelf is for, and it would bury "
-          + "them."));
+          + ". Those are real ingest too — the Sources dropdown turns any of "
+          + "them on. They are off because Instagram alone is several times "
+          + "the size of the five routines this shelf is for, and it would "
+          + "bury them."));
       }
     }
     return;

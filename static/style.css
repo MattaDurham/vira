@@ -6602,17 +6602,6 @@ button.story-shead:hover { color: var(--accent-bright); }
    what you are grazing for. Tokens only, so every skin reaches it. */
 
 .inf-bar { padding: 4px 0 10px; }
-.inf-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
-.inf-chip {
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
-  text-transform: uppercase; padding: 4px 9px; border-radius: 999px;
-  border: 1px solid var(--line); background: transparent;
-  color: var(--text-faint); cursor: pointer;
-}
-.inf-chip:hover { border-color: var(--line-warm-bright); color: var(--text-dim); }
-.inf-chip.on {
-  border-color: var(--sel-line); color: var(--sel-text); background: var(--sel-bg);
-}
 .inf-controls {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
 }
@@ -6633,6 +6622,16 @@ button.story-shead:hover { color: var(--accent-bright); }
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--text-faint); margin-top: 9px;
 }
+/* The load-more sentinel: a real counted button (auto-fires when scrolled
+   near; the click is the no-observer fallback). */
+.inf-sentinel {
+  display: block; width: 100%; margin: 2px 0 30px; padding: 11px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text-dim); cursor: pointer;
+  background: var(--bg-raised); border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+.inf-sentinel:hover { border-color: var(--line-warm-bright); color: var(--text); }
 
 .inf-list { padding-top: 4px; }
 .inf-sec { margin: 0 0 32px; }

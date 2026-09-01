@@ -1965,7 +1965,12 @@ def api_ingestfeed(sources: str = "", force: bool = False):
     not showing rather than implying the shelf is everything."""
     want = [s.strip() for s in sources.split(",") if s.strip()] or None
     with admission.cpu("ingestfeed"):
-        return ingestfeed.feed(sources=want, force=force)
+        # A Response, not a dict: with everything switched on this payload is
+        # ~6,300 items / ~10MB, and FastAPI's jsonable_encoder deep-walks
+        # every one of them before serializing — measured 9s per request
+        # against 0.08s for a plain json.dumps of the same dict. The feed is
+        # already plain JSON-safe types, so encode it directly.
+        return JSONResponse(ingestfeed.feed(sources=want, force=force))
 
 
 @app.get("/api/vault/asset")
