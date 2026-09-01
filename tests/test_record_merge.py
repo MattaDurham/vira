@@ -130,6 +130,23 @@ class MergedStreamContract(unittest.TestCase):
         self.assertIn(
             'e.kind !== "job" || (e.job_id && !covered.has(e.job_id))', APP)
 
+    def test_a_shipped_group_is_never_dated_now(self):
+        # The regression the day-ledger redesign exists to kill: the
+        # dateless "unfiled" bucket was stamped Date.now() at render, so
+        # seven weeks of work read "Today · shipped 0s ago". A group
+        # without a date is now skipped, never handed an invented time.
+        self.assertNotIn('Date.now() / 1000;   // the "recent / unfiled"',
+                         APP)
+        fold = _block(APP, "runsState.shipped.forEach", 1400)
+        self.assertIn("if (!g.date) return;", fold)
+
+    def test_a_no_retro_day_states_its_own_gap(self):
+        # An honest label replaces the lie: the card names the gap in its
+        # title fallback and in its meta line.
+        fold = _block(APP, "runsState.shipped.forEach", 1400)
+        self.assertIn('g.no_retro ? "No retro yet" : "Session"', fold)
+        self.assertIn('g.no_retro ? " · no retro yet" : ""', fold)
+
     def test_paging_is_counted_and_inside_the_signature(self):
         # Older history makes the list long, so it pages — a bounded render
         # with a COUNTED Show more, never a silent cap — and the page size
