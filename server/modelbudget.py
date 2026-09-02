@@ -226,12 +226,11 @@ def capability(provider=None, backend=None, model=""):
 def has_tools(provider=None, backend=None):
     """Whether the answering path can call tools.
 
-    Only the Anthropic CLI path can: `claude --print` is a full Claude Code
-    turn and hands back a tool-capable agent (measured 2026-08-28 -- Read of a
-    file outside cwd, zero permission denials).  Every direct API path is a
-    plain completion with no tools, and codex exec is its own sandbox.  A
-    module may use this to ask for MORE, never to require it: the any-model
-    seam means the same feature must still work when the answer is False.
+    This describes the drafting path, not a detached live agent session.
+    Anthropic's CLI draft path is tool-capable; direct API paths are plain
+    completions. A module may use this to ask for MORE, never to require it:
+    the any-model seam means the same feature must still work when the answer
+    is False.
     """
     if provider is None or backend is None:
         provider, backend = effective()

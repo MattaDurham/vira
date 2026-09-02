@@ -581,9 +581,11 @@ class Sessions:
         prov = agentbackend.session_provider(model=model, provider=provider)
         if not agentbackend.sessions_quality(prov):
             raise ValueError(
-                f"{prov} cannot host live agent sessions yet — pick an "
-                "Anthropic or OpenAI model")
+                f"{prov} cannot host live agent sessions yet — pick a "
+                "provider whose capability record includes sessions")
         live = SDK_AVAILABLE or agentbackend.uses_cli_exec({"provider": prov})
+        workspace_tools = bool(
+            agentbackend.capabilities(prov).get("workspace_tools"))
         # Branch-first placement, decided HERE rather than asked of the model.
         # A session that can write lands in its own worktree; the gate then
         # refuses any write aimed back at the live checkout. Read-only
@@ -595,7 +597,8 @@ class Sessions:
         # other writing session.
         branch_slug = wt_path = live_root = None
         branch_note = ""
-        if cwd and not read_only and bool(_scfg("session_branch_first")):
+        if (cwd and workspace_tools and not read_only
+                and bool(_scfg("session_branch_first"))):
             root = worktree.repo_root(cwd)
             if root and worktree.is_branch_first(root) and worktree.is_worktree(root):
                 # RE-ENTRY: cwd is already a linked worktree (the orphan-work
@@ -655,11 +658,15 @@ class Sessions:
                         f"claude/{branch_slug} ({detail}); the live checkout "
                         f"at {root} is read-only for this session\n")
                 else:
-                    branch_slug = None
-                    branch_note = (
-                        f"[vira] branch-first: could NOT create a worktree "
-                        f"({detail}) — running in {cwd}. Nothing enforces the "
-                        f"live tree here; commit nothing.\n")
+                    # Branch-first is a placement invariant, not a hint. The
+                    # old fallback continued in the live checkout after a
+                    # failed `ensure`, which handed a writing agent the exact
+                    # tree this mechanism exists to protect. Refuse before a
+                    # job dir or detached process exists.
+                    raise ValueError(
+                        "branch-first worktree could not be created "
+                        f"({detail}); refusing to run in the live checkout "
+                        f"at {cwd}")
         data = {"id": jid, "prompt": prompt, "cwd": cwd or str(Path.home()),
                 "status": "running", "output": "", "started": time.time(),
                 "finished": None,
@@ -1238,7 +1245,8 @@ class Sessions:
                     result_text = rtext
                 if sid:
                     d["session_id"] = sid
-                    joblog.record_session(d["id"], sid)
+                    joblog.record_session(d["id"], sid,
+                                          transport="claude-sdk")
             proc.wait(timeout=1800)
             ok = proc.returncode == 0
         except Exception as e:  # noqa: BLE001 — job surface, report all

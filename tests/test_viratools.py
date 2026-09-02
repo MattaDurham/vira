@@ -59,6 +59,54 @@ class TestRegistryShape(unittest.TestCase):
             finally:
                 r.out.close()
 
+    def test_dynamic_tools_derive_from_the_same_registry(self):
+        (namespace,) = viratools.dynamic_tool_specs()
+        self.assertEqual(namespace["name"], "vira")
+        got = [tool["name"] for tool in namespace["tools"]]
+        self.assertEqual(got, [name for name, *_ in viratools.TOOL_SPECS])
+        calendar = next(t for t in namespace["tools"]
+                        if t["name"] == "calendar")
+        self.assertEqual(calendar["inputSchema"]["properties"]["days"],
+                         {"type": "integer"})
+
+    def test_read_only_dynamic_registry_excludes_every_write_tool(self):
+        (namespace,) = viratools.dynamic_tool_specs(read_only=True)
+        got = {f"mcp__vira__{tool['name']}" for tool in namespace["tools"]}
+        self.assertFalse(got & viratools.WRITE_TOOLS)
+        self.assertIn("mcp__vira__calendar", got)
+        self.assertIn("mcp__vira__ask_owner", got)
+
+    def test_provider_neutral_invoke_calls_the_registered_handler(self):
+        async def handler(args):
+            return {"content": [{"type": "text", "text": args["value"]}]}
+
+        specs = [("example", "Example", {"value": str}, handler)]
+        with mock.patch.object(viratools, "TOOL_SPECS", specs):
+            import asyncio
+            out = asyncio.run(viratools.invoke("example", {"value": "yes"}))
+        self.assertEqual(out["content"][0]["text"], "yes")
+
+    def test_function_specs_derive_from_the_same_registry(self):
+        tools = viratools.function_tool_specs(read_only=True)
+        names = {tool["name"] for tool in tools}
+        self.assertIn("calendar", names)
+        self.assertIn("ask_owner", names)
+        self.assertFalse({name.removeprefix("mcp__vira__")
+                          for name in viratools.WRITE_TOOLS} & names)
+
+    def test_provider_neutral_ask_owner_uses_session_callback(self):
+        async def ask(question, options, allow_text):
+            self.assertEqual(question, "Choose")
+            self.assertEqual(options[0]["label"], "A")
+            self.assertFalse(allow_text)
+            return "A"
+
+        import asyncio
+        out = asyncio.run(viratools.invoke(
+            "ask_owner", {"question": "Choose", "options": "A|B",
+                          "allow_text": "false"}, ask_owner=ask))
+        self.assertEqual(out["content"][0]["text"], "A")
+
 
 class TestPreamble(unittest.TestCase):
     def test_native_mentions_tools_legacy_does_not(self):

@@ -150,6 +150,15 @@ class SpecReachesDisk(unittest.TestCase):
         self.assertFalse(worktree.violates(
             str(wt / "server" / "main.py"), self.root, wt))
 
+    def test_failed_worktree_creation_refuses_before_spawn(self):
+        reg = session.Sessions()
+        with mock.patch.object(session.worktree, "ensure",
+                               return_value=(None, False, "git refused")), \
+             mock.patch.object(reg, "_spawn_runner") as spawn:
+            with self.assertRaisesRegex(ValueError, "refusing to run"):
+                reg.launch("change the widget", cwd=str(self.root))
+        spawn.assert_not_called()
+
     def test_place_then_tidy_round_trip_with_the_real_script(self):
         """Watched to FIRE, not read: the real branch.sh creates the worktree
         and the real branch.sh takes it away, leaving the live tree exactly

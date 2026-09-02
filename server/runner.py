@@ -3,16 +3,16 @@
 Spawned by the session registry as its own process group
 (.venv python -m server.runner data/jobs/<id>), so a Vira restart —
 launchctl kickstart, crash, update-and-restart — no longer kills running
-jobs. The runner owns the Claude Agent SDK session end to end: it streams
+jobs. The runner owns the provider session end to end: it streams
 the transcript to output.log, mirrors status / pending permission cards /
 heartbeat into state.json, and tails control.jsonl for the owner's
 steering, permission decisions, interrupts, and closes (appended by
 whichever server process is up — including one booted AFTER this runner
 started; the supervisor re-attaches through these same files).
 
-Everything the in-process session had still applies here: the claude_code
-system-prompt preset with the Vira preamble, the in-process mcp "vira"
-native tools (imported from viratools — they read Vira's data plane
+Everything the in-process session had still applies here: the provider's
+agent harness with the Vira preamble, the session-scoped "vira" native
+tools (imported from viratools — they read Vira's data plane
 directly from disk/Keychain, so they keep working even while the server
 itself is down), the permission gate with timeout default-deny, plan
 publishing, and closing out the launching idea. The runner finalizes its
@@ -55,8 +55,18 @@ try:
 except Exception as e:  # noqa: BLE001 — tolerated for CLI-exec jobs
     SDK_IMPORT_ERROR = e
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = HookMatcher = None
-    PermissionResultAllow = PermissionResultDeny = ResultMessage = None
+    ResultMessage = None
     SystemMessage = TextBlock = ThinkingBlock = ToolUseBlock = None
+
+    # The Vira gate is provider-neutral even when the Claude SDK is absent.
+    # These two tiny stand-ins preserve its allow/deny contract for Codex;
+    # the real SDK classes above are still used whenever Claude is installed.
+    class PermissionResultAllow:  # noqa: D101 — compatibility value object
+        pass
+
+    class PermissionResultDeny:  # noqa: D101 — compatibility value object
+        def __init__(self, message=""):
+            self.message = message
 
 
 # The floor is the SDK's own default, so a nonsense config value can only
@@ -675,7 +685,8 @@ class Runner:
             if sid and not self.state["session_id"]:
                 self.state["session_id"] = sid
                 self.flush_state()
-                joblog.record_session(self.spec["id"], sid)
+                joblog.record_session(self.spec["id"], sid,
+                                      transport="claude-sdk")
             tail = f" (session {sid[:8]})" if sid else ""
             model = msg.data.get("model", "claude")
             # The RESOLVED generation, which is the only place it is ever
@@ -727,9 +738,10 @@ class Runner:
                 raise RuntimeError(f"branch-first guard disarmed: "
                                    f"{self.disarmed}")
             if agentbackend.uses_cli_exec(spec):
-                # Best-effort engine: the provider's own CLI, inside this
-                # same harness — inbox, reply window, epilogue all shared.
-                result_text, ok = await agentbackend.run_cliexec(self)
+                # Provider adapter inside this same harness — inbox, reply
+                # window, epilogue and policy all remain Runner-owned. Codex
+                # uses App Server first and keeps exec only as compatibility.
+                result_text, ok = await agentbackend.run_provider_session(self)
                 raise _EngineDone
             if SDK_IMPORT_ERROR is not None:
                 raise RuntimeError(

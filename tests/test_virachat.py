@@ -84,13 +84,13 @@ class SendingATurn(ChatBase):
         self.assertEqual(s["turns"][0]["status"], "pending")
         virachat.threading.Thread.assert_called_once()
 
-    def test_without_anthropic_the_chat_falls_to_the_default_engine_by_http(self):
+    def test_openai_chat_uses_the_same_native_vira_tool_contract(self):
         with mock.patch("server.models.connected", return_value=[{"id": "openai", "connected": True}]):
             virachat.send("hello")
         args, kw = self.launched[0]
-        self.assertIsNone(kw["provider"])
-        self.assertNotIn("mcp__vira__", args[0])
-        self.assertIn("/api/find?q=", args[0])
+        self.assertEqual(kw["provider"], "openai")
+        self.assertIn("vira.find first", args[0])
+        self.assertNotIn("mcp__vira__find", args[0])
 
     def test_a_later_turn_talks_to_the_same_session(self):
         virachat.send("first")

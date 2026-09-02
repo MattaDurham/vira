@@ -61,7 +61,8 @@ PREVIEW = 160            # per-line body/context preview
 
 # ---------- the session preamble ----------
 
-def preamble(native=True, worktree_path="", branch="", live_root=""):
+def preamble(native=True, worktree_path="", branch="", live_root="",
+             tool_prefix="mcp__vira__"):
     """Context every Vira-spawned session gets about its parent. native=False
     is the legacy --print fallback, where the mcp__vira__* tools don't exist
     (no SDK) and only the HTTP API applies.
@@ -73,7 +74,7 @@ def preamble(native=True, worktree_path="", branch="", live_root=""):
     """
     owner = settings.get("owner_name") or "the owner"
     tools_para = (
-        "Native tools: the mcp__vira__* tools answer questions about "
+        f"Native tools: the {tool_prefix}* tools answer questions about "
         f"{owner}'s life directly from Vira's data plane — calendar (local "
         "macOS calendars + the M365 work calendar), the daily brief, CRM "
         "dossiers, mail search across connected mailboxes, iMessage "
@@ -117,7 +118,7 @@ def preamble(native=True, worktree_path="", branch="", live_root=""):
             "revert the parts you cannot finish so the tree is left "
             "consistent, and say so.\n\n")
     ask_para = (
-        "WHEN YOU NEED A DECISION, ASK WITH mcp__vira__ask_owner. It shows "
+        f"WHEN YOU NEED A DECISION, ASK WITH {tool_prefix}ask_owner. It shows "
         f"{owner} a card with clickable options, in the app and on their "
         "phone, and waits. Putting a question only in your final report "
         "does not reach them — that is how work gets left half-done. Ask "
@@ -1052,6 +1053,82 @@ WRITE_TOOLS = {
     "mcp__vira__record_role_scores",
     "mcp__vira__update_person_profile",
 }
+
+_JSON_TYPES = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def json_input_schema(simple):
+    """Translate the SDK's compact name->type schema to portable JSON Schema.
+
+    TOOL_SPECS remains the single registry. Claude's adapter consumes the
+    compact form it always has; Codex and future function/MCP adapters consume
+    this standards-shaped view. Fields stay optional because the established
+    handlers deliberately tolerate missing optional keys.
+    """
+    props = {}
+    for name, pytype in (simple or {}).items():
+        props[name] = {"type": _JSON_TYPES.get(pytype, "string")}
+    return {"type": "object", "properties": props,
+            "additionalProperties": False}
+
+
+def dynamic_tool_specs(read_only=False):
+    """Codex App Server dynamic-tool namespace derived from TOOL_SPECS."""
+    tools = []
+    for name, description, schema, _handler in TOOL_SPECS:
+        fqname = f"mcp__vira__{name}"
+        if read_only and fqname in WRITE_TOOLS:
+            continue
+        tools.append({"type": "function", "name": name,
+                      "description": description,
+                      "inputSchema": json_input_schema(schema),
+                      "deferLoading": False})
+    return [{"type": "namespace", "name": "vira",
+             "description": "Vira's governed local data and action tools",
+             "tools": tools}]
+
+
+def has_tool(name):
+    plain = str(name or "").removeprefix("mcp__vira__")
+    return any(tool_name == plain for tool_name, *_ in TOOL_SPECS)
+
+
+async def invoke(name, arguments=None, read_only=False, ask_owner=None):
+    """Call one registered Vira tool through a provider-neutral adapter."""
+    plain = str(name or "").removeprefix("mcp__vira__")
+    for tool_name, _description, _schema, handler in TOOL_SPECS:
+        if tool_name != plain:
+            continue
+        fqname = f"mcp__vira__{tool_name}"
+        if read_only and fqname in WRITE_TOOLS:
+            return _txt(f"error: {fqname} is unavailable in a read-only session")
+        args = arguments if isinstance(arguments, dict) else {}
+        if tool_name == "ask_owner" and ask_owner is not None:
+            return _txt(await ask_owner(
+                args.get("question"), parse_options(args.get("options")),
+                str(args.get("allow_text", "true")).lower() != "false"))
+        return await handler(args)
+    return _txt(f"error: unknown Vira tool {plain or '(blank)'}")
+
+
+def function_tool_specs(read_only=False):
+    """Portable function definitions for HTTP model adapters."""
+    out = []
+    for name, description, schema, _handler in TOOL_SPECS:
+        fqname = f"mcp__vira__{name}"
+        if read_only and fqname in WRITE_TOOLS:
+            continue
+        out.append({"type": "function", "name": name,
+                    "description": description,
+                    "parameters": json_input_schema(schema)})
+    return out
 
 _server = None
 

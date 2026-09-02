@@ -3,6 +3,7 @@
 Run: .venv/bin/python -m unittest tests.test_joblog
 """
 import unittest
+from unittest import mock
 
 from server import joblog
 
@@ -83,3 +84,28 @@ class JobNamingTests(unittest.TestCase):
     def test_never_raises_on_empty(self):
         self.assertEqual(joblog.command(_rec()), "(untitled job)")
         self.assertTrue(joblog.name(_rec()))
+
+
+class TranscriptLocatorTests(unittest.TestCase):
+    def test_claude_has_its_verified_jsonl_path(self):
+        path = joblog._transcript_path("anthropic", "/tmp/repo", "sess")
+        self.assertIn(".claude/projects", path)
+        self.assertTrue(path.endswith("sess.jsonl"))
+
+    def test_codex_thread_is_not_misattributed_to_claude(self):
+        self.assertEqual(
+            joblog._transcript_path("openai", "/tmp/repo", "thread"), "")
+
+    def test_session_transport_can_be_backfilled(self):
+        state = {"jobs": [{"id": "job", "provider": "openai",
+                            "cwd": "/tmp", "session_id": "thread",
+                            "transcript": "", "session_locator": "thread"}]}
+
+        def mutate(fn):
+            fn(state)
+
+        with mock.patch.object(joblog, "_mutate", side_effect=mutate):
+            joblog.record_session("job", "thread",
+                                  transport="codex-app-server")
+        self.assertEqual(state["jobs"][0]["session_transport"],
+                         "codex-app-server")

@@ -90,9 +90,17 @@ def _mutate(fn):
             _write(s)
 
 
-def _transcript_path(cwd, session_id):
-    # claude CLI writes session transcripts under a project dir whose name is
-    # the cwd with path separators and dots flattened to dashes.
+def _transcript_path(provider, cwd, session_id):
+    """A provider-owned on-disk transcript, when Vira can verify one.
+
+    Claude writes to the stable projects path below. Codex thread ids are
+    App Server identities, not filenames, and pretending they live under
+    ~/.claude made the History link confidently point at a nonexistent file.
+    The session id remains the portable locator for other providers; their
+    adapter may add a real transcript path once it can verify one.
+    """
+    if provider != "anthropic":
+        return ""
     slug = re.sub(r"[/._]", "-", cwd or str(Path.home()))
     return str(Path.home() / ".claude" / "projects" / slug
                / f"{session_id}.jsonl")
@@ -233,8 +241,7 @@ def record_launch(job):
         # Which engine actually answered. Recorded at launch because the
         # live registry is the ONLY other place that knows it — once a job
         # ages out, a row without this reads as the gated Anthropic default
-        # and the terminal banner calls a best-effort OpenAI session
-        # "interactive (gated)", the exact opposite of what happened.
+        # and the terminal banner can attribute the run to the wrong engine.
         "provider": job.get("provider") or "anthropic",
         "permission_mode": job.get("permission_mode"),
         "publish_plan": bool(job.get("publish_plan")),
@@ -302,13 +309,21 @@ def record_model_used(jid, model):
     _mutate(fn)
 
 
-def record_session(jid, session_id):
+def record_session(jid, session_id, transport=""):
     def fn(s):
         r = next((r for r in s["jobs"] if r["id"] == jid), None)
-        if r and session_id and not r["session_id"]:
-            r["session_id"] = session_id
-            r["transcript"] = _transcript_path(r["cwd"], session_id)
-            return True
+        if r and session_id:
+            changed = False
+            if not r["session_id"]:
+                r["session_id"] = session_id
+                r["transcript"] = _transcript_path(
+                    r.get("provider") or "anthropic", r["cwd"], session_id)
+                r["session_locator"] = session_id
+                changed = True
+            if transport and r.get("session_transport") != transport:
+                r["session_transport"] = transport
+                changed = True
+            return changed
         return False
     _mutate(fn)
 

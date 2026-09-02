@@ -1,20 +1,17 @@
 """Provider-agnostic session backends — a live agent session is no longer
 synonymous with the Claude Agent SDK.
 
-Two grades, and the difference is stated everywhere it matters:
+Two provider adapters, one Vira control plane:
 
 - **gated** (Anthropic, the SDK path in runner.py): per-tool Approve/Deny
   cards, the acceptedits rung, the branch-first write guard, the ask_owner
   decision channel. The full experience.
-- **best_effort** (any provider whose agent CLI has a real non-interactive
-  mode): the CLI drives the session as a detached subprocess streaming into
-  the same output.log, mapped onto the CLI's own sandbox instead of Vira's
-  gate. No approval cards CAN be raised — codex exec has no can_use_tool
-  hook — so the honest containment is the sandbox plus branch-first
-  placement (a writing session already lands in its own worktree, and
-  workspace-write confines writes to that cwd). The transcript says all of
-  this at session start; sessions_quality rides /api/models so the UI says
-  it before dispatch.
+- **gated Codex** (App Server path in codexapp.py): the same Vira registry,
+  approval cards, owner questions, branch guard, resume and in-turn steering
+  translated over bidirectional JSON-RPC.
+- **best_effort compatibility**: ``codex exec`` remains a fallback for an old
+  Codex installation that cannot initialize App Server. It is deliberately
+  not the primary OpenAI engine.
 
 The harness around a session — the job dir protocol, heartbeat, control
 tail, the reply window, the epilogue (plan finalize, idea close-out,
@@ -113,6 +110,42 @@ CLI_EXEC = {
 }
 
 
+# The public provider contract. Routing and UI disclosure consume this
+# instead of inferring features from a provider name. A new adapter earns a
+# capability only when its path implements and tests that behavior.
+CAPABILITIES = {
+    "anthropic": {
+        "draft": True, "sessions": True, "native_tools": True,
+        "workspace_tools": True,
+        "approvals": True, "owner_questions": True, "resume": True,
+        "steering": True, "interrupt": True, "model_catalog": True,
+    },
+    "openai": {
+        "draft": True, "sessions": True, "native_tools": True,
+        "workspace_tools": True,
+        "approvals": True, "owner_questions": True, "resume": True,
+        "steering": True, "interrupt": True, "model_catalog": True,
+    },
+    "google": {
+        "draft": True, "sessions": True, "native_tools": True,
+        "workspace_tools": False,
+        "approvals": True, "owner_questions": True, "resume": True,
+        "steering": False, "interrupt": False, "model_catalog": True,
+    },
+    "xai": {
+        "draft": True, "sessions": True, "native_tools": True,
+        "workspace_tools": False,
+        "approvals": True, "owner_questions": True, "resume": True,
+        "steering": False, "interrupt": False, "model_catalog": True,
+    },
+}
+
+
+def capabilities(pid):
+    """A copy of the verified feature contract for one provider."""
+    return dict(CAPABILITIES.get(pid, {}))
+
+
 def provider_of_model(model):
     """Which provider a model id/alias belongs to. '' means unknown —
     the caller falls back to the configured session default."""
@@ -127,7 +160,9 @@ def provider_of_model(model):
         return "xai"
     if m.startswith(("claude", "sonnet", "opus", "haiku", "fable")):
         return "anthropic"
-    return ""
+    # Future ids need no prefix rule when the provider's own catalog has
+    # already vouched for them.
+    return models.provider_for_model(model)
 
 
 def default_session_provider():
@@ -145,11 +180,9 @@ def default_session_provider():
     limit", and the Resume button could only relaunch it onto the same dead
     account — there was no way, anywhere in the UI, to say otherwise.
 
-    Guarded by session capability rather than trusted blindly: google and
-    xai are drafting-only (sessions_quality "" — no agent CLI to drive), so
-    a go-to of Gemini must not take every routine down with a ValueError at
-    launch. Those fall back to anthropic, which is equally the answer when
-    the key is unset or names a provider Vira does not know.
+    Guarded by session capability rather than trusted blindly. Unknown or
+    drafting-only future providers fall back to Anthropic; Gemini and Grok
+    qualify through Vira's function-calling session adapter.
     """
     want = str(settings.raw().get("ai_provider") or "").strip().lower()
     if want in models.PROVIDERS and sessions_quality(want):
@@ -168,14 +201,18 @@ def session_provider(model=None, provider=None):
 
 
 def uses_cli_exec(spec):
-    return (spec.get("provider") or "anthropic") in CLI_EXEC
+    # Historical name kept for the structural launch contract. True now
+    # means "Runner must use a provider adapter rather than Claude SDK."
+    return (spec.get("provider") or "anthropic") != "anthropic"
 
 
 def sessions_quality(pid):
     """"gated" | "best_effort" | "" (cannot host sessions)."""
-    if pid == "anthropic":
+    caps = CAPABILITIES.get(pid, {})
+    if (caps.get("sessions") and caps.get("native_tools")
+            and caps.get("approvals") and caps.get("owner_questions")):
         return "gated"
-    if pid in CLI_EXEC:
+    if caps.get("sessions") or pid in CLI_EXEC:
         return "best_effort"
     return ""
 
@@ -289,7 +326,8 @@ async def _run_turn(runner, binary, prompt, resume_id):
                     runner.state["session_id"] = thread_id
                     runner.flush_state()
                     from . import joblog
-                    joblog.record_session(spec["id"], thread_id)
+                    joblog.record_session(spec["id"], thread_id,
+                                          transport="cli-exec")
                     runner.append(f"[vira] codex working… "
                                   f"(thread {thread_id[:8]})\n")
             elif et == "item.completed":
@@ -420,3 +458,36 @@ async def run_cliexec(runner):
             runner.flush_state()
             prompt = reply if thread_id else pre + "\n\n" + reply
     return result_text, ok
+
+
+async def run_provider_session(runner):
+    """Run the best available interactive adapter for this provider.
+
+    App Server is Codex's first-class lane. The exec implementation remains a
+    compatibility fallback only when initialization fails before a thread has
+    started; falling back after work began could replay side effects.
+    """
+    spec = runner.spec
+    if spec.get("provider") == "openai":
+        binary = models.find_binary("openai")
+        if not binary:
+            runner.append("[vira] Codex CLI not found — connect OpenAI in "
+                          "Config or pick another model\n")
+            return "", False
+        from . import codexapp
+        runner.append(
+            "[vira] OpenAI session via Codex App Server — Vira tools, "
+            "approval cards, owner questions, resume, steering and "
+            "interrupts share the native control plane\n")
+        try:
+            return await codexapp.run_session(
+                runner, binary, settings.strip_env())
+        except codexapp.AppServerUnavailable as e:
+            runner.append(
+                f"[vira] Codex App Server unavailable ({e}); falling back "
+                "to compatibility exec mode without native Vira cards\n")
+        return await run_cliexec(runner)
+    if spec.get("provider") in ("google", "xai"):
+        from . import functionagent
+        return await functionagent.run_session(runner, spec["provider"])
+    return await run_cliexec(runner)

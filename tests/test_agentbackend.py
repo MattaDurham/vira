@@ -27,6 +27,13 @@ class RoutingTest(unittest.TestCase):
                         ("mystery-9", "")):
             self.assertEqual(agentbackend.provider_of_model(m), want, m)
 
+    def test_opaque_future_model_routes_from_live_catalog(self):
+        with mock.patch.object(agentbackend.models, "provider_for_model",
+                               return_value="xai") as known:
+            self.assertEqual(agentbackend.provider_of_model("nova-next"),
+                             "xai")
+        known.assert_called_once_with("nova-next")
+
     def test_session_provider_precedence(self):
         # explicit wins over the model, model over the configured default.
         # The config is PINNED rather than inherited from whichever machine
@@ -45,10 +52,20 @@ class RoutingTest(unittest.TestCase):
                              "anthropic")
 
 
-    def test_launch_refuses_a_sessionless_provider(self):
-        with self.assertRaises(ValueError) as ctx:
-            session.Sessions().launch("p", model="gemini-2.5-pro")
-        self.assertIn("cannot host live agent sessions", str(ctx.exception))
+    def test_launch_routes_gemini_to_its_provider_adapter(self):
+        reg = session.Sessions()
+        seen = {}
+
+        def fake_spawn(data):
+            seen.update(data)
+            h = mock.Mock()
+            h.kind = "detached"
+            h.working.return_value = False
+            return h
+
+        with mock.patch.object(reg, "_spawn_runner", fake_spawn):
+            reg.launch("p", model="gemini-2.5-pro")
+        self.assertEqual(seen["provider"], "google")
 
     def test_launch_stamps_provider_on_the_spec(self):
         reg = session.Sessions()
@@ -90,15 +107,11 @@ class DefaultSessionProviderTest(unittest.TestCase):
             self.assertEqual(agentbackend.default_session_provider(), "openai")
             self.assertEqual(agentbackend.session_provider(), "openai")
 
-    def test_a_drafting_only_go_to_falls_back_rather_than_raising(self):
-        # google/xai have no agent CLI (sessions_quality ""), so honoring
-        # them literally would make session.launch raise on EVERY automatic
-        # dispatch — every routine down because the drafting backend moved.
+    def test_function_calling_go_to_is_honored(self):
         for pid in ("google", "xai"):
             with self.subTest(pid=pid), _go_to(pid):
-                self.assertEqual(agentbackend.sessions_quality(pid), "")
-                self.assertEqual(agentbackend.default_session_provider(),
-                                 "anthropic")
+                self.assertEqual(agentbackend.sessions_quality(pid), "gated")
+                self.assertEqual(agentbackend.default_session_provider(), pid)
 
     def test_an_unknown_or_unset_go_to_falls_back(self):
         for cfg in ({"ai_provider": "bogus"}, {"ai_provider": ""}, {}):
@@ -299,7 +312,7 @@ class CliExecRunTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(text, "all done")
         self.assertEqual(runner.state["session_id"], "tid-abc")
-        rec.assert_called_once_with("j1", "tid-abc")
+        rec.assert_called_once_with("j1", "tid-abc", transport="cli-exec")
         joined = "".join(runner.out)
         self.assertIn("best-effort", joined)
         self.assertIn("all done", joined)
@@ -444,7 +457,7 @@ class LedgerReplayTest(unittest.TestCase):
         from server.main import _job_from_disk
         return _job_from_disk(jid)
 
-    def test_finished_openai_job_replays_as_best_effort(self):
+    def test_finished_openai_job_replays_with_current_gated_capability(self):
         joblog.record_launch({"id": "oai000000001", "cwd": "/tmp",
                               "prompt": "Reply naming your model.",
                               "mode": "interactive", "model": "gpt-5.6-sol",
@@ -457,7 +470,7 @@ class LedgerReplayTest(unittest.TestCase):
         self.assertFalse(snap["live"])            # off the live registry
         self.assertEqual(snap["provider"], "openai")
         self.assertEqual(agentbackend.sessions_quality(snap["provider"]),
-                         "best_effort")
+                         "gated")
 
     def test_legacy_row_without_provider_falls_back_to_the_model(self):
         # Rows written BEFORE the ledger persisted the field — exactly the
@@ -472,7 +485,7 @@ class LedgerReplayTest(unittest.TestCase):
         snap = self._replay("old000000001")
         self.assertEqual(snap["provider"], "openai")
         self.assertEqual(agentbackend.sessions_quality(snap["provider"]),
-                         "best_effort")
+                         "gated")
 
     def test_anthropic_job_stays_gated(self):
         # The other half of honesty: the fallback must not flip the gated
