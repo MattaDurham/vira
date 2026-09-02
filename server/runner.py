@@ -624,6 +624,32 @@ class Runner:
             + " Do not retry this call; adjust your approach or finish "
               "with what you have.")
 
+    # ----- what a turn looked at -----
+
+    # A chat turn's "sources" are the tool calls it made (virachat.py reads
+    # them back as cards: the find query it ran, the note it opened, the
+    # person it looked up). The transcript already prints each call as a
+    # line, but a line is prose; this is the same fact as DATA, attributed
+    # to the turn it belongs to. Bounded so a long session cannot grow
+    # state.json without limit - the newest calls are the ones any reader
+    # wants, since a chat reads the CURRENT turn's.
+    TOOLS_KEEP = 120
+
+    def record_tool(self, name, inp):
+        inp = inp or {}
+        keep = {}
+        for k in ("query", "q", "path", "name", "person", "status", "days",
+                  "start", "end", "limit"):
+            v = inp.get(k) if isinstance(inp, dict) else None
+            if v not in (None, ""):
+                keep[k] = str(v)[:200]
+        rows = list(self.state.get("tools") or [])
+        rows.append({"turn": int(self.state.get("turn") or 0),
+                     "name": str(name)[:80], "input": keep,
+                     "t": time.time()})
+        self.state["tools"] = rows[-self.TOOLS_KEEP:]
+        self.flush_state()
+
     # ----- transcript rendering -----
 
     def render_message(self, msg):
@@ -639,6 +665,7 @@ class Runner:
                 elif isinstance(b, ToolUseBlock):
                     out += "  → " + _tool_summary(
                         {"name": b.name, "input": b.input}) + "\n"
+                    self.record_tool(b.name, b.input)
                 elif isinstance(b, ThinkingBlock):
                     pass  # keep the log readable, as before
             self.append(out)
@@ -831,6 +858,10 @@ class Runner:
                         # mark every later turn of the session aborted.
                         self.interrupted = False
                         self.append("[vira] reply delivered\n")
+                        # the reply opens a new TURN: tool calls from here
+                        # belong to it, not to the answer just published
+                        self.state["turn"] = int(self.state.get("turn") or 0) + 1
+                        self.flush_state()
                         await client.query(reply)
         except _EngineDone:
             pass                     # CLI-exec engine finished; epilogue below

@@ -297,6 +297,14 @@ async def _run_turn(runner, binary, prompt, resume_id):
                 if piece:
                     runner.append(piece)
                 item = ev.get("item") or {}
+                # the same per-turn record the SDK path keeps (what a chat
+                # turn looked at); a command is the codex path's whole
+                # tool surface, so it is recorded under the Bash name
+                rec = getattr(runner, "record_tool", None)
+                if rec and item.get("type") == "command_execution":
+                    rec("Bash", {"query": (item.get("command") or "")[:200]})
+                elif rec and item.get("type") == "mcp_tool_call":
+                    rec(item.get("tool") or item.get("name") or "tool", {})
                 if item.get("type") == "agent_message":
                     last_msg = item.get("text") or last_msg
             elif et == "turn.completed":
@@ -392,6 +400,14 @@ async def run_cliexec(runner):
                               "starting a fresh one with your message\n")
                 prompt = pre + "\n\n" + prompt
             continue
+        # Publish the turn's answer BEFORE parking - the SDK path has done
+        # this since the reply-followthrough fix (2026-08-28), and this path
+        # never did: a parked codex session reported result_text "" for the
+        # whole reply window, so anything reading the answer at the turn
+        # boundary (the reply channel, a chat) saw nothing until Finish.
+        from . import runner as _runner_mod   # lazy: runner imports this module
+        runner.state["result_text"] = (result_text or "")[:_runner_mod.RESULT_KEEP]
+        runner.flush_state()
         reply = (await runner.await_reply()
                  if ok and runner.parks_at_turn_end() else None)
         if reply is None:
@@ -399,5 +415,8 @@ async def run_cliexec(runner):
         else:
             runner.finished_cleanly = False
             runner.append("[vira] reply delivered\n")
+            # a new turn: tool calls from here belong to it (record_tool)
+            runner.state["turn"] = int(runner.state.get("turn") or 0) + 1
+            runner.flush_state()
             prompt = reply if thread_id else pre + "\n\n" + reply
     return result_text, ok

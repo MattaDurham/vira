@@ -65,6 +65,14 @@ class ReattachTests(unittest.TestCase):
         snap = reg.get("alive0000001")
         self.assertEqual(snap["status"], "running")
         self.assertTrue(snap["live"])
+        # the per-turn tool record rides the snapshot (a chat reads it as
+        # its progress line and its "looked at" cards - 2026-09-01)
+        self.assertEqual(snap["tools"], [])
+        sp = self.jobs_root / "alive0000001" / "state.json"
+        st = json.loads(sp.read_text(encoding="utf-8"))
+        st["tools"] = [{"turn": 0, "name": "mcp__vira__find", "input": {"query": "x"}, "t": 1}]
+        sp.write_text(json.dumps(st), encoding="utf-8")
+        self.assertEqual(reg.get("alive0000001")["tools"][0]["name"], "mcp__vira__find")
         # the ledger record was NOT swept
         self.assertEqual(joblog.get_record("alive0000001")["status"],
                          "running")

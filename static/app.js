@@ -2124,6 +2124,8 @@ let findSetQuery = null;
 let findPendingQuery = null;
 
 let findChatSession = null;
+let findChatList = [];          // every saved chat, for the picker
+let findChatPollStop = null;    // the poll that follows a pending turn
 let findChatLoaded = false;
 let findChatPending = false;
 let findChatRefs = null;
@@ -2180,7 +2182,7 @@ const findCompanion = (id) => FIND_COMPANIONS.find((c) => c.id === id);
 
 function findChatSessionLabel() {
   const n = findChatSession?.turns?.length || 0;
-  return n ? `Vault chat · ${n} turn${n === 1 ? "" : "s"}` : "Vault chat";
+  return n ? `Chat · ${n} turn${n === 1 ? "" : "s"}` : "Chat";
 }
 
 function findChatFill(question) {
@@ -2572,23 +2574,59 @@ async function defineSource(term, btn) {
   }
 }
 
+// Chat with Vira (2026-09-01, branch claude/chat-with-vira): a chat is a
+// live agent session on Vira's own tools, so it reaches everything - not
+// the vault alone. The client's job is to render a session as a
+// conversation: send a turn, poll while it is pending, show what the
+// session looked at beside its answer.
+function findChatAdopt(d) {
+  findChatLoaded = true;
+  findChatSession = d.session || null;
+  if (Array.isArray(d.sessions)) findChatList = d.sessions;
+  if (findChatRefs) findChatRefs.input.disabled = false;
+  renderFindChat();
+  findChatWatch();
+}
+
 async function loadFindChat(force = false) {
   if (findChatLoaded && !force) return findChatSession;
-  const d = await api("/api/find/chat");
+  const d = await api("/api/vira/chat");
   // A newly-written app.js is served immediately, while Python routes do not
-  // change until Vira restarts. On that mixed-version seam the old dynamic
-  // /api/find/{query} route answers this GET, then rejects the chat POST with
-  // a raw 405. Detect the wrong envelope before a question can be lost.
+  // change until Vira restarts. On that mixed-version seam a 404 or an
+  // unrelated envelope would swallow a question; detect it first.
   if (!Object.prototype.hasOwnProperty.call(d, "session")) {
-    const e = new Error("Restart Vira once to finish enabling vault chat.");
+    const e = new Error("Restart Vira once to finish enabling chat.");
     e.restartRequired = true;
     throw e;
   }
-  findChatLoaded = true;
-  findChatSession = d.session || null;
-  if (findChatRefs) findChatRefs.input.disabled = false;
-  renderFindChat();
+  findChatAdopt(d);
   return findChatSession;
+}
+
+// A pending turn settles on the server (the session answers at its turn
+// boundary); the client follows it here, repainting the progress line as
+// the session's tool calls land and the answer when it does.
+function findChatWatch() {
+  const pending = (findChatSession?.turns || []).some((t) => t.status === "pending");
+  findChatPending = pending;
+  if (findChatRefs) findChatRefs.send.disabled = pending || !findChatRefs.input.value.trim();
+  if (!pending) { findChatPollStop?.(); findChatPollStop = null; return; }
+  if (findChatPollStop) return;
+  findChatPollStop = startPoll(async (h) => {
+    try {
+      const d = await api("/api/vira/chat");
+      if (!d.session || d.session.id !== findChatSession?.id) return;
+      const still = (d.session.turns || []).some((t) => t.status === "pending");
+      findChatSession = d.session;
+      if (Array.isArray(d.sessions)) findChatList = d.sessions;
+      renderFindChat();
+      if (!still) { h.stop(); findChatPollStop = null; findChatPending = false;
+        if (findChatRefs) {
+          findChatRefs.send.disabled = !findChatRefs.input.value.trim();
+          findChatRefs.input.focus();
+        } }
+    } catch { /* keep polling */ }
+  }, 1500, 700000).stop;
 }
 
 function findChatRestartRequired(e) {
@@ -2598,12 +2636,12 @@ function findChatRestartRequired(e) {
 function renderFindChatFailure(e) {
   if (!findChatRefs) return;
   const restart = findChatRestartRequired(e);
-  findChatRefs.status.textContent = restart ? "Restart required" : "Vault chat unavailable";
+  findChatRefs.status.textContent = restart ? "Restart required" : "Chat unavailable";
   findChatRefs.log.innerHTML = "";
   findChatRefs.log.appendChild(el("div", "brain-msg error",
     restart
-      ? "Vira has the new chat interface but is still running the old backend. Restart Vira once, then reopen vault chat."
-      : "Vault chat could not connect: " + (e?.message || "unknown error")));
+      ? "Vira has the new chat interface but is still running the old backend. Restart Vira once, then reopen chat."
+      : "Chat could not connect: " + (e?.message || "unknown error")));
   findChatRefs.empty.style.display = "none";
   findChatRefs.input.disabled = true;
   findChatRefs.send.disabled = true;
@@ -2613,12 +2651,10 @@ function renderFindChatFailure(e) {
 async function startNewFindChat() {
   if (findChatPending) return;
   const prior = findChatSession?.turns?.length || 0;
-  if (prior && !confirm("Start a new vault chat? The current chat stays saved.")) return;
+  if (prior && !confirm("Start a new chat? The current chat stays saved.")) return;
   try {
-    const d = await post("/api/find/chat/new", {});
-    findChatLoaded = true;
-    findChatSession = d.session;
-    renderFindChat();
+    const d = await post("/api/vira/chat/new", {});
+    findChatAdopt(d);
     findChatFill("");
   } catch (e) {
     toast("Could not start chat: " + e.message);
@@ -2633,29 +2669,34 @@ async function sendFindChat(question) {
   findChatRefs.send.disabled = true;
   renderFindChat();
   const pendingUser = el("div", "brain-msg you", q);
-  const thinking = el("div", "brain-msg vira thinking", "Reading the vault…");
+  const thinking = el("div", "brain-msg vira thinking", "Vira is looking…");
   findChatRefs.log.appendChild(pendingUser);
   findChatRefs.log.appendChild(thinking);
   findChatRefs.log.scrollTop = findChatRefs.log.scrollHeight;
   try {
-    const d = await post("/api/find/chat", {
+    const d = await post("/api/vira/chat", {
       question: q, session_id: findChatSession?.id || null,
     });
-    findChatLoaded = true;
-    findChatSession = d.session;
-    renderFindChat();
+    findChatAdopt(d);     // the turn is pending; findChatWatch follows it
   } catch (e) {
+    findChatPending = false;
     if (findChatRestartRequired(e)) renderFindChatFailure(e);
     else {
       thinking.classList.remove("thinking");
       thinking.classList.add("error");
-      thinking.textContent = "Chat failed: " + e.message;
+      thinking.textContent = "Chat failed: " + errText(e);
+      findChatRefs.send.disabled = !findChatRefs.input.value.trim();
+      findChatRefs.input.focus();
     }
-  } finally {
-    findChatPending = false;
-    findChatRefs.send.disabled = !findChatRefs.input.value.trim();
-    findChatRefs.input.focus();
   }
+}
+
+async function switchFindChat(sid) {
+  if (!sid || findChatPending) return;
+  try {
+    const d = await post("/api/vira/chat/switch", { session_id: sid });
+    findChatAdopt(d);
+  } catch (e) { toast("Could not open that chat: " + errText(e)); }
 }
 
 async function showFindChat(question = "") {
@@ -2665,7 +2706,9 @@ async function showFindChat(question = "") {
   findChatRefs.mobileTabs.hidden = false;
   findChatShowMobileTab("chat");
   try {
-    await loadFindChat();
+    // always re-read: a chat advances from the phone, from another
+    // browser, and from the session settling while this pane was hidden
+    await loadFindChat(true);
   } catch (e) {
     renderFindChatFailure(e);
     return;
@@ -2711,8 +2754,13 @@ function initFindChatShell(root, searchPane, searchInput) {
   const fresh = el("button", "fchip sm", "New chat");
   back.addEventListener("click", hideFindChat);
   fresh.addEventListener("click", startNewFindChat);
+  // every saved chat, newest first - a conversation is worth coming back to
+  const picker = el("select", "find-chat-picker");
+  picker.title = "Earlier chats";
+  picker.addEventListener("change", () => switchFindChat(picker.value));
   toolbar.appendChild(back);
   toolbar.appendChild(status);
+  toolbar.appendChild(picker);
   // The companions are windows of their own, so the only way to get one back
   // after closing it was the palette. These are that control, at the top of
   // the window the companions belong to. Desktop only: on a phone the same
@@ -2736,11 +2784,14 @@ function initFindChatShell(root, searchPane, searchInput) {
   const log = el("div", "brain-log find-chat-log");
   const empty = el("div", "brain-empty find-chat-empty");
   empty.appendChild(el("p", "hint",
-    "Chat with your vault as a continuing research session. Answers stay "
-    + "grounded in indexed notes; Concept Cloud and Related evolve with each turn."));
+    "Talk to Vira about anything it holds: your messages and mail, every "
+    + "photo and document ever shared, your contacts, calendar, notes and "
+    + "backlog. Each answer says what it looked at; Concept Cloud and "
+    + "Related evolve with the conversation."));
   const examples = el("div", "brain-examples");
-  ["What have I concluded about Vira?", "Connect my recent research themes",
-   "What decisions keep recurring in my sessions?"]
+  ["What is on my calendar this week that needs prep?",
+   "Who have I gone quiet on that I should text?",
+   "What did we decide about the boat, and where is it written down?"]
     .forEach((q) => {
       const b = el("button", "fchip sm", q);
       b.addEventListener("click", () => findChatFill(q));
@@ -2750,7 +2801,7 @@ function initFindChatShell(root, searchPane, searchInput) {
   const composer = el("div", "find-chat-composer");
   const input = el("textarea", "search");
   input.rows = 2;
-  input.placeholder = "Ask the vault a follow-up…";
+  input.placeholder = "Ask Vira anything, or follow up…";
   const send = el("button", "btn primary", "Send");
   send.disabled = true;
   input.addEventListener("input", () => {
@@ -2788,7 +2839,7 @@ function initFindChatShell(root, searchPane, searchInput) {
   root.appendChild(mobileTabs);
   root.appendChild(chatPane);
   findChatRefs = {searchPane, searchInput, mobileTabs, chatPane, toolbar,
-                  status, chatBody, log, empty, input, send, compBtns,
+                  status, picker, chatBody, log, empty, input, send, compBtns,
                   mobileCloud, mobileRelated, mobileDefine};
   syncFindCompanionToggles();
 }
@@ -2803,16 +2854,88 @@ function renderFindChat() {
   findChatRefs.log.innerHTML = "";
   turns.forEach((turn) => {
     findChatRefs.log.appendChild(el("div", "brain-msg you", turn.question || ""));
-    const answer = el("div", "brain-msg vira");
-    answer.appendChild(findAnswer(turn));
-    findChatRefs.log.appendChild(answer);
+    findChatRefs.log.appendChild(chatAnswer(turn, findChatSession));
   });
+  // the picker names every saved chat; the active one is selected
+  if (findChatRefs.picker) {
+    const pk = findChatRefs.picker;
+    pk.innerHTML = "";
+    (findChatList || []).forEach((r) => {
+      const o = document.createElement("option");
+      o.value = r.id;
+      o.textContent = (r.title || "New chat") + (r.turns ? ` (${r.turns})` : "");
+      if (r.id === findChatSession?.id) o.selected = true;
+      pk.appendChild(o);
+    });
+    pk.hidden = (findChatList || []).length < 2;
+  }
   findChatRefs.empty.style.display = turns.length ? "none" : "";
   requestAnimationFrame(() => {
     findChatRefs.log.scrollTop = findChatRefs.log.scrollHeight;
   });
   renderFindClouds();
   renderFindRelated();
+}
+
+// One chat turn's answer. A pending turn shows what the session is doing
+// right now (the tool calls it has made, read off the job); a settled one
+// renders the answer as markdown with its [[wikilinks]] resolved EXACTLY
+// (a search-only match says "closest match" rather than passing itself
+// off), then the cards for what the turn looked at - the find it ran, the
+// note it opened, the person it looked up - each opening the surface that
+// shows the same thing the session saw.
+function chatAnswer(turn, session) {
+  const box = el("div", "brain-msg vira");
+  if (turn.status === "pending") {
+    box.classList.add("thinking");
+    const steps = session?.progress || [];
+    box.appendChild(el("div", null, steps.length ? "Vira is looking…" : "Vira is thinking…"));
+    if (steps.length) {
+      const ul = el("div", "chat-progress");
+      steps.forEach((t) => ul.appendChild(el("div", "chat-step", "→ " + t)));
+      box.appendChild(ul);
+    }
+    return box;
+  }
+  if (turn.status === "failed") {
+    box.classList.add("error");
+    box.textContent = turn.answer || "Vira could not answer.";
+    return box;
+  }
+  const body = el("div", "chat-md");
+  body.innerHTML = mdToHtml(turn.answer || "");
+  const byRef = {};
+  (turn.citations || []).forEach((c) => { byRef[c.ref.toLowerCase()] = c; });
+  body.querySelectorAll(".note-link").forEach((a) => {
+    const c = byRef[(a.dataset.ref || "").trim().toLowerCase()];
+    if (!c || !c.path) { a.classList.add("dead"); return; }
+    if (!c.exact) a.title = "closest match: " + c.path;
+    a.addEventListener("click", () => openNote(c.path, c.title));
+  });
+  box.appendChild(body);
+  const looked = turn.looked_at || [];
+  if (looked.length) {
+    const rail = el("div", "cite-rail chat-looked");
+    rail.appendChild(el("span", "hint", "looked at"));
+    looked.forEach((c) => {
+      const chip = el("span", "cite-chip chat-src " + c.kind, c.label || c.kind);
+      chip.addEventListener("click", () => openLookedAt(c));
+      rail.appendChild(chip);
+    });
+    box.appendChild(rail);
+  }
+  return box;
+}
+
+// Where a "looked at" card goes: the surface that shows what the session
+// read. Never a second implementation - each is an existing opener.
+function openLookedAt(c) {
+  if (c.kind === "find") return openFindQuery(c.query || c.label, c.tab ? { tab: c.tab } : {});
+  if (c.kind === "note") return openNote(c.path, c.label);
+  if (c.kind === "person") return c.pid ? openPerson(c.pid)
+    : openFindQuery(c.label, { tab: "people" });
+  if (c.kind === "brief") return openApp("brief");
+  if (c.kind === "queue") { openApp("work"); return setWorkTab("queue"); }
 }
 
 const FIND_CLOUD_CTX = document.createElement("canvas").getContext("2d");
@@ -2878,10 +3001,13 @@ function renderFindCloudInto(target) {
     node.style.top = found.py + "px";
     if (found.rotate) node.style.transform = "translate(-50%, -50%) rotate(-90deg)";
     if (turns > 1) node.appendChild(el("span", "find-concept-turns", "x" + turns));
-    node.title = c.primary_path || "";
-    // The term is the anchor: the note opens ON the passage about it rather
-    // than at its own first line. See applyNoteAnchor.
-    node.addEventListener("click", () => openNote(c.primary_path, null, {term: c.term}));
+    node.title = c.primary_path || ("Find " + c.term + " across everything");
+    // A concept with a cited note opens ON the passage about it (see
+    // applyNoteAnchor); one without is a Find over everything - which is
+    // what a concept means in a chat that spans it all.
+    node.addEventListener("click", () => c.primary_path
+      ? openNote(c.primary_path, null, {term: c.term})
+      : openFindQuery(c.term));
     target.appendChild(node);
   });
   FIND_CLOUD_OBSERVERS.get(target)?.disconnect();
@@ -2911,12 +3037,16 @@ function renderFindRelatedInto(target) {
   (session?.topic_clusters || []).forEach((c) =>
     items.push({type: "cluster", label: c.label, paths: c.paths, fresh: true}));
   const turnCount = session?.turns?.length || 0;
+  // what the LAST settled turn looked at - the honest "sources" of a session
+  const lastDone = [...(session?.turns || [])].reverse().find((t) => t.status === "done");
+  (lastDone?.looked_at || []).forEach((c) =>
+    items.push({type: "source", card: c, fresh: true}));
   (session?.cited || []).forEach((c) => items.push({
     type: "cited", ...c,
     fresh: turnCount - (c.last_cited_in_turn || 0) < 3,
   }));
   if (!items.length) {
-    target.innerHTML = '<div class="find-companion-empty">Follow-ups, cited notes, and topic clusters appear here.</div>';
+    target.innerHTML = '<div class="find-companion-empty">Follow-ups, what Vira looked at, and cited notes appear here.</div>';
     return;
   }
   target.innerHTML = "";
@@ -2928,6 +3058,10 @@ function renderFindRelatedInto(target) {
       card.addEventListener("click", () => {
         openApp("find"); showFindChat(); findChatFill(item.body);
       });
+    } else if (item.type === "source") {
+      card.appendChild(el("span", "find-related-type source", "looked at · " + item.card.kind));
+      card.appendChild(el("span", "find-related-body", item.card.label || item.card.kind));
+      card.addEventListener("click", () => openLookedAt(item.card));
     } else if (item.type === "cluster") {
       card.appendChild(el("span", "find-related-type cluster", "cluster"));
       card.appendChild(el("span", "find-related-body", item.label));
@@ -3023,7 +3157,7 @@ function initFindView() {
   input.autocomplete = "off";
   input.placeholder = "Search or ask across notes, media, people, messages…";
   const askBtn = el("button", "btn primary", "Ask");
-  const chatBtn = el("button", "btn", "Chat with my vault");
+  const chatBtn = el("button", "btn", "Chat");
   bar.appendChild(input);
   bar.appendChild(askBtn);
   bar.appendChild(chatBtn);

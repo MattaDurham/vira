@@ -815,6 +815,11 @@ class Sessions:
             "awaiting": st.get("awaiting"),
             "live": True,
             "result_text": st.get("result_text", ""),
+            # what each turn looked at (runner.record_tool) - a chat reads
+            # it back as its progress line and its "looked at" cards; the
+            # first live chat turn recorded 15 calls and showed none,
+            # because this snapshot never carried the field
+            "tools": st.get("tools") or [],
             "pending": sorted(st.get("pending") or [],
                               key=lambda p: p.get("created", 0)),
             "finished_by_owner": bool(st.get("finished_by_owner")),
