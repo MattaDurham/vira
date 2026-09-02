@@ -129,14 +129,17 @@ class EveryRevealObserverContract(unittest.TestCase):
     def test_the_sweep_actually_reaches_the_shipped_observers(self):
         # Guards the guard: a scan that silently matches nothing passes every
         # assertion above. Pin the count so a moved/renamed file is noticed.
-        # app.js x4: the library grid's reveal, its film-loop observer, the
-        # Inflow's section reveal (2026-08-14), and the Inflow's load-more
+        # app.js x6: the library grid's reveal, its film-loop observer, the
+        # Inflow's section reveal (2026-08-14), the Inflow's load-more
         # sentinel (2026-09-01 -- appends the next page of cards; the sentinel
         # is itself a clickable button, so a miss degrades to a click rather
-        # than hiding content, and it uses threshold 0 regardless).
+        # than hiding content, and it uses threshold 0 regardless), and the
+        # build story's pair (2026-09-02): its day/chapter reveal at
+        # threshold 0 and its film-loop observer, which only attaches a
+        # motion loop over a poster already drawn.
         found = [n for n, _ in _observers()]
         self.assertEqual(sorted(found),
-                         ["app.js", "app.js", "app.js", "app.js", "atlas.js"])
+                         ["app.js"] * 6 + ["atlas.js"])
 
 
 if __name__ == "__main__":

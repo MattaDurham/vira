@@ -603,8 +603,14 @@ DEFAULT_MODULES = [
      "updated": TODAY},
     {"id": "subs-win", "name": "Subscriptions", "layer": "surface",
      "group": "money", "kind": "dock window / mobile tab",
-     "what": "The subscription ledger: what renews when, what looks off, "
-             "receipts attached.",
+     "what": "The subscription ledger, read off the bank feed and reconciled "
+             "by a deterministic cadence engine: every recurring charge "
+             "grouped by merchant, what renews when and for how much, the "
+             "off-pattern charges that need a receipt found, cancels and "
+             "downgrades verified against the ledger once their date passes, "
+             "and the login each one bills to so an accidental duplicate "
+             "surfaces. Renewals worth money ping the phone; the Daily Brief "
+             "carries the same list.",
      "links": [{"to": "subs-engine", "how": "renders"}],
      "keywords": ["subscriptions window"],
      "updated": TODAY},
@@ -657,6 +663,141 @@ DEFAULT_MODULES = [
                {"to": "front-doors", "how": "is set up by"}],
      "endpoints": ["/api/reading/pages", "/api/reading/{name}/done"],
      "keywords": ["reader", "reading room", "queue", "watch listen read"],
+     "updated": TODAY},
+    # Surfaces the live registry grew after the seed was written; copied in
+    # 2026-09-02 so a fresh install's build stories (modulestory) answer
+    # from a real description rather than a blank.
+    {
+     "id": "work-win",
+     "name": "The Forge",
+     "layer": "surface",
+     "group": "operate",
+     "kind": "dock window / mobile tab",
+     "what": "The cockpit in one window with three tabs. Cues is the live "
+             "queue of ideas, proposals, and notes that need a session. "
+             "Flows builds and dispatches library skills, free-form agent "
+             "work, and multi-step pipelines; its edit toolbar carries the "
+             "familiar undo, redo, clipboard, and selection actions, and a "
+             "live run can be traced directly on the board. Record is one "
+             "chronological ledger for sessions, flow runs, unlanded work, "
+             "job history, shipped changes, judge grades, rules, and filed "
+             "work. It replaces the separate Actions, Jobs, Ideas, "
+             "Circuits, and Agent Loops windows.",
+     "ask": {"label": "Ask Claude anything (Flows)", "corpus": "everything (live agent with native Vira tools)", "engine": "agent runtime (a real session; ~minutes)"},
+     "links": [
+              {"to": "sessions", "how": "launches jobs through"},
+              {"to": "ideas-store", "how": "edits the backlog in"},
+              {"to": "changelog-engine", "how": "shows the Record from"},
+              {"to": "flows-engine", "how": "draws pipelines with"},
+              {"to": "circuits-engine", "how": "runs pipelines via"},
+              {"to": "lessonwatch-engine", "how": "shows the Rules panel from"},
+              {"to": "orphanwork-engine", "how": "lists unlanded work from"},
+              {"to": "library-src", "how": "lists skills from"},
+              {"to": "attention-engine", "how": "opens live traces and waiting work from"}],
+     "keywords": ["forge", "work", "cockpit", "cues", "flows", "runs", "record", "undo", "trace", "chronological ledger"],
+     "updated": TODAY},
+    {
+     "id": "journal-win",
+     "name": "Journal",
+     "layer": "surface",
+     "group": "rhythm",
+     "kind": "dock window",
+     "what": "The running record of everything you've told Vira from your "
+             "own head, each note with what Vira did about it: loops "
+             "closed, facts filed, or an instruction flagged as needing a "
+             "real session. Read-only history, newest first; you compose "
+             "notes by right-clicking anywhere or from a person's page.",
+     "links": [
+              {"to": "crm-data", "how": "files facts + loops into"},
+              {"to": "suggest", "how": "integrates each note via"}],
+     "keywords": ["journal", "tell vira", "notes"],
+     "updated": TODAY},
+    {
+     "id": "find-win",
+     "name": "Find",
+     "layer": "surface",
+     "group": "know",
+     "kind": "dock window",
+     "what": "One box that searches everything Vira knows - people, "
+             "messages, mail, shared media, and every connected vault at "
+             "once. Type for instant results; press Enter to ask a "
+             "question over the same hits; or start a continuing "
+             "conversation with your notes. Three companion windows travel "
+             "with that work: the ideas it keeps circling, the notes "
+             "behind them, and a definition card that can be summoned from "
+             "selected text anywhere in Vira.",
+     "ask": {"label": "Find, ask, or chat with your notes", "corpus": "the CRM, messages, mail, media, and the vault", "engine": "find engine (instant; ask and chat ~seconds)"},
+     "links": [
+              {"to": "find-engine", "how": "queries"},
+              {"to": "brainchat-engine", "how": "holds its vault conversation in"}],
+     "keywords": ["find window", "search", "brain", "four databases", "chat", "concept cloud", "definition"],
+     "updated": TODAY},
+    {
+     "id": "evidence-win",
+     "name": "Evidence Ledger",
+     "layer": "surface",
+     "group": "operate",
+     "kind": "dock window",
+     "what": "Your build history as interview material: approved cases, "
+             "drafts, and episodes not yet written up. Compose one with a "
+             "click, edit the three sections in place, then approve and "
+             "copy it as clean text to paste into interview prep.",
+     "links": [
+              {"to": "evidence-engine", "how": "renders"}],
+     "keywords": ["evidence ledger", "case studies", "interview"],
+     "updated": TODAY},
+    {
+     "id": "atlas-win",
+     "name": "Visual Network",
+     "layer": "surface",
+     "group": "know",
+     "kind": "dock window / mobile tab",
+     "what": "A living 3D map of who's connected to whom, rendered as "
+             "faces and ties in a volume. Rotate, pan, zoom, and re-anchor "
+             "it with the same controls as the Image Atlas; a selected "
+             "person keeps the orbit anchor, empty sky never moves it, and "
+             "each name stays attached to its circle. Four lenses re-band "
+             "the same stable layout - owner groups, emergent circles, "
+             "companies, and cities - while one corner gear holds the "
+             "controls.",
+     "links": [
+              {"to": "atlas-engine", "how": "renders"},
+              {"to": "image-atlas", "how": "shares its navigation model with"}],
+     "keywords": ["visual network window", "face graph", "lenses", "gear", "3d", "orbit", "image atlas navigation"],
+     "updated": TODAY},
+    {
+     "id": "design-studio",
+     "name": "Design Studio",
+     "layer": "surface",
+     "group": "operate",
+     "kind": "dock window / full tab",
+     "what": "A canvas-first tool for restyling Vira itself live - click "
+             "anything to select it, change its color, font, or size with "
+             "a real picker, and save straight back to the stylesheet. A "
+             "skins gallery at the top lets you pick a whole look and "
+             "reload wearing it, and a genre studio lets you build a new "
+             "one from reference images: each image is broken into the "
+             "fragments of the prompt that would produce it, and the genre "
+             "is whichever fragments you keep. A phone-sized parallel "
+             "shows the same edit on mobile as you make it.",
+     "links": [],
+     "keywords": ["design studio", "tokens", "theme", "canvas", "skins", "genre"],
+     "updated": TODAY},
+    {
+     "id": "setup-win",
+     "name": "Config",
+     "layer": "surface",
+     "group": "operate",
+     "kind": "dock window",
+     "what": "The dashboard for everything Vira is wired into: your AI "
+             "providers, disk access, contacts, dossiers, the vault, mail, "
+             "phone and channels, notifications, and updates - each a row "
+             "showing its live state that opens in place. A brand-new "
+             "install doesn't start here; it starts on one screen asking "
+             "for one thing, your go-to AI, and the rest of the app "
+             "unlocks as its data lands.",
+     "links": [],
+     "keywords": ["config", "setup", "onboarding", "settings", "first run"],
      "updated": TODAY},
     {"id": "quick", "name": "Quick actions", "layer": "surface",
      "group": "operate", "kind": "Cmd-K + right-click",
