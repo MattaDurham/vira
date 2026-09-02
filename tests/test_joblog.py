@@ -89,7 +89,10 @@ class JobNamingTests(unittest.TestCase):
 class TranscriptLocatorTests(unittest.TestCase):
     def test_claude_has_its_verified_jsonl_path(self):
         path = joblog._transcript_path("anthropic", "/tmp/repo", "sess")
-        self.assertIn(".claude/projects", path)
+        # _transcript_path returns the host platform's native path. Normalize
+        # only for this semantic assertion so Windows backslashes do not turn
+        # a valid location into a test failure.
+        self.assertIn(".claude/projects", path.replace("\\", "/"))
         self.assertTrue(path.endswith("sess.jsonl"))
 
     def test_codex_thread_is_not_misattributed_to_claude(self):
