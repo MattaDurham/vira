@@ -55,6 +55,16 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('let reviewFilter = "all"', self.app)
         self.assertIn('column-width: 255px', self.css)
 
+    def test_attention_cards_activate_their_one_safe_primary_destination(self):
+        self.assertIn(
+            'cardAction(row, () => verb.run(btn), { hint: verb.title });',
+            self.app)
+        self.assertIn(
+            'cardAction(row, () => openReviewTarget(it), {', self.app)
+        self.assertIn('if (!it.open) {\n    openReviewContext(it);', self.app)
+        self.assertIn('.attn-item.card-actionable:hover', self.css)
+        self.assertIn('.review-card.card-actionable:hover', self.css)
+
     def test_attention_prose_wraps_instead_of_ellipsizing(self):
         self.assertIn('Global to the combined Attention module', self.css)
         self.assertIn('text-overflow: clip; overflow-wrap: anywhere', self.css)
