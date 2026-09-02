@@ -1875,8 +1875,9 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
   border: 1px solid var(--line); border-radius: 7px; background: var(--bg-raised);
   transition: border-color .16s ease, transform .16s ease;
 }
-.attn-item.click { cursor: pointer; }
-.attn-item.click:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+.attn-item.card-actionable:hover {
+  border-color: var(--accent-line); transform: translateY(-2px);
+}
 .attn-thumb {
   position: relative; min-height: 104px; overflow: hidden; display: flex;
   align-items: flex-end; padding: 10px 12px;
@@ -1960,8 +1961,9 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
   background: var(--bg-card); vertical-align: top;
   transition: transform .16s ease, border-color .16s ease;
 }
-.review-card.click { cursor: pointer; }
-.review-card.click:hover { transform: translateY(-2px); border-color: var(--review-tone); }
+.review-card.card-actionable:hover {
+  transform: translateY(-2px); border-color: var(--review-tone);
+}
 .review-card-art {
   position: relative; height: 92px; overflow: hidden; border-bottom: 1px solid var(--line);
   background:

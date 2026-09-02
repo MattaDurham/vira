@@ -9237,13 +9237,13 @@ function attnRow(sec, r) {
       verb.run(btn);
     });
     foot.appendChild(btn);
+    // Every Now card has one canonical verb. The visible button names it;
+    // the full card is the generous hit target, including for non-session
+    // rows such as Review, Forge traces, health, and unlanded branches.
+    cardAction(row, () => verb.run(btn), { hint: verb.title });
   }
   if (foot.childElementCount) main.appendChild(foot);
   row.appendChild(main);
-  if (r.job_id) {
-    row.classList.add("click");
-    row.addEventListener("click", () => openSession(r.job_id));
-  }
   sec.appendChild(row);
   return row;
 }
@@ -10320,6 +10320,20 @@ async function openReviewContext(it) {
   }
 }
 
+function openReviewTarget(it) {
+  if (!it.open) {
+    openReviewContext(it);
+    return;
+  }
+  if (/^https?:\/\//i.test(it.open)) {
+    window.open(it.open, "_blank", "noopener");
+  } else if (location.hash === it.open) {
+    routeHash();
+  } else {
+    location.hash = it.open;
+  }
+}
+
 $("#attention-source-close")?.addEventListener("click", closeReviewContext);
 addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("#attention-source")?.hidden) {
@@ -10383,17 +10397,13 @@ function reviewRow(sec, it, after, source) {
   body.appendChild(el("h3", "review-card-title", it.title || "Untitled decision"));
   if (it.why) body.appendChild(el("p", "review-card-why", it.why));
   if (it.ref) body.appendChild(el("div", "review-card-ref", it.ref));
-  // A row carrying `open` is a POINTER at the surface where the ruling
-  // happens (today: the Morning Picker's #subs-visuals deep link). The
-  // server decides which rows point; this only routes the hash — setting
-  // an already-current hash fires no hashchange, so route directly then.
-  if (it.open) {
-    row.classList.add("click");
-    row.addEventListener("click", () => {
-      if (location.hash === it.open) routeHash();
-      else location.hash = it.open;
-    });
-  }
+  // A server-supplied pointer is the card's exact destination (Forge idea,
+  // journal entry, sender triage, Morning Picker). Every other card opens
+  // its full deciding context. Approve/drop remain explicit buttons: a
+  // generous hit target must never turn a casual card click into a write.
+  cardAction(row, () => openReviewTarget(it), {
+    hint: it.open ? "Open the exact source" : "Read the full decision context",
+  });
   // A caveat that changes what a button DOES is shown on the row, never
   // hidden in a tooltip: today that is a proposal whose id is shared with
   // other pending rows, where approve promotes this exact text rather than
