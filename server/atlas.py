@@ -822,12 +822,43 @@ def compose(vault=False):
                               "error": "vault overlay unavailable"}
     graph["status"] = "ok"
     graph["building"] = _building.is_set()
+    _overlay_recency(graph)
     # Lenses are a regroup of the nodes this payload already carries, so
     # they are derived per read rather than stored — an override applied
     # a line above can never be a rebuild behind the legend.
     from . import atlaslens
     graph["lenses"] = atlaslens.lenses(graph)
     return graph
+
+
+def _overlay_recency(graph):
+    """Stamp each node with `last` - the most recent contact date (ISO
+    day) - at READ time, never into the cached graph. The registry's
+    activity snapshot goes stale between profile refreshes (the owner's
+    busiest thread read as three months quiet on 2026-09-02), so the live
+    chat.db last-message read the brief already keeps (`_live_imsg_last`,
+    cached five minutes) is overlaid on top of it, exactly as going-quiet
+    does. Never raises: a machine without chat.db access falls back to the
+    snapshot, and a node with no dated contact carries `last: None`."""
+    try:
+        c = crm._load()
+    except Exception:  # noqa: BLE001
+        return
+    live = {}
+    try:
+        from . import brief
+        live = brief._live_imsg_last() or {}
+    except Exception:  # noqa: BLE001
+        live = {}
+    for n in graph.get("nodes", []):
+        p = c["by_id"].get(n["id"])
+        if not p:
+            n.setdefault("last", None)
+            continue
+        last = crm._last_contact(p)
+        for h in p.get("handles", {}).get("imessage", []):
+            last = max(last, live.get(h, ""))
+        n["last"] = last[:10] or None
 
 
 # ---------- user-curated groups (the override layer) ----------

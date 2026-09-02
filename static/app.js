@@ -13852,6 +13852,12 @@ function viewLoad(id) {
   if (id === "find-define") requestAnimationFrame(renderDefines);
   if (id === "people") peopleTabLoad(peopleTab);
   if (id === "atlas") window.atlasLoad?.();
+  if (id === "orbits") {
+    // an ES module, loaded on first open so a Vira that never opens
+    // Orbits never fetches it
+    if (window.orbitsLoad) window.orbitsLoad();
+    else import("/orbits.js").then((m) => m.load()).catch((e) => console.warn("Orbits:", e));
+  }
   if (id === "map") {
     const f = $("#map-frame");             // load the atlas page on first open
     if (f && !f.getAttribute("src")) f.src = "/explainer/modules.html";
@@ -19359,6 +19365,10 @@ const WINDOWS = [
   // for Find and the five cockpit windows do for Work.
   { id: "atlas", title: "World", w: 1040,
     icon: "M12 12m-2.4 0a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0M5 5.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M19 6.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M5.5 18.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M18.5 18m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M10.3 10.3L6.3 6.9M13.7 10.6L17.5 7.6M10.5 13.7L6.8 17.2M13.6 13.5L17 16.7" },
+  // Orbits - the network as time (2026-09-02): a fresh take beside the
+  // Visual Network, not a replacement. static/orbits.js is the whole module.
+  { id: "orbits", title: "Orbits", w: 980, h: 660,
+    icon: "M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M12 12m-6 0a6 6 0 1 0 12 0a6 6 0 1 0-12 0M12 12m-9.5 0a9.5 9.5 0 1 0 19 0a9.5 9.5 0 1 0-19 0M17.2 8.8m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0M5.5 15.5m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0" },
   { id: "map", title: "System Map", w: 1000,
     icon: "M9 4L4 6v14l5-2 6 2 5-2V4l-5 2-6-2zM9 4v14M15 6v14" },
   { id: "imageatlas", title: "Image Atlas", w: 1100,
@@ -23494,6 +23504,7 @@ const HASH_ROUTES = {
   },
   "atlas": "atlas",
   "network": "atlas",
+  "orbits": "orbits",
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
   "work": (rest) => {           // #work, #work/queue|dispatch|live|record
