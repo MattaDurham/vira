@@ -79,6 +79,7 @@
   "site_root": "",
   "_site_root": "Checkout of the owner's public site repo (e.g. ~/workspace/thedurham-nyc). Used by the sitedocs migration (documents moved off the site into /docs/) and the blog publish pipeline (posts render into the site repo and push). Empty = both stay dormant.",
   "judge_model": "opus",
+  "chat_model": "",
   "_judge_model": "Model for fresh-eyes judge sessions (circuit judge stages and the Judge button on job history). Accepts sonnet | opus | haiku | fable.",
   "atlas_anchor_org": "",
   "_atlas_anchor_org": "Company name pinned as the Contact Atlas anchor cluster (substring-matched against CRM company fields), e.g. \"Taurid Capital\". Empty = no pinned cluster; communities still form by label propagation.",

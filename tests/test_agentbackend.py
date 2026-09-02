@@ -227,6 +227,9 @@ class _FakeRunner:
         return True
 
     async def await_reply(self):
+        # what the state PUBLISHED at the moment of parking - the answer a
+        # chat or the reply channel reads at the turn boundary
+        self.parked_with = getattr(self, "parked_with", []) + [self.state.get("result_text")]
         if self._replies:
             return self._replies.pop(0)
         return None
@@ -346,6 +349,10 @@ class CliExecRunTest(unittest.TestCase):
             argv2 = json.loads(Path(tmp, "calls.argv1").read_text(encoding="utf-8"))
         self.assertTrue(ok)
         self.assertEqual(text, "second")
+        # the answer is published BEFORE each park, never only at the end
+        # (a parked codex session read result_text "" until 2026-09-01)
+        self.assertEqual(runner.parked_with, ["first", "second"])
+        self.assertEqual(runner.state.get("turn"), 1)
         self.assertEqual(argv2[:2], ["exec", "resume"])
         self.assertEqual(argv2[2], "tid-1")
         self.assertNotIn("--sandbox", argv2)

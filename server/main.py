@@ -24,7 +24,7 @@ from . import (
     actions, admission, agentbackend, aihealth, applecontacts,
                applicationmap, applications,
                atlas, attention,
-               backup, brainchat, brief,
+               backup, brainchat, brief, virachat,
                briefstate, changelog,
                circuits,
                companion,
@@ -1354,6 +1354,50 @@ def api_find_chat_ask(body: FindChatReq):
         raise HTTPException(409, str(e))
     except Exception as e:  # noqa: BLE001 — surface configured-model failures
         raise HTTPException(502, str(e)[:400])
+
+
+# ---- Chat with Vira: the conversation over everything (virachat.py) ----
+
+class ViraChatReq(BaseModel):
+    question: str
+    session_id: str | None = None
+
+
+class ViraChatSwitchReq(BaseModel):
+    session_id: str
+
+
+@app.get("/api/vira/chat")
+def api_vira_chat():
+    """The active chat (with live progress for a pending turn) plus the
+    picker's list of every saved chat."""
+    return {"session": virachat.current(), "sessions": virachat.summary_rows()}
+
+
+@app.post("/api/vira/chat/new")
+def api_vira_chat_new():
+    return {"session": virachat.new(), "sessions": virachat.summary_rows()}
+
+
+@app.post("/api/vira/chat/switch")
+def api_vira_chat_switch(body: ViraChatSwitchReq):
+    try:
+        return {"session": virachat.switch(body.session_id),
+                "sessions": virachat.summary_rows()}
+    except KeyError:
+        raise HTTPException(404, "no such chat")
+
+
+@app.post("/api/vira/chat")
+def api_vira_chat_send(body: ViraChatReq):
+    q = body.question.strip()
+    if not q:
+        raise HTTPException(400, "empty message")
+    try:
+        return {"session": virachat.send(q, body.session_id),
+                "sessions": virachat.summary_rows()}
+    except virachat.Busy as e:
+        raise HTTPException(409, str(e))
 
 
 @app.get("/api/search/faces")

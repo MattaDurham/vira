@@ -87,6 +87,9 @@ DEFAULTS = {
     "reader_sources": [],                # folders connected to the Reader; empty = only
                                          # the places Vira writes itself
     "judge_model": "opus",               # fresh-eyes judge sessions (circuits + Jobs history)
+    # Chat with Vira: the model its session runs on; empty = the session
+    # default (cli_model), which is what every other owner session uses.
+    "chat_model": "",
     "atlas_anchor_org": "",              # pinned anchor-org cluster in the Contact Atlas
     "atlas_max_nodes": 200,              # atlas node cap (most-active contacts)
     "atlas_min_edge_weight": 0.15,       # edges below this fused weight are dropped
