@@ -23968,15 +23968,23 @@ function rdocGroupLabel(key) {
   return key;
 }
 
-// Newest first; a walkthrough leads its own date — the film is the thing
-// you actually want to look at. Shared by both views.
+// Newest first; same-date documents use the moment they first landed in the
+// Reader, since several producers know only a calendar date. A walkthrough
+// leads its own date — the film is the thing you actually want to look at.
+// Shared by both views.
 // `strict` drops the films-first tiebreak. Inside a band that tiebreak is a
 // nicety; in the flat library it is the last place kind still reorders the
 // list after the owner asked for newest-first and nothing else.
 function rdocSortNew(items, strict = false) {
   return items.slice().sort((a, b) => {
-    const d = String(b.created || "").localeCompare(String(a.created || ""));
-    if (d) return d;
+    const ac = String(a.created || ""), bc = String(b.created || "");
+    const aa = String(a.added || ""), ba = String(b.added || "");
+    const day = (bc || ba).slice(0, 10).localeCompare((ac || aa).slice(0, 10));
+    if (day) return day;
+    const landed = (ba || bc).localeCompare(aa || ac);
+    if (landed) return landed;
+    const made = bc.localeCompare(ac);
+    if (made) return made;
     if (strict) return 0;
     return (a.kind === "walkthrough" ? -1 : 0)
       - (b.kind === "walkthrough" ? -1 : 0);

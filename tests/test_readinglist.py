@@ -439,6 +439,18 @@ class StoreTests(Base):
         readinglist.register("new", "dossier", "/b/", created="2026-07-27T00:00:00")
         self.assertEqual([i["title"] for i in readinglist.queue()], ["new", "old"])
 
+    def test_same_day_documents_are_newest_landed_first(self):
+        with mock.patch.object(
+                readinglist, "_now",
+                side_effect=["2026-09-02T09:00:00-04:00",
+                             "2026-09-02T17:00:00-04:00"]):
+            readinglist.register("morning", "dossier", "/morning/",
+                                 created="2026-09-02T08:00:00-04:00")
+            readinglist.register("afternoon", "dossier", "/afternoon/",
+                                 created="2026-09-02")
+        self.assertEqual([i["title"] for i in readinglist.queue()],
+                         ["afternoon", "morning"])
+
 
 class SlugTests(Base):
     def test_slugs_are_always_reading_name_legal(self):
