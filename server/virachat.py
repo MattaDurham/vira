@@ -12,12 +12,21 @@ tools, and this module is the thin layer that makes a session read as a
 conversation: one turn in, one answer out, what it looked at beside it.
 
 - THE ENGINE IS THE SESSION HARNESS, unchanged. `send` launches ONE
-  read-only session per chat (the vira tools are auto-allowed, so a chat
-  never raises a permission card; write tools are disallowed at the SDK
-  level) and every later turn is `sessions.say` into it. A finished turn
-  PARKS in the reply window, which is exactly the state a conversation
-  wants; a chat resumed after the window closed continues through
-  `_resume_ended` by session id, so the transcript is never lost.
+  session per chat and every later turn is `sessions.say` into it. A
+  finished turn PARKS in the reply window, which is exactly the state a
+  conversation wants; a chat resumed after the window closed continues
+  through `_resume_ended` by session id, so the transcript is never lost.
+- IT RUNS ON THE DEFAULT RUNG, NOT READ-ONLY (owner's ruling, 2026-09-01,
+  after the first live chat failed a question about his subscriptions).
+  The first cut launched `read_only=True`: the vira tools are auto-allowed
+  either way, so it cost no cards - what it cost was Bash and the HTTP
+  API. The session could SEE that /api/subs held the full ledger and could
+  not call it, so it counted from the brief's five-row slice and said so.
+  Read-only is the plan session's contract, not a chat's; a chat is an
+  owner session and gets what every Implement and Ask-Vira dispatch gets:
+  `session_default_mode`, decided in config, never hardcoded here. cwd is
+  the home directory, so branch-first placement never fires and no
+  worktree is minted for a conversation.
 - THE ANSWER ARRIVES AT THE TURN BOUNDARY. `_follow` polls the job
   snapshot the way inbound.py's reply follower does: settled means the
   session is parked again (or ended) and the published result differs
@@ -157,10 +166,18 @@ OCR, people and the text of messages and mail), then the single-corpus \
 tools when you know where the answer lives (calendar, daily_brief, \
 crm_lookup, imessage_thread, mail_search, media_search, vault_search, \
 vault_note, list_ideas). Never answer from memory what a tool can answer \
-from the data. Name people, dates and the thing you found; when a vault \
-note grounds a claim, cite it as a [[wikilink]] to its path. Never invent \
-a fact, a date or a document. If nothing in the data answers, say so \
-plainly and name what you searched.
+from the data. When a tool returns a SLICE (the daily brief shows five \
+renewals, not the ledger), go to the whole thing: Vira's HTTP API on \
+http://localhost:8377 serves every store raw and you may call it with \
+Bash - GET /api/subs (the full subscriptions ledger), /api/brief, \
+/api/people?q=, /api/person/<id>, /api/find?q=, /api/applications, \
+/api/reading/list, /api/ideas, /api/attention. Name people, dates and \
+the thing you found; when a vault note grounds a claim, cite it as a \
+[[wikilink]] to its path. Never invent a fact, a date or a document. If \
+nothing in the data answers, say so plainly and name what you searched. \
+You can act as well as answer - draft, file, look things up, run what is \
+needed - and when an action is genuinely {owner}'s call, ask with \
+mcp__vira__ask_owner rather than guessing.
 
 Do not narrate your tool calls or your plan, and do not end with offers or \
 status - the reply box under this chat stays open on its own.
@@ -229,7 +246,7 @@ def _open_session(job_id, question):
         model = (settings.get("chat_model") or "").strip() or None
         provider, native = chat_provider()
         return session.sessions.launch(
-            _launch_prompt(question, native), read_only=True, model=model,
+            _launch_prompt(question, native), model=model,
             provider=provider, meta={"kind": "chat"})
     out = session.sessions.say(job_id, question)
     return out.get("job") or job_id
