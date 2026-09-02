@@ -148,6 +148,18 @@ class ChangelogScopeTests(unittest.TestCase):
                 if e["kind"] == "job"]
         self.assertEqual([e.get("job_id") for e in jobs], [long_id])
 
+    def test_retro_entries_name_the_retro_they_came_from(self):
+        # The module story joins a shipped line to its retro's module tags
+        # through this stem — session_id cannot, since hand-written and day
+        # retros carry none (258 of 830 bullets on the live log).
+        with mock.patch.object(changelog.ideasstore, "list_items",
+                               return_value=[]), \
+             mock.patch.object(changelog.joblog, "list_records",
+                               return_value=[]):
+            g = changelog.groups()
+        ships = [e for grp in g for e in grp["entries"] if e["kind"] == "ship"]
+        self.assertEqual(ships[0]["retro"], "2026-07-11 vira")
+
     def test_non_job_entries_carry_no_job_id(self):
         groups = self._groups([_idea("i1", "vira thing", "Vira")], [])
         for g in groups:

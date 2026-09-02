@@ -20048,91 +20048,611 @@ const WIN_ACTIONS = {
   } }],
 };
 
-const STORY_KINDS = [
-  ["walkthrough", "Session films"],
-  ["dossier", "Dossiers"],
-  ["plan", "Plans"],
-  ["brief", "Morning briefs"],
-  ["retro", "Session retros"],
+// ==================== The build story — an animated timeline ====================
+// "What is this?" answers with a CHRONOLOGY, not a list (owner's ask,
+// 2026-09-02: "animated timelines: rich, graphically rendered, flowing images
+// with cards, all of the articles and charts intermingled"). The server
+// (modulestory.story) hands over every library document tagged to the module
+// plus EVERY change-log entry, each flagged hit / strong; this code decides
+// how much of it is on screen and how it reads.
+//
+// Three depths, one switch in the panel head (persisted per browser):
+//   highlights  the films, dossiers and plans, the ideas that resolved, and
+//               the retro that narrates each day; shipped lines fold behind
+//               a counted button so a chapter reads as a story, not a log
+//   story       every change the log holds about this module, line by line
+//   all         the WHOLE Vira change log, this module's part of it lit —
+//               nothing in the changelog is missing at this depth, which is
+//               the owner's floor
+// The story reads OLDEST FIRST: a build story flows forward. The ribbon at
+// the top is the map — every week of Vira's life, this module's activity
+// drawn bright over the whole, each month a jump.
+//
+// Motion rules this shares with the library grid: the reveal observer fires
+// on ANY intersection (threshold 0 — a ratio is unsatisfiable for a tall
+// section and hides content forever), film loops attach only while a frame
+// is on screen and detach when it leaves, and reduced motion never gets a
+// hidden state to miss (`.anim` is withheld; counts render static).
+const BS_DEPTHS = [
+  ["highlights", "Highlights",
+   "The films, plans and dossiers, the ideas that resolved, and each day's narrative. Shipped lines fold behind a count."],
+  ["story", "Full story",
+   "Everything the change log holds about this module, shipped line by shipped line."],
+  ["all", "Everything",
+   "The whole Vira change log, with this module's part of it lit."],
 ];
+const BS_KIND_LABEL = {
+  walkthrough: "Session film", dossier: "Dossier", plan: "Plan",
+  brief: "Morning brief", ship: "Shipped", done: "Idea done",
+  dropped: "Idea dropped", job: "Session run",
+};
+let bsDepth = lsGet("vira-story-depth", "highlights");
+if (!BS_DEPTHS.some(([k]) => k === bsDepth)) bsDepth = "highlights";
+let bsStory = null;          // the payload on screen
+let bsObs = null;            // reveal observer, rebuilt per render
+let bsVidObs = null;         // film-loop attach/detach observer
+let bsHeadBound = false;
+let bsScrollRaf = 0;
 
 function closeStory() { exitFocus($("#story-panel")); }
 
-function storyDocRow(d) {
-  const row = el("div", "story-row" + (d.read ? " read" : ""));
-  row.appendChild(rdocThumb(d));
-  const main = el("div", "story-main");
-  main.appendChild(el("div", "story-name", d.title));
-  const sub = (d.film || {}).description || "";
-  if (sub) main.appendChild(el("div", "story-sub", sub));
-  row.appendChild(main);
-  if (d.read) row.appendChild(el("span", "story-readtag", "read"));
-  row.appendChild(el("div", "story-date",
-    d.created ? fmtTime(d.created) : ""));
-  cardAction(row, () => openReaderItem(d));
-  return row;
+function bsTeardown() {
+  if (bsObs) { bsObs.disconnect(); bsObs = null; }
+  if (bsVidObs) { bsVidObs.disconnect(); bsVidObs = null; }
+  bsStory = null;
+}
+
+function bsBindHead() {
+  if (bsHeadBound) return;
+  bsHeadBound = true;
+  const seg = $("#story-depth");
+  BS_DEPTHS.forEach(([k, label, hint]) => {
+    const b = el("button", "seg-btn" + (k === bsDepth ? " on" : ""), label);
+    b.dataset.depth = k;
+    b.title = hint;
+    b.addEventListener("click", () => bsSetDepth(k));
+    seg.appendChild(b);
+  });
+  $("#story-lib").addEventListener("click", () => {
+    if (bsStory) storyToLibrary(bsStory, bsStory.docs);
+  });
+  $("#story-body").addEventListener("scroll", () => {
+    if (bsScrollRaf) return;
+    bsScrollRaf = requestAnimationFrame(() => { bsScrollRaf = 0; bsOnScroll(); });
+  }, { passive: true });
+}
+
+function bsSetDepth(k) {
+  bsDepth = k;
+  lsSet("vira-story-depth", k);
+  document.querySelectorAll("#story-depth .seg-btn").forEach((b) =>
+    b.classList.toggle("on", b.dataset.depth === k));
+  if (bsStory) bsRender();
 }
 
 async function openModuleStory(winId) {
+  bsBindHead();
+  const panel = $("#story-panel");
+  panel.classList.add("open");
+  enterFocus(panel, () => { panel.classList.remove("open"); bsTeardown(); });
+  $("#story-title").textContent = "What is " + (WIN_TITLES[winId] || winId) + "?";
+  const body = $("#story-body");
+  body.innerHTML = "";
+  body.appendChild(el("div", "bs-loading", "Composing the build story…"));
   let s;
   try {
     s = await api("/api/module/story/" + encodeURIComponent(winId));
-  } catch (e) { toast("No build story here: " + errText(e)); return; }
-
-  const panel = $("#story-panel");
-  panel.classList.add("open");
-  enterFocus(panel, () => panel.classList.remove("open"));
-
-  $("#story-title").textContent =
-    "What is " + (WIN_TITLES[s.id] || s.title || s.id) + "?";
-  const body = $("#story-body");
-  body.innerHTML = "";
-
-  if (s.what) body.appendChild(el("p", "story-what", s.what));
-
-  const docs = s.docs || [];
-  if (!docs.length) {
-    body.appendChild(el("div", "empty left",
-      "No documents tagged to this module yet."
-      + (s.pending ? " " + s.pending + " are still being tagged — the story "
-                     + "fills in as the tagger reaches them." : "")));
+  } catch (e) {
+    body.innerHTML = "";
+    body.appendChild(el("div", "empty left", "No build story here: " + errText(e)));
     return;
   }
+  if (!panel.classList.contains("open")) return;   // closed while composing
+  bsStory = s;
+  bsRender();
+}
 
-  const byKind = {};
-  docs.forEach((d) => (byKind[d.kind] = byKind[d.kind] || []).push(d));
-  STORY_KINDS.forEach(([kind, label]) => {
-    const items = byKind[kind];
-    if (!items || !items.length) return;
-    const sec = el("div", "story-sec");
-    // Retros are raw material and there can be dozens; they fold. The
-    // films, dossiers and plans are the story and stay open.
-    const folds = kind === "retro" && items.length > 5;
-    const head = el(folds ? "button" : "div",
-      "story-shead" + (folds ? " folds" : ""),
-      label + " · " + items.length);
-    sec.appendChild(head);
-    const list = el("div", "story-list");
-    if (folds) {
-      list.style.display = "none";
-      head.addEventListener("click", () => {
-        const shut = list.style.display === "none";
-        list.style.display = shut ? "" : "none";
-        head.classList.toggle("on", shut);
-      });
+function bsRender() {
+  const s = bsStory;
+  const body = $("#story-body");
+  body.innerHTML = "";
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const wrap = el("div", "bs" + (reduce ? "" : " anim"));
+  wrap.appendChild(bsHero(s, reduce));
+  const model = bsModel(s, bsDepth);
+  if ((s.events || []).length) wrap.appendChild(bsRibbon(s, model, reduce));
+  if (!model.chapters.length) {
+    wrap.appendChild(bsEmpty(s));
+  } else {
+    wrap.appendChild(bsTimeline(model, s));
+  }
+  body.appendChild(wrap);
+  body.scrollTop = 0;
+  bsArm(wrap, reduce);
+  bsOnScroll();
+}
+
+function bsEmpty(s) {
+  const box = el("div", "bs-empty");
+  const st = s.stats || {};
+  let line = bsDepth === "all"
+    ? "The change log is empty and no document is tagged to this module."
+    : "Nothing in the change log or the library joins this module yet.";
+  if (s.pending) {
+    line += " " + s.pending + " documents are still being tagged — the story "
+      + "fills in as the tagger reaches them.";
+  }
+  box.appendChild(el("p", "bs-what", line));
+  if (bsDepth !== "all" && st.changelog_total) {
+    const b = el("button", "bs-foldbtn",
+      "Read everything — " + st.changelog_total + " changes across Vira");
+    b.addEventListener("click", () => bsSetDepth("all"));
+    box.appendChild(b);
+  }
+  return box;
+}
+
+// ---- the model: events -> days -> chapters, filtered by depth ----
+function bsMonthLabel(key) {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined,
+    { month: "long", year: "numeric" });
+}
+
+function bsModel(s, depth) {
+  const byDay = new Map();
+  const dayOf = (d) => {
+    if (!byDay.has(d)) {
+      byDay.set(d, { date: d, narr: [], more: [], docs: [], changes: [],
+                     dim: [], dimGoal: "", hits: 0 });
     }
-    items.forEach((d) => list.appendChild(storyDocRow(d)));
-    sec.appendChild(list);
-    body.appendChild(sec);
+    return byDay.get(d);
+  };
+  (s.events || []).forEach((e) => {
+    if (!e.day) return;
+    if (e.doc) { const d = dayOf(e.day); d.docs.push(e); d.hits++; return; }
+    if (e.hit) { const d = dayOf(e.day); d.changes.push(e); d.hits++; }
+    else if (depth === "all") dayOf(e.day).dim.push(e);
   });
+  // A retro NARRATES its day when work shipped under it; a hit retro
+  // with nothing shipped - a muse run, a brief TL;DR job, a session that
+  // only read - still counts but folds behind a "N more sessions" button,
+  // or the routine chatter of a busy day buries the sentence that matters.
+  Object.entries(s.days || {}).forEach(([date, info]) => {
+    const hit = (info.retros || []).filter((r) => r.hit && (r.goal || r.doc));
+    if (hit.length) {
+      const d = dayOf(date);
+      d.narr = hit.filter((r) => r.ships > 0 && r.goal);
+      d.more = hit.filter((r) => !(r.ships > 0 && r.goal));
+      d.hits += hit.length;
+    } else if (depth === "all" && info.goal) {
+      dayOf(date).dimGoal = info.goal;
+    }
+  });
+  let days = [...byDay.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+  if (depth === "highlights") {
+    // A day earns a highlight when it produced a document worth a card, an
+    // idea reached a verdict, or a retro narrates it with real shipped work
+    // under it — a day of wording-only hits is log material, not story.
+    days = days.filter((d) =>
+      d.docs.some((e) => e.weight >= 0.55)
+      || d.changes.some((e) => e.kind === "done" || e.kind === "dropped")
+      || (d.narr.length && d.changes.some((e) => e.strong)));
+  } else if (depth === "story") {
+    days = days.filter((d) => d.hits > 0);
+  }
+  const chapters = [];
+  days.forEach((d) => {
+    const key = d.date.slice(0, 7);
+    let ch = chapters[chapters.length - 1];
+    if (!ch || ch.key !== key) {
+      ch = { key, label: bsMonthLabel(key), days: [], changes: 0, docs: 0 };
+      chapters.push(ch);
+    }
+    ch.days.push(d);
+    ch.changes += d.changes.length;
+    ch.docs += d.docs.length;
+  });
+  return { days, chapters };
+}
 
-  const foot = el("div", "story-foot");
-  if (s.pending) foot.appendChild(el("span", "hint",
-    s.pending + " documents are still being tagged — the story grows."));
-  const lib = el("button", "story-lib", "Browse in the Reader library");
-  lib.addEventListener("click", () => storyToLibrary(s, docs));
-  foot.appendChild(lib);
-  body.appendChild(foot);
+// ---- hero ----
+function bsSpan(a, b) {
+  const f = (iso) => new Date(iso + "T12:00:00").toLocaleDateString(undefined,
+    { month: "short", day: "numeric" });
+  if (!a) return "";
+  if (!b || a === b) return f(a);
+  const sameYear = a.slice(0, 4) === b.slice(0, 4);
+  return f(a) + " → " + f(b) + (sameYear ? " " + b.slice(0, 4) : "");
+}
+
+function bsHero(s, reduce) {
+  const st = s.stats || {};
+  const hero = el("div", "bs-hero");
+  const bits = ["Build story"];
+  if (st.first) bits.push(bsSpan(st.first, st.last));
+  if (st.days) bits.push(st.days + " active " + (st.days === 1 ? "day" : "days"));
+  hero.appendChild(el("div", "bs-kicker", bits.join(" · ")));
+  hero.appendChild(el("h1", "bs-name", s.title || WIN_TITLES[s.id] || s.id));
+  if (s.what) hero.appendChild(el("p", "bs-what", s.what));
+  const stats = el("div", "bs-stats");
+  [["films", "session films"], ["plans", "plans"], ["dossiers", "dossiers"],
+   ["sessions", "sessions"], ["changes", "shipped changes"]].forEach(([k, lab]) => {
+    const n = st[k] || 0;
+    if (!n && k !== "changes") return;
+    const t = el("div", "bs-stat");
+    const num = el("div", "bs-num", reduce ? String(n) : "0");
+    num.dataset.n = n;
+    t.appendChild(num);
+    t.appendChild(el("div", "bs-slab", lab));
+    stats.appendChild(t);
+  });
+  hero.appendChild(stats);
+  if (st.changes) {
+    const weak = st.changes - (st.strong || 0);
+    hero.appendChild(el("div", "bs-fine",
+      st.strong + " of " + st.changes + " changes join through the tagger's "
+      + "verdict on their session" + (weak ? "; " + weak + " by wording alone, "
+        + "drawn hollow" : "") + ". " + (st.changelog_total || 0)
+      + " changes across all of Vira."));
+  }
+  return hero;
+}
+
+function bsCountUp(node, n) {
+  const dur = 1100, t0 = performance.now();
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    node.textContent = String(Math.round(n * eased));
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ---- the ribbon: Vira's whole life by week, this module drawn bright ----
+function bsSmoothPath(pts) {
+  // Catmull-Rom through the points, emitted as cubic beziers.
+  if (pts.length < 2) return "";
+  let d = "M" + pts[0][0].toFixed(1) + " " + pts[0][1].toFixed(1);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1],
+      p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += " C" + [c1[0], c1[1], c2[0], c2[1], p2[0], p2[1]]
+      .map((v) => v.toFixed(1)).join(" ");
+  }
+  return d;
+}
+
+function bsRibbon(s, model, reduce) {
+  const evs = s.events || [];
+  const st = s.stats || {};
+  const firstDay = st.changelog_first || evs[0].day;
+  const lastDay = st.changelog_last || evs[evs.length - 1].day;
+  const t0 = new Date(firstDay + "T00:00:00").getTime();
+  const wk = 7 * 864e5;
+  const weeks = Math.max(2, Math.floor((new Date(lastDay + "T00:00:00") - t0) / wk) + 1);
+  const tot = new Array(weeks).fill(0), hit = new Array(weeks).fill(0);
+  const idx = (day) => Math.max(0, Math.min(weeks - 1,
+    Math.floor((new Date(day + "T00:00:00").getTime() - t0) / wk)));
+  evs.forEach((e) => { const i = idx(e.day); tot[i]++; if (e.hit) hit[i]++; });
+  Object.entries(s.days || {}).forEach(([d, info]) =>
+    (info.retros || []).forEach((r) => { if (r.hit) hit[idx(d)]++; }));
+
+  const W = 1000, H = 132, pad = 8, base = 100, top = 14;
+  const max = Math.max(1, ...tot);
+  const x = (i) => pad + (i / (weeks - 1)) * (W - 2 * pad);
+  // Square-root scale: a module's dozen changes must stay visible against
+  // Vira's whole week of a hundred, and a linear scale flattens it away.
+  const y = (v) => base - Math.sqrt(v / max) * (base - top);
+  const line = (arr) => bsSmoothPath(arr.map((v, i) => [x(i), y(v)]));
+  const area = (arr) => line(arr) + " L" + x(weeks - 1).toFixed(1) + " " + base
+    + " L" + x(0).toFixed(1) + " " + base + " Z";
+
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.classList.add("bs-rsvg");
+  svg.innerHTML =
+    '<defs><linearGradient id="bsFill" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0" stop-color="var(--accent-bright)" stop-opacity=".55"/>'
+    + '<stop offset="1" stop-color="var(--accent-bright)" stop-opacity="0"/>'
+    + '</linearGradient>'
+    + '<filter id="bsGlow" x="-5%" y="-40%" width="110%" height="180%">'
+    + '<feGaussianBlur stdDeviation="2.2" result="b"/>'
+    + '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>'
+    + '</filter></defs>';
+  const mk = (tag, attrs, cls) => {
+    const n = document.createElementNS(ns, tag);
+    Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v));
+    if (cls) n.setAttribute("class", cls);
+    return n;
+  };
+  svg.appendChild(mk("path", { d: area(tot) }, "bs-rarea-all"));
+  svg.appendChild(mk("path", { d: line(tot) }, "bs-rline-all"));
+  svg.appendChild(mk("path", { d: area(hit) }, "bs-rarea"));
+  svg.appendChild(mk("path", { d: line(hit), pathLength: "1" }, "bs-rline"));
+  svg.appendChild(mk("line", { x1: pad, x2: W - pad, y1: base, y2: base }, "bs-rbase"));
+
+  // Month ticks. A month with a chapter at this depth is a jump; the others
+  // still label the axis, dimmer.
+  const has = new Set(model.chapters.map((c) => c.key));
+  const cur = new Date(firstDay + "T00:00:00");
+  cur.setDate(1);
+  const end = new Date(lastDay + "T00:00:00");
+  const labels = el("div", "bs-rlabels");
+  while (cur <= end) {
+    const key = cur.getFullYear() + "-" + String(cur.getMonth() + 1).padStart(2, "0");
+    const dayStart = new Date(Math.max(cur.getTime(), t0));
+    const px = (dayStart.getTime() - t0) / ((weeks - 1) * wk);
+    if (px <= 1) {
+      svg.appendChild(mk("line", { x1: (pad + px * (W - 2 * pad)).toFixed(1),
+        x2: (pad + px * (W - 2 * pad)).toFixed(1), y1: top - 6, y2: base + 6 }, "bs-rtick"));
+      const lab = el("button", "bs-rlabel" + (has.has(key) ? " has" : ""),
+        cur.toLocaleDateString(undefined, { month: "short" }));
+      lab.style.left = (pad / W * 100 + px * (1 - 2 * pad / W) * 100).toFixed(2) + "%";
+      lab.title = has.has(key) ? "Jump to " + bsMonthLabel(key)
+        : bsMonthLabel(key) + " — nothing about this module at this depth";
+      if (has.has(key)) {
+        lab.addEventListener("click", () => bsJumpTo(key, reduce));
+      }
+      labels.appendChild(lab);
+    }
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  const rib = el("div", "bs-ribbon");
+  rib.appendChild(svg);
+  rib.appendChild(labels);
+  const legend = el("div", "bs-rlegend");
+  const a = el("span"); a.appendChild(el("i", "all")); a.appendChild(document.createTextNode("all of Vira, by week"));
+  const b = el("span"); b.appendChild(el("i")); b.appendChild(document.createTextNode(
+    (s.title || "this module") + " · click a month to jump"));
+  legend.appendChild(a); legend.appendChild(b);
+  rib.appendChild(legend);
+  return rib;
+}
+
+function bsJumpTo(key, reduce) {
+  const sec = $("#story-body")?.querySelector('.bs-ch[data-key="' + key + '"]');
+  if (!sec) return;
+  sec.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+}
+
+// ---- the timeline ----
+function bsTimeline(model, s) {
+  const tl = el("div", "bs-tl");
+  const spine = el("div", "bs-spine");
+  spine.appendChild(el("div", "bs-spine-fill"));
+  tl.appendChild(spine);
+  model.chapters.forEach((ch, ci) => {
+    const sec = el("section", "bs-ch");
+    sec.dataset.key = ch.key;
+    const head = el("div", "bs-chhead");
+    const bits = ["Chapter " + (ci + 1),
+      ch.days.length + (ch.days.length === 1 ? " day" : " days")];
+    if (ch.changes) bits.push(ch.changes + (ch.changes === 1 ? " change" : " changes"));
+    if (ch.docs) bits.push(ch.docs + (ch.docs === 1 ? " document" : " documents"));
+    head.appendChild(el("div", "bs-kicker", bits.join(" · ")));
+    head.appendChild(el("h2", "bs-chname", ch.label));
+    head.appendChild(el("div", "bs-rule"));
+    sec.appendChild(head);
+    ch.days.forEach((d, di) => sec.appendChild(bsDay(d, di, s)));
+    tl.appendChild(sec);
+  });
+  return tl;
+}
+
+function bsDayVoice(d) {
+  const k = new Set(d.docs.map((e) => e.kind));
+  if (k.has("walkthrough")) return "v-film";
+  if (k.has("dossier")) return "v-dossier";
+  if (k.has("plan")) return "v-plan";
+  if (d.changes.some((e) => e.kind === "done")) return "v-done";
+  if (d.changes.some((e) => e.strong)) return "v-ship";
+  if (d.hits) return "v-weak";
+  return "v-quiet";
+}
+
+function bsDay(d, i, s) {
+  const row = el("div", "bs-day" + (d.hits ? "" : " quiet"));
+  row.style.setProperty("--i", Math.min(i, 6));
+  row.dataset.day = d.date;
+  const node = el("div", "bs-node");
+  node.appendChild(el("span", "bs-dot " + bsDayVoice(d)));
+  const dt = new Date(d.date + "T12:00:00");
+  node.appendChild(el("div", "bs-date",
+    dt.toLocaleDateString(undefined, { month: "short", day: "numeric" })));
+  node.appendChild(el("div", "bs-wd",
+    dt.toLocaleDateString(undefined, { weekday: "short" })));
+  row.appendChild(node);
+
+  const body = el("div", "bs-dbody");
+  d.narr.forEach((r) => body.appendChild(bsNarr(r)));
+  if (d.more.length && bsDepth !== "highlights") {
+    const fold = el("div", "bs-fold");
+    const n = d.more.length;
+    const btn = el("button", "bs-foldbtn",
+      n + (n === 1 ? " more session" : " more sessions") + " that day");
+    btn.addEventListener("click", () => {
+      d.more.forEach((r) => fold.parentNode.insertBefore(bsNarr(r, true), fold));
+      fold.remove();
+    });
+    fold.appendChild(btn);
+    body.appendChild(fold);
+  }
+  if (!d.narr.length && !d.more.length && d.dimGoal) {
+    const p = el("div", "bs-narr dim");
+    p.appendChild(el("span", "bs-narrk", "that day, elsewhere in Vira"));
+    p.appendChild(el("p", "bs-goal", d.dimGoal));
+    body.appendChild(p);
+  }
+  if (d.docs.length) {
+    const cards = el("div", "bs-cards");
+    [...d.docs].sort((a, b) => b.weight - a.weight)
+      .forEach((e) => cards.appendChild(bsCard(e)));
+    body.appendChild(cards);
+  }
+  const ideas = d.changes.filter((e) => e.kind === "done" || e.kind === "dropped");
+  const ships = d.changes.filter((e) => e.kind === "ship");
+  const jobs = d.changes.filter((e) => e.kind === "job");
+  const list = el("ul", "bs-changes");
+  ideas.forEach((e) => list.appendChild(bsChange(e)));
+  if (bsDepth === "highlights") {
+    if (ships.length) {
+      const fold = el("li", "bs-fold");
+      const btn = el("button", "bs-foldbtn",
+        ships.length + " shipped " + (ships.length === 1 ? "line" : "lines"));
+      btn.addEventListener("click", () => {
+        const rows = ships.map((e) => bsChange(e));
+        rows.forEach((r) => list.insertBefore(r, fold));
+        fold.remove();
+      });
+      fold.appendChild(btn);
+      list.appendChild(fold);
+    }
+  } else {
+    ships.forEach((e) => list.appendChild(bsChange(e)));
+    jobs.forEach((e) => list.appendChild(bsChange(e)));
+  }
+  d.dim.forEach((e) => list.appendChild(bsChange(e, true)));
+  if (list.children.length) body.appendChild(list);
+  row.appendChild(body);
+  return row;
+}
+
+function bsNarr(r, quiet) {
+  const box = el("div", "bs-narr" + (quiet ? " quiet" : ""));
+  const bits = [];
+  if (r.time) bits.push(r.time);
+  bits.push("session");
+  if (r.ships) bits.push(r.ships + " shipped here");
+  box.appendChild(el("span", "bs-narrk", bits.join(" · ")));
+  // A retro with no readable goal is named by its stem, in the kicker's
+  // voice - a filename set in the display serif reads as a sentence.
+  box.appendChild(el("p", "bs-goal" + (r.goal ? "" : " stem"), r.goal || r.stem));
+  box.title = r.stem;
+  cardAction(box, () => {
+    if (r.doc) openReaderItem(r.doc);
+    else openNote("Sessions/" + r.stem + ".md", r.stem);
+  });
+  return box;
+}
+
+function bsCard(e) {
+  const d = e.doc || {};
+  const card = el("div", "bs-card k-" + e.kind + (d.read ? " read" : ""));
+  const frame = el("div", "bs-frame");
+  const film = d.film || {};
+  if (e.kind === "walkthrough" && film.thumb) {
+    const img = el("img"); img.src = film.thumb; img.loading = "lazy"; img.alt = "";
+    frame.appendChild(img);
+    if (film.motion && d.locator) {
+      frame.classList.add("film");
+      frame.dataset.motion = d.locator + "motion.mp4";
+    }
+  } else if (d.thumb) {
+    const img = el("img"); img.src = d.thumb; img.loading = "lazy"; img.alt = "";
+    frame.appendChild(img);
+  } else {
+    // No face to show: a small glyph beside the caption, not an empty
+    // 16:10 frame that reads as a broken image.
+    card.classList.add("text");
+    frame.classList.add("glyph");
+    frame.appendChild(el("span", "bs-glyph", rdocKindGlyph(e.kind)));
+  }
+  card.appendChild(frame);
+  const cap = el("div", "bs-cap");
+  cap.appendChild(el("div", "bs-ck", BS_KIND_LABEL[e.kind] || e.kind));
+  cap.appendChild(el("div", "bs-cn", d.title || e.title || ""));
+  if (film.description) cap.appendChild(el("div", "bs-cs", film.description));
+  card.appendChild(cap);
+  cardAction(card, () => openReaderItem(d));
+  return card;
+}
+
+function bsChange(e, dim) {
+  const li = el("li", "bs-change k-" + e.kind + (e.strong ? "" : " weak")
+    + (dim ? " dim" : ""));
+  li.appendChild(el("span", "bs-tick"));
+  const txt = el("span", "bs-ctext");
+  if (e.kind === "job") {
+    const [head, ...rest] = (e.text || "").split(" · ");
+    txt.appendChild(el("span", "bs-jhead", head));
+    if (rest.length) txt.appendChild(el("span", "bs-jrest", " · " + rest.join(" · ")));
+  } else {
+    txt.textContent = e.text || "";
+  }
+  li.appendChild(txt);
+  if (e.kind !== "ship") li.appendChild(el("span", "bs-ckind", BS_KIND_LABEL[e.kind] || e.kind));
+  const why = (e.why || []).map((w) =>
+    w.replace(/^tag:/, "tag ").replace(/^word:/, "wording “") + (w.startsWith("word:") ? "”" : ""));
+  if (why.length) li.title = "joins this module by " + why.join(", ");
+  else if (dim) li.title = "not about this module — shown because the depth is Everything";
+  cardAction(li, () => {
+    if (e.job_id) { openSession(e.job_id); return; }
+    if (e.idea_id) { openApp("work"); revealIdea(e.idea_id); return; }
+    if (e.retro) openNote("Sessions/" + e.retro + ".md", e.retro);
+  });
+  return li;
+}
+
+// ---- motion: reveal on any intersection, films loop while on screen ----
+function bsArm(wrap, reduce) {
+  if (bsObs) bsObs.disconnect();
+  if (bsVidObs) bsVidObs.disconnect();
+  const root = $("#story-body");
+  bsObs = reduce ? null : new IntersectionObserver((ents) => {
+    ents.forEach((en) => {
+      if (!en.isIntersecting) return;
+      en.target.classList.add("rv");
+      bsObs.unobserve(en.target);
+    });
+  }, { root, threshold: 0 });
+  bsVidObs = new IntersectionObserver((ents) => {
+    ents.forEach((en) => {
+      const box = en.target;
+      if (en.isIntersecting && !reduce) {
+        if (box._vid || !box.dataset.motion) return;
+        const v = el("video", "bs-motion");
+        v.src = box.dataset.motion;
+        v.muted = true; v.loop = true; v.playsInline = true;
+        v.autoplay = true;
+        v.play().catch(() => {});
+        box._vid = v;
+        box.appendChild(v);
+      } else if (box._vid) {
+        box._vid.remove();
+        box._vid = null;
+      }
+    });
+  }, { root, threshold: 0.25 });
+  wrap.querySelectorAll(".bs-hero, .bs-ribbon, .bs-chhead, .bs-day").forEach((n) => {
+    if (bsObs) bsObs.observe(n); else n.classList.add("rv");
+  });
+  wrap.querySelectorAll(".bs-frame.film").forEach((n) => bsVidObs.observe(n));
+  if (!reduce) {
+    wrap.querySelectorAll(".bs-num[data-n]").forEach((n) => bsCountUp(n, +n.dataset.n));
+  }
+}
+
+// The spine fills as you read, and a day lights once the reading line has
+// passed it. Geometry from the scroller's own rect — the panel can carry a
+// zoom, and offsetTop math would then disagree with what is on screen.
+function bsOnScroll() {
+  const body = $("#story-body");
+  const tl = body?.querySelector(".bs-tl");
+  if (!tl) return;
+  const br = body.getBoundingClientRect();
+  const line = br.top + br.height * 0.55;
+  const tr = tl.getBoundingClientRect();
+  const fill = tl.querySelector(".bs-spine-fill");
+  if (fill) fill.style.height = Math.max(0, Math.min(tr.height, line - tr.top)) + "px";
+  tl.querySelectorAll(".bs-day").forEach((d) => {
+    d.classList.toggle("lit", d.getBoundingClientRect().top < line);
+  });
 }
 
 // Hand the story off to the Reader's library view, filtered to this module's

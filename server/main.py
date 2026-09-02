@@ -1115,6 +1115,13 @@ def api_map():
     return modulemap.payload()
 
 
+@app.get("/api/module/stories")
+def api_module_stories():
+    """The build-story coverage audit: one row per window, with the reasons
+    a story is thin named (2026-09-02). Read-only."""
+    return modulestory.coverage()
+
+
 @app.get("/api/module/story/{win_id}")
 def api_module_story(win_id: str):
     """The build story behind a window — right-click, "What is this?".

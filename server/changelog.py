@@ -29,7 +29,8 @@ Read-only: `GET /api/changelog` → { groups: [ {date, time, goal, no_retro,
 retros: [{stem, time, goal, session_id}], entries: [{text, kind, ts, day,
 session_id, source, job_id?, idea_id?, retro?}]} ], warnings: [str] },
 newest first. kind ∈ {ship, done, dropped, job}; source ∈ {retro, idea,
-job}. A kind-"job" entry carries `job_id` so a client rendering the ledger
+job}. A retro-source entry carries `retro` (the stem of the retro it came
+from) — the exact join modulestory uses to inherit that retro's module tags. A kind-"job" entry carries `job_id` so a client rendering the ledger
 BESIDE the changelog — the Work window's merged Record stream — can drop
 the changelog's copy of a job it already shows as a ledger row. Exclusions
 are never silent: skipped files and unparseable timestamps land in
@@ -212,9 +213,14 @@ def build():
                             "session_id": g["session_id"]})
         ts = g["date"] + "T" + (g["time"] or "00:00")
         for e in g["entries"]:
+            # `retro` names the retro the bullet came from — the ONE exact
+            # join a module story has from a shipped line back to the
+            # library document (and its module tags) that narrates it.
+            # session_id cannot carry that: hand-written and day retros
+            # have none, which left 258 of 830 bullets unjoinable.
             b["entries"].append({**e, "ts": ts, "day": g["date"],
                                  "session_id": g["session_id"],
-                                 "source": "retro"})
+                                 "source": "retro", "retro": g["stem"]})
         if g["session_id"]:
             session_to_stem[g["session_id"]] = g["stem"]
 
