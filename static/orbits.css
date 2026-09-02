@@ -1,0 +1,86 @@
+/* Orbits - the network as time. Tokens only, so every skin reaches it. */
+.orbits-stage {
+  position: relative; border: 1px solid var(--line); border-radius: 2px;
+  background: radial-gradient(ellipse at center, var(--bg-stage-glow) 0%, var(--bg-stage) 80%);
+  height: calc(100dvh - 320px); min-height: 320px; overflow: hidden; outline: none;
+}
+.orbits-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+  touch-action: none; display: block; }
+.orbits-tip {
+  position: absolute; z-index: 3; pointer-events: none; max-width: 230px;
+  background: var(--bg-hud-glass); border: 1px solid var(--line); border-radius: 2px;
+  padding: 6px 9px; font-size: 12px; color: var(--text);
+}
+.orbits-tip-name { font-weight: 500; }
+.orbits-tip-when { font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--oxidized); margin-top: 3px; }
+.orbits-empty {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  color: var(--text-dim); font-size: 12.5px; text-align: center; max-width: 320px;
+  background: var(--bg-hud-panel); padding: 12px 16px; border: 1px solid var(--line);
+  border-radius: 2px; z-index: 3;
+}
+.orbits-chrome {
+  position: absolute; left: 10px; top: 10px; z-index: 3;
+  display: flex; flex-direction: column; gap: 6px; max-width: min(360px, 60%);
+}
+.orbits-lenses { display: flex; flex-wrap: wrap; gap: 4px; }
+.orbits-hint { font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+  color: var(--text-faint); text-transform: uppercase; }
+.orbits-bar {
+  position: absolute; left: 10px; bottom: 10px; z-index: 3;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; max-width: min(460px, 70%);
+}
+.orbits-bar .search { flex: 1 1 150px; min-width: 0; }
+.orbits-card {
+  position: absolute; right: 10px; top: 10px; bottom: 10px; z-index: 4;
+  width: min(330px, 46%); overflow: auto;
+  background: var(--bg-hud-panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 12px; font-size: 12.5px; color: var(--text);
+  box-shadow: 0 12px 40px rgba(0,0,0,.45);
+}
+.orbits-card-head { display: flex; gap: 10px; align-items: center; }
+.orbits-card-head .avatar { width: 46px; height: 46px; flex: none; }
+.orbits-card-name { flex: 1; min-width: 0; font-weight: 500; }
+.orbits-card-name .click { cursor: pointer; font-family: var(--display); font-size: 16px; color: var(--text-head); }
+.orbits-card-name .click:hover { color: var(--accent-bright); }
+.orbits-orbit { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 10px 0 6px;
+  padding: 6px 8px; border: 1px solid var(--amber-line); border-radius: 2px; }
+.orbits-k { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); }
+.orbits-ring { font-family: var(--display); font-size: 14px; color: var(--oxidized); }
+.orbits-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 10px; }
+.orbits-chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-dim); border: 1px solid var(--line); border-radius: 2px; padding: 2px 7px;
+}
+.orbits-chip.you { color: var(--oxidized); border-color: var(--amber-line); }
+.orbits-card-body { border-top: 1px solid var(--line); padding-top: 8px; }
+.orbits-h { font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-faint); margin: 10px 0 5px; }
+.orbits-summary { margin: 0 0 6px; line-height: 1.45; }
+.orbits-loop { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; line-height: 1.35; }
+.orbits-owe { flex: none; font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em;
+  text-transform: uppercase; padding: 1px 5px; border-radius: 2px; border: 1px solid var(--line); }
+.orbits-owe.me { color: var(--oxidized); border-color: var(--amber-line); }
+.orbits-owe.them { color: var(--steel); border-color: var(--steel-line); }
+.orbits-hook { margin: 3px 0; padding-left: 8px; border-left: 2px solid var(--accent-line); line-height: 1.35; }
+.orbits-open { margin-top: 10px; }
+.orbits-ties { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 4px; }
+.orbits-tie { padding: 6px 4px; border-radius: 2px; cursor: pointer; }
+.orbits-tie:hover { background: var(--hover-wash); }
+.orbits-tie-name { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+.orbits-tie-when { flex: none; font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--text-faint); }
+.orbits-tie-why { color: var(--text-dim); font-size: 11.5px; margin-top: 2px; }
+@media (max-width: 1099px) {
+  .orbits-stage { height: calc(100dvh - 210px); }
+  .orbits-card { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 55%; }
+  .orbits-chrome { max-width: 70%; }
+}
+/* Orbits is a VIEW of the World window: exactly one stage shows. style.css
+   carries no global [hidden] rule, so the attribute needs a rule here. */
+.orbits-stage[hidden], .atlas-stage[hidden] { display: none !important; }
+.world-views { display: flex; gap: 6px; margin-left: 14px; }
+@media (min-width: 1100px) {
+  #win-atlas .orbits-stage { flex: 1; height: auto; min-height: 240px; }
+}

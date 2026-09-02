@@ -22,6 +22,7 @@
 <link rel="stylesheet" href="/skin-active.css">
 <link rel="stylesheet" href="/forge.css">
 <link rel="stylesheet" href="/research.css">
+<link rel="stylesheet" href="/orbits.css">
 </head>
 <body>
 <!-- Left nav drawer (mobile): swipe in from the left edge, or tap the brand.
@@ -616,7 +617,12 @@
   <!-- WORLD (typed, temporal graph over every connected local source) -->
   <section id="view-atlas" class="view">
     <div class="section-head"><h2>World</h2>
+      <div class="world-views" id="world-views" role="group" aria-label="World view">
+        <button class="fchip sm on" data-view="galaxy" type="button" title="The knowledge graph as a 3D galaxy">Galaxy</button>
+        <button class="fchip sm" data-view="orbits" type="button" title="Your contacts in orbit: radius is time since you last spoke">Orbits</button>
+      </div>
       <span class="hint" id="atlas-meta" style="margin-left:auto"></span>
+      <span class="hint" id="orbits-meta" style="margin-left:auto" hidden></span>
     </div>
     <div class="atlas-stage" id="atlas-stage">
       <canvas id="atlas-canvas"></canvas>
@@ -704,7 +710,26 @@
         <button class="world-now" id="world-now" type="button">Now</button>
       </div>
     </div>
+    <!-- ORBITS: the same network as time (2026-09-02) - a second VIEW of the
+         World window, toggled in the head. static/orbits.js is the whole module. -->
+    <div class="orbits-stage" id="orbits-stage" hidden>
+      <canvas id="orbits-canvas"></canvas>
+      <div class="orbits-tip" id="orbits-tip" style="display:none"></div>
+      <div class="orbits-card" id="orbits-card" style="display:none"></div>
+      <div class="orbits-empty" id="orbits-empty" style="display:none"></div>
+      <div class="orbits-chrome" id="orbits-chrome">
+        <div class="orbits-lenses" id="orbits-lenses"></div>
+        <div class="orbits-hint">radius is time since you last spoke - drag to spin, wheel to zoom, click a card</div>
+      </div>
+      <div class="orbits-bar">
+        <input id="orbits-search" class="search" type="search" placeholder="Find someone" autocomplete="off">
+        <button class="fchip" id="orbits-drift" title="Let the sky turn, or hold it still">Drifting</button>
+        <button class="fchip" id="orbits-home" title="Frame the whole sky">Home</button>
+        <button class="fchip" id="orbits-refresh" title="Reload the graph">Reload</button>
+      </div>
+    </div>
   </section>
+
 
   <!-- SYSTEM MAP (the Modules atlas page: module registry rendered live) -->
   <section id="view-map" class="view">

@@ -137,9 +137,12 @@ class EveryRevealObserverContract(unittest.TestCase):
         # build story's pair (2026-09-02): its day/chapter reveal at
         # threshold 0 and its film-loop observer, which only attaches a
         # motion loop over a poster already drawn.
+        # orbits.js: the Orbits window's wake/sleep observer (2026-09-02) -- it
+        # pauses the render loop off-screen and never grants a class, so a
+        # miss costs frames, not content.
         found = [n for n, _ in _observers()]
         self.assertEqual(sorted(found),
-                         ["app.js"] * 6 + ["atlas.js"])
+                         ["app.js"] * 6 + ["atlas.js", "orbits.js"])
 
 
 if __name__ == "__main__":
