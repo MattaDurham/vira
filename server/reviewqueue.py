@@ -687,12 +687,22 @@ def _ideas_read():
     for it in ideas.list_items():
         if it.get("status") != "proposed":
             continue
+        image = next((im for im in (it.get("images") or [])
+                      if im.get("id")), None)
+        visual = None
+        if image:
+            visual = {
+                "kind": "image",
+                "src": (f'/api/ideas/{it["id"]}/images/'
+                        f'{image["id"]}/thumb'),
+                "alt": image.get("name") or "Visual context for this idea",
+            }
         rows.append(item("ideas", it["id"], it.get("text") or "",
                          why=it.get("note") or "",
                          stamp=(it.get("created") or "")[:10],
                          actions=("approve", "drop"),
                          ref=it.get("project") or "",
-                         open=f'#idea/{it["id"]}'))
+                         open=f'#idea/{it["id"]}', visual=visual))
     rows.sort(key=lambda x: x["date"])
     return rows
 

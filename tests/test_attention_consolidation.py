@@ -47,6 +47,25 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('/api/review/context?id=', self.app)
         self.assertIn('.review-visual img, .review-visual video', self.css)
 
+    def test_now_is_thumbnail_led_and_decisions_are_independent_cards(self):
+        self.assertIn('class="attention-filters" id="review-filters"',
+                      self.html)
+        self.assertIn('`attn-item attn-kind-${kind}`', self.app)
+        self.assertIn('"review-card " + reviewTypeClass', self.app)
+        self.assertIn('let reviewFilter = "all"', self.app)
+        self.assertIn('column-width: 255px', self.css)
+
+    def test_attention_prose_wraps_instead_of_ellipsizing(self):
+        self.assertIn('Global to the combined Attention module', self.css)
+        self.assertIn('text-overflow: clip; overflow-wrap: anywhere', self.css)
+        self.assertIn('#view-attention .brief-row { flex-wrap: wrap;',
+                      self.css)
+
+    def test_context_has_a_visual_fallback_when_source_media_is_absent(self):
+        self.assertIn('"attention-context-map"', self.app)
+        self.assertIn('"Review evidence", "full context below"', self.app)
+        self.assertIn('.attention-map-flow', self.css)
+
     def test_attention_verbs_reveal_exact_objects(self):
         self.assertIn('run: () => revealOrphan(r.orphan_key)', self.app)
         self.assertIn('run: () => revealBoardsHealth()', self.app)

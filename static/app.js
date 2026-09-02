@@ -9056,27 +9056,61 @@ function attnVerb(r) {
   return null;
 }
 
+function attnKindLabel(r) {
+  if (r.kind === "flow") return "Flow run";
+  if (r.kind === "orphan") return "Branch to land";
+  if (r.kind === "health") return "System health";
+  if (r.kind === "review") return "Review queue";
+  if (r.machine) return "Machine session";
+  return r.needs_you ? "Needs your input" : "Live session";
+}
+
 function attnRow(sec, r) {
   const verb = attnVerb(r);
-  const row = briefRow(sec, {
-    time: r.age_days != null ? briefDays(r.age_days) : "",
-    title: r.title,
-    sub: r.sub,
-    tag: r.machine ? "machine" : (r.kind === "health" ? "health" : null),
-    actions: verb ? [{ label: verb.label, title: verb.title,
-                       run: (btn) => verb.run(btn) }] : [],
-  });
+  const kind = String(r.kind || "session").replace(/[^a-z0-9-]/gi, "-");
+  const row = el("article", `attn-item attn-kind-${kind}`
+    + (r.needs_you ? " needs-you" : " in-motion"));
+  const thumb = el("div", "attn-thumb");
+  thumb.setAttribute("aria-hidden", "true");
+  thumb.appendChild(el("span", "attn-thumb-mark"));
+  thumb.appendChild(el("small", "", attnKindLabel(r)));
+  row.appendChild(thumb);
+
+  const main = el("div", "attn-item-main");
+  const meta = el("div", "attn-item-meta");
+  meta.appendChild(el("span", "attn-state",
+    r.needs_you ? "Waiting on you" : "In motion"));
+  if (r.age_days != null)
+    meta.appendChild(el("span", "attn-age", briefDays(r.age_days)));
+  main.appendChild(meta);
+  main.appendChild(el("h3", "attn-item-title", r.title || "Untitled work"));
+  if (r.sub) main.appendChild(el("p", "attn-item-sub", r.sub));
   // A flow row carries the mini stage strip — the same dots the Record
   // card wears, from the same vocabulary; the server sends the per-stage
   // list in topo order so the two surfaces cannot disagree.
   if (r.kind === "flow" && (r.stages || []).length) {
     const strip = stageStripEl(r.stages, r.run_id);
-    if (strip) row.insertBefore(strip, row.querySelector(".brief-acts"));
+    if (strip) main.appendChild(strip);
   }
+  const foot = el("div", "attn-item-foot");
+  if (r.machine)
+    foot.appendChild(el("span", "brief-tag", "machine"));
+  if (verb) {
+    const btn = el("button", "brief-act", verb.label);
+    btn.title = verb.title;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      verb.run(btn);
+    });
+    foot.appendChild(btn);
+  }
+  if (foot.childElementCount) main.appendChild(foot);
+  row.appendChild(main);
   if (r.job_id) {
     row.classList.add("click");
     row.addEventListener("click", () => openSession(r.job_id));
   }
+  sec.appendChild(row);
   return row;
 }
 
@@ -9121,11 +9155,13 @@ function renderAttention() {
 
   if (cards.length || needRows.length) {
     const sec = briefSection(body, "Waiting on you");
+    sec.classList.add("attn-shelf", "attn-shelf-waiting");
     cards.forEach((c) => sec.appendChild(attnCardBlock(c)));
     needRows.forEach((r) => attnRow(sec, r));
   }
   if (workRows.length) {
     const sec = briefSection(body, "Working");
+    sec.classList.add("attn-shelf", "attn-shelf-working");
     workRows.forEach((r) => attnRow(sec, r));
   }
   if (!rows.length)
@@ -10083,6 +10119,25 @@ function renderAttentionSource(c) {
     } else media.alt = c.visual.alt || c.title;
     wrap.appendChild(media);
     $("#attention-source-media").appendChild(wrap);
+  } else {
+    // Every decision gets a compact visual orientation even when its source
+    // has not supplied media yet. Source-owned diagrams and images replace
+    // this map; the fallback is deliberately structural, never fake art.
+    const map = el("div", "attention-context-map");
+    map.appendChild(el("span", "attention-map-label", "Decision map"));
+    const flow = el("div", "attention-map-flow");
+    [[c.source || "Source", "source", "evidence"],
+     ["Review evidence", "full context below", "question"],
+     ["Owner ruling", "approve, drop, or open", "action"]]
+      .forEach(([label, sub, cls], i) => {
+      const node = el("div", "attention-map-node " + cls);
+      node.appendChild(el("strong", "", label));
+      node.appendChild(el("small", "", sub));
+      flow.appendChild(node);
+      if (i < 2) flow.appendChild(el("i", "attention-map-link"));
+    });
+    map.appendChild(flow);
+    $("#attention-source-media").appendChild(map);
   }
   if (c.open) {
     const open = el("button", "btn small", "Open exact source");
@@ -10139,7 +10194,35 @@ addEventListener("keydown", (e) => {
   }
 }, true);
 
-function reviewRow(sec, it, after) {
+function reviewTypeClass(source) {
+  return "review-type-" + String(source || "other")
+    .toLowerCase().replace(/[^a-z0-9-]/g, "-");
+}
+
+function reviewCardArt(it) {
+  if (it.visual?.src) {
+    const media = el("div", "review-card-art has-media");
+    const node = document.createElement(it.visual.kind === "video" ? "video" : "img");
+    node.src = it.visual.src;
+    if (node.tagName === "VIDEO") {
+      node.muted = true; node.loop = true; node.autoplay = true; node.playsInline = true;
+      node.setAttribute("aria-label", it.visual.alt || it.title);
+    } else {
+      node.alt = it.visual.alt || it.title;
+      node.loading = "lazy";
+    }
+    media.appendChild(node);
+    return media;
+  }
+  const art = el("div", "review-card-art generated");
+  art.setAttribute("aria-hidden", "true");
+  art.appendChild(el("i"));
+  art.appendChild(el("i"));
+  art.appendChild(el("i"));
+  return art;
+}
+
+function reviewRow(sec, it, after, source) {
   const actions = [{
     label: "context",
     title: "Read the exact source context before deciding",
@@ -10153,36 +10236,19 @@ function reviewRow(sec, it, after) {
       + (it.note ? " (" + it.note + ")" : ""),
     run: (btn, row) => reviewAct(btn, row, it, a, after),
   }))];
-  const row = briefRow(sec, {
-    time: it.age_days == null ? "" : briefDays(it.age_days),
-    title: it.title,
-    sub: it.why,
-    tag: it.ref || null,
-    actions,
-  });
-  // A source can attach one same-origin image or looping video. This is the
-  // extension seam for visual-generating processes: the source owns the
-  // asset, while Attention owns its consistent card treatment.
-  if (it.visual?.src) {
-    const media = el("div", "review-visual");
-    if (it.visual.kind === "video") {
-      const video = document.createElement("video");
-      video.src = it.visual.src;
-      video.muted = true;
-      video.loop = true;
-      video.autoplay = true;
-      video.playsInline = true;
-      video.setAttribute("aria-label", it.visual.alt || it.title);
-      media.appendChild(video);
-    } else {
-      const img = document.createElement("img");
-      img.src = it.visual.src;
-      img.alt = it.visual.alt || it.title;
-      img.loading = "lazy";
-      media.appendChild(img);
-    }
-    row.insertBefore(media, row.querySelector(".brief-acts"));
-  }
+  const row = el("article", "review-card " + reviewTypeClass(it.source));
+  row.dataset.source = it.source || "";
+  row.appendChild(reviewCardArt(it));
+  const body = el("div", "review-card-body");
+  const meta = el("div", "review-card-meta");
+  meta.appendChild(el("span", "review-card-source",
+    it.source_label || source?.label || it.source || "Decision"));
+  if (it.age_days != null)
+    meta.appendChild(el("span", "review-card-age", briefDays(it.age_days)));
+  body.appendChild(meta);
+  body.appendChild(el("h3", "review-card-title", it.title || "Untitled decision"));
+  if (it.why) body.appendChild(el("p", "review-card-why", it.why));
+  if (it.ref) body.appendChild(el("div", "review-card-ref", it.ref));
   // A row carrying `open` is a POINTER at the surface where the ruling
   // happens (today: the Morning Picker's #subs-visuals deep link). The
   // server decides which rows point; this only routes the hash — setting
@@ -10199,10 +10265,23 @@ function reviewRow(sec, it, after) {
   // other pending rows, where approve promotes this exact text rather than
   // resolving the id.
   if (it.note) {
-    const flag = el("div", "brief-empty review-note", it.note);
-    row.appendChild(flag);
+    const flag = el("div", "review-note", it.note);
+    body.appendChild(flag);
     row.classList.add("review-flagged");
   }
+  const acts = el("div", "brief-acts review-card-actions");
+  actions.forEach((a) => {
+    const btn = el("button", "brief-act" + (a.cls ? " " + a.cls : ""), a.label);
+    btn.title = a.title;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      a.run(btn, row);
+    });
+    acts.appendChild(btn);
+  });
+  body.appendChild(acts);
+  row.appendChild(body);
+  sec.appendChild(row);
   return row;
 }
 
@@ -10218,10 +10297,33 @@ async function loadReview() {
   }
 }
 
+let reviewFilter = "all";
+
+function renderReviewFilters(q) {
+  const host = $("#review-filters");
+  if (!host) return;
+  host.innerHTML = "";
+  const options = [{ key: "all", label: "All", count: q.total || 0 },
+    ...(q.sources || []).filter((s) => s.count)
+      .map((s) => ({ key: s.key, label: s.label, count: s.count }))];
+  if (!options.some((o) => o.key === reviewFilter)) reviewFilter = "all";
+  options.forEach((o) => {
+    const btn = el("button", "attention-filter" + (o.key === reviewFilter ? " on" : ""));
+    btn.appendChild(el("span", "", o.label));
+    btn.appendChild(el("b", "", String(o.count)));
+    btn.addEventListener("click", () => {
+      reviewFilter = o.key;
+      renderReview(q);
+    });
+    host.appendChild(btn);
+  });
+}
+
 function renderReview(q) {
   const body = $("#review-body");
   if (!body) return;
   body.innerHTML = "";
+  renderReviewFilters(q);
   const count = $("#review-count");
   if (count) {
     count.textContent = q.total
@@ -10232,12 +10334,11 @@ function renderReview(q) {
   if (hero) hero.textContent = q.total
     ? q.total + " decision" + (q.total === 1 ? "" : "s")
     : "Nothing waiting";
-  (q.sources || []).forEach((s) => {
-    const rows = (q.items || []).filter((i) => i.source === s.key);
-    if (!rows.length) return;
-    const sec = briefSection(body, s.label, s.hint);
-    rows.forEach((it) => reviewRow(sec, it, () => loadReview().catch(() => {})));
-  });
+  const sourceMap = new Map((q.sources || []).map((s) => [s.key, s]));
+  const visible = (q.items || []).filter((it) =>
+    reviewFilter === "all" || it.source === reviewFilter);
+  visible.forEach((it) => reviewRow(
+    body, it, () => loadReview().catch(() => {}), sourceMap.get(it.source)));
   // A source that failed to read says so instead of vanishing — an empty
   // queue and an unreadable store must never look the same.
   Object.entries(q.errors || {}).forEach(([key, msg]) => {

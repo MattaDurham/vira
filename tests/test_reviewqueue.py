@@ -259,6 +259,20 @@ class ContextTests(_Case):
                                        "src": "https://example.com/a.png"})
         self.assertIsNone(bad["visual"])
 
+    def test_a_proposed_ideas_first_image_becomes_review_visual_context(self):
+        idea = ideas.add("Show the owner a richer decision card",
+                         status="proposed", source="muse", project="Vira")
+        ideas.attach_image(idea["id"], {
+            "id": "img_visual1", "name": "attention-map.png",
+            "mime": "image/png", "bytes": 120, "added": "2026-09-01",
+            "text": "", "text_source": "",
+        })
+        [row] = self.by_source("ideas")
+        self.assertEqual(
+            row["visual"]["src"],
+            f'/api/ideas/{idea["id"]}/images/img_visual1/thumb')
+        self.assertEqual(row["visual"]["alt"], "attention-map.png")
+
     def test_summary_leads_with_the_oldest_and_caps_the_top(self):
         self.write_proposals([
             proposal(f"L{i}", f"Proposal number {i} about something.",

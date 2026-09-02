@@ -124,10 +124,20 @@ def preamble(native=True, worktree_path="", branch="", live_root=""):
         "the moment the choice is genuinely theirs, and if no answer comes, "
         "stop and report rather than guessing.\n\n"
         if native else "")
+    visual_para = (
+        "VISUAL CONTEXT FOR DURABLE DECISIONS. When you create a proposal, "
+        "review document, plan, or other artifact the owner will later open "
+        "from Attention, make the detail page visual when that improves "
+        "understanding: add a diagram for systems or sequences, an image or "
+        "contact sheet for visual evidence, or a structured table/timeline "
+        "when prose hides the comparison. Give every visual useful alt text. "
+        "Do not add decorative filler; when a visual would not clarify the "
+        "decision, use a deliberately structured, scannable document instead."
+        "\n\n")
     return (
         f"You are running inside Vira, {owner}'s personal AI chief-of-staff "
         f"web app, as an agent session on {owner}'s Mac.\n\n"
-        + branch_para + ask_para + tools_para +
+        + branch_para + ask_para + tools_para + visual_para +
         "Vira's HTTP API on http://localhost:8377 serves the same data as "
         "JSON when you need it raw: GET /api/brief (calendar + who's "
         "waiting), /api/people?q=<name>, /api/person/<id>, "
