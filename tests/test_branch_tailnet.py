@@ -138,9 +138,16 @@ exit 0
         self.assertTrue((data / ".test-snapshot").is_file())
         self.assertTrue((data / "test-vault" / "wiki" /
                          "Durable previews.md").is_file())
+        world_map = data / "test-vault" / "Projects" / "World map.md"
+        self.assertTrue(world_map.is_file())
+        self.assertIn("type: project",
+                      world_map.read_text(encoding="utf-8"))
+        self.assertTrue((data / "test-vault" / "wiki" /
+                         "Ada Rivera.md").is_file())
         config = (data / "config.json").read_text(encoding="utf-8")
         self.assertIn('"fixture_mode": true', config)
         self.assertIn(str(data / "test-vault"), config)
+        self.assertIn('"Projects"', config)
 
     def test_magicdns_name_is_normalized(self):
         result = run_shell("tailnet_host", self.env)

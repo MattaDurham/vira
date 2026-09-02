@@ -1,4 +1,4 @@
-/* Visual Network — the 3D renderer.
+/* World — the 3D graph renderer.
 
    The module the Visual Network draws through when WebGL is available.
    atlas.js still owns the data, the state object S, and every piece of
@@ -50,6 +50,7 @@ export const NAV = {
 const CAM_KEY = "vira-atlas-cam.v1";
 const RING_W = 0.17;        // ring band as a fraction of the node's half-size
 const LABEL_MAX = 70;       // DOM labels are cheap but not free
+const POINT_CLOUD_AT = 2500; // all nodes remain visible; glyph detail adapts
 
 export function create(host) {
   const { stage, S } = host;
@@ -87,6 +88,7 @@ export function create(host) {
   const textures = new Map();       // sim node id -> THREE.Texture
   const labels = new Map();         // sim node id -> span
   let edgeMesh = null, edgeGeo = null, edgeList = [];
+  let pointCloud = null, pointGeo = null, pointMat = null, pointList = [];
   let stars = null;
 
   const requestRender = () => { needsRender = true; };
@@ -177,6 +179,36 @@ export function create(host) {
     transparent: true, depthWrite: false, depthTest: true,
   });
 
+  // A full vault is tens of thousands of nodes. One Mesh + ShaderMaterial +
+  // texture per item would spend the frame on draw-call overhead. The large
+  // graph path draws every node as one attribute-driven point cloud;
+  // selection, kind colors and time filters remain per-node buffer data.
+  const POINT_VERT = `
+    uniform float uScale;
+    attribute float aSize;
+    attribute vec3 aColor;
+    attribute float aAlpha;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main(){
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = clamp(aSize * uScale / max(1.0, -mv.z), 1.5, 72.0);
+      vColor = aColor;
+      vAlpha = aAlpha;
+    }`;
+  const POINT_FRAG = `
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main(){
+      vec2 p = gl_PointCoord * 2.0 - 1.0;
+      float d = length(p);
+      if (d > 1.0 || vAlpha <= 0.002) discard;
+      float edge = 1.0 - smoothstep(0.84, 1.0, d);
+      gl_FragColor = vec4(vColor, vAlpha * edge);
+      #include <colorspace_fragment>
+    }`;
+
   function tileTexture(name, letters) {
     const c = document.createElement("canvas");
     c.width = c.height = 128;
@@ -228,6 +260,15 @@ export function create(host) {
   // contiguous positions put each community on its own patch of the shell -
   // the 3D reading of the flat build's angular cluster homes.
   function seed() {
+    if (S.fixedLayout) {
+      S.nodes.forEach((p) => {
+        p.z = Number(p.z || 0);
+        p.vx = p.vy = p.vz = 0;
+      });
+      S.ego.x = S.ego.y = S.ego.z = 0;
+      S.ego.vx = S.ego.vy = S.ego.vz = 0;
+      return;
+    }
     const n = S.nodes.length || 1;
     const gold = Math.PI * (3 - Math.sqrt(5));
     S.nodes.forEach((p, i) => {
@@ -257,6 +298,7 @@ export function create(host) {
   // The flat build's force model, extended to three axes. Constants are the
   // same; only the geometry gained a dimension.
   function tick(dt) {
+    if (S.fixedLayout) { S.alpha = 0; return; }
     const nodes = S.nodes;
     const repel = 1300;
     for (let i = 0; i < nodes.length; i++) {
@@ -275,6 +317,7 @@ export function create(host) {
       }
     }
     for (const e of S.edges) {
+      if (host.isEdgeShown && !host.isEdgeShown(e)) continue;
       const w = Math.min(1.5, e.weight) / 1.5;
       const rest = 300 - 190 * w;
       const k = (e.structural ? 0.045 : 0.012) * (0.4 + 0.6 * w);
@@ -332,10 +375,43 @@ export function create(host) {
       if (free) edgeGeo.dispose();
       edgeMesh = null;
     }
+    if (pointCloud) {
+      scene.remove(pointCloud);
+      if (free) {
+        pointGeo.dispose();
+        pointMat.dispose();
+      }
+      pointCloud = pointGeo = pointMat = null;
+      pointList = [];
+    }
   }
 
   function buildNodes() {
     const all = S.ego ? [...S.nodes, S.ego] : S.nodes;
+    if (S.nodes.length > POINT_CLOUD_AT) {
+      pointList = all;
+      const n = all.length;
+      pointGeo = new THREE.BufferGeometry();
+      pointGeo.setAttribute("position",
+        new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      pointGeo.setAttribute("aSize",
+        new THREE.BufferAttribute(new Float32Array(n), 1));
+      pointGeo.setAttribute("aColor",
+        new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      pointGeo.setAttribute("aAlpha",
+        new THREE.BufferAttribute(new Float32Array(n), 1));
+      pointMat = new THREE.ShaderMaterial({
+        uniforms: { uScale: { value: H / (2 * Math.tan(
+          (NAV.fov * Math.PI / 180) / 2)) } },
+        vertexShader: POINT_VERT, fragmentShader: POINT_FRAG,
+        transparent: true, depthWrite: true, depthTest: true,
+      });
+      pointCloud = new THREE.Points(pointGeo, pointMat);
+      pointCloud.frustumCulled = false;
+      pointCloud.renderOrder = 2;
+      scene.add(pointCloud);
+      return;
+    }
     for (const p of all) {
       const tex = textureFor(p);
       textures.set(p.id, tex);
@@ -598,6 +674,29 @@ export function create(host) {
   }
 
   function paintNodes() {
+    if (pointCloud) {
+      const pos = pointGeo.getAttribute("position");
+      const size = pointGeo.getAttribute("aSize");
+      const color = pointGeo.getAttribute("aColor");
+      const alpha = pointGeo.getAttribute("aAlpha");
+      const shade = new THREE.Color();
+      for (let i = 0; i < pointList.length; i++) {
+        const p = pointList[i];
+        const show = visible(p);
+        pos.setXYZ(i, p.x, p.y, p.z);
+        alpha.setX(i, show ? nodeAlpha(p) : 0);
+        const emphasized = S.sel.has(p) || p === S.hover;
+        size.setX(i, p.r * 2 * (emphasized ? 1.5 : 1));
+        const value = p.ego ? "#a39c8d"
+          : S.sel.has(p) ? "#d4ccba"
+          : (p.band && S.colors.get(p.band)) || "#6a6a64";
+        shade.set(value);
+        color.setXYZ(i, shade.r, shade.g, shade.b);
+      }
+      pos.needsUpdate = size.needsUpdate = true;
+      color.needsUpdate = alpha.needsUpdate = true;
+      return;
+    }
     for (const mesh of nodeMeshes.values()) {
       const p = mesh.userData.p;
       const show = visible(p);
@@ -658,7 +757,9 @@ export function create(host) {
       const { e, ego } = edgeList[i];
       const v = i * 4;
       const hide = ego ? (S.hideEgo || !!S.shown)
-        : (S.shown && !(S.shown.has(e.an.id) && S.shown.has(e.bn.id)));
+        : (host.isEdgeShown ? !host.isEdgeShown(e)
+                           : S.shown && !(S.shown.has(e.an.id)
+                                          && S.shown.has(e.bn.id)));
       let r = 0, g = 0, b = 0, a = 0, lw = 1;
       if (!hide) {
         const st = edgeStyle(e, ego, hasSel, focus);
@@ -986,6 +1087,7 @@ export function create(host) {
   }
 
   function wake(heat = 0.6) {
+    if (S.fixedLayout) { S.alpha = 0; paint(); return; }
     S.alpha = Math.max(S.alpha || 0, heat);
     if (host.reducedMotion) {
       for (let i = 0; i < 260; i++) tick(1 / 60);
@@ -1003,6 +1105,9 @@ export function create(host) {
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     edgeMat.uniforms.uHalfRes.value.set(w / 2, h / 2);
+    if (pointMat)
+      pointMat.uniforms.uScale.value = h / (2 * Math.tan(
+        (NAV.fov * Math.PI / 180) / 2));
     if (camera) {
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -1091,7 +1196,9 @@ export function create(host) {
   function setGraph() {
     clearScene();
     seed();
-    if (host.reducedMotion) {
+    if (S.fixedLayout) {
+      S.alpha = 0;
+    } else if (host.reducedMotion) {
       S.alpha = 1;
       for (let i = 0; i < 420; i++) tick(1 / 60);
       S.alpha = 0;

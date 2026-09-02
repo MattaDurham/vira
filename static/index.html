@@ -613,9 +613,9 @@
 
   <!-- Radar folded into the People window as the Networking tab (2026-07-25) -->
 
-  <!-- VISUAL NETWORK (the face-graph of interconnection) -->
+  <!-- WORLD (typed, temporal graph over every connected local source) -->
   <section id="view-atlas" class="view">
-    <div class="section-head"><h2>Visual Network</h2>
+    <div class="section-head"><h2>World</h2>
       <span class="hint" id="atlas-meta" style="margin-left:auto"></span>
     </div>
     <div class="atlas-stage" id="atlas-stage">
@@ -630,8 +630,7 @@
         <div class="hint atlas-coverage" id="atlas-coverage"></div>
         <div class="atlas-bar">
           <input id="atlas-search" class="search" type="search"
-                 placeholder="Find a person…" autocomplete="off">
-          <button class="fchip" id="atlas-vault" title="Add everyone with a wiki page in your notes — people worth knowing, not only people you have met">Beyond the CRM</button>
+                 placeholder="Find anything…" autocomplete="off">
           <button class="fchip" id="atlas-ego" title="Hide the center node — the pure contact-to-contact mesh">Hide me</button>
           <button class="fchip" id="atlas-rescan">Rescan</button>
         </div>
@@ -639,6 +638,18 @@
       <button class="atlas-gear" id="atlas-gear" title="Lenses, groups and search"
               aria-expanded="false" aria-controls="atlas-chrome"><svg
         viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6zM12 5.4a6.6 6.6 0 1 0 0 13.2 6.6 6.6 0 0 0 0-13.2zM18.2 12h2.2M3.6 12h2.2M12 5.8V3.6M12 20.4v-2.2M16.38 7.62l1.56-1.56M6.06 17.94l1.56-1.56M16.38 16.38l1.56 1.56M6.06 6.06l1.56 1.56"/></svg></button>
+      <div class="world-time" id="world-timebar">
+        <div class="world-axis" role="group" aria-label="Timeline axis">
+          <button class="world-axis-btn on" id="world-axis-valid"
+                  title="Replay when facts held in the world">World time</button>
+          <button class="world-axis-btn" id="world-axis-recorded"
+                  title="Replay what Vira had learned by this date">Known by</button>
+        </div>
+        <input id="world-time" type="range" min="0" max="1000" value="1000"
+               aria-label="Replay date">
+        <span class="world-time-label" id="world-time-label">Now</span>
+        <button class="world-now" id="world-now" type="button">Now</button>
+      </div>
     </div>
   </section>
 

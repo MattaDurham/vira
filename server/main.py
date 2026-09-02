@@ -77,7 +77,7 @@ from . import (
                sessiondiag, settings,
                genreroutes,
                skins,
-               subs_visuals,
+               subs_visuals, worldgraph,
                subscriptions, suggest, threadread, triage, uistate, update, vault,
                doctags, walkthroughs,
                whatsapp)
@@ -3957,7 +3957,38 @@ def api_orphanwork_land_all(req: OrphanLandAllReq | None = None):
     return {"started": n > 0, "count": n}
 
 
-# ---------- contact atlas (the face-graph of interconnection) ----------
+# ---------- World (the temporal graph over every local source) ----------
+
+@app.get("/api/world")
+def api_world(at: str | None = None, axis: str = "valid",
+              kinds: str = ""):
+    try:
+        return Response(content=worldgraph.encoded(
+            at=at, axis=axis,
+            kinds=[part for part in kinds.split(",") if part.strip()]),
+            media_type="application/json")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/api/world/node/{node_id}")
+def api_world_node(node_id: str):
+    detail = worldgraph.node_detail(node_id)
+    if not detail:
+        raise HTTPException(404, "not in the World graph")
+    return detail
+
+
+@app.post("/api/world/refresh")
+def api_world_refresh():
+    """Refresh both derived inputs without making World a third store."""
+    atlas.refresh()
+    threading.Thread(target=vault.scan_once, daemon=True,
+                     name="vira-world-vault-refresh").start()
+    return {"refreshing": True}
+
+
+# ---------- contact atlas (legacy API + materialized CRM projection) -----
 
 @app.get("/api/atlas")
 def api_atlas(vault: bool = False):

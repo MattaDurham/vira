@@ -438,7 +438,8 @@ clone_data() {
 fixture_data() {
   local dir=$1 dst="$1/data" stage="$1/.data-snapshot.tmp"
   rm -rf "$dst" "$stage"
-  mkdir -p "$stage/test-vault/wiki" "$stage/test-vault/Sessions"
+  mkdir -p "$stage/test-vault/wiki" "$stage/test-vault/Sessions" \
+    "$stage/test-vault/Projects"
   python3 - "$stage/config.json" "$dst/test-vault" <<'PY'
 import json
 import sys
@@ -448,21 +449,99 @@ config_path, vault_path = sys.argv[1:]
 Path(config_path).write_text(json.dumps({
     "fixture_mode": True,
     "vault_root": vault_path,
-    "vault_dirs": ["wiki", "Sessions"],
+    "vault_dirs": ["wiki", "Sessions", "Projects"],
 }, indent=2), encoding="utf-8")
 PY
-  print -r -- '# Durable previews
+  print -r -- '---
+type: concept
+title: Durable previews
+valid_from: 2026-07-16
+recorded_at: 2026-07-16
+tags: [local-first, testing]
+---
+
+# Durable previews
 
 The preview server stays loopback-only. Tailscale Serve makes it available
 only to authenticated devices in the same tailnet.
 
 The test environment uses synthetic notes unless the owner explicitly approves
-a cloned personal-data snapshot.' > "$stage/test-vault/wiki/Durable previews.md"
-  print -r -- '# Find integration session
+a cloned personal-data snapshot. It exercises [[World map]] and [[Find integration]].' > "$stage/test-vault/wiki/Durable previews.md"
+  print -r -- '---
+type: event
+title: Find integration
+valid_from: 2026-07-20
+valid_to: 2026-07-21
+recorded_at: 2026-07-21
+tags: [local-first, search]
+---
+
+# Find integration session
 
 Find keeps deterministic search and one-shot Ask. Chat with my vault starts a
 persistent conversation. Concept Cloud and Related are session-linked companion
-windows on desktop and internal tabs on mobile.' > "$stage/test-vault/Sessions/Find integration.md"
+windows on desktop and internal tabs on mobile. The work belongs to [[Vira]]
+and follows [[Local-first software]].' > "$stage/test-vault/Sessions/Find integration.md"
+  print -r -- '---
+type: project
+title: Vira
+valid_from: 2026-07-07
+recorded_at: 2026-07-07
+tags: [local-first, knowledge-graph]
+---
+
+# Vira
+
+A local assistant that connects [[Ada Rivera]], [[Meridian Labs]], notes, and
+sources into one owner-controlled system. Its current visualization is the
+[[World map]].' > "$stage/test-vault/Projects/Vira.md"
+  print -r -- '---
+type: project
+title: World map
+valid_from: 2026-08-28
+recorded_at: 2026-09-02
+tags: [knowledge-graph, testing]
+---
+
+# World map
+
+A typed temporal graph over [[Vira]], informed by [[Local-first software]] and
+connected to the synthetic organization [[Meridian Labs]].' > "$stage/test-vault/Projects/World map.md"
+  print -r -- '---
+type: person
+title: Ada Rivera
+first_met: 2025-06
+recorded_at: 2026-01-12
+tags: [knowledge-graph]
+---
+
+# Ada Rivera
+
+A fictional fixture contact who works with [[Meridian Labs]] and contributes
+to [[Vira]].' > "$stage/test-vault/wiki/Ada Rivera.md"
+  print -r -- '---
+type: organization
+title: Meridian Labs
+valid_from: 2024
+recorded_at: 2026-01-10
+tags: [knowledge-graph]
+---
+
+# Meridian Labs
+
+A fictional fixture organization connected to [[Ada Rivera]] and the
+[[World map]].' > "$stage/test-vault/wiki/Meridian Labs.md"
+  print -r -- '---
+type: concept
+title: Local-first software
+recorded_at: 2025-11-03
+tags: [local-first]
+---
+
+# Local-first software
+
+Software whose canonical data stays under owner control. It informs
+[[Durable previews]], [[Vira]], and [[Find integration]].' > "$stage/test-vault/wiki/Local-first software.md"
   date > "$stage/.test-snapshot"
   mv "$stage" "$dst"
   (cd "$dir" && VIRA_PASSIVE=1 "$LIVE/.venv/bin/python" -c \

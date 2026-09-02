@@ -2971,8 +2971,8 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   background: var(--bg-frame); height: calc(100dvh - 190px); display: block;
 }
 
-/* ---------- visual network (the face-graph) ----------
-   THE MODULE IS THE WEB. Every control lives behind one gear in the
+/* ---------- World (typed temporal knowledge graph) ----------
+   THE MODULE IS THE WEB. Secondary controls live behind one gear in the
    stage's lower-left corner, on BOTH widths — a legend, a lens row, a
    search box and two buttons laid out around the picture is a control
    panel with a web attached. The panel floats over the stage from that
@@ -3046,6 +3046,29 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 }
 .atlas-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
   touch-action: none; }
+.world-time {
+  position: absolute; z-index: 5; left: 58px; right: 12px; bottom: 12px;
+  min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 7px 9px;
+  background: var(--bg-hud-glass); border: 1px solid var(--line);
+  border-radius: 2px; backdrop-filter: blur(12px);
+}
+.world-axis { display: flex; flex: none; }
+.world-axis-btn, .world-now {
+  border: 0; background: transparent; color: var(--text-faint);
+  font: inherit; font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; cursor: pointer; padding: 3px 7px;
+}
+.world-axis-btn + .world-axis-btn { border-left: 1px solid var(--line); }
+.world-axis-btn.on { color: var(--accent-bright); }
+.world-time input[type="range"] {
+  flex: 1; min-width: 80px; margin: 0; accent-color: var(--accent);
+}
+.world-time-label {
+  min-width: 82px; color: var(--text); font-size: 11px;
+  font-variant-numeric: tabular-nums; text-align: center;
+}
+.world-now { color: var(--accent); border-left: 1px solid var(--line); }
 /* the 3D renderer's own surfaces: its canvas sits under everything (the
    .atlas-stage canvas rule already places and un-gestures it) and its name
    plates ride above it as DOM, so they inherit this module's type and
@@ -3159,6 +3182,14 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   font-size: 13px; font-weight: 500;
 }
 .atlas-edge-why { font-size: 11.5px; color: var(--text-faint); margin-top: 3px; }
+.atlas-edge-receipt {
+  display: block; max-width: 100%; margin: 5px 0 0; padding: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 10px; letter-spacing: .04em;
+  text-align: left; cursor: pointer;
+}
+.atlas-edge-receipt:hover { color: var(--accent-bright); }
 .atlas-wwrap {
   flex: 1; height: 3px; border-radius: 2px; background: var(--bg-card);
   overflow: hidden; min-width: 30px;
@@ -3172,6 +3203,10 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   .atlas-stage { height: calc(100dvh - 190px - var(--mdock-h)); }
   .atlas-chrome { width: calc(100% - 24px); max-height: calc(100% - 76px); }
   .atlas-legend { max-height: 34vh; }
+  .world-time { gap: 5px; padding: 6px; }
+  .world-axis-btn { font-size: 9px; padding: 3px 5px; }
+  .world-time-label { min-width: 68px; }
+  .world-now { display: none; }
 }
 
 /* ---------- desktop: dock + floating windows over a constellation ---------- */

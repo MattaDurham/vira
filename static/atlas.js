@@ -1,8 +1,9 @@
-/* Visual Network — the face-graph of interconnection.
-   Hand-rolled canvas force layout over the materialized graph served by
-   /api/atlas: the owner pinned center as the ego node, degree-1 contacts
-   on the inner ring, clusters angularly grouped and colored, every node
-   rendered with its face (/api/atlas/face/{pid}, letter tile fallback).
+/* World — Vira's typed, temporal graph of local knowledge.
+   The existing high-performance network renderer now reads /api/world:
+   CRM people, vault notes, organizations, projects, places, events,
+   sources, concepts and topics share one map.  People are one kind filter,
+   not the schema.  Every relation can carry a source receipt and both a
+   valid-time interval (when it held) and recorded time (when Vira knew it).
    Selection is the core interaction: clicking a node (or a grouping chip)
    toggles it into the selection — selected people and the ties among them
    light up, bridges between unlinked selections are traced with a local
@@ -57,6 +58,8 @@
     shown: null,             // Set of visible node ids (null = everyone)
     hideEgo: false,
     match: "",            // search filter
+    time: { axis: "valid", at: null, min: null, max: null, timeline: {} },
+    fixedLayout: false,      // server-supplied semantic coordinates
     loading: false,
     loadedGen: null,
   };
@@ -80,7 +83,7 @@
       const r = mod.create({
         stage, S,
         reducedMotion: REDUCED_MOTION,
-        isShown, matchDim, tileColor, initials, firstLast,
+        isShown, isEdgeShown, matchDim, tileColor, initials, firstLast,
         onHover: hitHover,
         onSelect: hitSelect,
         onOpen: hitOpen,
@@ -95,7 +98,7 @@
         window.__network3d = r;
       }
     } catch (e) {
-      console.warn("Visual Network: staying flat -", e && e.message);
+      console.warn("World: staying flat -", e && e.message);
     }
     return R3;
   }
@@ -110,10 +113,9 @@
     S.loading = true;
     try {
       await ensure3D();
-      const g = await api("/api/atlas" + (vaultOn() ? "?vault=1" : ""));
+      const g = await api("/api/world");
       if (g.status === "empty") {
-        showEmpty(g.building);
-        if (g.building) setTimeout(() => atlasLoad(true), 4000);
+        showEmpty(false);
         return;
       }
       emptyEl.style.display = "none";
@@ -131,19 +133,19 @@
     emptyEl.innerHTML = "";
     emptyEl.appendChild(el("div", "subsviz-empty-title",
       msg || (building ? "Building the network…"
-                       : "The network has not been built yet")));
+                       : "No connected knowledge is available yet")));
     if (!msg && !building) {
       const b = el("button", "btn small primary", "Build the graph");
+      b.textContent = "Scan sources";
       b.addEventListener("click", async () => {
-        await post("/api/atlas/refresh", {});
+        await post("/api/world/refresh", {});
         showEmpty(true);
         setTimeout(() => atlasLoad(true), 4000);
       });
       emptyEl.appendChild(b);
     } else if (building) {
       emptyEl.appendChild(el("div", "hint",
-        "Fusing photo, group-chat, employer, family, topic, and vault "
-        + "signals across your contacts."));
+        "Refreshing the CRM projection and connected local vaults."));
     }
     emptyEl.style.display = "";
     $("#atlas-meta").textContent = "";
@@ -158,12 +160,6 @@
   // in three different corners is exactly the thing worth seeing.
 
   const LENS_KEY = "vira-atlas-lens";
-
-  // "Beyond the CRM" — merge the vault's wiki people into the web. The
-  // server composes the merged payload (?vault=1) so lenses and counts
-  // stay honest; the toggle just decides which payload is asked for.
-  const VAULT_KEY = "vira-atlas-vault";
-  const vaultOn = () => !!lsGet(VAULT_KEY, false);
 
   function activeLens() {
     const ls = S.graph?.lenses || [];
@@ -223,20 +219,20 @@
     if (!host) return;
     const lens = activeLens();
     if (!lens) { host.textContent = ""; return; }
-    // Companies and Locations read fields most contacts leave empty, so
-    // the count is stated rather than implied — a chip row that bands a
-    // tenth of the web must not read as the whole picture.
+    // A banding is explicit about coverage so a filtered slice never reads
+    // as the size of the whole knowledge world.
     const left = lens.total - lens.placed;
     host.textContent = lens.bands.length
-      ? `${lens.placed} of ${lens.total} people in ${lens.bands.length} `
+      ? `${lens.placed} of ${lens.total} items in ${lens.bands.length} `
         + `${lens.bands.length === 1 ? "band" : "bands"}`
         + (left ? ` · ${left} unplaced` : "")
       : `Nothing to band — no ${lens.label.toLowerCase()} on file for `
-        + `these ${lens.total} people.`;
+        + `these ${lens.total} items.`;
   }
 
   function initGraph(g) {
     S.graph = g;
+    S.fixedLayout = !!g.layout?.basis;
     S.lens = lsGet(LENS_KEY, null) || (g.lenses || [])[0]?.id || null;
 
     const n = g.nodes.length;
@@ -253,10 +249,14 @@
     order.forEach((node, i) => {
       const ang = (i / n) * Math.PI * 2 - Math.PI / 2;
       const r = ring(node.degree || 3) * (0.92 + 0.16 * ((i * 7919) % 13) / 13);
+      const position = Array.isArray(node.position)
+        && node.position.length === 3 ? node.position : null;
       const sim = {
         ...node,
-        x: Math.cos(ang) * r, y: Math.sin(ang) * r,
-        vx: 0, vy: 0,
+        x: position ? Number(position[0]) : Math.cos(ang) * r,
+        y: position ? Number(position[1]) : Math.sin(ang) * r,
+        z: position ? Number(position[2]) : 0,
+        vx: 0, vy: 0, vz: 0,
         r: nodeRadius(node),
         homeR: ring(node.degree || 3),
         pin: false,
@@ -273,7 +273,7 @@
       an: S.byId.get(e.a), bn: S.byId.get(e.b),
       structural: e.signals.some((s) =>
         ["photo_cooccur", "group_cochat", "family", "colleague",
-         "wiki_link", "wiki_org"].includes(s.type)),
+         "wikilink", "wiki_link", "wiki_org"].includes(s.type)),
     })).filter((e) => e.an && e.bn);
     S.egoEdges = (g.ego_edges || []).map((e) => ({
       ...e, an: S.ego, bn: S.byId.get(e.b),
@@ -298,11 +298,16 @@
     card.style.display = "none";
     applyLens(false);
     updateIsoBar();
-    $("#atlas-vault")?.classList.toggle("on", vaultOn());
+    initTimeline(g.timeline || {});
+    const missing = g.scope?.unreadable
+      ? ` · ${g.scope.unreadable} unreadable notes` : "";
+    const semantic = g.layout?.semantic_nodes
+      ? ` · ${g.layout.semantic_nodes} semantically placed` : "";
+    const fallback = g.layout?.fallback_nodes
+      ? ` · ${g.layout.fallback_nodes} deterministic fallback` : "";
     $("#atlas-meta").textContent =
-      `${g.nodes.length} people · ${g.edges.length} ties`
-      + (g.vault?.people ? ` · ${g.vault.people} from your notes` : "")
-      + ` · built ` + fmtTime(g.generated);
+      `${g.nodes.length} items · ${g.edges.length} relations${semantic}${fallback}${missing}`
+      + ` · composed ` + fmtTime(g.generated);
 
     if (R3) {
       // the renderer seeds its own layout on the sphere, settles it and
@@ -315,7 +320,10 @@
       S.cam = { k: Math.max(0.16, Math.min(1, (fit / 2 - 24) / ring(3))),
                 x: 0, y: 0 };
       resize();
-      if (REDUCED_MOTION) {
+      if (S.fixedLayout) {
+        S.alpha = 0;
+        draw();
+      } else if (REDUCED_MOTION) {
         S.alpha = 1;
         for (let i = 0; i < 420; i++) tick(1 / 60);
         S.alpha = 0;
@@ -333,9 +341,13 @@
   }
 
   function loadFaces() {
+    // The full-vault renderer uses one GPU point cloud instead of thousands
+    // of per-person texture draw calls. Faces return automatically when a
+    // filtered slice is small enough for the detailed renderer.
+    if (S.nodes.length > 2500) return;
     // avatars trickle in; each arrival repaints once
     S.nodes.forEach((node) => {
-      if (node.face && !S.imgs.has(node.id)) {
+      if (node.kind === "person" && node.face && !S.imgs.has(node.id)) {
         const img = new Image();
         const entry = { img, ok: false };
         S.imgs.set(node.id, entry);
@@ -383,6 +395,7 @@
     }
     // springs along edges — strong ties pull close
     for (const e of S.edges) {
+      if (!isEdgeShown(e)) continue;
       const w = Math.min(1.5, e.weight) / 1.5;
       const rest = 300 - 190 * w;
       const k = (e.structural ? 0.045 : 0.012) * (0.4 + 0.6 * w);
@@ -422,6 +435,7 @@
 
   function wake(heat = 0.6) {
     if (R3) { R3.wake(heat); return; }
+    if (S.fixedLayout) { draw(); return; }
     S.alpha = Math.max(S.alpha, heat);
     if (REDUCED_MOTION) {
       for (let i = 0; i < 200; i++) tick(1 / 60);
@@ -469,19 +483,89 @@
     return best;
   }
 
-  // ---------- isolate ("show just the family") ----------
+  // ---------- filters + temporal replay ----------
 
-  const isShown = (p) => !S.shown || S.shown.has(p.id);
+  const parseTime = (value) => value ? Date.parse(value) : NaN;
+
+  function timeActive(item) {
+    if (!S.time.at) return true;
+    const at = S.time.at;
+    if (S.time.axis === "recorded") {
+      const learned = parseTime(item.recorded_at);
+      return !Number.isFinite(learned) || learned <= at;
+    }
+    const start = parseTime(item.valid_from);
+    const end = parseTime(item.valid_to);
+    return (!Number.isFinite(start) || start <= at)
+      && (!Number.isFinite(end) || at < end);
+  }
+
+  const isShown = (p) => timeActive(p) && (!S.shown || S.shown.has(p.id));
+  const isEdgeShown = (e) => timeActive(e)
+    && (!S.shown || (S.shown.has(e.an.id) && S.shown.has(e.bn.id)));
+
+  function initTimeline(timeline) {
+    S.time.timeline = timeline;
+    setTimelineBounds();
+    S.time.at = null;
+    syncTimelineRange();
+    paintTimeline();
+  }
+
+  function setTimelineBounds() {
+    const row = S.time.timeline[S.time.axis] || S.time.timeline;
+    const min = parseTime(row.min);
+    const max = Math.max(parseTime(row.max) || 0, Date.now());
+    S.time.min = Number.isFinite(min) ? min : max;
+    S.time.max = Number.isFinite(max) ? max : S.time.min;
+    if (S.time.at)
+      S.time.at = Math.max(S.time.min, Math.min(S.time.max, S.time.at));
+  }
+
+  function syncTimelineRange() {
+    const range = $("#world-time");
+    if (!range) return;
+    if (!S.time.at) { range.value = "1000"; return; }
+    const span = Math.max(1, S.time.max - S.time.min);
+    range.value = String(Math.round(
+      1000 * (S.time.at - S.time.min) / span));
+  }
+
+  function paintTimeline() {
+    $("#world-axis-valid")?.classList.toggle("on", S.time.axis === "valid");
+    $("#world-axis-recorded")?.classList.toggle(
+      "on", S.time.axis === "recorded");
+    const label = $("#world-time-label");
+    if (label) label.textContent = S.time.at
+      ? new Date(S.time.at).toLocaleDateString(undefined,
+          { year: "numeric", month: "short", day: "numeric",
+            timeZone: "UTC" })
+      : "Now";
+  }
+
+  function timelineChanged() {
+    recomputeIso();
+    recomputeSel();
+    updateIsoBar();
+    renderSelCard();
+    paintTimeline();
+    wake(0.18);
+    draw();
+  }
 
   function recomputeIso() {
-    if (!S.iso.ids.size) { S.shown = null; return; }
+    if (!S.iso.ids.size && !S.time.at) { S.shown = null; return; }
     const shown = new Set();
-    for (const p of S.nodes)
-      if (p.band && S.iso.ids.has(p.band)) shown.add(p.id);
+    for (const p of S.nodes) {
+      if (!timeActive(p)) continue;
+      if (!S.iso.ids.size || (p.band && S.iso.ids.has(p.band)))
+        shown.add(p.id);
+    }
     // ring expansions: people directly connected to what is shown
     for (let r = 0; r < S.iso.ring; r++) {
       const add = [];
       for (const e of S.edges) {
+        if (!timeActive(e)) continue;
         const a = shown.has(e.an.id), b = shown.has(e.bn.id);
         if (a !== b) add.push(a ? e.bn.id : e.an.id);
       }
@@ -528,11 +612,12 @@
       S.bands.find((b) => b.id === id)?.label || id);
     const n = S.shown ? S.shown.size : 0;
     bar.appendChild(el("span", "atlas-iso-label",
-      `Showing ${labels.join(" + ")} — ${n} ${n === 1 ? "person" : "people"}`
+      `${labels.length ? `Showing ${labels.join(" + ")} — ` : ""}`
+      + `${n} ${n === 1 ? "item" : "items"}`
       + (S.iso.ring ? ` (+${S.iso.ring} ring${S.iso.ring > 1 ? "s" : ""}`
                       + " of connections)" : "")));
-    const grow = el("button", "fchip sm", "+ connected people");
-    grow.title = "Also show people directly connected to what is shown";
+    const grow = el("button", "fchip sm", "+ connected items");
+    grow.title = "Also show items directly connected to what is shown";
     grow.addEventListener("click", () => { S.iso.ring += 1; isoChanged(); });
     bar.appendChild(grow);
     if (S.iso.ring) {
@@ -543,7 +628,7 @@
       });
       bar.appendChild(shrink);
     }
-    const all = el("button", "fchip sm", "Everyone");
+    const all = el("button", "fchip sm", "All kinds");
     all.addEventListener("click", () => {
       S.iso = { ids: new Set(), ring: 0 };
       isoChanged(false);
@@ -608,8 +693,7 @@
 
     // contact-to-contact edges
     for (const e of S.edges) {
-      if (S.shown && !(S.shown.has(e.an.id) && S.shown.has(e.bn.id)))
-        continue;
+      if (!isEdgeShown(e)) continue;
       const hot = focus && (e.an === focus || e.bn === focus);
       const w = Math.min(1.5, e.weight) / 1.5;
       if (hasSel && S.selEdges.has(e)) {
@@ -760,7 +844,7 @@
       chip.title = editable
         ? "Show just this group — right-click to rename, edit members, "
           + "or remove it"
-        : "Show just these people — right-click to select them all";
+        : "Show just this kind — right-click to select all visible items";
       chip.addEventListener("click", () => {
         S.match = "";
         $("#atlas-search").value = "";
@@ -794,14 +878,14 @@
     const items = [
       { head: c.label + (c.custom ? " · your group"
                                   : ` · ${lens?.label || "band"}`) },
-      { label: "Show only these people", run: () => {
+      { label: "Show only these items", run: () => {
           S.iso = { ids: new Set([c.id]), ring: 0 };
           isoChanged();
         } },
       // selecting a whole band is how you compare two of them: the
       // selection card already draws the ties BETWEEN what is selected,
       // so two company chips answer "how do these firms connect?"
-      { label: "Select everyone here", run: () => {
+      { label: "Select all visible items here", run: () => {
           members.forEach((p) => S.sel.add(p));
           selectionChanged();
         } },
@@ -994,8 +1078,7 @@
     if (!n) return;
     const counts = new Map();
     for (const e of S.edges) {
-      if (S.shown && !(S.shown.has(e.an.id) && S.shown.has(e.bn.id)))
-        continue;
+      if (!isEdgeShown(e)) continue;
       const a = S.sel.has(e.an), b = S.sel.has(e.bn);
       if (a && b) {
         S.selEdges.add(e);
@@ -1042,7 +1125,7 @@
       const next = [];
       for (const node of frontier) {
         for (const { n, e } of S.adj.get(node.id) || []) {
-          if (!isShown(n)) continue;
+          if (!isShown(n) || !isEdgeShown(e)) continue;
           if (prev.has(n.id)) continue;
           prev.set(n.id, { node, via: e });
           if (n === b) {
@@ -1111,8 +1194,7 @@
     card.innerHTML = "";
     card.appendChild(el("div", "hint", "loading…"));
     try {
-      const d = await api("/api/atlas/node/" + p.id
-                          + (vaultOn() ? "?vault=1" : ""));
+      const d = await api("/api/world/node/" + encodeURIComponent(p.id));
       if (editorId || !(S.sel.size === 1 && S.sel.has(p))) return;
       renderCard(d);
     } catch {
@@ -1390,20 +1472,19 @@
   function renderCard(d) {
     card.innerHTML = "";
     const head = el("div", "atlas-card-head");
-    const av = avatarNode(d.node.id, d.node.name, !d.node.vault,
-                          d.node.face != null);
+    const isPerson = d.node.kind === "person";
+    const av = avatarNode(d.node.id, d.node.name, isPerson,
+                          isPerson && d.node.face != null);
     if (d.node.face) av.querySelector("img")
       ?.setAttribute("src", "/api/atlas/face/" + d.node.id);
     head.appendChild(av);
     const mid = el("div", "atlas-card-name");
     const nm = el("div", "click", d.node.name);
-    nm.addEventListener("click", () => d.node.vault
-      ? openNote(d.node.ref, d.node.name) : openPerson(d.node.id));
+    nm.addEventListener("click", () => openWorldNode(d.node));
     mid.appendChild(nm);
-    const sub = d.node.vault
-      ? (d.node.qualifier || d.node.company || "in your notes")
-      : [d.node.title, d.node.company].filter(Boolean).join(" · ")
-        || d.node.relationship_class || "";
+    const sub = [kindLabel(d.node.kind), d.node.title, d.node.company,
+                 d.node.qualifier, d.node.source_name]
+      .filter(Boolean).join(" · ");
     if (sub) mid.appendChild(el("div", "hint", sub));
     head.appendChild(mid);
     const x = el("button", "idea-del", "×");
@@ -1412,14 +1493,24 @@
     card.appendChild(head);
 
     const chips = el("div", "atlas-card-chips");
-    if (d.node.vault) {
-      const wk = el("span", "atlas-deg click", "in your notes — open page");
-      wk.addEventListener("click", () => openNote(d.node.ref, d.node.name));
+    const noteRef = d.node.ref || d.node.note_ref;
+    if (noteRef) {
+      const wk = el("span", "atlas-deg click", "open source note");
+      wk.addEventListener("click", () => openNote(noteRef, d.node.name));
       chips.appendChild(wk);
     }
+    chips.appendChild(el("span", "atlas-deg", kindLabel(d.node.kind)));
     if (d.node.degree)
       chips.appendChild(el("span", "atlas-deg",
         ["1st", "2nd", "3rd"][d.node.degree - 1] || d.node.degree + "th"));
+    if (d.node.valid_from || d.node.valid_to)
+      chips.appendChild(el("span", "atlas-deg",
+        timeRange(d.node.valid_from, d.node.valid_to,
+          d.node.time_precision)));
+    if (d.node.recorded_at)
+      chips.appendChild(el("span", "atlas-deg",
+        "known " + shortDate(d.node.recorded_at,
+          d.node.time_precision?.recorded_at)));
     const clab = S.bands.find((b) => b.id === S.byId.get(d.node.id)?.band);
     if (clab) {
       const cc = el("span", "atlas-deg");
@@ -1439,9 +1530,14 @@
     }
 
     const list = el("div", "atlas-card-edges");
-    d.edges.slice(0, 24).forEach((e) => {
+    const visibleEdges = d.edges.filter((e) => {
+      const other = S.byId.get(e.pid);
+      return other && isShown(other) && timeActive(e);
+    });
+    visibleEdges.slice(0, 24).forEach((e) => {
       const row = el("div", "atlas-edge click");
-      const nameRow = el("div", "atlas-edge-name", e.name);
+      const nameRow = el("div", "atlas-edge-name",
+        `${e.name} · ${e.label || e.relation || "connected"}`);
       const bar = el("span", "atlas-w");
       bar.style.width = Math.min(100, e.weight * 55) + "%";
       const barWrap = el("span", "atlas-wwrap");
@@ -1450,7 +1546,19 @@
       row.appendChild(nameRow);
       row.appendChild(el("div", "atlas-edge-why",
         e.narrative || e.signals.map((s) => s.detail)
-          .filter(Boolean).join(" · ")));
+          .filter(Boolean).join(" · ")
+          || receiptLabel(e.receipts)));
+      const receipt = (e.receipts || [])[0];
+      if (receipt?.ref) {
+        const source = el("button", "atlas-edge-receipt",
+          `Receipt · ${receipt.ref}${receipt.line ? `:${receipt.line}` : ""}`);
+        source.type = "button";
+        source.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openNote(receipt.ref, receipt.label || e.name);
+        });
+        row.appendChild(source);
+      }
       row.title = "Add to selection — see how they connect";
       row.addEventListener("click", () => {
         const other = S.byId.get(e.pid);
@@ -1458,17 +1566,56 @@
       });
       list.appendChild(row);
     });
-    if (!d.edges.length)
-      list.appendChild(el("div", "hint", d.node.vault
-        ? "No ties above the threshold — their page shares no links, "
-          + "sources or orgs with the rest of the web yet."
-        : "No contact-to-contact ties above the threshold — connected "
-          + "through you only."));
+    if (!visibleEdges.length)
+      list.appendChild(el("div", "hint",
+        "No visible relations at this point on the selected timeline."));
     else
       list.appendChild(el("div", "hint",
         "Click a tie — or more people on the map — to add them to the "
         + "selection and see how everyone connects."));
     card.appendChild(list);
+  }
+
+  function kindLabel(kind) {
+    return String(kind || "item").replace(/_/g, " ")
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  }
+
+  function shortDate(value, precision) {
+    const time = Date.parse(value);
+    if (!Number.isFinite(time)) return "undated";
+    const date = new Date(time);
+    if (precision === "year")
+      return date.toLocaleDateString(undefined,
+        { year: "numeric", timeZone: "UTC" });
+    if (precision === "month")
+      return date.toLocaleDateString(undefined,
+        { year: "numeric", month: "short", timeZone: "UTC" });
+    return date.toLocaleDateString(undefined,
+      { year: "numeric", month: "short", day: "numeric",
+        timeZone: "UTC" });
+  }
+
+  function timeRange(from, to, precision = {}) {
+    return from && to
+      ? `${shortDate(from, precision.valid_from)} – ${shortDate(to,
+          precision.valid_to)}`
+      : from ? `from ${shortDate(from, precision.valid_from)}`
+        : `until ${shortDate(to, precision.valid_to)}`;
+  }
+
+  function receiptLabel(receipts) {
+    const row = (receipts || [])[0];
+    return row ? `receipt: ${row.label || row.ref || row.kind}` : "";
+  }
+
+  function openWorldNode(node) {
+    if (node.open_kind === "person" || (node.kind === "person" && !node.ref))
+      openPerson(node.id);
+    else if (node.ref || node.note_ref)
+      openNote(node.ref || node.note_ref, node.name);
+    else
+      toast("This derived item has no standalone source page yet");
   }
 
   function centerOn(p) {
@@ -1499,13 +1646,15 @@
       tip.innerHTML = "";
       tip.appendChild(el("div", "atlas-tip-name", p.name));
       const clab = S.bands.find((b) => b.id === p.band);
-      const bits = [p.vault && "in your notes",
-                    p.degree && ["1st", "2nd", "3rd"][p.degree - 1],
-                    clab?.label, p.company].filter(Boolean);
+      const bits = [kindLabel(p.kind), clab?.label, p.company,
+                    p.source_name].filter(Boolean);
       if (bits.length)
         tip.appendChild(el("div", "atlas-tip-sub", bits.join(" \u00b7 ")));
-      if (p.vault && p.qualifier)
+      if (p.qualifier)
         tip.appendChild(el("div", "atlas-tip-sub", p.qualifier));
+      if (p.valid_from || p.valid_to)
+        tip.appendChild(el("div", "atlas-tip-sub",
+          timeRange(p.valid_from, p.valid_to, p.time_precision)));
     } else {
       tip.style.display = "none";
     }
@@ -1517,8 +1666,7 @@
   }
 
   function hitOpen(p) {
-    if (p.vault) openNote(p.ref, p.name);
-    else openPerson(p.id);
+    openWorldNode(p);
   }
 
   function hitEmpty() {
@@ -1527,22 +1675,22 @@
   }
 
   function hitContext(p, e) {
-    const ctxObj = { component: "Visual Network",
-                     person: p.vault ? null : { pid: p.id, name: p.name },
-                     snippet: p.vault
-                       ? `${p.name} \u2014 vault wiki page ${p.ref}` : "" };
+    const isPerson = p.kind === "person" && p.open_kind === "person";
+    const ctxObj = { component: "World",
+                     person: isPerson ? { pid: p.id, name: p.name } : null,
+                     snippet: `${p.name} — ${kindLabel(p.kind)}`
+                       + (p.ref ? ` · ${p.ref}` : "") };
     showContextMenu(e.clientX, e.clientY, [
-      { head: "Network \u00b7 " + p.name },
-      p.vault
-        ? { label: "Open wiki page", run: () => openNote(p.ref, p.name) }
-        : { label: "Open profile", run: () => openPerson(p.id) },
+      { head: "World \u00b7 " + p.name },
+      { label: isPerson ? "Open profile" : "Open source",
+        run: () => openWorldNode(p) },
       { label: "Feature connections", run: () => setSelection([p]) },
       { label: S.sel.has(p) ? "Remove from selection"
                             : "Add to selection",
         run: () => toggleSelect(p) },
       // group assignments key on CRM pids; a vault id has no row to hold
       // one, so the chooser is CRM-only
-      !p.vault && { label: "Set group\u2026",
+      isPerson && S.graph.clusters?.length && { label: "Set group\u2026",
         run: () => groupChooser(e.clientX, e.clientY, p) },
       { sep: true },
       { label: "New idea about this\u2026",
@@ -1665,7 +1813,7 @@
     if (e.key !== "Enter" || !S.match) return;
     const hit = S.nodes.find((p) => isShown(p)
       && (p.name || "").toLowerCase().includes(S.match));
-    // Enter ADDS to the selection — search out far-apart people one by
+    // Enter ADDS to the selection — search out far-apart items one by
     // one and watch how they connect
     if (hit) {
       centerOn(hit);
@@ -1695,15 +1843,28 @@
     } else if (chromeOpen()) setChrome(false);
   });
 
-  $("#atlas-vault")?.addEventListener("click", (e) => {
-    const on = !vaultOn();
-    lsSet(VAULT_KEY, on);
-    e.target.classList.toggle("on", on);
-    // the node set genuinely changes, so this is a re-init, not a redraw
-    S.loadedGen = null;
-    atlasLoad(true);
+  function setTimeAxis(axis) {
+    if (axis === S.time.axis) return;
+    S.time.axis = axis;
+    setTimelineBounds();
+    syncTimelineRange();
+    timelineChanged();
+  }
+  $("#world-axis-valid")?.addEventListener("click", () => setTimeAxis("valid"));
+  $("#world-axis-recorded")?.addEventListener(
+    "click", () => setTimeAxis("recorded"));
+  $("#world-time")?.addEventListener("input", (e) => {
+    const value = Number(e.target.value);
+    const span = Math.max(1, S.time.max - S.time.min);
+    S.time.at = value >= 999 ? null : S.time.min + span * (value / 1000);
+    timelineChanged();
   });
-  $("#atlas-vault")?.classList.toggle("on", vaultOn());
+  $("#world-now")?.addEventListener("click", () => {
+    S.time.at = null;
+    const range = $("#world-time");
+    if (range) range.value = "1000";
+    timelineChanged();
+  });
 
   $("#atlas-ego")?.addEventListener("click", (e) => {
     S.hideEgo = !S.hideEgo;
@@ -1715,22 +1876,14 @@
   $("#atlas-rescan")?.addEventListener("click", async () => {
     const btn = $("#atlas-rescan");
     btn.disabled = true;
-    btn.textContent = "rebuilding…";
-    const was = S.graph?.generated;
-    try { await post("/api/atlas/refresh", {}); } catch { /* best effort */ }
-    let tries = 0;
-    const poll = setInterval(async () => {
-      tries += 1;
-      try {
-        const g = await api("/api/atlas");
-        if ((g.generated && g.generated !== was) || tries > 30) {
-          clearInterval(poll);
-          btn.disabled = false;
-          btn.textContent = "Rescan";
-          if (g.status === "ok") { S.loadedGen = null; atlasLoad(true); }
-        }
-      } catch { /* keep polling */ }
-    }, 3000);
+    btn.textContent = "scanning…";
+    try { await post("/api/world/refresh", {}); } catch { /* best effort */ }
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = "Rescan";
+      S.loadedGen = null;
+      atlasLoad(true);
+    }, 1800);
   });
 
   // ---------- lifecycle: pause when hidden ----------
