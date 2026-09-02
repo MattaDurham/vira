@@ -342,7 +342,11 @@ class Evidence(CirclesBase):
                "why": "w", "story": {"you": "Y", "them": "T"}}
         prompt = circles.compose_prompt(ev, rec, ["joined: Zoe"])
         self.assertIn("Ann Larkspur [p_ann]", prompt)
-        self.assertIn("'Ski trip': 3 of 3 members", prompt)
+        self.assertIn("'Ski trip' (a named chat): 3 of 3 members", prompt)
+        # the unnamed ann+raj chat is described by its circle members,
+        # never quoted as a title
+        self.assertIn("an unnamed chat with Ann, Raj: 2 of 3", prompt)
+        self.assertNotIn("'group: ", prompt)
         self.assertIn("PREVIOUS READ", prompt)
         self.assertIn("WHAT CHANGED SINCE: joined: Zoe", prompt)
         self.assertIn("CURRENT NAME: Ski trip", prompt)
@@ -516,6 +520,15 @@ class Sync(CirclesBase):
         held = [r for r in s["circles"].values() if r.get("held")]
         self.assertEqual(len(held), 1)
         self.assertIn("another circle", held[0]["held"]["reason"])
+        # a circle already WEARING a colliding name (a read from before the
+        # guard) drops to its fallback when its next read is held
+        loser = held[0]["id"]
+        circles._mutate(lambda st: st["circles"][loser].__setitem__(
+            "label", "Old friends"))
+        self.stub_model(dict(GOOD_READ, label="Aspen powder hounds"))
+        circles.sync(graph=g, force=True, sids=[loser])
+        labels = [r["label"] for r in self.store()["circles"].values()]
+        self.assertEqual(labels.count("Old friends"), 1)
         # the second read was told what was taken
         self.assertIn("ALREADY CARRY (pick something distinct): Old friends",
                       self.reads[1])

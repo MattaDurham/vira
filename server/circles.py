@@ -520,9 +520,10 @@ the circle. {rereading}
 Write, grounded ONLY in this evidence and never inventing a fact:
 
 - "label": a 2-4 word name {owner} would recognise on sight. Use the \
-words the evidence uses — a place, an era, a shared thing, a group chat's \
-own name. Never a bare number, never a person's surname unless the circle \
-is that family, never "{owner}'s friends".
+words the evidence uses - a place, an era, a shared thing that binds THESE \
+members, or a NAMED chat's own title. Never a bare number, never a \
+member's first name, never a person's surname unless the circle is that \
+family, never "{owner}'s friends".
 - "why": ONE sentence naming the evidence the label rests on.
 - "you": 2-3 sentences on how {owner} is connected to this circle — where \
 it comes from, what it is in {owner}'s life now.
@@ -584,11 +585,23 @@ def _members_block(ev):
 
 
 def _chats_block(ev):
+    """A NAMED chat is quoted by its title - a name the owner chose, and
+    fair game for a label. An unnamed chat is described by the circle
+    members in it, never by a participant list dressed as a title: the
+    first cut quoted 'group: Zach, Max, Nick' and got the label "Zach,
+    Max, Nick thread" back, naming a non-member."""
     out = []
     n = len(ev["members"])
+    names = {p["id"]: _first(p["name"]) for p in ev["people"]}
     for g in ev["chats"]:
         span = " - ".join(d for d in (g.get("first"), g.get("last")) if d)
-        out.append(f"- {g['label']!r}: {len(g['members'])} of {n} members "
+        if g.get("named"):
+            head = f"{g['label']!r} (a named chat)"
+        else:
+            who = ", ".join(names.get(p, "") for p in g["members"]
+                            if names.get(p))
+            head = f"an unnamed chat with {who}"
+        out.append(f"- {head}: {len(g['members'])} of {n} members "
                    f"(of {g['total']} in the chat), {g['messages']} messages"
                    + (f", {span}" if span else ""))
     return "\n".join(out) or "- (none found)"
@@ -752,7 +765,11 @@ def _apply_read(sid, read, ev, changes, reason):
         rec["held"] = read["held"]
         if read["label"]:
             rec["label"] = read["label"]
-        elif not rec.get("label"):
+        elif not rec.get("label") or \
+                rec["label"].casefold() in _taken_labels(s, sid):
+            # nothing grounded to apply, and the name it wears is either
+            # missing or one another circle already carries - the
+            # deterministic name is the honest fallback
             rec["label"] = fallback_label(ev)
         if old_label and rec["label"] != old_label and not read["held"]:
             hist.append({"when": now, "kind": "renamed",
