@@ -9883,7 +9883,15 @@ function watchBriefNote(id) {
       const e = (j.entries || []).find((x) => x.id === id);
       if (!e || e.status === "pending") return;
       h.stop();
-      if (e.status === "failed")
+      // the pass read the note as a QUESTION (journal._is_question): it
+      // was never work, so it goes where answers live — Find, on the
+      // owner's own words, not the model's paraphrase of them
+      const asked = (e.result?.unapplied || []).some((u) => u.redirect === "ask");
+      if (asked) {
+        toast("That was a question — asking Vira instead of filing it",
+              [["Journal", () => openJournal()]]);
+        openFindQuery(e.text, { ask: true });
+      } else if (e.status === "failed")
         toast("Note kept, but integration failed.",
               [["Journal", () => openJournal()]]);
       else
@@ -9925,8 +9933,11 @@ function journalNode(e) {
   // — so the Journal CHRONICLES it and names where it went rather than
   // being the place it waits. A resolved one stays here struck through.
   (res.unapplied || []).forEach((u) => {
-    const done = !!u.resolved;
-    const lead = done ? "done — "
+    // a question was never work: it went to Find (journal._is_question),
+    // so it reads as answered, not as struck-through work
+    const asked = u.redirect === "ask";
+    const done = !!u.resolved && !asked;
+    const lead = asked ? "asked in Find — " : done ? "done — "
       : u.job_id ? "dispatched — " : u.staged ? "queued — "
       : "needs a session — ";
     const line = el("div", "jn-unap" + (done ? " resolved" : ""),
@@ -21517,6 +21528,7 @@ function omniRouteKick(text) {
       if (omniRouted.text === text)
         omniRouted = { text, state: "failed", route: null };
     }
+    if (omniArmed === text && paletteOpen) { omniFireArmed(); return; }
     if (paletteOpen) renderPalette();
   }, 600);
 }
@@ -21560,6 +21572,48 @@ function omniRoutedRow(r) {
 const omniRoutePending = (q) =>
   omniRouted.text === q.trim() && omniRouted.state === "pending";
 
+// A question-shaped sentence ASKS FIRST, even before the router answers.
+// Kept deliberately Python-compatible (no lookbehind, no named groups) so
+// tests/test_omni_palette.py can run the same expression the palette does.
+// 2026-09-01: "Show me the insurance card that Casey texted me" was filed
+// as a Tell — the deterministic first row — because Enter beat a 4s
+// route; the sentence's own shape said it was a question all along.
+const OMNI_QUESTION_RE = /^\s*(?:(?:can|could|would|will)\s+you\s+)?(?:show(?:\s+me)?|find(?:\s+me)?|pull\s+up|look\s+up|search(?:\s+for)?|dig\s+up|get\s+me|where(?:'s|\s+is|\s+are|\s+was|\s+did)|what(?:'s|\s+is|\s+was|\s+are|\s+did|\s+time)|when(?:'s|\s+is|\s+was|\s+did|\s+do)|who(?:'s|\s+is|\s+was|\s+did|\s+sent)|did|does|do\s+i|have\s+i|how\s+(?:many|much|do|did|long))\b/i;
+const omniAsksFirst = (t) => /\?\s*$/.test(t) || OMNI_QUESTION_RE.test(t);
+
+// Enter while the router is still reading ARMS the palette instead of
+// running whatever row happened to be first. The route lands (or fails,
+// or times out) and THEN the first row runs — the routed row when there
+// is one, the deterministic pick otherwise. A second Enter runs the
+// deterministic pick at once; closing the palette or editing the text
+// disarms. Without this the palette's "Enter always works immediately"
+// meant "Enter files your question as a fact if you are quicker than the
+// model", which is exactly what happened.
+let omniArmed = null;
+const OMNI_ARM_MS = 8000;   // a route slower than this runs the deterministic pick
+
+function omniArm(q) {
+  omniArmed = q;
+  clearTimeout(omniArm.t);
+  omniArm.t = setTimeout(() => { if (omniArmed === q) omniFireArmed(); },
+                         OMNI_ARM_MS);
+  renderPalette();
+}
+
+function omniDisarm() {
+  omniArmed = null;
+  clearTimeout(omniArm.t);
+}
+
+function omniFireArmed() {
+  const q = omniArmed;
+  omniDisarm();
+  if (!paletteOpen || q === null) return;
+  const it = paletteMatches(q)[0];
+  togglePalette(false);
+  it?.run();
+}
+
 function omniRow(intent, text) {
   const r = OMNI_ROUTES[intent];
   return { label: r.label + " — " + omniQuote(text), kind: r.kind,
@@ -21596,9 +21650,9 @@ function omniRows(q) {
       const routed = omniRoutedRow(omniRouted.route);
       if (routed) pinned.push(routed);
     }
-    return { pinned, open: null,
-             trailing: ["tell", "ask", "idea", "session"]
-               .map((k) => omniRow(k, t)) };
+    const order = omniAsksFirst(t) ? ["ask", "tell", "idea", "session"]
+                                   : ["tell", "ask", "idea", "session"];
+    return { pinned, open: null, trailing: order.map((k) => omniRow(k, t)) };
   }
   return none;
 }
@@ -21758,8 +21812,11 @@ function renderPalette() {
   if (paletteIdx >= items.length) paletteIdx = Math.max(0, items.length - 1);
   list.innerHTML = "";
   if (omniRoutePending(q))
-    list.appendChild(el("div", "palette-empty",
-                        "Vira is reading the request…"));
+    list.appendChild(el("div", "palette-empty", omniArmed === q
+      ? "Vira is reading the request… it runs the moment the read lands"
+        + (items[0] ? " (Enter again: " + items[0].label.split(" — ")[0]
+                      + " now)" : "")
+      : "Vira is reading the request…"));
   if (!items.length) list.appendChild(el("div", "palette-empty", "No matches."));
   items.forEach((it, i) => {
     const row = el("div", "palette-row" + (i === paletteIdx ? " active" : ""));
@@ -21780,6 +21837,7 @@ function togglePalette(show, seed) {
   const wrap = $("#palette");
   if (!wrap) return;
   paletteOpen = show ?? !paletteOpen;
+  if (!paletteOpen) omniDisarm();
   wrap.classList.toggle("open", paletteOpen);
   if (paletteOpen) {
     $("#palette-input").value = seed || "";
@@ -21811,7 +21869,9 @@ function buildPalette() {
   });
   document.body.appendChild(wrap);
 
-  input.addEventListener("input", () => { paletteIdx = 0; renderPalette(); });
+  input.addEventListener("input", () => {
+    omniDisarm(); paletteIdx = 0; renderPalette();
+  });
   input.addEventListener("keydown", (e) => {
     const items = paletteMatches(input.value.trim());
     if (e.key === "ArrowDown") {
@@ -21824,6 +21884,14 @@ function buildPalette() {
       renderPalette();
     } else if (e.key === "Enter") {
       e.preventDefault();
+      const q = input.value.trim();
+      // the owner has not picked a row and the router has not answered:
+      // arm, and let the route decide the first row (see omniArm)
+      if (paletteIdx === 0 && omniRoutePending(q)) {
+        if (omniArmed === q) omniFireArmed();
+        else omniArm(q);
+        return;
+      }
       const it = items[paletteIdx];
       togglePalette(false);
       it?.run();

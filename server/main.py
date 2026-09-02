@@ -1381,7 +1381,12 @@ def api_tag_face(body: TagFaceBody):
     return {"rematched": n}
 
 
-@app.get("/api/media/thumb/{att_id}")
+# Both byte routes answer HEAD as well as GET. FastAPI's @app.get registers
+# GET alone (Starlette's own Route would add HEAD; APIRoute does not), so a
+# `curl -I` on a thumbnail returned 404 while GET served the file — and a
+# dispatched session probing the URL that way concluded the thumbnail did
+# not exist and fell back to printing a filesystem path (2026-09-01).
+@app.api_route("/api/media/thumb/{att_id}", methods=["GET", "HEAD"])
 def api_media_thumb(att_id: int):
     p = media.thumbnail(att_id)
     if not p:
@@ -1390,7 +1395,7 @@ def api_media_thumb(att_id: int):
                         headers={"cache-control": "max-age=86400"})
 
 
-@app.get("/api/media/file/{att_id}")
+@app.api_route("/api/media/file/{att_id}", methods=["GET", "HEAD"])
 def api_media_file(att_id: int):
     p, mime, name = media.preview_file(att_id)
     if not p:

@@ -211,3 +211,74 @@ class TheRouterOnlyEverAddsARow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AQuestionIsNeverFiledByDefault(unittest.TestCase):
+    """2026-09-01: "Show me the insurance card that Casey texted me" was
+    filed as a Tell — the deterministic first row — because Enter beat a
+    four-second route, and a coding session was dispatched to "search the
+    messages and show it". Two guards, each pinned: question-shaped prose
+    puts Ask first without waiting for any model, and Enter while a route
+    is pending ARMS rather than runs.
+
+    Mutation-checked when written: dropping `omniAsksFirst` from the
+    trailing order, removing the arm branch from the Enter handler,
+    dropping the fire from omniRouteKick, and hardcoding a tell in
+    omniFireArmed each fail at least one case."""
+
+    def _question_re(self):
+        m = re.search(r"const OMNI_QUESTION_RE = /(.*)/i;", SRC)
+        self.assertIsNotNone(m, "OMNI_QUESTION_RE is gone")
+        return re.compile(m.group(1), re.I)
+
+    def test_the_question_grammar_reads_the_real_sentence(self):
+        rx = self._question_re()
+        for t in ("Show me the insurance card that Casey texted me the other day.",
+                  "find the text with the account numbers",
+                  "Pull up Casey's profile",
+                  "Did Alex send me that photo",
+                  "what's the address of the cabin",
+                  "Can you show me the receipt from last week"):
+            self.assertTrue(rx.match(t), t)
+        for t in ("Casey sent me the new insurance card this month",
+                  "The rent went up to 4200",
+                  "What Casey said was that the girls stay up til 8",
+                  "Which reminds me, Alex is moving in October"):
+            self.assertFalse(rx.match(t), t)
+
+    def test_question_shaped_prose_puts_ask_first(self):
+        body = _block("function omniRows(")
+        self.assertRegex(body, r'omniAsksFirst\(t\)\s*\?\s*\["ask",\s*"tell"')
+        self.assertRegex(body, r':\s*\["tell",\s*"ask"')
+
+    def test_enter_while_a_route_is_pending_arms(self):
+        # the palette's own handlers live inside buildPalette — the Find chat
+        # composer registers an earlier "keydown" listener of its own
+        body = _block("function buildPalette(")
+        body = body[body.index('addEventListener("keydown"'):]
+        enter = body[body.index('e.key === "Enter"'):body.index('e.key === "Escape"')]
+        self.assertIn("omniRoutePending(q)", enter)
+        self.assertIn("omniArm(q)", enter)
+        self.assertIn("paletteIdx === 0", enter)   # an arrowed pick still runs at once
+
+    def test_the_route_landing_fires_the_armed_pick(self):
+        body = _block("function omniRouteKick(")
+        self.assertIn("omniArmed === text", body)
+        self.assertIn("omniFireArmed()", body)
+
+    def test_the_armed_pick_is_the_first_row_never_a_fixed_intent(self):
+        body = _block("function omniFireArmed(")
+        self.assertIn("paletteMatches(q)[0]", body)
+        self.assertNotIn("OMNI_ROUTES", body)
+
+    def test_closing_or_editing_disarms(self):
+        self.assertIn("omniDisarm()", _block("function togglePalette("))
+        body = _block("function buildPalette(")
+        i = body.index('addEventListener("input"')
+        j = body.index('addEventListener("keydown"')
+        self.assertIn("omniDisarm()", body[i:j])
+
+    def test_a_redirected_question_hands_off_to_find(self):
+        body = _block("function watchBriefNote(")
+        self.assertIn('u.redirect === "ask"', body)
+        self.assertIn("openFindQuery(e.text, { ask: true })", body)
