@@ -16,9 +16,14 @@
    whole system turns slowly, because an orrery that does not move is a
    diagram.
 
-   HOW IT MOVES: drag slides the sky, the wheel zooms toward the cursor,
-   and there is no orbit camera at all - the ORBIT is the picture. The only
-   rotation is the sky's own slow drift, which pauses under your hand.
+   HOW IT MOVES: you stay at the centre. A drag SPINS the sky around you
+   like a record on a platter (owner's call, 2026-09-02 - it used to slide
+   the sky, which walked the sun off screen); the wheel zooms toward the
+   cursor, so zooming in at the rim zooms in on the rim; a pinch zooms the
+   same way and never pans. There is no orbit camera at all - the ORBIT is
+   the picture. Clicking a card still centres that card (the panel docks
+   beside it), and the next drag spins the sky about the sun from wherever
+   it then sits, dropping the follow so the pivot stays put under the hand.
 
    WHAT A CLICK SHOWS: the card grows and the sky centres on it; its ties
    light up as chords to the people it is tied to, everyone else recedes;
@@ -305,6 +310,12 @@ function flyTo(node, k, opts = {}) {
 }
 
 // ---------- pointer ----------
+// the pointer's angle about the sun (world origin) as drawn on screen
+function sunAngle(px, py) {
+  const r = S.canvas.getBoundingClientRect();
+  return Math.atan2((py - r.top) - sy(0), (px - r.left) - sx(0));
+}
+
 function bindPointer() {
   const cv = S.canvas;
   cv.addEventListener("pointerdown", (e) => {
@@ -315,8 +326,10 @@ function bindPointer() {
       S.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
       S.drag = null; return;
     }
-    S.drag = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false,
-      button: e.button, cx: S.cam.x, cy: S.cam.y };
+    // a drag is a SPIN about the sun: remember the pointer's angle around
+    // the sun's screen position and turn the sky by how much it changes
+    S.drag = { x0: e.clientX, y0: e.clientY, moved: false, button: e.button,
+      ang: sunAngle(e.clientX, e.clientY) };
   });
   cv.addEventListener("pointermove", (e) => {
     if (S.pointers.has(e.pointerId)) S.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -325,16 +338,19 @@ function bindPointer() {
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
       if (S.pinch.d > 0) zoomAt(mx, my, d / S.pinch.d);
-      S.cam.x -= (mx - S.pinch.mx) / S.cam.k; S.cam.y -= (my - S.pinch.my) / S.cam.k;
-      S.pinch = { d, mx, my }; S.follow = null; S.dirty = true;
+      // zoom only: a pinch that also panned would walk the sun off centre
+      S.pinch = { d, mx, my }; S.dirty = true;
       return;
     }
     if (S.drag) {
       const dx = e.clientX - S.drag.x0, dy = e.clientY - S.drag.y0;
       if (!S.drag.moved && Math.hypot(dx, dy) > 4) { S.drag.moved = true; S.follow = null; }
       if (S.drag.moved) {
-        S.cam.x = S.drag.cx - dx / S.cam.k; S.cam.y = S.drag.cy - dy / S.cam.k;
-        S.cur.x = S.cam.x; S.cur.y = S.cam.y;   // a drag is direct, never eased
+        // incremental, wrapped: the pointer can circle the sun any number
+        // of times and a jump across the -pi/pi seam must not flip the sky
+        const a = sunAngle(e.clientX, e.clientY);
+        let da = a - S.drag.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
+        S.spin += da; S.drag.ang = a;          // direct, never eased
         S.dirty = true; hideTip();
       }
       return;
