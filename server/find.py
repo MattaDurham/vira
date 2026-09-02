@@ -832,6 +832,8 @@ def _row_line(i, r):
         # with it (its caption, or the message beside it)
         body = f"a {r['kind']} '{r['name']}'" + (f" - {body}" if body
                                                  else "")
+        if r.get("ocr"):   # already excerpted at the row (search.py)
+            body += f" - text on it: {r['ocr']}"
     if not body:
         body = " - ".join(str(r[k]) for k in ("name", "title", "company")
                           if r.get(k))

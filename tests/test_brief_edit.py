@@ -389,6 +389,59 @@ class TestJournalStaging(JournalBase):
         from server import session
         self.assertTrue(hasattr(session.sessions.launch, "side_effect"))
 
+    def test_a_question_is_redirected_to_find_never_staged(self):
+        """2026-09-01: 'Show me the insurance card that Casey texted me'
+        was filed as a Tell, emitted as an area-data instruction, and
+        dispatched a coding session. A question is a lookup, not work."""
+        entry = journal.add("Show me the insurance card that Casey texted "
+                            "me the other day. Might have been last month.",
+                            integrate=False)
+        u = {"instruction": "Search the owner's texts for an insurance card "
+                            "sent by Casey and show it to him",
+             "area": "data", "pid_check": {}}
+        journal._stage_unapplied(entry, [u])
+        self.assertEqual(u["redirect"], "ask")
+        self.assertTrue(u["resolved"])
+        self.assertNotIn("idea_id", u)
+        self.assertNotIn("job_id", u)
+        self.assertEqual(ideas.list_items(), [])
+        self.assertEqual(self.launched, [])
+
+    def test_the_models_own_question_tag_redirects_too(self):
+        entry = journal.add("Casey's card, the one from last month",
+                            integrate=False)
+        u = {"instruction": "Find the card Casey sent last month",
+             "area": "question", "pid_check": {}}
+        journal._stage_unapplied(entry, [u])
+        self.assertEqual(u["redirect"], "ask")
+        self.assertEqual(ideas.list_items(), [])
+
+    def test_a_statement_in_the_data_area_still_stages(self):
+        entry = journal.add("Casey switched us to BlueCross this month",
+                            integrate=False)
+        u = {"instruction": "Record that the family insurer is BlueCross",
+             "area": "data", "pid_check": {}}
+        journal._stage_unapplied(entry, [u])
+        self.assertNotIn("redirect", u)
+        self.assertTrue(u["staged"])
+        self.assertEqual(len(ideas.list_items()), 1)
+
+    def test_looks_like_question_is_narrow_on_the_statement_side(self):
+        yes = ("Show me the insurance card Casey texted me",
+               "find the account numbers",
+               "did Alex ever send that",
+               "Is the cabin booked for October?",
+               "where's the receipt from the plumber")
+        no = ("What Casey said was that the girls stay up late",
+              "Which reminds me, Alex moves in October",
+              "Casey sent me the new insurance card",
+              "Did the dishes and took the girls to school", )
+        for t in yes:
+            self.assertTrue(journal.looks_like_question(t), t)
+        for t in no[:3]:
+            self.assertFalse(journal.looks_like_question(t), t)
+        self.assertFalse(journal.looks_like_question(""))
+
     def test_an_app_instruction_stages_open_and_dispatches(self):
         _, u = self.stage("Rename the Queue tab to The Forge", "app")
         self.assertTrue(u["staged"])

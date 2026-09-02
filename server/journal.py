@@ -153,7 +153,7 @@ what EXACTLY>", "action": "close"}} or {{"person_id": "...", "match_what": \
  "facts": [{{"person_id": "...", "fact": "<durable fact worth remembering>"}}],
  "unapplied": [{{"instruction": "<one precise, self-contained imperative \
 instruction>", "area": "<what it touches: contacts, calendar, config, app, \
-data, other>"}}],
+data, question, other>"}}],
  "summary": "<one plain sentence: what you extracted and did>"
 }}
 
@@ -171,6 +171,10 @@ Rules:
   loops and facts. Encode each as one instruction an agent with full access
   could execute later, carrying every specific the note gives (names, dates,
   which event, which contact). Never silently drop such a request.
+- a QUESTION — the owner asking Vira to find, show, look up or pull up
+  something from his own records ("show me the card Casey texted me") — is
+  area "question". It is a lookup, not a change: encode it as the question
+  itself, never as work for an agent to do.
 - "(unidentified)" roster entries are placeholder contacts awaiting a name.
   Never assume one of them is the company or sender the note mentions —
   picking one is a guess that lands knowledge on the wrong real person.
@@ -673,6 +677,50 @@ def _clean_unapplied(plan, entry=None):
 # approval bar instead of dispatching.
 AUTO_AREAS = {"app", "config", "contacts", "data"}
 
+# A QUESTION IS NOT WORK. "Show me the insurance card that Casey texted me"
+# reached this rail on 2026-09-01: the palette filed it as a Tell (Enter
+# beat the AI route), the pass could not express a lookup as a loop or a
+# fact and emitted it as an `unapplied` instruction in area `data`, and
+# _stage_one dispatched a coding session to "search the messages and show
+# it to Matt" — which a detached session cannot do, and which grepped the
+# codebase for an hour before printing a file path. The answer was one
+# call away in find.ask the whole time. So a question is REDIRECTED: the
+# instruction is stamped `redirect: "ask"` and resolved (it never becomes
+# an idea, never dispatches, never sits in the Queue lane), and the client
+# that is watching the note opens Find on the owner's OWN words — the
+# note, not the model's paraphrase of it. Two independent tests decide it,
+# because the model's area tag is one reading and the note is ground
+# truth: the model may say `question`, and the note's own shape says it
+# regardless of what the model called it.
+QUESTION_AREA = "question"
+QUESTION_RE = re.compile(
+    r"^\s*(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:show(?:\s+me)?|find(?:\s+me)?|pull\s+up|look\s+up|search(?:\s+for)?"
+    r"|dig\s+up|get\s+me"
+    r"|where(?:'s|\s+is|\s+are|\s+was|\s+did)"
+    r"|what(?:'s|\s+is|\s+was|\s+are|\s+did|\s+time)"
+    r"|when(?:'s|\s+is|\s+was|\s+did|\s+do)"
+    r"|who(?:'s|\s+is|\s+was|\s+did|\s+sent)"
+    r"|did|does|do\s+i|have\s+i|how\s+(?:many|much|do|did|long))\b",
+    re.I)
+
+
+def looks_like_question(text):
+    """The note's own shape: a question mark, or an opening that asks for
+    something to be found or shown. Deliberately NARROW on the statement
+    side — a tell that opens 'What Casey said was...' must not match, so
+    the bare question words are not in the table, only their asking forms."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return t.endswith("?") or bool(QUESTION_RE.match(t))
+
+
+def _is_question(entry, u):
+    if (u.get("area") or "").strip().lower() == QUESTION_AREA:
+        return True
+    return looks_like_question(entry.get("text"))
+
 # The cwd is ALWAYS the Vira checkout, for every area. It is the only tree
 # with a safety net, it ships scripts/branch.sh (so worktree.ensure places
 # the session on its own branch), it carries the agent contract, and the
@@ -759,6 +807,10 @@ def _stage_one(entry, u):
     Losing the owner's request to an ideas-store hiccup would be strictly
     worse than the clipboard this replaces."""
     from . import ideas
+    if _is_question(entry, u):
+        u["redirect"] = "ask"
+        u["resolved"] = _now()
+        return
     text = _verified_instruction(entry, u)
     if not text:
         return

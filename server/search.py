@@ -207,6 +207,12 @@ def _hydrate(con, seqs, scores=None):
         if r["kind"] in ("photo", "video") and r["caption"] and \
                 r["caption"].strip():
             entry["caption"] = r["caption"].strip()[:200]
+        if r["ocr"] and r["ocr"].strip():
+            # the text read OFF the image — what makes a screenshot of an
+            # insurance card answer "show me the insurance card" (before
+            # 2026-09-01 the narrator only ever saw the caption and the
+            # message beside it, and said it "couldn't confirm")
+            entry["ocr"] = " ".join(r["ocr"].split())[:OCR_EXCERPT_CHARS]
         out.append(entry)
     return out
 
@@ -245,11 +251,20 @@ Reply with ONLY a JSON object, no prose:
 }}
 Rules: face_person is only for people visible in the image, not the sender. Put scene words (objects, actions, settings) and document topics in query. Dates belong in since/until, never in query. Omit people's names from query when they are covered by person/sender/face_person."""
 
+# How much of an item's OCR rides a search row. Whole-card OCR runs 300-600
+# characters (a member card is ~30 short lines); 400 keeps the identifying
+# head — issuer, holder, the first numbers — and the narrator sees six rows,
+# so this bounds the prompt at ~2.4k characters of OCR. Applied at the row,
+# so the UI payload carries the same excerpt the model reads.
+OCR_EXCERPT_CHARS = 400
+
 NARRATE_PROMPT = """The user asked: {question}
 
 A local search over their iMessage media ran. Plan: {plan}
 {relax_note}
 Top results (JSON): {results}
+
+A result's "ocr" field is the text read off the image itself — use it to say what a photo IS (an insurance card from which issuer, a receipt, a screenshot of what) rather than calling it unconfirmed.
 
 Write 1-3 short sentences answering the question directly and honestly, referencing what was found (sender, date, what it is). If the results only partially match or a constraint was relaxed, say so plainly (e.g. a different person sent it than the one asked about). If nothing matches, say that. No markdown, no emojis."""
 
@@ -355,7 +370,7 @@ def ask(question, plan=None):
     def _slim(rs):
         return [{k: v for k, v in r.items()
                  if k in ("kind", "name", "title", "sender", "person",
-                          "when", "context", "caption", "domain",
+                          "when", "context", "caption", "ocr", "domain",
                           "is_group")} for r in rs]
 
     relax_note = (f"No exact match; these constraints were relaxed: "
