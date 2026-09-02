@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from . import (
     actions, admission, agentbackend, aihealth, applecontacts,
                applicationmap, applications,
-               atlas, attention,
+               atlas, attention, circles,
                backup, brainchat, brief, virachat,
                briefstate, changelog,
                circuits,
@@ -148,6 +148,8 @@ idea_indexer = ideatags.Indexer(                  # backlog tags + vectors
 doc_indexer = doctags.Indexer(                    # document tags for the Reader
     settings.get("doc_tag_interval_min") or 10)
 doc_thumb_sweeper = docthumbs.Sweeper()           # rendered faces for the grid
+circle_watcher = circles.Watcher(                 # names + stories for the
+    settings.get("circle_refresh_min") or 60)     # network's social circles
 media_archiver = mediaarchive.Archiver()          # Vira's own copy of every
                                                   # attachment macOS may evict
 
@@ -179,6 +181,7 @@ async def _startup():
     idea_indexer.start()       # keeps the backlog's tags/vectors current
     doc_indexer.start()        # and the Reader's documents, one batch a tick
     doc_thumb_sweeper.start()  # captures document faces for the library grid
+    circle_watcher.start()     # re-reads a circle when its chats move
     # macOS evicts ~/Library/Messages/Attachments under storage pressure and
     # keeps the chat.db row, so the media history decays into a list of
     # filenames. This keeps Vira's own copy (server/mediaarchive.py).
@@ -3971,6 +3974,52 @@ class AtlasRefreshReq(BaseModel):
 def api_atlas_refresh(req: AtlasRefreshReq | None = None):
     atlas.refresh(narrate=bool(req and req.narrate))
     return {"refreshing": True}
+
+
+class CircleRefreshReq(BaseModel):
+    force: bool = False
+
+
+@app.get("/api/atlas/circles")
+def api_atlas_circles():
+    """Every circle the store knows — name, why, size, read state."""
+    return {"circles": circles.list_all(), "status": circles.status()}
+
+
+@app.post("/api/atlas/circles/refresh")
+def api_atlas_circles_refresh(req: CircleRefreshReq | None = None):
+    """Run a sync pass now (in a thread — a pass may spend model calls)."""
+    circles.sync_async(force=bool(req and req.force))
+    return {"refreshing": True}
+
+
+@app.get("/api/atlas/circles/{sid}")
+def api_atlas_circle(sid: str):
+    out = circles.circle(sid)
+    if not out:
+        raise HTTPException(404, "unknown circle")
+    return out
+
+
+@app.post("/api/atlas/circles/{sid}/reread")
+def api_atlas_circle_reread(sid: str):
+    """Read this one circle again, whatever its evidence says."""
+    if not circles.circle(sid):
+        raise HTTPException(404, "unknown circle")
+    circles.sync_async(force=True, limit=1, sids=[sid])
+    return {"refreshing": True}
+
+
+@app.post("/api/atlas/circles/{sid}/rename")
+def api_atlas_circle_rename(sid: str, req: GroupLabelReq):
+    try:
+        c = circles.rename(sid, req.label)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    # the client patches clusters + lenses in place, the group-edit shape
+    out = atlas._overlay_payload()
+    out["circle"] = c
+    return out
 
 
 @app.get("/api/atlas/node/{pid}")

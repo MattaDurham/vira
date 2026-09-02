@@ -339,6 +339,15 @@ async def _t_crm_lookup(args):
     return _txt(await asyncio.to_thread(_crm_text, args.get("name")))
 
 
+def _circles_text():
+    from . import circles
+    return circles.text_for_tools()
+
+
+async def _t_circles(args):
+    return _txt(await asyncio.to_thread(_circles_text))
+
+
 # ---------- mail search ----------
 
 def _accounts():
@@ -912,6 +921,12 @@ TOOL_SPECS = [
      "CRM dossier for a person by name: role, company, relationship, "
      "conversation hooks, open loops, contact activity.",
      {"name": str}, _t_crm_lookup),
+    ("circles",
+     "The owner's social circles as the Visual Network reads them: each "
+     "circle's name, how the owner is connected to it, how its members "
+     "connect to each other, who anchors it, its members, and what "
+     "changed recently (people joining, new shared group chats).",
+     {}, _t_circles),
     ("mail_search",
      "Search the owner's connected mailboxes (M365 work + personal Gmail) "
      "for messages matching a query. Returns date, sender, subject, "

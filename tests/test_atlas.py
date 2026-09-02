@@ -106,6 +106,9 @@ class AtlasTests(unittest.TestCase):
             mock.patch.object(crm, "_load", lambda: self.cache),
             mock.patch.object(atlas, "GRAPH", root / "atlas-graph.json"),
             mock.patch.object(atlas, "GROUPS", root / "atlas-groups.json"),
+            # a build kicks the circles sync (server/circles.py), which
+            # would otherwise write the REAL data/atlas-circles.json
+            mock.patch.object(atlas, "_after_build", lambda g: None),
             mock.patch.object(atlas, "FACES_DIR", root / "atlas-faces"),
             mock.patch.object(mediaindex, "DB", faces),
             mock.patch.object(vault, "DB_PATH", root / "no-vault.sqlite"),

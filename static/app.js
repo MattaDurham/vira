@@ -1597,6 +1597,11 @@ async function openPerson(pid) {
         row.appendChild(el("span", "hint",
           "not shown in the Visual Network — below its activity cutoff"));
     };
+    // the circle's own read, when the current group is one Vira has read
+    // (server/circles.py) — what this circle is in the owner's life
+    if (g.story && (g.story.why || g.story.you))
+      gs.appendChild(el("div", "hint p-summary dim",
+        [g.story.why, g.story.you].filter(Boolean).join(" ")));
     const move = async (target) => {
       try {
         await post("/api/atlas/groups/assign", { pid, group: target });

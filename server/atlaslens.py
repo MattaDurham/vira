@@ -206,7 +206,10 @@ def _bands_from_clusters(graph, kinds):
                  if n.get("cluster") in ids}
     bands = [{"id": c["id"], "label": c.get("label") or c["id"],
               "size": c.get("size") or 0, "custom": bool(c.get("custom")),
-              "anchor": bool(c.get("anchor")), "kind": _cluster_kind(c)}
+              "anchor": bool(c.get("anchor")), "kind": _cluster_kind(c),
+              # a circle with a stable identity carries it, so the legend
+              # can open its story (server/circles.py)
+              "circle": c.get("circle"), "story": bool(c.get("story"))}
              for c in keep]
     return bands, node_band
 

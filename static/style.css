@@ -3124,6 +3124,11 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   color: var(--text-faint); margin: 6px 0 -2px;
 }
 .atlas-selchip { cursor: pointer; background: none; }
+.atlas-dot-big { width: 18px; height: 18px; border-radius: 50%; flex: none; }
+.atlas-story { font-size: 12.5px; line-height: 1.45; margin-top: 6px; }
+.atlas-story p { margin: 5px 0; }
+.atlas-read-when { margin-top: 6px; }
+.atlas-hist { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
 .atlas-selchip:hover { color: var(--text); border-color: var(--accent); }
 .atlas-shared { display: flex; flex-wrap: wrap; gap: 6px; }
 .atlas-iso {
