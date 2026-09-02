@@ -603,8 +603,14 @@ DEFAULT_MODULES = [
      "updated": TODAY},
     {"id": "subs-win", "name": "Subscriptions", "layer": "surface",
      "group": "money", "kind": "dock window / mobile tab",
-     "what": "The subscription ledger: what renews when, what looks off, "
-             "receipts attached.",
+     "what": "The subscription ledger, read off the bank feed and reconciled "
+             "by a deterministic cadence engine: every recurring charge "
+             "grouped by merchant, what renews when and for how much, the "
+             "off-pattern charges that need a receipt found, cancels and "
+             "downgrades verified against the ledger once their date passes, "
+             "and the login each one bills to so an accidental duplicate "
+             "surfaces. Renewals worth money ping the phone; the Daily Brief "
+             "carries the same list.",
      "links": [{"to": "subs-engine", "how": "renders"}],
      "keywords": ["subscriptions window"],
      "updated": TODAY},
