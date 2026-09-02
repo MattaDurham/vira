@@ -119,6 +119,7 @@ export function create(host) {
     uniform float uAlpha;
     uniform float uDash;
     uniform float uRingW;
+    uniform float uSphere;
     varying vec2 vUv;
     void main(){
       vec2 p = vUv * 2.0 - 1.0;
@@ -139,6 +140,14 @@ export function create(host) {
         }
         if (on < 0.5) discard;
         rgb = uRing;
+      }
+      if (uSphere > 0.5) {
+        float z = sqrt(max(0.0, 1.0 - dot(p, p)));
+        vec3 normal = normalize(vec3(p.x, -p.y, z));
+        vec3 lightDir = normalize(vec3(-0.45, 0.55, 0.72));
+        float diffuse = 0.48 + 0.62 * max(0.0, dot(normal, lightDir));
+        float specular = pow(max(0.0, dot(normal, lightDir)), 18.0) * 0.32;
+        rgb = rgb * diffuse + vec3(specular);
       }
       gl_FragColor = vec4(rgb, uAlpha * edge);
       #include <colorspace_fragment>
@@ -204,6 +213,7 @@ export function create(host) {
       vAlpha = aAlpha;
     }`;
   const POINT_FRAG = `
+    uniform float uSphere;
     varying vec3 vColor;
     varying float vAlpha;
     void main(){
@@ -211,7 +221,16 @@ export function create(host) {
       float d = length(p);
       if (d > 1.0 || vAlpha <= 0.002) discard;
       float edge = 1.0 - smoothstep(0.84, 1.0, d);
-      gl_FragColor = vec4(vColor, vAlpha * edge);
+      vec3 rgb = vColor;
+      if (uSphere > 0.5) {
+        float z = sqrt(max(0.0, 1.0 - dot(p, p)));
+        vec3 normal = normalize(vec3(p.x, -p.y, z));
+        vec3 lightDir = normalize(vec3(-0.45, 0.55, 0.72));
+        float diffuse = 0.48 + 0.62 * max(0.0, dot(normal, lightDir));
+        float specular = pow(max(0.0, dot(normal, lightDir)), 18.0) * 0.32;
+        rgb = rgb * diffuse + vec3(specular);
+      }
+      gl_FragColor = vec4(rgb, vAlpha * edge);
       #include <colorspace_fragment>
     }`;
 
@@ -479,7 +498,8 @@ export function create(host) {
         new THREE.BufferAttribute(new Float32Array(n), 1));
       pointMat = new THREE.ShaderMaterial({
         uniforms: { uScale: { value: H / (2 * Math.tan(
-          (NAV.fov * Math.PI / 180) / 2)) } },
+          (NAV.fov * Math.PI / 180) / 2)) },
+          uSphere: { value: S.display.sphericalNodes ? 1 : 0 } },
         vertexShader: POINT_VERT, fragmentShader: POINT_FRAG,
         transparent: true, depthWrite: true, depthTest: true,
       });
@@ -499,6 +519,7 @@ export function create(host) {
           uAlpha: { value: 1 },
           uDash: { value: p.vault ? 1 : 0 },
           uRingW: { value: RING_W },
+          uSphere: { value: S.display.sphericalNodes ? 1 : 0 },
         },
         vertexShader: NODE_VERT, fragmentShader: NODE_FRAG,
         transparent: true, depthWrite: true, depthTest: true,
@@ -761,11 +782,12 @@ export function create(host) {
     } else if (host.matchDim(p) && !p.ego) {
       alpha = 0.22;
     }
-    return alpha;
+    return alpha * S.display.nodeOpacity;
   }
 
   function paintNodes() {
     if (pointCloud) {
+      pointMat.uniforms.uSphere.value = S.display.sphericalNodes ? 1 : 0;
       const pos = pointGeo.getAttribute("position");
       const size = pointGeo.getAttribute("aSize");
       const color = pointGeo.getAttribute("aColor");
@@ -798,6 +820,7 @@ export function create(host) {
       mesh.scale.set(meshSize, meshSize, 1);
       const u = mesh.material.uniforms;
       u.uAlpha.value = nodeAlpha(p);
+      u.uSphere.value = S.display.sphericalNodes ? 1 : 0;
       const isSel = S.sel.has(p);
       const col = p.ego ? "#a39c8d"
         : isSel ? "#d4ccba"

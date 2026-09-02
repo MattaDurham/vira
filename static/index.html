@@ -640,6 +640,7 @@
           <div class="atlas-toggle-row">
             <label><input id="atlas-filter-mode" type="checkbox" checked> Hide non-matches</label>
             <label><input id="atlas-hide-orphans" type="checkbox"> Hide unconnected</label>
+            <label><input id="atlas-starred-only" type="checkbox"> Starred only</label>
           </div>
           <div class="atlas-filter-kinds" id="atlas-filter-kinds"></div>
           <div class="hint atlas-filter-count" id="atlas-filter-count"></div>
@@ -656,9 +657,11 @@
           <div class="atlas-toggle-row">
             <label><input id="atlas-auto-rotate" type="checkbox" checked> Auto rotate</label>
             <label><input id="atlas-curved-links" type="checkbox" checked> Arc links</label>
+            <label><input id="atlas-spherical-nodes" type="checkbox" checked> Spherical nodes</label>
           </div>
           <label class="atlas-slider"><span>Graph spread <output id="atlas-geometry-out">100%</output></span><input id="atlas-geometry" type="range" min="35" max="250" value="100"></label>
           <label class="atlas-slider"><span>Node size <output id="atlas-node-size-out">100%</output></span><input id="atlas-node-size" type="range" min="60" max="180" value="100"></label>
+          <label class="atlas-slider"><span>Node opacity <output id="atlas-node-opacity-out">100%</output></span><input id="atlas-node-opacity" type="range" min="10" max="100" value="100"></label>
           <label class="atlas-slider"><span>Link thickness <output id="atlas-link-thickness-out">100%</output></span><input id="atlas-link-thickness" type="range" min="25" max="250" value="100"></label>
           <label class="atlas-slider" id="atlas-link-curve-row"><span>Link arc <output id="atlas-link-curve-out">10%</output></span><input id="atlas-link-curve" type="range" min="0" max="30" value="10"></label>
           <button class="fchip sm" id="atlas-reset-geometry" type="button">Reset positions</button>
@@ -683,6 +686,8 @@
               aria-expanded="false" aria-controls="atlas-chrome"><svg
         viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6zM12 5.4a6.6 6.6 0 1 0 0 13.2 6.6 6.6 0 0 0 0-13.2zM18.2 12h2.2M3.6 12h2.2M12 5.8V3.6M12 20.4v-2.2M16.38 7.62l1.56-1.56M6.06 17.94l1.56-1.56M16.38 16.38l1.56 1.56M6.06 6.06l1.56 1.56"/></svg></button>
       <div class="world-time" id="world-timebar">
+        <button class="world-play" id="world-play" type="button" aria-label="Play timeline">Play</button>
+        <label class="world-speed"><span>Speed</span><select id="world-speed" aria-label="Timeline playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
         <div class="world-axis" role="group" aria-label="Timeline axis">
           <button class="world-axis-btn on" id="world-axis-valid"
                   title="When the content or represented knowledge was created">Content date</button>

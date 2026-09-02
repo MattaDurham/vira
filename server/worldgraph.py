@@ -718,7 +718,26 @@ def node_detail(node_id):
                                     row["name"].lower()))
     ego = next((edge for edge in graph.get("ego_edges", [])
                 if edge.get("b") == node_id), None)
-    return {"node": node, "edges": connected, "ego": ego}
+    detail = {"node": node, "edges": connected, "ego": ego,
+              "content": None, "content_path": None, "person": None}
+    # The 75 MB graph payload carries structure, never document bodies. A
+    # selected node is different: the owner asked for the article itself, so
+    # read exactly that one source lazily through vault.py's source-aware,
+    # containment-checked resolver. Typed person notes folded onto CRM nodes
+    # keep their note_ref and therefore receive the same full article.
+    note_ref = node.get("ref") or node.get("note_ref")
+    if note_ref:
+        try:
+            detail["content"] = vault.note_text(note_ref)
+            detail["content_path"] = note_ref
+        except (KeyError, OSError, ValueError):
+            pass
+    if node.get("kind") == "person" and node.get("open_kind") == "person":
+        try:
+            detail["person"] = crm.get_person(node_id)
+        except (KeyError, OSError, ValueError):
+            pass
+    return detail
 
 
 def encoded(at=None, axis="valid", kinds=None):

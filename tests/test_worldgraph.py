@@ -183,6 +183,17 @@ Built with [[Acme Lab]].
         self.assertIn("Alice Example", linked)
         self.assertIn("World Map", linked)
 
+    def test_node_detail_loads_only_the_selected_notes_full_markdown(self):
+        graph = worldgraph.compose()
+        acme = next(node for node in graph["nodes"]
+                    if node["name"] == "Acme Lab")
+        with mock.patch.object(worldgraph.vault, "note_text",
+                               return_value="# Acme\n\nFull article.") as read:
+            detail = worldgraph.node_detail(acme["id"])
+        read.assert_called_once_with("wiki/acme-lab.md")
+        self.assertEqual(detail["content_path"], "wiki/acme-lab.md")
+        self.assertEqual(detail["content"], "# Acme\n\nFull article.")
+
     def test_invalid_replay_axis_and_date_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "axis"):
             worldgraph.compose(axis="transaction")

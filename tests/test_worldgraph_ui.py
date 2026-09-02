@@ -93,6 +93,25 @@ class WorldGraphUiTests(unittest.TestCase):
                           f'"{field}"', self.atlas)
             self.assertIn(f'S.physics.{field}', self.renderer)
 
+    def test_article_favorites_playback_and_node_materials_are_wired(self):
+        for needle in ('id="atlas-starred-only"',
+                       'id="atlas-spherical-nodes"',
+                       'id="atlas-node-opacity"', 'id="world-play"',
+                       'id="world-speed"'):
+            self.assertIn(needle, self.html)
+        for needle in ('function navigateArticle(',
+                       'function followArticleLink(',
+                       'function renderImageRail(',
+                       'function renderExternalLinks(',
+                       'function toggleTimelinePlayback(',
+                       'S.starred.has(d.node.id)',
+                       'mdToHtml(d.content, d.content_path)'):
+            self.assertIn(needle, self.atlas)
+        self.assertIn('centerOn(p);\n      toggleSelect(p);', self.atlas)
+        self.assertIn('S.display.nodeOpacity', self.renderer)
+        self.assertIn('uniform float uSphere;', self.renderer)
+        self.assertIn('S.display.sphericalNodes', self.renderer)
+
     def test_world_api_replaces_atlas_only_for_this_window(self):
         self.assertIn('api("/api/world")', self.atlas)
         self.assertIn('api("/api/world/node/"', self.atlas)

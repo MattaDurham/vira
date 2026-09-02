@@ -51,6 +51,9 @@
     shared: new Set(),       // ids connected to 2+ selected nodes
     neighbors: new Set(),    // ids connected to any selected node
     chains: [],              // [{a, b, nodes}] bridge chains for the card
+    articleTrail: [],        // node ids followed through the inspector
+    articleIndex: -1,
+    detailToken: 0,
     adj: new Map(),          // id -> [{n, e}] adjacency for BFS
     lens: null,           // active lens id (see LENS_KEY)
     bands: [],            // the active lens's bands
@@ -60,11 +63,15 @@
     match: "",            // search filter
     filterSearch: true,
     hideOrphans: false,
+    starredOnly: false,
+    starred: new Set(),
     enabledKinds: new Set(),
-    time: { axis: "valid", at: null, min: null, max: null, timeline: {} },
+    time: { axis: "valid", at: null, min: null, max: null, timeline: {},
+            playing: false, speed: 1, raf: 0, lastFrame: 0 },
     fixedLayout: false,      // server-supplied semantic coordinates
-    display: { scale: 1, nodeSize: 1, linkThickness: 1, autoRotate: true,
-               curvedLinks: true, linkCurve: .10 },
+    display: { scale: 1, nodeSize: 1, nodeOpacity: 1, linkThickness: 1,
+               autoRotate: true, curvedLinks: true, linkCurve: .10,
+               sphericalNodes: true },
     colorOverrides: {},
     physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
                distance: 1, semantic: 0.18 },
@@ -74,9 +81,10 @@
 
   const CONTROL_KEY = "vira-world-controls";
   const CONTROL_DEFAULTS = {
-    filterSearch: true, hideOrphans: false,
-    display: { scale: 1, nodeSize: 1, linkThickness: 1, autoRotate: true,
-               curvedLinks: true, linkCurve: .10 },
+    filterSearch: true, hideOrphans: false, starredOnly: false,
+    display: { scale: 1, nodeSize: 1, nodeOpacity: 1, linkThickness: 1,
+               autoRotate: true, curvedLinks: true, linkCurve: .10,
+               sphericalNodes: true },
     physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
                distance: 1, semantic: 0.18 },
   };
@@ -94,13 +102,19 @@
     if (!saved || typeof saved !== "object") return;
     S.filterSearch = saved.filterSearch !== false;
     S.hideOrphans = !!saved.hideOrphans;
+    S.starredOnly = !!saved.starredOnly;
+    if (Array.isArray(saved.starred))
+      S.starred = new Set(saved.starred.filter((id) => typeof id === "string"));
     S.display.scale = clamp(saved.display?.scale, .35, 2.5, 1);
     S.display.nodeSize = clamp(saved.display?.nodeSize, .6, 1.8, 1);
+    S.display.nodeOpacity = clamp(saved.display?.nodeOpacity, .1, 1, 1);
     S.display.linkThickness = clamp(
       saved.display?.linkThickness, .25, 2.5, 1);
     S.display.autoRotate = saved.display?.autoRotate !== false;
     S.display.curvedLinks = saved.display?.curvedLinks !== false;
     S.display.linkCurve = clamp(saved.display?.linkCurve, 0, .3, .10);
+    S.display.sphericalNodes = saved.display?.sphericalNodes !== false;
+    S.time.speed = clamp(saved.timelineSpeed, .5, 4, 1);
     if (saved.colorOverrides && typeof saved.colorOverrides === "object") {
       for (const [key, color] of Object.entries(saved.colorOverrides))
         if (/^#[0-9a-f]{6}$/i.test(color)) S.colorOverrides[key] = color;
@@ -117,6 +131,8 @@
     try {
       localStorage.setItem(CONTROL_KEY, JSON.stringify({
         filterSearch: S.filterSearch, hideOrphans: S.hideOrphans,
+        starredOnly: S.starredOnly, starred: [...S.starred],
+        timelineSpeed: S.time.speed,
         display: S.display, physics: S.physics,
         colorOverrides: S.colorOverrides,
       }));
@@ -595,12 +611,13 @@
   function passesNodeFilters(node) {
     return S.enabledKinds.has(node.kind)
       && (!S.hideOrphans || Number(node.graph_degree || 0) > 0)
+      && (!S.starredOnly || S.starred.has(node.id))
       && (!S.filterSearch || matchesSearch(node));
   }
 
   function hasNodeFilters() {
     const totalKinds = (S.graph?.kinds || []).length;
-    return S.hideOrphans || (S.filterSearch && !!S.match)
+    return S.hideOrphans || S.starredOnly || (S.filterSearch && !!S.match)
       || S.enabledKinds.size !== totalKinds;
   }
 
@@ -679,13 +696,70 @@
     recomputeIso();
     recomputeSel();
     updateIsoBar();
-    renderSelCard();
+    if (!S.time.playing) renderSelCard();
     renderSearchResults();
     paintFilterCount();
     paintTimeline();
     if (R3) R3.refreshPhysics();
     wake(0.18);
     draw();
+  }
+
+  function paintTimelinePlayback() {
+    const play = $("#world-play");
+    if (!play) return;
+    play.textContent = S.time.playing ? "Pause" : "Play";
+    play.classList.toggle("on", S.time.playing);
+    play.setAttribute("aria-label", S.time.playing
+      ? "Pause timeline" : "Play timeline");
+  }
+
+  function stopTimelinePlayback(refresh = true) {
+    if (!S.time.playing && !S.time.raf) return;
+    S.time.playing = false;
+    cancelAnimationFrame(S.time.raf);
+    S.time.raf = 0;
+    paintTimelinePlayback();
+    if (refresh) renderSelCard();
+  }
+
+  function timelineFrame(now) {
+    if (!S.time.playing) return;
+    if (!S.time.lastFrame) S.time.lastFrame = now;
+    const elapsed = now - S.time.lastFrame;
+    // Rebuilding visibility over 25k nodes and 92k links at 60fps would
+    // turn playback into a benchmark. Eight updates per second remains
+    // visually continuous while leaving the graph interactive.
+    if (elapsed >= 125) {
+      const span = Math.max(1, S.time.max - S.time.min);
+      const start = S.time.at == null ? S.time.min : S.time.at;
+      S.time.at = Math.min(S.time.max,
+        start + span * (elapsed / 30000) * S.time.speed);
+      S.time.lastFrame = now;
+      syncTimelineRange();
+      timelineChanged();
+      if (S.time.at >= S.time.max) {
+        S.time.at = null;
+        syncTimelineRange();
+        stopTimelinePlayback(false);
+        timelineChanged();
+        return;
+      }
+    }
+    S.time.raf = requestAnimationFrame(timelineFrame);
+  }
+
+  function toggleTimelinePlayback() {
+    if (S.time.playing) { stopTimelinePlayback(); return; }
+    if (S.time.at == null || S.time.at >= S.time.max) {
+      S.time.at = S.time.min;
+      syncTimelineRange();
+    }
+    S.time.playing = true;
+    S.time.lastFrame = performance.now();
+    paintTimelinePlayback();
+    timelineChanged();
+    S.time.raf = requestAnimationFrame(timelineFrame);
   }
 
   function recomputeIso() {
@@ -918,7 +992,7 @@
       alpha = 0.22;
     }
     ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * S.display.nodeOpacity;
 
     // cluster / ego ring
     const color = p.ego ? "#a39c8d"
@@ -950,6 +1024,16 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(initials(p.name), sx, sy + r * 0.05);
+    }
+    if (S.display.sphericalNodes) {
+      const shade = ctx.createRadialGradient(
+        sx - r * .38, sy - r * .42, r * .08, sx, sy, r * 1.05);
+      shade.addColorStop(0, "rgba(255,255,255,.34)");
+      shade.addColorStop(.34, "rgba(255,255,255,.06)");
+      shade.addColorStop(.72, "rgba(0,0,0,.06)");
+      shade.addColorStop(1, "rgba(0,0,0,.58)");
+      ctx.fillStyle = shade;
+      ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
     }
     ctx.restore();
 
@@ -1074,6 +1158,7 @@
     return S.nodes.filter((p) => timeActive(p)
       && S.enabledKinds.has(p.kind)
       && (!S.hideOrphans || Number(p.graph_degree || 0) > 0)
+      && (!S.starredOnly || S.starred.has(p.id))
       && (ignoreSearch || matchesSearch(p)));
   }
 
@@ -1095,8 +1180,7 @@
         button.appendChild(el("span", null, p.source_name));
       button.addEventListener("click", () => {
         if (S.filterSearch && S.shown && !S.shown.has(p.id)) return;
-        centerOn(p);
-        if (!S.sel.has(p)) toggleSelect(p);
+        navigateArticle(p);
       });
       host.appendChild(button);
     }
@@ -1114,7 +1198,8 @@
     const matches = S.match ? filteredNodes().length : shown;
     host.textContent = `${shown.toLocaleString()} of `
       + `${S.nodes.length.toLocaleString()} items visible`
-      + (S.match ? ` · ${matches.toLocaleString()} search matches` : "");
+      + (S.match ? ` · ${matches.toLocaleString()} search matches` : "")
+      + (S.starred.size ? ` · ${S.starred.size.toLocaleString()} starred` : "");
   }
 
   // ---------- group curation (rename / members / remove / create) ----------
@@ -1400,11 +1485,38 @@
   function toggleSelect(p) {
     if (!p || p.ego) return;
     if (S.sel.has(p)) S.sel.delete(p); else S.sel.add(p);
+    if (S.sel.size === 1 && S.sel.has(p)) rememberArticle(p);
     selectionChanged();
+  }
+
+  function rememberArticle(p) {
+    if (!p || S.articleTrail[S.articleIndex] === p.id) return;
+    S.articleTrail = S.articleTrail.slice(0, S.articleIndex + 1);
+    S.articleTrail.push(p.id);
+    if (S.articleTrail.length > 80) S.articleTrail.shift();
+    S.articleIndex = S.articleTrail.length - 1;
+  }
+
+  function navigateArticle(p, remember = true) {
+    if (!p || p.ego) return;
+    if (remember) rememberArticle(p);
+    centerOn(p);
+    S.sel = new Set([p]);
+    selectionChanged();
+  }
+
+  function moveArticleTrail(delta) {
+    const next = S.articleIndex + delta;
+    if (next < 0 || next >= S.articleTrail.length) return;
+    const p = S.byId.get(S.articleTrail[next]);
+    if (!p) return;
+    S.articleIndex = next;
+    navigateArticle(p, false);
   }
 
   function setSelection(list) {
     S.sel = new Set((list || []).filter((p) => p && !p.ego));
+    if (S.sel.size === 1) rememberArticle([...S.sel][0]);
     selectionChanged();
   }
 
@@ -1446,7 +1558,7 @@
     try {
       const d = await api("/api/world/node/" + encodeURIComponent(p.id));
       if (editorId || !(S.sel.size === 1 && S.sel.has(p))) return;
-      renderCard(d);
+      await renderCard(d, ++S.detailToken);
     } catch {
       card.innerHTML = "";
       card.appendChild(el("div", "hint", "detail unavailable"));
@@ -1719,8 +1831,32 @@
     setTimeout(tick, 3000);
   }
 
-  function renderCard(d) {
+  async function renderCard(d, token) {
     card.innerHTML = "";
+    card.scrollTop = 0;
+    const articleNav = el("div", "atlas-article-nav");
+    const back = el("button", "atlas-nav-btn", "Back");
+    back.disabled = S.articleIndex <= 0;
+    back.addEventListener("click", () => moveArticleTrail(-1));
+    const forward = el("button", "atlas-nav-btn", "Forward");
+    forward.disabled = S.articleIndex >= S.articleTrail.length - 1;
+    forward.addEventListener("click", () => moveArticleTrail(1));
+    articleNav.append(back, forward);
+    if (d.edges.length) {
+      const nextEdge = d.edges.find((edge) => {
+        const other = S.byId.get(edge.pid);
+        return other && isShown(other) && timeActive(edge);
+      });
+      const nextNode = nextEdge && S.byId.get(nextEdge.pid);
+      if (nextNode) {
+        const next = el("button", "atlas-nav-btn next", "Next connection");
+        next.title = "Follow the strongest visible connection";
+        next.addEventListener("click", () => navigateArticle(nextNode));
+        articleNav.appendChild(next);
+      }
+    }
+    card.appendChild(articleNav);
+
     const head = el("div", "atlas-card-head");
     const isPerson = d.node.kind === "person";
     const av = avatarNode(d.node.id, d.node.name, isPerson,
@@ -1737,6 +1873,23 @@
       .filter(Boolean).join(" · ");
     if (sub) mid.appendChild(el("div", "hint", sub));
     head.appendChild(mid);
+    const star = el("button", "atlas-star",
+      S.starred.has(d.node.id) ? "Starred" : "Star");
+    star.type = "button";
+    star.title = S.starred.has(d.node.id) ? "Remove from starred" : "Star this node";
+    star.setAttribute("aria-label", star.title);
+    star.addEventListener("click", () => {
+      if (S.starred.has(d.node.id)) S.starred.delete(d.node.id);
+      else S.starred.add(d.node.id);
+      saveControls();
+      star.textContent = S.starred.has(d.node.id) ? "Starred" : "Star";
+      star.title = S.starred.has(d.node.id)
+        ? "Remove from starred" : "Star this node";
+      star.setAttribute("aria-label", star.title);
+      paintFilterCount();
+      if (S.starredOnly) isoChanged(false); else draw();
+    });
+    head.appendChild(star);
     const x = el("button", "idea-del", "×");
     x.addEventListener("click", clearSel);
     head.appendChild(x);
@@ -1778,6 +1931,37 @@
     }
     card.appendChild(chips);
 
+    if (d.person) renderPersonArticle(d.person);
+
+    let markdownHost = null;
+    if (d.content != null) {
+      card.appendChild(el("div", "atlas-card-sub", "Article"));
+      markdownHost = el("article", "atlas-article note-body");
+      markdownHost.innerHTML = mdToHtml(d.content, d.content_path);
+      if (!markdownHost.innerHTML.trim())
+        markdownHost.appendChild(el("div", "hint", "This source note is empty."));
+      markdownHost.querySelectorAll(".note-link").forEach((link) => {
+        link.addEventListener("click", () =>
+          followArticleLink(link.dataset.ref, d.content_path));
+      });
+      const contentImages = [...markdownHost.querySelectorAll("img")].map(
+        (img, index) => ({ src: img.getAttribute("src"),
+                          href: img.getAttribute("src"),
+                          label: img.alt || `Image ${index + 1}` }));
+      if (contentImages.length)
+        card.appendChild(renderImageRail(contentImages, "Attached images"));
+      const seenLinks = new Set();
+      const contentLinks = [...markdownHost.querySelectorAll("a[href]")]
+        .map((link) => ({ url: link.href,
+                         title: link.textContent.trim() || link.href }))
+        .filter((link) => /^https?:/i.test(link.url)
+          && !seenLinks.has(link.url) && seenLinks.add(link.url));
+      if (contentLinks.length)
+        card.appendChild(renderExternalLinks(contentLinks));
+      card.appendChild(markdownHost);
+      markDeadLinks(markdownHost);
+    }
+
     if (d.ego) {
       const you = el("div", "atlas-edge you");
       you.appendChild(el("div", "atlas-edge-name",
@@ -1792,7 +1976,14 @@
       const other = S.byId.get(e.pid);
       return other && isShown(other) && timeActive(e);
     });
-    visibleEdges.slice(0, 24).forEach((e) => {
+    if (visibleEdges.length)
+      list.appendChild(el("div", "atlas-card-sub",
+        `Continue exploring · ${visibleEdges.length} connections`));
+    let edgeCursor = 0;
+    const more = el("button", "atlas-more", "");
+    const appendEdges = () => {
+      const end = Math.min(visibleEdges.length, edgeCursor + 30);
+      visibleEdges.slice(edgeCursor, end).forEach((e) => {
       const row = el("div", "atlas-edge click");
       const nameRow = el("div", "atlas-edge-name",
         `${e.name} · ${e.label || e.relation || "connected"}`);
@@ -1817,21 +2008,173 @@
         });
         row.appendChild(source);
       }
-      row.title = "Add to selection — see how they connect";
+      row.title = "Open this connected node";
       row.addEventListener("click", () => {
         const other = S.byId.get(e.pid);
-        if (other) { centerOn(other); toggleSelect(other); }
+        if (other) navigateArticle(other);
       });
       list.appendChild(row);
-    });
+      });
+      edgeCursor = end;
+      more.remove();
+      if (edgeCursor < visibleEdges.length) {
+        more.textContent = `Show 30 more · ${visibleEdges.length - edgeCursor} remaining`;
+        list.appendChild(more);
+      }
+    };
+    more.addEventListener("click", appendEdges);
+    appendEdges();
     if (!visibleEdges.length)
       list.appendChild(el("div", "hint",
         "No visible relations at this point on the selected timeline."));
-    else
-      list.appendChild(el("div", "hint",
-        "Click a tie — or more people on the map — to add them to the "
-        + "selection and see how everyone connects."));
     card.appendChild(list);
+
+    if (isPerson && S.sel.size === 1 && S.sel.has(S.byId.get(d.node.id))) {
+      try {
+        const media = await api("/api/person/" + encodeURIComponent(d.node.id)
+          + "/media");
+        if (token !== S.detailToken || !S.sel.has(S.byId.get(d.node.id))) return;
+        const photos = (media.photos || []).map((item) => ({
+          src: "/api/media/thumb/" + item.id,
+          href: "/api/media/file/" + item.id,
+          label: item.context?.text || item.name || "Shared image",
+        }));
+        if (photos.length)
+          card.insertBefore(renderImageRail(photos,
+            `Shared images · ${photos.length}`), list);
+        if ((media.links || []).length)
+          card.insertBefore(renderExternalLinks(media.links), list);
+      } catch { /* media is enrichment; the article remains useful */ }
+    }
+  }
+
+  function renderPersonArticle(person) {
+    const profile = person.profile || {};
+    const master = person.master || {};
+    const section = el("section", "atlas-person-article");
+    const summary = profile.relationship_summary || profile.summary
+      || master.relationship;
+    if (summary) section.appendChild(el("p", "atlas-lede", String(summary)));
+    if (profile.how_we_met)
+      section.appendChild(articleBlock("How we met", profile.how_we_met));
+    const lists = [
+      ["Personal context", profile.personal_facts],
+      ["Open loops", profile.open_loops],
+      ["Conversation hooks", profile.hooks],
+    ];
+    for (const [label, rows] of lists) {
+      if (!Array.isArray(rows) || !rows.length) continue;
+      const block = el("div", "atlas-profile-block");
+      block.appendChild(el("div", "atlas-card-sub", label));
+      const ul = document.createElement("ul");
+      rows.forEach((row) => {
+        const value = typeof row === "string" ? row
+          : row.what || row.fact || row.text || row.hook || row.note;
+        if (value) ul.appendChild(el("li", null, String(value)));
+      });
+      if (ul.children.length) block.appendChild(ul);
+      section.appendChild(block);
+    }
+    if (!section.children.length)
+      section.appendChild(el("div", "hint",
+        "No written CRM narrative is available for this person yet."));
+    card.appendChild(section);
+  }
+
+  function articleBlock(label, value) {
+    const block = el("div", "atlas-profile-block");
+    block.appendChild(el("div", "atlas-card-sub", label));
+    block.appendChild(el("p", null, String(value)));
+    return block;
+  }
+
+  function renderImageRail(images, title) {
+    const section = el("section", "atlas-media-section");
+    const head = el("div", "atlas-media-head");
+    head.appendChild(el("div", "atlas-card-sub", title));
+    const controls = el("div", "atlas-media-controls");
+    const prev = el("button", "atlas-nav-btn", "Previous");
+    const next = el("button", "atlas-nav-btn", "Next");
+    controls.append(prev, next); head.appendChild(controls);
+    section.appendChild(head);
+    const rail = el("div", "atlas-image-rail");
+    section.appendChild(rail);
+    let cursor = 0;
+    const batch = el("button", "atlas-more", "");
+    const add = () => {
+      const end = Math.min(images.length, cursor + 24);
+      images.slice(cursor, end).forEach((item) => {
+        const link = el("a", "atlas-image-card");
+        link.href = item.href || item.src;
+        link.target = "_blank";
+        link.rel = "noopener";
+        const img = document.createElement("img");
+        img.loading = "lazy"; img.src = item.src; img.alt = item.label || "";
+        link.appendChild(img);
+        if (item.label) link.appendChild(el("span", null, item.label));
+        rail.appendChild(link);
+      });
+      cursor = end;
+      batch.remove();
+      if (cursor < images.length) {
+        batch.textContent = `Load 24 more · ${images.length - cursor} remaining`;
+        section.appendChild(batch);
+      }
+    };
+    batch.addEventListener("click", add);
+    prev.addEventListener("click", () => rail.scrollBy(
+      { left: -rail.clientWidth * .82, behavior: "smooth" }));
+    next.addEventListener("click", () => rail.scrollBy(
+      { left: rail.clientWidth * .82, behavior: "smooth" }));
+    add();
+    return section;
+  }
+
+  function renderExternalLinks(links) {
+    const section = el("section", "atlas-related-links");
+    section.appendChild(el("div", "atlas-card-sub",
+      `Relevant links · ${links.length}`));
+    let cursor = 0;
+    const more = el("button", "atlas-more", "");
+    const add = () => {
+      const end = Math.min(links.length, cursor + 20);
+      links.slice(cursor, end).forEach((item) => {
+        const a = el("a", "atlas-related-link");
+        a.href = item.url; a.target = "_blank"; a.rel = "noopener";
+        a.appendChild(el("b", null, item.title || item.domain || item.url));
+        if (item.context?.text)
+          a.appendChild(el("span", null, item.context.text));
+        section.appendChild(a);
+      });
+      cursor = end; more.remove();
+      if (cursor < links.length) {
+        more.textContent = `Show 20 more · ${links.length - cursor} remaining`;
+        section.appendChild(more);
+      }
+    };
+    more.addEventListener("click", add); add();
+    return section;
+  }
+
+  async function followArticleLink(ref, fromPath) {
+    const clean = String(ref || "").split("#")[0].split("^")[0].trim();
+    const stem = clean.split("/").pop().replace(/\.md$/i, "").toLowerCase();
+    let hit = S.nodes.find((node) => {
+      const path = String(node.ref || node.note_ref || "");
+      const nodeStem = path.split("/").pop().replace(/\.md$/i, "").toLowerCase();
+      return nodeStem === stem || String(node.name || "").toLowerCase() === stem;
+    });
+    if (hit) { navigateArticle(hit); return; }
+    try {
+      const resolved = await api("/api/vault/resolve?ref="
+        + encodeURIComponent(clean) + (fromPath ? "&from_path="
+        + encodeURIComponent(fromPath) : ""));
+      const path = resolved.path || resolved.ref;
+      hit = S.nodes.find((node) =>
+        (node.ref || node.note_ref) === path);
+      if (hit) navigateArticle(hit);
+      else if (path) openNote(path, resolved.title || clean);
+    } catch { toast("No page is available for " + clean); }
   }
 
   function kindLabel(kind) {
@@ -1935,7 +2278,10 @@
 
   function hitSelect(p) {
     if (editorId) editorToggle(p);
-    else toggleSelect(p);
+    else {
+      centerOn(p);
+      toggleSelect(p);
+    }
   }
 
   function hitOpen(p) {
@@ -1961,6 +2307,14 @@
       { label: S.sel.has(p) ? "Remove from selection"
                             : "Add to selection",
         run: () => toggleSelect(p) },
+      { label: S.starred.has(p.id) ? "Remove from starred" : "Star node",
+        run: () => {
+          if (S.starred.has(p.id)) S.starred.delete(p.id);
+          else S.starred.add(p.id);
+          saveControls();
+          paintFilterCount();
+          if (S.starredOnly) isoChanged(false); else draw();
+        } },
       // group assignments key on CRM pids; a vault id has no row to hold
       // one, so the chooser is CRM-only
       isPerson && S.graph.clusters?.length && { label: "Set group\u2026",
@@ -2087,15 +2441,18 @@
     const values = {
       "#atlas-filter-mode": S.filterSearch,
       "#atlas-hide-orphans": S.hideOrphans,
+      "#atlas-starred-only": S.starredOnly,
       "#atlas-physics": S.physics.enabled,
       "#atlas-auto-rotate": S.display.autoRotate,
       "#atlas-curved-links": S.display.curvedLinks,
+      "#atlas-spherical-nodes": S.display.sphericalNodes,
     };
     for (const [id, value] of Object.entries(values))
       if ($(id)) $(id).checked = value;
     const ranges = {
       "#atlas-geometry": S.display.scale * 100,
       "#atlas-node-size": S.display.nodeSize * 100,
+      "#atlas-node-opacity": S.display.nodeOpacity * 100,
       "#atlas-link-thickness": S.display.linkThickness * 100,
       "#atlas-link-curve": S.display.linkCurve * 100,
       "#atlas-center": S.physics.center * 100,
@@ -2108,6 +2465,7 @@
       if ($(id)) $(id).value = String(Math.round(value));
     setOutput("#atlas-geometry-out", S.display.scale);
     setOutput("#atlas-node-size-out", S.display.nodeSize);
+    setOutput("#atlas-node-opacity-out", S.display.nodeOpacity);
     setOutput("#atlas-link-thickness-out", S.display.linkThickness);
     setOutput("#atlas-link-curve-out", S.display.linkCurve);
     setOutput("#atlas-center-out", S.physics.center);
@@ -2119,6 +2477,7 @@
       "disabled", !S.display.curvedLinks);
     if ($("#atlas-link-curve"))
       $("#atlas-link-curve").disabled = !S.display.curvedLinks;
+    if ($("#world-speed")) $("#world-speed").value = String(S.time.speed);
     paintFilterCount();
   }
 
@@ -2200,6 +2559,11 @@
     saveControls();
     isoChanged(false);
   });
+  $("#atlas-starred-only")?.addEventListener("change", (e) => {
+    S.starredOnly = e.target.checked;
+    saveControls();
+    isoChanged(false);
+  });
   $("#atlas-search")?.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !S.match) return;
     const hit = filteredNodes().find((p) => isShown(p));
@@ -2214,6 +2578,8 @@
   bindPercentRange("#atlas-geometry", S.display, "scale", .35, 2.5,
                    "positions");
   bindPercentRange("#atlas-node-size", S.display, "nodeSize", .6, 1.8,
+                   true);
+  bindPercentRange("#atlas-node-opacity", S.display, "nodeOpacity", .1, 1,
                    true);
   bindPercentRange("#atlas-link-thickness", S.display, "linkThickness",
                    .25, 2.5, true);
@@ -2244,6 +2610,11 @@
     if (R3) R3.linkGeometryChanged();
     else draw();
   });
+  $("#atlas-spherical-nodes")?.addEventListener("change", (e) => {
+    S.display.sphericalNodes = e.target.checked;
+    saveControls();
+    draw();
+  });
   $("#atlas-reset-colors")?.addEventListener("click", () => {
     const prefix = `${S.lens}|`;
     for (const key of Object.keys(S.colorOverrides))
@@ -2258,6 +2629,7 @@
   $("#atlas-reset-controls")?.addEventListener("click", () => {
     S.filterSearch = CONTROL_DEFAULTS.filterSearch;
     S.hideOrphans = CONTROL_DEFAULTS.hideOrphans;
+    S.starredOnly = CONTROL_DEFAULTS.starredOnly;
     S.display = { ...CONTROL_DEFAULTS.display };
     S.physics = { ...CONTROL_DEFAULTS.physics };
     S.colorOverrides = {};
@@ -2297,6 +2669,7 @@
 
   function setTimeAxis(axis) {
     if (axis === S.time.axis) return;
+    stopTimelinePlayback(false);
     S.time.axis = axis;
     setTimelineBounds();
     syncTimelineRange();
@@ -2306,16 +2679,23 @@
   $("#world-axis-recorded")?.addEventListener(
     "click", () => setTimeAxis("recorded"));
   $("#world-time")?.addEventListener("input", (e) => {
+    stopTimelinePlayback(false);
     const value = Number(e.target.value);
     const span = Math.max(1, S.time.max - S.time.min);
     S.time.at = value >= 999 ? null : S.time.min + span * (value / 1000);
     timelineChanged();
   });
   $("#world-now")?.addEventListener("click", () => {
+    stopTimelinePlayback(false);
     S.time.at = null;
     const range = $("#world-time");
     if (range) range.value = "1000";
     timelineChanged();
+  });
+  $("#world-play")?.addEventListener("click", toggleTimelinePlayback);
+  $("#world-speed")?.addEventListener("change", (e) => {
+    S.time.speed = clamp(e.target.value, .5, 4, 1);
+    saveControls();
   });
 
   $("#atlas-ego")?.addEventListener("click", (e) => {
@@ -2351,6 +2731,7 @@
         wake(0.2);
         if (R3) R3.setRunning(true);
       } else {
+        stopTimelinePlayback(false);
         if (R3) R3.setRunning(false);
         S.running = false;
         cancelAnimationFrame(S.raf);
@@ -2360,6 +2741,7 @@
   io.observe(stage);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      stopTimelinePlayback(false);
       if (R3) R3.setRunning(false);
       S.running = false;
       cancelAnimationFrame(S.raf);
