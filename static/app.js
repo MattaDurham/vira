@@ -104,6 +104,21 @@ function cardAction(node, run, opts = {}) {
   return node;
 }
 
+// A destination revealed from another surface must remain findable after
+// the scroll finishes and the eye moves across windows. Re-arming the same
+// node restarts the full dwell instead of letting an older timer clear it.
+const REVEAL_HIGHLIGHT_MS = 10000;
+function revealHighlight(node) {
+  clearTimeout(node._revealHighlightTimer);
+  node.classList.remove("idea-flash");
+  void node.offsetWidth;
+  node.classList.add("idea-flash");
+  node._revealHighlightTimer = setTimeout(() => {
+    node.classList.remove("idea-flash");
+    node._revealHighlightTimer = null;
+  }, REVEAL_HIGHLIGHT_MS);
+}
+
 // longPress(node, run): the phone's answer to a right-click. Desktop has
 // the context menu, so this only arms for touch — a mouse held still is
 // not an intent, and treating it as one steals ordinary clicks. Movement,
@@ -5039,8 +5054,7 @@ function revealIdea(id) {
   const node = document.querySelector(`.idea[data-idea-id="${id}"]`);
   if (!node) { toast("That idea is no longer in the queue"); return; }
   node.scrollIntoView({ block: "center", behavior: "smooth" });
-  node.classList.add("idea-flash");
-  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+  revealHighlight(node);
 }
 
 async function toggleSimilar(box, it, btn) {
@@ -7145,18 +7159,18 @@ function renderRuns() {
 // Open one exact unlanded item, never the generic Record landing page. This
 // is the source-link contract Attention rows follow: clear any filter that
 // could hide the object, fetch the owning surface, then scroll and mark it.
-async function revealOrphan(key) {
+async function revealOrphan(key, branch = "") {
   setWorkTab("live", { defer: true });
   setRunsFilter("unlanded");
   openApp("work");
   await loadRuns().catch(() => {});
   const want = "orphan:" + key;
-  const node = [...document.querySelectorAll("[data-run-key]")]
-    .find((n) => n.dataset.runKey === want);
+  const cards = [...document.querySelectorAll("[data-run-key]")];
+  const node = cards.find((n) => n.dataset.runKey === want)
+    || (branch && cards.find((n) => n.dataset.runBranch === branch));
   if (!node) { toast("That branch is no longer waiting"); return; }
   node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
-  node.classList.add("idea-flash");
-  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+  revealHighlight(node);
 }
 
 async function revealBoardsHealth() {
@@ -7165,8 +7179,7 @@ async function revealBoardsHealth() {
   const node = $("#app-boards");
   if (!node) return;
   node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
-  node.classList.add("idea-flash");
-  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+  revealHighlight(node);
 }
 
 // ONE shell for the run kinds. Dot = STATE (what matters), title, then a
@@ -7187,6 +7200,7 @@ function runCard(it) {
   }
   const card = el("article", "run-card k-" + it.kind + " is-" + it.state);
   card.dataset.runKey = it.key;
+  if (it.kind === "unlanded") card.dataset.runBranch = it.src.branch || "";
   const head = el("div", "run-head");
   head.appendChild(el("span", "job-dot " + it.state));
   const main = el("div", "run-main");
@@ -7519,7 +7533,19 @@ function orphanBody(card, it) {
       card.appendChild(fx);
     }
 
-    card.appendChild(orphanContext(it));
+    const context = orphanContext(it);
+    card.appendChild(context);
+    card.setAttribute("aria-expanded", "false");
+    context.addEventListener("toggle", () => {
+      card.classList.toggle("context-open", context.open);
+      card.setAttribute("aria-expanded", context.open ? "true" : "false");
+    });
+    // The disclosure label remains a visible affordance and collapse
+    // control, but the card itself opens the full context. Embedded action
+    // buttons and text selection keep their own behaviour through cardAction.
+    cardAction(card, () => {
+      if (!context.open) context.open = true;
+    }, { hint: "Expand the full worktree context" });
 
     const foot = el("div", "run-foot orphan-foot");
     if (it.action && it.action.status === "running") {
@@ -7622,19 +7648,28 @@ async function refreshShipped() {
   renderRuns();
 }
 
+let runsLoadPromise = null;
 async function loadRuns() {
   if (!$("#runs-list")) return;
-  await Promise.all([
-    refreshJobs().catch(() => {}),
-    refreshFlowRuns().catch(() => {}),
-    refreshHistory().catch(() => {}),
-    refreshShipped().catch(() => {}),
-  ]);
-  runsState.ready = true;
-  renderRuns();
-  scheduleRunsPoll();
-  await loadOrphans();
-  scheduleRunsPoll();
+  // Opening Forge and a cross-surface reveal can arrive in the same turn.
+  // They must share one load: two concurrent orphan refreshes can repaint
+  // the exact destination after revealHighlight has marked it.
+  if (runsLoadPromise) return runsLoadPromise;
+  runsLoadPromise = (async () => {
+    await Promise.all([
+      refreshJobs().catch(() => {}),
+      refreshFlowRuns().catch(() => {}),
+      refreshHistory().catch(() => {}),
+      refreshShipped().catch(() => {}),
+    ]);
+    runsState.ready = true;
+    renderRuns();
+    scheduleRunsPoll();
+    await loadOrphans();
+    scheduleRunsPoll();
+  })();
+  try { await runsLoadPromise; }
+  finally { runsLoadPromise = null; }
 }
 window.loadRuns = loadRuns;
 
@@ -9181,7 +9216,7 @@ function attnVerb(r) {
   if (r.kind === "orphan")
     return { label: "review",
              title: "Open this exact unlanded branch with its full context",
-             run: () => revealOrphan(r.orphan_key) };
+             run: () => revealOrphan(r.orphan_key, r.orphan_branch) };
   if (r.id === "health:ai")
     return { label: "recheck",
              title: "Probe the AI backend again right now",
@@ -9297,20 +9332,15 @@ function renderAttention() {
     : (working ? "progress without interruption"
       : "Vira is watching the edges");
 
-  const cardIds = new Set(cards.map((c) => c.card.req_id));
-  const needRows = rows.filter((r) => r.needs_you && !cardIds.has(r.req_id));
-  const workRows = rows.filter((r) => !r.needs_you);
-
-  if (cards.length || needRows.length) {
-    const sec = briefSection(body, "Waiting on you");
-    sec.classList.add("attn-shelf", "attn-shelf-waiting");
-    cards.forEach((c) => sec.appendChild(attnCardBlock(c)));
-    needRows.forEach((r) => attnRow(sec, r));
-  }
-  if (workRows.length) {
-    const sec = briefSection(body, "Working");
-    sec.classList.add("attn-shelf", "attn-shelf-working");
-    workRows.forEach((r) => attnRow(sec, r));
+  if (rows.length) {
+    const sec = briefSection(body, "Newest activity first");
+    sec.classList.add("attn-shelf", "attn-shelf-chronology");
+    const cardsByRequest = new Map(cards.map((c) => [c.card.req_id, c]));
+    rows.forEach((r) => {
+      const pending = r.req_id ? cardsByRequest.get(r.req_id) : null;
+      if (pending) sec.appendChild(attnCardBlock(pending));
+      else attnRow(sec, r);
+    });
   }
   if (!rows.length)
     body.appendChild(el("div", "brief-empty",
@@ -10176,8 +10206,7 @@ async function revealJournal(id) {
     .find((n) => n.dataset.journalId === id);
   if (!node) { toast("That Journal entry is no longer available"); return; }
   node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
-  node.classList.add("idea-flash");
-  setTimeout(() => node.classList.remove("idea-flash"), 1600);
+  revealHighlight(node);
 }
 
 function pollJournal() {

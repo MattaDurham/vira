@@ -65,6 +65,25 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.attn-item.card-actionable:hover', self.css)
         self.assertIn('.review-card.card-actionable:hover', self.css)
 
+    def test_now_renders_one_newest_first_chronology(self):
+        self.assertIn('briefSection(body, "Newest activity first")', self.app)
+        self.assertIn('new Map(cards.map((c) => [c.card.req_id, c]))',
+                      self.app)
+        self.assertNotIn('briefSection(body, "Waiting on you")', self.app)
+        self.assertNotIn('briefSection(body, "Working")', self.app)
+
+    def test_revealed_destinations_hold_a_strong_ten_second_highlight(self):
+        self.assertIn('const REVEAL_HIGHLIGHT_MS = 10000;', self.app)
+        self.assertEqual(self.app.count('revealHighlight(node);'), 4)
+        self.assertIn('outline: 2px solid var(--accent)', self.css)
+
+    def test_record_card_click_expands_its_full_context(self):
+        self.assertIn(
+            'card.classList.toggle("context-open", context.open);', self.app)
+        self.assertIn(
+            'if (!context.open) context.open = true;', self.app)
+        self.assertIn('.run-card.k-unlanded.context-open', self.css)
+
     def test_attention_prose_wraps_instead_of_ellipsizing(self):
         self.assertIn('Global to the combined Attention module', self.css)
         self.assertIn('text-overflow: clip; overflow-wrap: anywhere', self.css)
@@ -77,7 +96,14 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.attention-map-flow', self.css)
 
     def test_attention_verbs_reveal_exact_objects(self):
-        self.assertIn('run: () => revealOrphan(r.orphan_key)', self.app)
+        self.assertIn(
+            'run: () => revealOrphan(r.orphan_key, r.orphan_branch)',
+            self.app)
+        self.assertIn('n.dataset.runBranch === branch', self.app)
+        self.assertIn(
+            'card.dataset.runBranch = it.src.branch || "";', self.app)
+        self.assertIn('if (runsLoadPromise) return runsLoadPromise;',
+                      self.app)
         self.assertIn('run: () => revealBoardsHealth()', self.app)
         self.assertNotIn(
             'run: () => { openApp("work"); setWorkTab("live"); }', self.app)

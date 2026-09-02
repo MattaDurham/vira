@@ -64,14 +64,27 @@ def _age_days(iso):
         return None
 
 
+def _epoch(value):
+    """Comparable activity time from the numeric and ISO clocks our source
+    stores already carry. Missing legacy timestamps sort last, never as now."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value or "").replace(
+            "Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _row(rid, kind, state, needs_you, title, sub="", verb="", job_id=None,
-         **extra):
+         activity_at=0, **extra):
     """One attention row. `trigger` is the edge-token the client's reopen
     logic keys on — see the module docstring for why state only joins it
     when the row needs the owner."""
     r = {"id": rid, "kind": kind, "state": state,
          "needs_you": bool(needs_you), "title": title, "sub": sub,
          "verb": verb, "job_id": job_id,
+         "activity_at": _epoch(activity_at),
          "trigger": f"{rid}@{state}" if needs_you else f"{rid}@"}
     r.update(extra)
     return r
@@ -111,6 +124,7 @@ def _session_rows(registry, names):
         st = jobfiles.read_json(h.dir / "state.json") or {}
         status = st.get("status")
         awaiting = st.get("awaiting")
+        started = h.spec.get("started") or st.get("started")
         machine = _machine_meta(h.spec)
         circuit_stage = bool((h.spec.get("meta") or {}).get("circuit_run"))
         title = names.get(h.id) or h.id
@@ -121,7 +135,8 @@ def _session_rows(registry, names):
                 rows.append(_row(
                     f"session:{h.id}", "reply", "reply", True, title,
                     "finished its turn and is holding open for your reply",
-                    verb="reply", job_id=h.id, machine=machine))
+                    verb="reply", job_id=h.id, machine=machine,
+                    activity_at=started))
             else:
                 # A circuit-stage session is one dot of a flow the flows
                 # source already draws; a second row would double it.
@@ -129,7 +144,8 @@ def _session_rows(registry, names):
                     continue
                 rows.append(_row(
                     f"session:{h.id}", "working", "working", False, title,
-                    "working", verb="watch", job_id=h.id, machine=machine))
+                    "working", verb="watch", job_id=h.id, machine=machine,
+                    activity_at=started))
         elif status == "error":
             snap = {"status": status, "live": st.get("live"),
                     "session_id": st.get("session_id"),
@@ -145,7 +161,7 @@ def _session_rows(registry, names):
                     (st.get("error") or "ended on an error")[:140]
                     + " — the conversation is resumable",
                     verb="open", job_id=h.id, machine=machine,
-                    age_days=age))
+                    age_days=age, activity_at=fin))
     return rows
 
 
@@ -163,7 +179,8 @@ def _card_rows(registry, names):
             "approval: " + (card.get("tool") or "a tool call")
         rows.append(_row(
             f"card:{card['req_id']}", "card", "pending", True, title, kind,
-            verb="answer", job_id=p["job_id"], req_id=card["req_id"]))
+            verb="answer", job_id=p["job_id"], req_id=card["req_id"],
+            activity_at=card.get("created")))
         cards.append({**p, "title": title})
     return rows, cards
 
@@ -224,7 +241,7 @@ def _flow_rows():
             f"flow:{run['id']}", "flow", "running", False,
             run.get("circuit_name") or run["id"], sub, verb="trace",
             run_id=run["id"], stages_done=done, stages_total=len(stages),
-            stages=_stage_strip(run)))
+            stages=_stage_strip(run), activity_at=run.get("started")))
     return rows
 
 
@@ -254,7 +271,9 @@ def _orphan_rows():
         rows.append(_row(
             f"orphan:{it['key']}", "orphan", "open", True,
             it.get("branch") or it.get("key"), sub, verb="review",
-            age_days=it.get("age_days"), orphan_key=it.get("key")))
+            age_days=it.get("age_days"), orphan_key=it.get("key"),
+            orphan_branch=it.get("branch"),
+            activity_at=it.get("last_activity")))
     return rows
 
 
@@ -275,7 +294,7 @@ def _health_rows():
         rows.append(_row(
             "health:ai", "health", "red", True, "AI backend is down",
             (ai.get("action") or ai.get("detail") or "")[:160],
-            verb="recheck"))
+            verb="recheck", activity_at=ai.get("checked_at")))
 
     from . import jobboards
     bh = jobboards.health()
@@ -287,7 +306,7 @@ def _health_rows():
                 "health:boards-stale", "health", f"d{int(age)}", True,
                 "Job boards sweep is stale",
                 f"last swept {fetched.replace('T', ' ')[:16]} — the poller "
-                "may be wedged", verb="open"))
+                "may be wedged", verb="open", activity_at=fetched))
         errs = bh.get("errors") or {}
         if errs:
             bid, msg = next(iter(errs.items()))
@@ -296,7 +315,7 @@ def _health_rows():
                 "health:boards-errors", "health", f"n{len(errs)}", True,
                 f"{len(errs)} job board{'s' if len(errs) > 1 else ''} "
                 "failing to poll", f"{bid}: {msg}"[:160] + more,
-                verb="open"))
+                verb="open", activity_at=fetched))
     return rows
 
 
@@ -325,7 +344,7 @@ def _names(registry):
 
 def compose(registry=None):
     """The whole attention payload, one read. `rows` is everything, sorted
-    needs-you-first then newest-working; `cards` is the renderable card
+    by newest activity first; `cards` is the renderable card
     payloads (pending_all shape); `tokens` is the flat trigger list the
     client's edge-triggered reopen compares against what it has seen."""
     if registry is None:
@@ -348,10 +367,11 @@ def compose(registry=None):
     rows += _safe(_orphan_rows, errors, "orphans")
     rows += _safe(_health_rows, errors, "health")
 
-    # Needs-you first, oldest waiting first inside that (the decision that
-    # has blocked longest leads); working rows after, in source order.
-    rows.sort(key=lambda r: (0 if r["needs_you"] else 1,
-                             -(r.get("age_days") or 0)))
+    # Now is a chronology, not a triage queue: a session that just started
+    # leads immediately even when older work is waiting on the owner. That
+    # visible proof of activity prevents duplicate dispatches made because
+    # the new working row quietly landed below the fold.
+    rows.sort(key=lambda r: r.get("activity_at") or 0, reverse=True)
     return {
         "rows": rows,
         "cards": cards,
