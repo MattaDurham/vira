@@ -1860,6 +1860,204 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
 }
 .attention-source .review-visual { margin-bottom: 12px; }
 
+/* Attention is a reading surface, not a status table. Every live object gets
+   its own thumbnail-led story card; every durable decision gets its own
+   masonry card, so one long source can never create a blank column beside it. */
+#attention-now-pane #attention-body { display: block; }
+#attention-now-pane #attention-body > .attn-shelf {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px; margin: 0 0 18px; padding: 12px; border: 1px solid var(--line-warm);
+  border-radius: 7px; background: rgba(42, 43, 45, .72);
+}
+.attn-shelf > .brief-sec-head { grid-column: 1 / -1; margin: 0 2px 2px; }
+.attn-item {
+  min-width: 0; overflow: hidden; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg-raised);
+  transition: border-color .16s ease, transform .16s ease;
+}
+.attn-item.click { cursor: pointer; }
+.attn-item.click:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+.attn-thumb {
+  position: relative; min-height: 104px; overflow: hidden; display: flex;
+  align-items: flex-end; padding: 10px 12px;
+  background:
+    radial-gradient(circle at 72% 30%, var(--accent-veil), transparent 7%),
+    radial-gradient(circle at 25% 70%, var(--accent-soft), transparent 26%),
+    linear-gradient(145deg, #111315, var(--bg-card));
+  border-bottom: 1px solid var(--line);
+}
+.attn-thumb::before, .attn-thumb::after {
+  content: ""; position: absolute; pointer-events: none;
+}
+.attn-thumb::before {
+  width: 92px; height: 92px; right: 16px; top: -22px; border-radius: 50%;
+  border: 1px solid var(--accent-line); box-shadow: 0 0 0 18px var(--accent-soft);
+}
+.attn-thumb::after {
+  left: 12px; right: 12px; top: 30px; height: 1px; background: var(--line-warm);
+  box-shadow: 0 20px 0 var(--line-warm), 0 40px 0 var(--line-warm);
+}
+.attn-thumb-mark {
+  position: absolute; z-index: 1; right: 39px; top: 26px; width: 13px; height: 13px;
+  border: 2px solid var(--accent); border-radius: 50%; background: var(--bg-raised);
+  box-shadow: 0 0 18px var(--accent-glow);
+}
+.attn-thumb small {
+  position: relative; z-index: 1; color: var(--text); font: 9px var(--mono);
+  letter-spacing: .12em; text-transform: uppercase;
+}
+.attn-kind-flow .attn-thumb { background:
+  linear-gradient(32deg, transparent 47%, var(--steel-line) 48% 49%, transparent 50%),
+  radial-gradient(circle at 25% 65%, var(--steel-line), transparent 22%), #15191c; }
+.attn-kind-orphan .attn-thumb { background:
+  repeating-linear-gradient(130deg, transparent 0 18px, var(--red-soft) 19px 20px), #171413; }
+.attn-kind-health .attn-thumb { background:
+  linear-gradient(90deg, transparent 49%, var(--red-line) 50% 51%, transparent 52%),
+  linear-gradient(#141313, #24201d); }
+.attn-item-main { display: flex; flex-direction: column; gap: 8px; padding: 13px; min-width: 0; }
+.attn-item-meta, .attn-item-foot {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 6px; min-width: 0;
+}
+.attn-state, .attn-age {
+  font: 9.5px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.attn-item.needs-you .attn-state { color: var(--accent-bright); }
+.attn-item-title { font-size: 15px; line-height: 1.28; font-weight: 500; color: var(--text-head); }
+.attn-item-sub { font-size: 12.5px; line-height: 1.48; color: var(--text-dim); }
+.attn-item-foot { margin-top: 2px; justify-content: flex-end; }
+.attn-item .stagestrip { max-width: 100%; }
+.attn-shelf > .attn-card { min-width: 0; margin: 0; }
+
+.attention-filters {
+  display: flex; flex-wrap: wrap; gap: 7px; margin: -2px 0 14px; min-width: 0;
+}
+.attention-filter {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text-dim); background: var(--bg-raised); cursor: pointer;
+  font: 9.5px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+}
+.attention-filter span { overflow-wrap: anywhere; }
+.attention-filter b {
+  min-width: 19px; padding: 1px 5px; border-radius: 999px; background: var(--bg);
+  color: var(--text-faint); font-weight: 400; text-align: center;
+}
+.attention-filter:hover, .attention-filter.on {
+  color: var(--text); border-color: var(--accent-line); background: var(--accent-soft);
+}
+.attention-filter.on b { color: var(--accent-bright); }
+
+#attention-decide-pane #review-body {
+  display: block; column-width: 255px; column-gap: 12px;
+}
+.review-card {
+  --review-tone: var(--accent); --review-tone-soft: var(--accent-soft);
+  display: inline-block; width: 100%; min-width: 0; margin: 0 0 12px;
+  overflow: hidden; break-inside: avoid; border: 1px solid var(--line-warm);
+  border-top: 2px solid var(--review-tone); border-radius: 7px;
+  background: var(--bg-card); vertical-align: top;
+  transition: transform .16s ease, border-color .16s ease;
+}
+.review-card.click { cursor: pointer; }
+.review-card.click:hover { transform: translateY(-2px); border-color: var(--review-tone); }
+.review-card-art {
+  position: relative; height: 92px; overflow: hidden; border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(90deg, var(--review-tone-soft), transparent 58%),
+    radial-gradient(circle at 24% 30%, var(--review-tone-soft), transparent 30%),
+    linear-gradient(145deg, #151617, var(--bg-raised));
+}
+.review-card-art.has-media { height: auto; min-height: 112px; }
+.review-card-art img, .review-card-art video {
+  display: block; width: 100%; max-height: 240px; object-fit: cover;
+}
+.review-card-art.generated i { position: absolute; border: 1px solid var(--review-tone); }
+.review-card-art.generated i:nth-child(1) { width: 62px; height: 62px; right: 22px; top: 14px; border-radius: 50%; }
+.review-card-art.generated i:nth-child(2) { width: 8px; height: 8px; right: 49px; top: 41px; border-radius: 50%; background: var(--review-tone); box-shadow: 0 0 18px var(--review-tone); }
+.review-card-art.generated i:nth-child(3) { left: 15px; right: 98px; top: 46px; height: 1px; border-width: 1px 0 0; box-shadow: 0 -18px 0 var(--review-tone-soft), 0 18px 0 var(--review-tone-soft); }
+.review-card-body { display: flex; flex-direction: column; gap: 9px; min-width: 0; padding: 13px; }
+.review-card-meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.review-card-source, .review-card-age {
+  color: var(--review-tone); font: 9.5px var(--mono); letter-spacing: .11em;
+  text-transform: uppercase; overflow-wrap: anywhere;
+}
+.review-card-age { flex: none; color: var(--text-faint); }
+.review-card-title { color: var(--text-head); font-size: 15px; line-height: 1.36; font-weight: 500; overflow-wrap: anywhere; }
+.review-card-why { color: var(--text-dim); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.review-card-ref {
+  padding-top: 8px; border-top: 1px solid var(--line); color: var(--text-faint);
+  font: 9px/1.45 var(--mono); letter-spacing: .07em; text-transform: uppercase;
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.review-card-actions { margin: 2px 0 0; flex-wrap: wrap; opacity: 1; align-self: stretch; }
+.review-card-actions .brief-act { flex: 1 1 auto; min-width: 0; }
+.review-note {
+  padding: 8px 9px; border-left: 2px solid var(--review-tone);
+  color: var(--text-dim); background: var(--review-tone-soft);
+  font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere;
+}
+.review-type-lessons { --review-tone: #b38b62; --review-tone-soft: rgba(179, 139, 98, .12); }
+.review-type-inbox { --review-tone: #7a8f9c; --review-tone-soft: rgba(122, 143, 156, .13); }
+.review-type-flags { --review-tone: #b36f5a; --review-tone-soft: rgba(179, 111, 90, .13); border-style: dashed; }
+.review-type-ideas { --review-tone: #9b936f; --review-tone-soft: rgba(155, 147, 111, .13); }
+.review-type-journal { --review-tone: #7f9a78; --review-tone-soft: rgba(127, 154, 120, .12); }
+.review-type-senders { --review-tone: #7b83a6; --review-tone-soft: rgba(123, 131, 166, .13); }
+.review-type-picker { --review-tone: #9b7ca6; --review-tone-soft: rgba(155, 124, 166, .13); }
+.review-type-inbox .review-card-art.generated i:nth-child(1) { border-radius: 3px; transform: rotate(5deg); }
+.review-type-flags .review-card-art.generated i:nth-child(1) { border-radius: 0; transform: rotate(45deg) scale(.7); }
+.review-type-journal .review-card-art.generated i:nth-child(1) { width: 76px; border-radius: 50% 50% 8px 8px; }
+.review-type-senders .review-card-art.generated i:nth-child(1) { box-shadow: 0 0 0 13px var(--review-tone-soft); }
+
+/* Global to the combined Attention module: prose is always allowed to wrap.
+   No ellipsis and no min-content token may widen the module. */
+#view-attention :is(.brief-title, .brief-sub, .brief-hint, .brief-tag,
+  .brief-act, .attention-pane-title, .hint, .attention-source-head h3) {
+  min-width: 0; max-width: 100%; white-space: normal; overflow: visible;
+  text-overflow: clip; overflow-wrap: anywhere; word-break: break-word;
+}
+#view-attention .brief-row { flex-wrap: wrap; min-width: 0; }
+#view-attention .brief-time { flex: 0 1 auto; min-width: 38px; }
+#view-attention .brief-title { flex: 1 1 150px; }
+#view-attention .brief-sub { flex: 1 1 100%; }
+#view-attention .brief-acts { flex-wrap: wrap; max-width: 100%; }
+
+.attention-context-map {
+  margin: 0 0 12px; padding: 13px; overflow: hidden; border: 1px solid var(--line-warm);
+  border-radius: 6px; background:
+    radial-gradient(circle at 50% 50%, var(--accent-soft), transparent 55%),
+    var(--bg-card);
+}
+.attention-map-label {
+  display: block; margin-bottom: 12px; color: var(--accent);
+  font: 9.5px var(--mono); letter-spacing: .13em; text-transform: uppercase;
+}
+.attention-map-flow { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+.attention-map-node {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 5px; min-height: 74px;
+  padding: 9px; border: 1px solid var(--accent-line); border-radius: 5px;
+  color: var(--text); background: var(--bg-raised); font-size: 11.5px;
+  line-height: 1.35; text-align: center; overflow-wrap: anywhere;
+}
+.attention-map-node strong { font-size: 11.5px; font-weight: 500; overflow-wrap: anywhere; }
+.attention-map-node small {
+  color: var(--text-faint); font: 8.5px/1.3 var(--mono); letter-spacing: .06em;
+  text-transform: uppercase; overflow-wrap: anywhere;
+}
+.attention-map-node.question { border-color: var(--steel-line); }
+.attention-map-node.action { border-color: var(--green-line); }
+.attention-map-link {
+  flex: 0 0 18px; align-self: center; height: 1px; background: var(--accent-line);
+  position: relative;
+}
+.attention-map-link::after {
+  content: ""; position: absolute; right: -1px; top: -3px; width: 6px; height: 6px;
+  border-top: 1px solid var(--accent); border-right: 1px solid var(--accent);
+  transform: rotate(45deg);
+}
+
 @keyframes attention-orbit { to { transform: rotate(360deg); } }
 @keyframes attention-pulse { 50% { transform: scale(1.7); opacity: .55; } }
 @keyframes attention-day {
@@ -1882,6 +2080,11 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
   #attention-now-pane #attention-body,
   #attention-day-pane #brief-body,
   #attention-decide-pane #review-body { grid-template-columns: 1fr; }
+  #attention-decide-pane #review-body { column-width: auto; column-count: 1; }
+  #attention-now-pane #attention-body > .attn-shelf { grid-template-columns: 1fr; padding: 9px; }
+  .attention-map-flow { flex-direction: column; }
+  .attention-map-link { width: 1px; height: 16px; flex-basis: 16px; align-self: center; }
+  .attention-map-link::after { right: -3px; top: auto; bottom: 0; transform: rotate(135deg); }
 }
 @media (prefers-reduced-motion: reduce) {
   .attention-hero::after, .attention-orbit i, .attention-orbit span,

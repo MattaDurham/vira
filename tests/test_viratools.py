@@ -72,6 +72,12 @@ class TestPreamble(unittest.TestCase):
             self.assertIn("Never restart", p)
             self.assertIn("nyc.durham.vira", p)
 
+    def test_both_require_visual_context_for_durable_decisions(self):
+        for p in (viratools.preamble(), viratools.preamble(False)):
+            self.assertIn("VISUAL CONTEXT FOR DURABLE DECISIONS", p)
+            self.assertIn("diagram for systems or sequences", p)
+            self.assertIn("useful alt text", p)
+
     def test_branch_para_claims_the_gate_only_where_one_exists(self):
         kw = dict(worktree_path="/tmp/wt", branch="claude/x",
                   live_root="/tmp/live")
