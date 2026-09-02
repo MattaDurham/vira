@@ -613,9 +613,9 @@
 
   <!-- Radar folded into the People window as the Networking tab (2026-07-25) -->
 
-  <!-- VISUAL NETWORK (the face-graph of interconnection) -->
+  <!-- WORLD (typed, temporal graph over every connected local source) -->
   <section id="view-atlas" class="view">
-    <div class="section-head"><h2>Visual Network</h2>
+    <div class="section-head"><h2>World</h2>
       <span class="hint" id="atlas-meta" style="margin-left:auto"></span>
     </div>
     <div class="atlas-stage" id="atlas-stage">
@@ -625,20 +625,84 @@
       <div class="atlas-card" id="atlas-card" style="display:none"></div>
       <div class="atlas-empty" id="atlas-empty" style="display:none"></div>
       <div class="atlas-chrome" id="atlas-chrome">
-        <div class="atlas-lenses" id="atlas-lenses"></div>
-        <div class="atlas-legend" id="atlas-legend"></div>
-        <div class="hint atlas-coverage" id="atlas-coverage"></div>
-        <div class="atlas-bar">
-          <input id="atlas-search" class="search" type="search"
-                 placeholder="Find a person…" autocomplete="off">
-          <button class="fchip" id="atlas-vault" title="Add everyone with a wiki page in your notes — people worth knowing, not only people you have met">Beyond the CRM</button>
+        <div class="atlas-controls-head">
+          <strong>World controls</strong>
+          <button class="linkish" id="atlas-reset-controls" type="button">Restore defaults</button>
+        </div>
+        <details class="atlas-control-section" open>
+          <summary>Filter</summary>
+          <div class="atlas-bar">
+            <input id="atlas-search" class="search" type="search"
+                   placeholder='Search, or try kind:person tag:"knowledge graph"' autocomplete="off">
+            <button class="fchip sm" id="atlas-search-clear" type="button">Clear</button>
+          </div>
+          <div class="atlas-search-results" id="atlas-search-results"></div>
+          <div class="atlas-toggle-row">
+            <label><input id="atlas-filter-mode" type="checkbox" checked> Hide non-matches</label>
+            <label><input id="atlas-hide-orphans" type="checkbox"> Hide unconnected</label>
+            <label><input id="atlas-starred-only" type="checkbox"> Starred only</label>
+          </div>
+          <div class="atlas-filter-kinds" id="atlas-filter-kinds"></div>
+          <div class="hint atlas-filter-count" id="atlas-filter-count"></div>
+        </details>
+        <details class="atlas-control-section" open>
+          <summary>Color and grouping</summary>
+          <div class="atlas-lenses" id="atlas-lenses"></div>
+          <div class="atlas-legend" id="atlas-legend"></div>
+          <button class="linkish atlas-reset-colors" id="atlas-reset-colors" type="button">Reset colors</button>
+          <div class="hint atlas-coverage" id="atlas-coverage"></div>
+        </details>
+        <details class="atlas-control-section">
+          <summary>Display and geometry</summary>
+          <div class="atlas-toggle-row">
+            <label><input id="atlas-auto-rotate" type="checkbox" checked> Auto rotate</label>
+            <label><input id="atlas-curved-links" type="checkbox" checked> Arc links</label>
+            <label><input id="atlas-spherical-nodes" type="checkbox" checked> Spherical nodes</label>
+          </div>
+          <label class="atlas-slider"><span>Graph spread <output id="atlas-geometry-out">100%</output></span><input id="atlas-geometry" type="range" min="35" max="250" value="100"></label>
+          <label class="atlas-slider"><span>Node size <output id="atlas-node-size-out">100%</output></span><input id="atlas-node-size" type="range" min="60" max="180" value="100"></label>
+          <label class="atlas-slider"><span>Node opacity <output id="atlas-node-opacity-out">100%</output></span><input id="atlas-node-opacity" type="range" min="10" max="100" value="100"></label>
+          <label class="atlas-slider"><span>Link thickness <output id="atlas-link-thickness-out">100%</output></span><input id="atlas-link-thickness" type="range" min="25" max="250" value="100"></label>
+          <label class="atlas-slider" id="atlas-link-curve-row"><span>Link arc <output id="atlas-link-curve-out">10%</output></span><input id="atlas-link-curve" type="range" min="0" max="30" value="10"></label>
+          <button class="fchip sm" id="atlas-reset-geometry" type="button">Reset positions</button>
+        </details>
+        <details class="atlas-control-section">
+          <summary>Forces</summary>
+          <label class="atlas-physics-enable"><input id="atlas-physics" type="checkbox" checked> Interactive physics</label>
+          <label class="atlas-slider"><span>Center force <output id="atlas-center-out">8%</output></span><input id="atlas-center" type="range" min="0" max="100" value="8"></label>
+          <label class="atlas-slider"><span>Repel force <output id="atlas-repel-out">30%</output></span><input id="atlas-repel" type="range" min="0" max="100" value="30"></label>
+          <label class="atlas-slider"><span>Link force <output id="atlas-link-force-out">25%</output></span><input id="atlas-link-force" type="range" min="0" max="100" value="25"></label>
+          <label class="atlas-slider"><span>Link distance <output id="atlas-link-distance-out">100%</output></span><input id="atlas-link-distance" type="range" min="40" max="220" value="100"></label>
+          <label class="atlas-slider"><span>Semantic gravity <output id="atlas-semantic-out">18%</output></span><input id="atlas-semantic" type="range" min="0" max="100" value="18"></label>
+          <div class="hint">Drag a node to pull its neighborhood. Drag empty space to rotate; Shift-drag, middle-drag, or right-drag to pan.</div>
+          <div class="hint" id="atlas-physics-status">Select or drag a node to engage local physics.</div>
+        </details>
+        <div class="atlas-bar atlas-actions">
           <button class="fchip" id="atlas-ego" title="Hide the center node — the pure contact-to-contact mesh">Hide me</button>
           <button class="fchip" id="atlas-rescan">Rescan</button>
         </div>
       </div>
-      <button class="atlas-gear" id="atlas-gear" title="Lenses, groups and search"
+      <button class="atlas-gear" id="atlas-gear" title="Search, filters, geometry and physics"
               aria-expanded="false" aria-controls="atlas-chrome"><svg
         viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6zM12 5.4a6.6 6.6 0 1 0 0 13.2 6.6 6.6 0 0 0 0-13.2zM18.2 12h2.2M3.6 12h2.2M12 5.8V3.6M12 20.4v-2.2M16.38 7.62l1.56-1.56M6.06 17.94l1.56-1.56M16.38 16.38l1.56 1.56M6.06 6.06l1.56 1.56"/></svg></button>
+      <div class="world-time" id="world-timebar">
+        <button class="world-play" id="world-play" type="button" aria-label="Play timeline">Play</button>
+        <label class="world-speed"><span>Speed</span><select id="world-speed" aria-label="Timeline playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <div class="world-axis" role="group" aria-label="Timeline axis">
+          <button class="world-axis-btn on" id="world-axis-valid"
+                  title="When the content or represented knowledge was created">Content date</button>
+          <button class="world-axis-btn" id="world-axis-recorded"
+                  title="When this Vira learned or received the item">Learned by</button>
+        </div>
+        <div class="world-time-track">
+          <div class="world-time-bounds"><span id="world-time-min"></span><span id="world-time-max"></span></div>
+          <input id="world-time" type="range" min="0" max="1000" value="1000"
+                 aria-label="Replay date">
+          <div class="world-time-summary" id="world-time-summary"></div>
+        </div>
+        <span class="world-time-label" id="world-time-label">Latest</span>
+        <button class="world-now" id="world-now" type="button">Now</button>
+      </div>
     </div>
   </section>
 

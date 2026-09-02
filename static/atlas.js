@@ -1,8 +1,9 @@
-/* Visual Network — the face-graph of interconnection.
-   Hand-rolled canvas force layout over the materialized graph served by
-   /api/atlas: the owner pinned center as the ego node, degree-1 contacts
-   on the inner ring, clusters angularly grouped and colored, every node
-   rendered with its face (/api/atlas/face/{pid}, letter tile fallback).
+/* World — Vira's typed, temporal graph of local knowledge.
+   The existing high-performance network renderer now reads /api/world:
+   CRM people, vault notes, organizations, projects, places, events,
+   sources, concepts and topics share one map.  People are one kind filter,
+   not the schema.  Every relation can carry a source receipt and both a
+   valid-time interval (when it held) and recorded time (when Vira knew it).
    Selection is the core interaction: clicking a node (or a grouping chip)
    toggles it into the selection — selected people and the ties among them
    light up, bridges between unlinked selections are traced with a local
@@ -50,6 +51,9 @@
     shared: new Set(),       // ids connected to 2+ selected nodes
     neighbors: new Set(),    // ids connected to any selected node
     chains: [],              // [{a, b, nodes}] bridge chains for the card
+    articleTrail: [],        // node ids followed through the inspector
+    articleIndex: -1,
+    detailToken: 0,
     adj: new Map(),          // id -> [{n, e}] adjacency for BFS
     lens: null,           // active lens id (see LENS_KEY)
     bands: [],            // the active lens's bands
@@ -57,9 +61,84 @@
     shown: null,             // Set of visible node ids (null = everyone)
     hideEgo: false,
     match: "",            // search filter
+    filterSearch: true,
+    hideOrphans: false,
+    starredOnly: false,
+    starred: new Set(),
+    enabledKinds: new Set(),
+    time: { axis: "valid", at: null, min: null, max: null, timeline: {},
+            playing: false, speed: 1, raf: 0, lastFrame: 0 },
+    fixedLayout: false,      // server-supplied semantic coordinates
+    display: { scale: 1, nodeSize: 1, nodeOpacity: 1, linkThickness: 1,
+               autoRotate: true, curvedLinks: true, linkCurve: .10,
+               sphericalNodes: true },
+    colorOverrides: {},
+    physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
+               distance: 1, semantic: 0.18 },
     loading: false,
     loadedGen: null,
   };
+
+  const CONTROL_KEY = "vira-world-controls";
+  const CONTROL_DEFAULTS = {
+    filterSearch: true, hideOrphans: false, starredOnly: false,
+    display: { scale: 1, nodeSize: 1, nodeOpacity: 1, linkThickness: 1,
+               autoRotate: true, curvedLinks: true, linkCurve: .10,
+               sphericalNodes: true },
+    physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
+               distance: 1, semantic: 0.18 },
+  };
+
+  function clamp(value, low, high, fallback) {
+    value = Number(value);
+    return Number.isFinite(value) ? Math.max(low, Math.min(high, value))
+                                  : fallback;
+  }
+
+  function loadControls() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(CONTROL_KEY) || "null"); }
+    catch { saved = null; }
+    if (!saved || typeof saved !== "object") return;
+    S.filterSearch = saved.filterSearch !== false;
+    S.hideOrphans = !!saved.hideOrphans;
+    S.starredOnly = !!saved.starredOnly;
+    if (Array.isArray(saved.starred))
+      S.starred = new Set(saved.starred.filter((id) => typeof id === "string"));
+    S.display.scale = clamp(saved.display?.scale, .35, 2.5, 1);
+    S.display.nodeSize = clamp(saved.display?.nodeSize, .6, 1.8, 1);
+    S.display.nodeOpacity = clamp(saved.display?.nodeOpacity, .1, 1, 1);
+    S.display.linkThickness = clamp(
+      saved.display?.linkThickness, .25, 2.5, 1);
+    S.display.autoRotate = saved.display?.autoRotate !== false;
+    S.display.curvedLinks = saved.display?.curvedLinks !== false;
+    S.display.linkCurve = clamp(saved.display?.linkCurve, 0, .3, .10);
+    S.display.sphericalNodes = saved.display?.sphericalNodes !== false;
+    S.time.speed = clamp(saved.timelineSpeed, .5, 4, 1);
+    if (saved.colorOverrides && typeof saved.colorOverrides === "object") {
+      for (const [key, color] of Object.entries(saved.colorOverrides))
+        if (/^#[0-9a-f]{6}$/i.test(color)) S.colorOverrides[key] = color;
+    }
+    S.physics.enabled = saved.physics?.enabled !== false;
+    S.physics.center = clamp(saved.physics?.center, 0, 1, .08);
+    S.physics.repel = clamp(saved.physics?.repel, 0, 1, .30);
+    S.physics.link = clamp(saved.physics?.link, 0, 1, .25);
+    S.physics.distance = clamp(saved.physics?.distance, .4, 2.2, 1);
+    S.physics.semantic = clamp(saved.physics?.semantic, 0, 1, .18);
+  }
+
+  function saveControls() {
+    try {
+      localStorage.setItem(CONTROL_KEY, JSON.stringify({
+        filterSearch: S.filterSearch, hideOrphans: S.hideOrphans,
+        starredOnly: S.starredOnly, starred: [...S.starred],
+        timelineSpeed: S.time.speed,
+        display: S.display, physics: S.physics,
+        colorOverrides: S.colorOverrides,
+      }));
+    } catch { /* private browsing or a full origin: controls stay in memory */ }
+  }
+  loadControls();
 
   // ---------- the 3D renderer ----------
 
@@ -80,12 +159,13 @@
       const r = mod.create({
         stage, S,
         reducedMotion: REDUCED_MOTION,
-        isShown, matchDim, tileColor, initials, firstLast,
+        isShown, isEdgeShown, matchDim, tileColor, initials, firstLast,
         onHover: hitHover,
         onSelect: hitSelect,
         onOpen: hitOpen,
         onContext: hitContext,
         onEmpty: hitEmpty,
+        onPhysicsScope: paintPhysicsStatus,
       });
       if (r) {
         R3 = r;
@@ -95,7 +175,7 @@
         window.__network3d = r;
       }
     } catch (e) {
-      console.warn("Visual Network: staying flat -", e && e.message);
+      console.warn("World: staying flat -", e && e.message);
     }
     return R3;
   }
@@ -110,10 +190,9 @@
     S.loading = true;
     try {
       await ensure3D();
-      const g = await api("/api/atlas" + (vaultOn() ? "?vault=1" : ""));
+      const g = await api("/api/world");
       if (g.status === "empty") {
-        showEmpty(g.building);
-        if (g.building) setTimeout(() => atlasLoad(true), 4000);
+        showEmpty(false);
         return;
       }
       emptyEl.style.display = "none";
@@ -131,19 +210,19 @@
     emptyEl.innerHTML = "";
     emptyEl.appendChild(el("div", "subsviz-empty-title",
       msg || (building ? "Building the network…"
-                       : "The network has not been built yet")));
+                       : "No connected knowledge is available yet")));
     if (!msg && !building) {
       const b = el("button", "btn small primary", "Build the graph");
+      b.textContent = "Scan sources";
       b.addEventListener("click", async () => {
-        await post("/api/atlas/refresh", {});
+        await post("/api/world/refresh", {});
         showEmpty(true);
         setTimeout(() => atlasLoad(true), 4000);
       });
       emptyEl.appendChild(b);
     } else if (building) {
       emptyEl.appendChild(el("div", "hint",
-        "Fusing photo, group-chat, employer, family, topic, and vault "
-        + "signals across your contacts."));
+        "Refreshing the CRM projection and connected local vaults."));
     }
     emptyEl.style.display = "";
     $("#atlas-meta").textContent = "";
@@ -159,12 +238,6 @@
 
   const LENS_KEY = "vira-atlas-lens";
 
-  // "Beyond the CRM" — merge the vault's wiki people into the web. The
-  // server composes the merged payload (?vault=1) so lenses and counts
-  // stay honest; the toggle just decides which payload is asked for.
-  const VAULT_KEY = "vira-atlas-vault";
-  const vaultOn = () => !!lsGet(VAULT_KEY, false);
-
   function activeLens() {
     const ls = S.graph?.lenses || [];
     return ls.find((l) => l.id === S.lens) || ls[0] || null;
@@ -173,9 +246,10 @@
   function assignColors() {
     S.colors.clear();
     S.bands.forEach((b, i) => {
-      S.colors.set(b.id, b.anchor ? "#a39c8d"
+      const fallback = b.anchor ? "#a39c8d"
         : CLUSTER_COLORS[(i + (S.bands.some((x) => x.anchor) ? 0 : 1))
-                         % CLUSTER_COLORS.length]);
+                         % CLUSTER_COLORS.length];
+      S.colors.set(b.id, S.colorOverrides[`${S.lens}|${b.id}`] || fallback);
     });
   }
 
@@ -223,20 +297,21 @@
     if (!host) return;
     const lens = activeLens();
     if (!lens) { host.textContent = ""; return; }
-    // Companies and Locations read fields most contacts leave empty, so
-    // the count is stated rather than implied — a chip row that bands a
-    // tenth of the web must not read as the whole picture.
+    // A banding is explicit about coverage so a filtered slice never reads
+    // as the size of the whole knowledge world.
     const left = lens.total - lens.placed;
     host.textContent = lens.bands.length
-      ? `${lens.placed} of ${lens.total} people in ${lens.bands.length} `
+      ? `${lens.placed} of ${lens.total} items in ${lens.bands.length} `
         + `${lens.bands.length === 1 ? "band" : "bands"}`
         + (left ? ` · ${left} unplaced` : "")
       : `Nothing to band — no ${lens.label.toLowerCase()} on file for `
-        + `these ${lens.total} people.`;
+        + `these ${lens.total} items.`;
   }
 
   function initGraph(g) {
     S.graph = g;
+    S.fixedLayout = !!g.layout?.basis;
+    S.enabledKinds = new Set((g.kinds || []).map((row) => row.id));
     S.lens = lsGet(LENS_KEY, null) || (g.lenses || [])[0]?.id || null;
 
     const n = g.nodes.length;
@@ -253,11 +328,22 @@
     order.forEach((node, i) => {
       const ang = (i / n) * Math.PI * 2 - Math.PI / 2;
       const r = ring(node.degree || 3) * (0.92 + 0.16 * ((i * 7919) % 13) / 13);
+      const position = Array.isArray(node.position)
+        && node.position.length === 3 ? node.position : null;
+      const baseX = position ? Number(position[0]) : Math.cos(ang) * r;
+      const baseY = position ? Number(position[1]) : Math.sin(ang) * r;
+      const baseZ = position ? Number(position[2]) : 0;
+      const baseR = nodeRadius(node);
       const sim = {
         ...node,
-        x: Math.cos(ang) * r, y: Math.sin(ang) * r,
-        vx: 0, vy: 0,
-        r: nodeRadius(node),
+        x: baseX * S.display.scale, y: baseY * S.display.scale,
+        z: baseZ * S.display.scale,
+        baseX, baseY, baseZ,
+        homeX: baseX * S.display.scale,
+        homeY: baseY * S.display.scale,
+        homeZ: baseZ * S.display.scale,
+        vx: 0, vy: 0, vz: 0,
+        baseR, r: baseR * S.display.nodeSize,
         homeR: ring(node.degree || 3),
         pin: false,
       };
@@ -273,7 +359,7 @@
       an: S.byId.get(e.a), bn: S.byId.get(e.b),
       structural: e.signals.some((s) =>
         ["photo_cooccur", "group_cochat", "family", "colleague",
-         "wiki_link", "wiki_org"].includes(s.type)),
+         "wikilink", "wiki_link", "wiki_org"].includes(s.type)),
     })).filter((e) => e.an && e.bn);
     S.egoEdges = (g.ego_edges || []).map((e) => ({
       ...e, an: S.ego, bn: S.byId.get(e.b),
@@ -297,12 +383,20 @@
     recomputeSel();
     card.style.display = "none";
     applyLens(false);
+    renderKindFilters();
+    renderSearchResults();
+    syncControlInputs();
     updateIsoBar();
-    $("#atlas-vault")?.classList.toggle("on", vaultOn());
+    initTimeline(g.timeline || {});
+    const missing = g.scope?.unreadable
+      ? ` · ${g.scope.unreadable} unreadable notes` : "";
+    const semantic = g.layout?.semantic_nodes
+      ? ` · ${g.layout.semantic_nodes} semantically placed` : "";
+    const fallback = g.layout?.fallback_nodes
+      ? ` · ${g.layout.fallback_nodes} deterministic fallback` : "";
     $("#atlas-meta").textContent =
-      `${g.nodes.length} people · ${g.edges.length} ties`
-      + (g.vault?.people ? ` · ${g.vault.people} from your notes` : "")
-      + ` · built ` + fmtTime(g.generated);
+      `${g.nodes.length} items · ${g.edges.length} relations${semantic}${fallback}${missing}`
+      + ` · composed ` + fmtTime(g.generated);
 
     if (R3) {
       // the renderer seeds its own layout on the sphere, settles it and
@@ -315,7 +409,10 @@
       S.cam = { k: Math.max(0.16, Math.min(1, (fit / 2 - 24) / ring(3))),
                 x: 0, y: 0 };
       resize();
-      if (REDUCED_MOTION) {
+      if (S.fixedLayout) {
+        S.alpha = 0;
+        draw();
+      } else if (REDUCED_MOTION) {
         S.alpha = 1;
         for (let i = 0; i < 420; i++) tick(1 / 60);
         S.alpha = 0;
@@ -333,9 +430,13 @@
   }
 
   function loadFaces() {
+    // The full-vault renderer uses one GPU point cloud instead of thousands
+    // of per-person texture draw calls. Faces return automatically when a
+    // filtered slice is small enough for the detailed renderer.
+    if (S.nodes.length > 2500) return;
     // avatars trickle in; each arrival repaints once
     S.nodes.forEach((node) => {
-      if (node.face && !S.imgs.has(node.id)) {
+      if (node.kind === "person" && node.face && !S.imgs.has(node.id)) {
         const img = new Image();
         const entry = { img, ok: false };
         S.imgs.set(node.id, entry);
@@ -383,6 +484,7 @@
     }
     // springs along edges — strong ties pull close
     for (const e of S.edges) {
+      if (!isEdgeShown(e)) continue;
       const w = Math.min(1.5, e.weight) / 1.5;
       const rest = 300 - 190 * w;
       const k = (e.structural ? 0.045 : 0.012) * (0.4 + 0.6 * w);
@@ -422,6 +524,7 @@
 
   function wake(heat = 0.6) {
     if (R3) { R3.wake(heat); return; }
+    if (S.fixedLayout) { draw(); return; }
     S.alpha = Math.max(S.alpha, heat);
     if (REDUCED_MOTION) {
       for (let i = 0; i < 200; i++) tick(1 / 60);
@@ -469,21 +572,215 @@
     return best;
   }
 
-  // ---------- isolate ("show just the family") ----------
+  // ---------- filters + temporal replay ----------
 
-  const isShown = (p) => !S.shown || S.shown.has(p.id);
+  const parseTime = (value) => value ? Date.parse(value) : NaN;
+
+  function queryTerms(query) {
+    const terms = [];
+    const re = /(-?)(?:(kind|type|tag|source|company|title):)?(?:"([^"]+)"|(\S+))/gi;
+    let match;
+    while ((match = re.exec(query || ""))) {
+      terms.push({ not: match[1] === "-", key: (match[2] || "").toLowerCase(),
+                   value: (match[3] || match[4] || "").toLowerCase() });
+    }
+    return terms;
+  }
+
+  function searchText(node, key) {
+    const fields = {
+      kind: [node.kind], type: [node.kind], tag: node.tags || [],
+      source: [node.source_name, node.source_id, node.ref],
+      company: [node.company], title: [node.title],
+    };
+    const values = key ? (fields[key] || []) : [
+      node.name, node.kind, node.company, node.title, node.qualifier,
+      node.source_name, node.source_id, node.ref, ...(node.tags || []),
+    ];
+    return values.filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function matchesSearch(node) {
+    if (!S.match) return true;
+    return queryTerms(S.match).every((term) => {
+      const hit = searchText(node, term.key).includes(term.value);
+      return term.not ? !hit : hit;
+    });
+  }
+
+  function passesNodeFilters(node) {
+    return S.enabledKinds.has(node.kind)
+      && (!S.hideOrphans || Number(node.graph_degree || 0) > 0)
+      && (!S.starredOnly || S.starred.has(node.id))
+      && (!S.filterSearch || matchesSearch(node));
+  }
+
+  function hasNodeFilters() {
+    const totalKinds = (S.graph?.kinds || []).length;
+    return S.hideOrphans || S.starredOnly || (S.filterSearch && !!S.match)
+      || S.enabledKinds.size !== totalKinds;
+  }
+
+  function timeActive(item) {
+    if (!S.time.at) return true;
+    const at = S.time.at;
+    if (S.time.axis === "recorded") {
+      const learned = parseTime(item.recorded_at);
+      return !Number.isFinite(learned) || learned <= at;
+    }
+    const start = parseTime(item.valid_from);
+    const end = parseTime(item.valid_to);
+    return (!Number.isFinite(start) || start <= at)
+      && (!Number.isFinite(end) || at < end);
+  }
+
+  const isShown = (p) => timeActive(p) && (!S.shown || S.shown.has(p.id));
+  const isEdgeShown = (e) => timeActive(e)
+    && (!S.shown || (S.shown.has(e.an.id) && S.shown.has(e.bn.id)));
+
+  function initTimeline(timeline) {
+    S.time.timeline = timeline;
+    setTimelineBounds();
+    S.time.at = null;
+    syncTimelineRange();
+    paintTimeline();
+  }
+
+  function setTimelineBounds() {
+    const row = S.time.timeline[S.time.axis] || S.time.timeline;
+    const min = parseTime(row.min);
+    const max = parseTime(row.max);
+    S.time.min = Number.isFinite(min) ? min
+      : Number.isFinite(max) ? max : Date.now();
+    S.time.max = Number.isFinite(max) ? max : S.time.min;
+    if (S.time.at)
+      S.time.at = Math.max(S.time.min, Math.min(S.time.max, S.time.at));
+  }
+
+  function syncTimelineRange() {
+    const range = $("#world-time");
+    if (!range) return;
+    if (!S.time.at) { range.value = "1000"; return; }
+    const span = Math.max(1, S.time.max - S.time.min);
+    range.value = String(Math.round(
+      1000 * (S.time.at - S.time.min) / span));
+  }
+
+  function paintTimeline() {
+    $("#world-axis-valid")?.classList.toggle("on", S.time.axis === "valid");
+    $("#world-axis-recorded")?.classList.toggle(
+      "on", S.time.axis === "recorded");
+    const label = $("#world-time-label");
+    if (label) label.textContent = S.time.at
+      ? new Date(S.time.at).toLocaleDateString(undefined,
+          { year: "numeric", month: "short", day: "numeric",
+            timeZone: "UTC" })
+      : "Latest";
+    const minLabel = $("#world-time-min");
+    const maxLabel = $("#world-time-max");
+    if (minLabel) minLabel.textContent = shortDate(
+      new Date(S.time.min).toISOString(), "day");
+    if (maxLabel) maxLabel.textContent = shortDate(
+      new Date(S.time.max).toISOString(), "day");
+    const row = S.time.timeline[S.time.axis] || {};
+    const active = S.nodes.filter((p) => timeActive(p)).length;
+    const summary = $("#world-time-summary");
+    if (summary) summary.textContent =
+      active.toLocaleString() + " of " + S.nodes.length.toLocaleString()
+      + " items" + (row.undated_nodes
+        ? " · " + row.undated_nodes + " without this date"
+        : " · every item dated");
+  }
+
+  function timelineChanged() {
+    recomputeIso();
+    recomputeSel();
+    updateIsoBar();
+    if (!S.time.playing) renderSelCard();
+    renderSearchResults();
+    paintFilterCount();
+    paintTimeline();
+    if (R3) R3.refreshPhysics();
+    wake(0.18);
+    draw();
+  }
+
+  function paintTimelinePlayback() {
+    const play = $("#world-play");
+    if (!play) return;
+    play.textContent = S.time.playing ? "Pause" : "Play";
+    play.classList.toggle("on", S.time.playing);
+    play.setAttribute("aria-label", S.time.playing
+      ? "Pause timeline" : "Play timeline");
+  }
+
+  function stopTimelinePlayback(refresh = true) {
+    if (!S.time.playing && !S.time.raf) return;
+    S.time.playing = false;
+    cancelAnimationFrame(S.time.raf);
+    S.time.raf = 0;
+    paintTimelinePlayback();
+    if (refresh) renderSelCard();
+  }
+
+  function timelineFrame(now) {
+    if (!S.time.playing) return;
+    if (!S.time.lastFrame) S.time.lastFrame = now;
+    const elapsed = now - S.time.lastFrame;
+    // Rebuilding visibility over 25k nodes and 92k links at 60fps would
+    // turn playback into a benchmark. Eight updates per second remains
+    // visually continuous while leaving the graph interactive.
+    if (elapsed >= 125) {
+      const span = Math.max(1, S.time.max - S.time.min);
+      const start = S.time.at == null ? S.time.min : S.time.at;
+      S.time.at = Math.min(S.time.max,
+        start + span * (elapsed / 30000) * S.time.speed);
+      S.time.lastFrame = now;
+      syncTimelineRange();
+      timelineChanged();
+      if (S.time.at >= S.time.max) {
+        S.time.at = null;
+        syncTimelineRange();
+        stopTimelinePlayback(false);
+        timelineChanged();
+        return;
+      }
+    }
+    S.time.raf = requestAnimationFrame(timelineFrame);
+  }
+
+  function toggleTimelinePlayback() {
+    if (S.time.playing) { stopTimelinePlayback(); return; }
+    if (S.time.at == null || S.time.at >= S.time.max) {
+      S.time.at = S.time.min;
+      syncTimelineRange();
+    }
+    S.time.playing = true;
+    S.time.lastFrame = performance.now();
+    paintTimelinePlayback();
+    timelineChanged();
+    S.time.raf = requestAnimationFrame(timelineFrame);
+  }
 
   function recomputeIso() {
-    if (!S.iso.ids.size) { S.shown = null; return; }
+    if (!S.iso.ids.size && !S.time.at && !hasNodeFilters()) {
+      S.shown = null; return;
+    }
     const shown = new Set();
-    for (const p of S.nodes)
-      if (p.band && S.iso.ids.has(p.band)) shown.add(p.id);
+    for (const p of S.nodes) {
+      if (!timeActive(p)) continue;
+      if (!passesNodeFilters(p)) continue;
+      if (!S.iso.ids.size || (p.band && S.iso.ids.has(p.band)))
+        shown.add(p.id);
+    }
     // ring expansions: people directly connected to what is shown
     for (let r = 0; r < S.iso.ring; r++) {
       const add = [];
       for (const e of S.edges) {
+        if (!timeActive(e)) continue;
         const a = shown.has(e.an.id), b = shown.has(e.bn.id);
-        if (a !== b) add.push(a ? e.bn.id : e.an.id);
+        const other = a ? e.bn : e.an;
+        if (a !== b && passesNodeFilters(other)) add.push(other.id);
       }
       if (!add.length) break;
       add.forEach((id) => shown.add(id));
@@ -498,7 +795,11 @@
         if (!S.shown.has(p.id)) S.sel.delete(p);
     recomputeSel();
     syncLegend();
+    syncKindFilters();
+    renderSearchResults();
+    paintFilterCount();
     updateIsoBar();
+    if (R3) R3.refreshPhysics();
     if (fit && S.shown && S.shown.size) fitShown();
     draw();
     renderSelCard();
@@ -528,11 +829,12 @@
       S.bands.find((b) => b.id === id)?.label || id);
     const n = S.shown ? S.shown.size : 0;
     bar.appendChild(el("span", "atlas-iso-label",
-      `Showing ${labels.join(" + ")} — ${n} ${n === 1 ? "person" : "people"}`
+      `${labels.length ? `Showing ${labels.join(" + ")} — ` : ""}`
+      + `${n} ${n === 1 ? "item" : "items"}`
       + (S.iso.ring ? ` (+${S.iso.ring} ring${S.iso.ring > 1 ? "s" : ""}`
                       + " of connections)" : "")));
-    const grow = el("button", "fchip sm", "+ connected people");
-    grow.title = "Also show people directly connected to what is shown";
+    const grow = el("button", "fchip sm", "+ connected items");
+    grow.title = "Also show items directly connected to what is shown";
     grow.addEventListener("click", () => { S.iso.ring += 1; isoChanged(); });
     bar.appendChild(grow);
     if (S.iso.ring) {
@@ -543,7 +845,7 @@
       });
       bar.appendChild(shrink);
     }
-    const all = el("button", "fchip sm", "Everyone");
+    const all = el("button", "fchip sm", "All kinds");
     all.addEventListener("click", () => {
       S.iso = { ids: new Set(), ring: 0 };
       isoChanged(false);
@@ -565,8 +867,7 @@
   }
 
   function matchDim(node) {
-    return S.match
-      && !(node.name || "").toLowerCase().includes(S.match);
+    return S.match && !S.filterSearch && !matchesSearch(node);
   }
 
   function draw() {
@@ -598,42 +899,40 @@
                            : focus && (e.bn === focus || S.ego === focus);
         ctx.strokeStyle = hot ? "rgba(138,132,120,.4)"
                               : `rgba(138,132,120,${hasSel ? 0.02 : 0.05})`;
-        ctx.lineWidth = hot ? 1.4 : 1;
+        ctx.lineWidth = (hot ? 1.4 : 1) * S.display.linkThickness;
         ctx.beginPath();
-        ctx.moveTo(w2sX(S.ego.x), w2sY(S.ego.y));
-        ctx.lineTo(w2sX(e.bn.x), w2sY(e.bn.y));
+        traceFlatEdge(e, S.ego, e.bn);
         ctx.stroke();
       }
     }
 
     // contact-to-contact edges
     for (const e of S.edges) {
-      if (S.shown && !(S.shown.has(e.an.id) && S.shown.has(e.bn.id)))
-        continue;
+      if (!isEdgeShown(e)) continue;
       const hot = focus && (e.an === focus || e.bn === focus);
       const w = Math.min(1.5, e.weight) / 1.5;
       if (hasSel && S.selEdges.has(e)) {
         // the featured links — ties among the selected
         ctx.strokeStyle = "rgba(222,214,197,.95)";
-        ctx.lineWidth = 1.6 + 2.2 * w;
+        ctx.lineWidth = (1.6 + 2.2 * w) * S.display.linkThickness;
       } else if (hasSel && S.selPathEdges.has(e)) {
         // bridge chains connecting selections that share no direct tie
         ctx.strokeStyle = "rgba(163,156,141,.75)";
-        ctx.lineWidth = 1.3 + 1.2 * w;
+        ctx.lineWidth = (1.3 + 1.2 * w) * S.display.linkThickness;
       } else if (hasSel && (S.sel.has(e.an) || S.sel.has(e.bn))) {
         // spokes from a selected node out to its world — prominent for a
         // single selection, quieter once the story is between selections
         const spoke = S.sel.size === 1 ? 0.45 : 0.16;
         ctx.strokeStyle = `rgba(207,203,194,${spoke * (0.5 + 0.5 * w)})`;
-        ctx.lineWidth = 0.8 + 1.4 * w;
+        ctx.lineWidth = (0.8 + 1.4 * w) * S.display.linkThickness;
       } else if (hasSel) {
         // the hint of what's left
         ctx.strokeStyle = `rgba(143,141,133,${0.015 + 0.03 * w})`;
-        ctx.lineWidth = 0.6 + w;
+        ctx.lineWidth = (0.6 + w) * S.display.linkThickness;
       } else if (hot) {
         ctx.strokeStyle = e.shared_interest
           ? "rgba(138,132,120,.85)" : "rgba(207,203,194,.55)";
-        ctx.lineWidth = 1 + 2 * w;
+        ctx.lineWidth = (1 + 2 * w) * S.display.linkThickness;
       } else {
         let alpha = 0.05 + 0.3 * w * w;
         // isolating strips the noise — let the remaining ties read clearly
@@ -642,11 +941,10 @@
         ctx.strokeStyle = e.shared_interest
           ? `rgba(138,132,120,${alpha + 0.08})`
           : `rgba(143,141,133,${alpha})`;
-        ctx.lineWidth = 0.6 + 1.8 * w;
+        ctx.lineWidth = (0.6 + 1.8 * w) * S.display.linkThickness;
       }
       ctx.beginPath();
-      ctx.moveTo(w2sX(e.an.x), w2sY(e.an.y));
-      ctx.lineTo(w2sX(e.bn.x), w2sY(e.bn.y));
+      traceFlatEdge(e, e.an, e.bn);
       ctx.stroke();
     }
 
@@ -656,6 +954,25 @@
       drawNode(p, focus);
     }
     if (!S.hideEgo && !S.shown) drawNode(S.ego, focus);
+  }
+
+  function traceFlatEdge(edge, A, B) {
+    const ax = w2sX(A.x), ay = w2sY(A.y);
+    const bx = w2sX(B.x), by = w2sY(B.y);
+    ctx.moveTo(ax, ay);
+    if (!S.display.curvedLinks || S.display.linkCurve <= 0) {
+      ctx.lineTo(bx, by);
+      return;
+    }
+    const dx = bx - ax, dy = by - ay;
+    const distance = Math.hypot(dx, dy) || 1;
+    let hash = 0;
+    for (const ch of `${edge.an?.id || "ego"}|${edge.bn?.id || ""}`)
+      hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+    const sign = hash & 1 ? 1 : -1;
+    const offset = distance * S.display.linkCurve * 2 * sign;
+    ctx.quadraticCurveTo((ax + bx) / 2 - dy / distance * offset,
+                         (ay + by) / 2 + dx / distance * offset, bx, by);
   }
 
   function drawNode(p, focus) {
@@ -675,7 +992,7 @@
       alpha = 0.22;
     }
     ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * S.display.nodeOpacity;
 
     // cluster / ego ring
     const color = p.ego ? "#a39c8d"
@@ -707,6 +1024,16 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(initials(p.name), sx, sy + r * 0.05);
+    }
+    if (S.display.sphericalNodes) {
+      const shade = ctx.createRadialGradient(
+        sx - r * .38, sy - r * .42, r * .08, sx, sy, r * 1.05);
+      shade.addColorStop(0, "rgba(255,255,255,.34)");
+      shade.addColorStop(.34, "rgba(255,255,255,.06)");
+      shade.addColorStop(.72, "rgba(0,0,0,.06)");
+      shade.addColorStop(1, "rgba(0,0,0,.58)");
+      ctx.fillStyle = shade;
+      ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
     }
     ctx.restore();
 
@@ -752,6 +1079,13 @@
     legendChips.clear();
     const editable = !!activeLens()?.editable;
     S.bands.forEach((c) => {
+      const item = el("span", "atlas-legend-item");
+      const picker = document.createElement("input");
+      picker.type = "color";
+      picker.className = "atlas-color";
+      picker.value = S.colors.get(c.id);
+      picker.title = `Change the color for ${c.label}`;
+      picker.setAttribute("aria-label", `Color for ${c.label}`);
       const chip = el("button", "atlas-chip");
       const dot = el("span", "atlas-dot");
       dot.style.background = S.colors.get(c.id);
@@ -760,7 +1094,7 @@
       chip.title = editable
         ? "Show just this group — right-click to rename, edit members, "
           + "or remove it"
-        : "Show just these people — right-click to select them all";
+        : "Show just this kind — right-click to select all visible items";
       chip.addEventListener("click", () => {
         S.match = "";
         $("#atlas-search").value = "";
@@ -774,14 +1108,98 @@
         ev.stopPropagation();
         groupMenu(ev.clientX, ev.clientY, c.id);
       });
+      picker.addEventListener("input", () => {
+        S.colorOverrides[`${S.lens}|${c.id}`] = picker.value;
+        S.colors.set(c.id, picker.value);
+        dot.style.background = picker.value;
+        saveControls();
+        draw();
+      });
       legendChips.set(c.id, chip);
-      host.appendChild(chip);
+      item.appendChild(picker);
+      item.appendChild(chip);
+      host.appendChild(item);
     });
   }
 
   function syncLegend() {
     for (const [cid, chip] of legendChips)
       chip.classList.toggle("on", S.iso.ids.has(cid));
+  }
+
+  function renderKindFilters() {
+    const host = $("#atlas-filter-kinds");
+    if (!host) return;
+    host.innerHTML = "";
+    for (const row of S.graph?.kinds || []) {
+      const label = el("label", "atlas-kind-filter");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = S.enabledKinds.has(row.id);
+      input.dataset.kind = row.id;
+      input.addEventListener("change", () => {
+        if (input.checked) S.enabledKinds.add(row.id);
+        else S.enabledKinds.delete(row.id);
+        isoChanged(false);
+      });
+      label.append(input, document.createTextNode(`${row.label} ${row.count}`));
+      host.appendChild(label);
+    }
+  }
+
+  function syncKindFilters() {
+    document.querySelectorAll("#atlas-filter-kinds input[data-kind]")
+      .forEach((input) => {
+        input.checked = S.enabledKinds.has(input.dataset.kind);
+      });
+  }
+
+  function filteredNodes(ignoreSearch = false) {
+    return S.nodes.filter((p) => timeActive(p)
+      && S.enabledKinds.has(p.kind)
+      && (!S.hideOrphans || Number(p.graph_degree || 0) > 0)
+      && (!S.starredOnly || S.starred.has(p.id))
+      && (ignoreSearch || matchesSearch(p)));
+  }
+
+  function renderSearchResults() {
+    const host = $("#atlas-search-results");
+    if (!host) return;
+    host.innerHTML = "";
+    host.classList.toggle("live", !!S.match);
+    if (!S.match) return;
+    const matches = filteredNodes().sort((a, b) =>
+      Number(b.graph_degree || 0) - Number(a.graph_degree || 0)
+      || String(a.name).localeCompare(String(b.name)));
+    for (const p of matches.slice(0, 12)) {
+      const button = el("button", "atlas-search-result");
+      button.type = "button";
+      button.appendChild(el("b", null, p.name));
+      button.appendChild(el("span", null, kindLabel(p.kind)));
+      if (p.source_name)
+        button.appendChild(el("span", null, p.source_name));
+      button.addEventListener("click", () => {
+        if (S.filterSearch && S.shown && !S.shown.has(p.id)) return;
+        navigateArticle(p);
+      });
+      host.appendChild(button);
+    }
+    if (!matches.length)
+      host.appendChild(el("div", "hint atlas-member", "No matching items"));
+    else if (matches.length > 12)
+      host.appendChild(el("div", "hint atlas-member",
+        `${matches.length - 12} more matches`));
+  }
+
+  function paintFilterCount() {
+    const host = $("#atlas-filter-count");
+    if (!host || !S.graph) return;
+    const shown = S.shown ? S.shown.size : S.nodes.length;
+    const matches = S.match ? filteredNodes().length : shown;
+    host.textContent = `${shown.toLocaleString()} of `
+      + `${S.nodes.length.toLocaleString()} items visible`
+      + (S.match ? ` · ${matches.toLocaleString()} search matches` : "")
+      + (S.starred.size ? ` · ${S.starred.size.toLocaleString()} starred` : "");
   }
 
   // ---------- group curation (rename / members / remove / create) ----------
@@ -794,14 +1212,14 @@
     const items = [
       { head: c.label + (c.custom ? " · your group"
                                   : ` · ${lens?.label || "band"}`) },
-      { label: "Show only these people", run: () => {
+      { label: "Show only these items", run: () => {
           S.iso = { ids: new Set([c.id]), ring: 0 };
           isoChanged();
         } },
       // selecting a whole band is how you compare two of them: the
       // selection card already draws the ties BETWEEN what is selected,
       // so two company chips answer "how do these firms connect?"
-      { label: "Select everyone here", run: () => {
+      { label: "Select all visible items here", run: () => {
           members.forEach((p) => S.sel.add(p));
           selectionChanged();
         } },
@@ -994,8 +1412,7 @@
     if (!n) return;
     const counts = new Map();
     for (const e of S.edges) {
-      if (S.shown && !(S.shown.has(e.an.id) && S.shown.has(e.bn.id)))
-        continue;
+      if (!isEdgeShown(e)) continue;
       const a = S.sel.has(e.an), b = S.sel.has(e.bn);
       if (a && b) {
         S.selEdges.add(e);
@@ -1042,7 +1459,7 @@
       const next = [];
       for (const node of frontier) {
         for (const { n, e } of S.adj.get(node.id) || []) {
-          if (!isShown(n)) continue;
+          if (!isShown(n) || !isEdgeShown(e)) continue;
           if (prev.has(n.id)) continue;
           prev.set(n.id, { node, via: e });
           if (n === b) {
@@ -1068,11 +1485,38 @@
   function toggleSelect(p) {
     if (!p || p.ego) return;
     if (S.sel.has(p)) S.sel.delete(p); else S.sel.add(p);
+    if (S.sel.size === 1 && S.sel.has(p)) rememberArticle(p);
     selectionChanged();
+  }
+
+  function rememberArticle(p) {
+    if (!p || S.articleTrail[S.articleIndex] === p.id) return;
+    S.articleTrail = S.articleTrail.slice(0, S.articleIndex + 1);
+    S.articleTrail.push(p.id);
+    if (S.articleTrail.length > 80) S.articleTrail.shift();
+    S.articleIndex = S.articleTrail.length - 1;
+  }
+
+  function navigateArticle(p, remember = true) {
+    if (!p || p.ego) return;
+    if (remember) rememberArticle(p);
+    centerOn(p);
+    S.sel = new Set([p]);
+    selectionChanged();
+  }
+
+  function moveArticleTrail(delta) {
+    const next = S.articleIndex + delta;
+    if (next < 0 || next >= S.articleTrail.length) return;
+    const p = S.byId.get(S.articleTrail[next]);
+    if (!p) return;
+    S.articleIndex = next;
+    navigateArticle(p, false);
   }
 
   function setSelection(list) {
     S.sel = new Set((list || []).filter((p) => p && !p.ego));
+    if (S.sel.size === 1) rememberArticle([...S.sel][0]);
     selectionChanged();
   }
 
@@ -1085,6 +1529,7 @@
   function selectionChanged() {
     recomputeSel();
     syncLegend();
+    if (R3) R3.refreshPhysics(null, true);
     draw();
     renderSelCard();
   }
@@ -1111,10 +1556,9 @@
     card.innerHTML = "";
     card.appendChild(el("div", "hint", "loading…"));
     try {
-      const d = await api("/api/atlas/node/" + p.id
-                          + (vaultOn() ? "?vault=1" : ""));
+      const d = await api("/api/world/node/" + encodeURIComponent(p.id));
       if (editorId || !(S.sel.size === 1 && S.sel.has(p))) return;
-      renderCard(d);
+      await renderCard(d, ++S.detailToken);
     } catch {
       card.innerHTML = "";
       card.appendChild(el("div", "hint", "detail unavailable"));
@@ -1387,39 +1831,97 @@
     setTimeout(tick, 3000);
   }
 
-  function renderCard(d) {
+  async function renderCard(d, token) {
     card.innerHTML = "";
+    card.scrollTop = 0;
+    const articleNav = el("div", "atlas-article-nav");
+    const back = el("button", "atlas-nav-btn", "Back");
+    back.disabled = S.articleIndex <= 0;
+    back.addEventListener("click", () => moveArticleTrail(-1));
+    const forward = el("button", "atlas-nav-btn", "Forward");
+    forward.disabled = S.articleIndex >= S.articleTrail.length - 1;
+    forward.addEventListener("click", () => moveArticleTrail(1));
+    articleNav.append(back, forward);
+    if (d.edges.length) {
+      const nextEdge = d.edges.find((edge) => {
+        const other = S.byId.get(edge.pid);
+        return other && isShown(other) && timeActive(edge);
+      });
+      const nextNode = nextEdge && S.byId.get(nextEdge.pid);
+      if (nextNode) {
+        const next = el("button", "atlas-nav-btn next", "Next connection");
+        next.title = "Follow the strongest visible connection";
+        next.addEventListener("click", () => navigateArticle(nextNode));
+        articleNav.appendChild(next);
+      }
+    }
+    card.appendChild(articleNav);
+
     const head = el("div", "atlas-card-head");
-    const av = avatarNode(d.node.id, d.node.name, !d.node.vault,
-                          d.node.face != null);
+    const isPerson = d.node.kind === "person";
+    const av = avatarNode(d.node.id, d.node.name, isPerson,
+                          isPerson && d.node.face != null);
     if (d.node.face) av.querySelector("img")
       ?.setAttribute("src", "/api/atlas/face/" + d.node.id);
     head.appendChild(av);
     const mid = el("div", "atlas-card-name");
     const nm = el("div", "click", d.node.name);
-    nm.addEventListener("click", () => d.node.vault
-      ? openNote(d.node.ref, d.node.name) : openPerson(d.node.id));
+    nm.addEventListener("click", () => openWorldNode(d.node));
     mid.appendChild(nm);
-    const sub = d.node.vault
-      ? (d.node.qualifier || d.node.company || "in your notes")
-      : [d.node.title, d.node.company].filter(Boolean).join(" · ")
-        || d.node.relationship_class || "";
+    const sub = [kindLabel(d.node.kind), d.node.title, d.node.company,
+                 d.node.qualifier, d.node.source_name]
+      .filter(Boolean).join(" · ");
     if (sub) mid.appendChild(el("div", "hint", sub));
     head.appendChild(mid);
+    const star = el("button", "atlas-star",
+      S.starred.has(d.node.id) ? "Starred" : "Star");
+    star.type = "button";
+    star.title = S.starred.has(d.node.id) ? "Remove from starred" : "Star this node";
+    star.setAttribute("aria-label", star.title);
+    star.addEventListener("click", () => {
+      if (S.starred.has(d.node.id)) S.starred.delete(d.node.id);
+      else S.starred.add(d.node.id);
+      saveControls();
+      star.textContent = S.starred.has(d.node.id) ? "Starred" : "Star";
+      star.title = S.starred.has(d.node.id)
+        ? "Remove from starred" : "Star this node";
+      star.setAttribute("aria-label", star.title);
+      paintFilterCount();
+      if (S.starredOnly) isoChanged(false); else draw();
+    });
+    head.appendChild(star);
     const x = el("button", "idea-del", "×");
     x.addEventListener("click", clearSel);
     head.appendChild(x);
     card.appendChild(head);
 
     const chips = el("div", "atlas-card-chips");
-    if (d.node.vault) {
-      const wk = el("span", "atlas-deg click", "in your notes — open page");
-      wk.addEventListener("click", () => openNote(d.node.ref, d.node.name));
+    const noteRef = d.node.ref || d.node.note_ref;
+    if (noteRef) {
+      const wk = el("span", "atlas-deg click", "open source note");
+      wk.addEventListener("click", () => openNote(noteRef, d.node.name));
       chips.appendChild(wk);
     }
+    chips.appendChild(el("span", "atlas-deg", kindLabel(d.node.kind)));
     if (d.node.degree)
       chips.appendChild(el("span", "atlas-deg",
         ["1st", "2nd", "3rd"][d.node.degree - 1] || d.node.degree + "th"));
+    if (d.node.valid_from || d.node.valid_to) {
+      const timeChip = el("span", "atlas-deg",
+        "content " + timeRange(d.node.valid_from, d.node.valid_to,
+          d.node.time_precision).replace(/^from /, ""));
+      timeChip.title = "Date source: "
+        + timeSourceLabel(d.node.time_source?.valid_from);
+      chips.appendChild(timeChip);
+    }
+    if (d.node.recorded_at) {
+      const learnedChip = el("span", "atlas-deg",
+        "learned " + shortDate(d.node.recorded_at,
+          d.node.time_precision?.recorded_at));
+      learnedChip.title = "Date source: "
+        + timeSourceLabel(d.node.time_source?.recorded_at);
+      chips.appendChild(learnedChip);
+    }
     const clab = S.bands.find((b) => b.id === S.byId.get(d.node.id)?.band);
     if (clab) {
       const cc = el("span", "atlas-deg");
@@ -1428,6 +1930,37 @@
       chips.appendChild(cc);
     }
     card.appendChild(chips);
+
+    if (d.person) renderPersonArticle(d.person);
+
+    let markdownHost = null;
+    if (d.content != null) {
+      card.appendChild(el("div", "atlas-card-sub", "Article"));
+      markdownHost = el("article", "atlas-article note-body");
+      markdownHost.innerHTML = mdToHtml(d.content, d.content_path);
+      if (!markdownHost.innerHTML.trim())
+        markdownHost.appendChild(el("div", "hint", "This source note is empty."));
+      markdownHost.querySelectorAll(".note-link").forEach((link) => {
+        link.addEventListener("click", () =>
+          followArticleLink(link.dataset.ref, d.content_path));
+      });
+      const contentImages = [...markdownHost.querySelectorAll("img")].map(
+        (img, index) => ({ src: img.getAttribute("src"),
+                          href: img.getAttribute("src"),
+                          label: img.alt || `Image ${index + 1}` }));
+      if (contentImages.length)
+        card.appendChild(renderImageRail(contentImages, "Attached images"));
+      const seenLinks = new Set();
+      const contentLinks = [...markdownHost.querySelectorAll("a[href]")]
+        .map((link) => ({ url: link.href,
+                         title: link.textContent.trim() || link.href }))
+        .filter((link) => /^https?:/i.test(link.url)
+          && !seenLinks.has(link.url) && seenLinks.add(link.url));
+      if (contentLinks.length)
+        card.appendChild(renderExternalLinks(contentLinks));
+      card.appendChild(markdownHost);
+      markDeadLinks(markdownHost);
+    }
 
     if (d.ego) {
       const you = el("div", "atlas-edge you");
@@ -1439,9 +1972,21 @@
     }
 
     const list = el("div", "atlas-card-edges");
-    d.edges.slice(0, 24).forEach((e) => {
+    const visibleEdges = d.edges.filter((e) => {
+      const other = S.byId.get(e.pid);
+      return other && isShown(other) && timeActive(e);
+    });
+    if (visibleEdges.length)
+      list.appendChild(el("div", "atlas-card-sub",
+        `Continue exploring · ${visibleEdges.length} connections`));
+    let edgeCursor = 0;
+    const more = el("button", "atlas-more", "");
+    const appendEdges = () => {
+      const end = Math.min(visibleEdges.length, edgeCursor + 30);
+      visibleEdges.slice(edgeCursor, end).forEach((e) => {
       const row = el("div", "atlas-edge click");
-      const nameRow = el("div", "atlas-edge-name", e.name);
+      const nameRow = el("div", "atlas-edge-name",
+        `${e.name} · ${e.label || e.relation || "connected"}`);
       const bar = el("span", "atlas-w");
       bar.style.width = Math.min(100, e.weight * 55) + "%";
       const barWrap = el("span", "atlas-wwrap");
@@ -1450,25 +1995,238 @@
       row.appendChild(nameRow);
       row.appendChild(el("div", "atlas-edge-why",
         e.narrative || e.signals.map((s) => s.detail)
-          .filter(Boolean).join(" · ")));
-      row.title = "Add to selection — see how they connect";
+          .filter(Boolean).join(" · ")
+          || receiptLabel(e.receipts)));
+      const receipt = (e.receipts || [])[0];
+      if (receipt?.ref) {
+        const source = el("button", "atlas-edge-receipt",
+          `Receipt · ${receipt.ref}${receipt.line ? `:${receipt.line}` : ""}`);
+        source.type = "button";
+        source.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openNote(receipt.ref, receipt.label || e.name);
+        });
+        row.appendChild(source);
+      }
+      row.title = "Open this connected node";
       row.addEventListener("click", () => {
         const other = S.byId.get(e.pid);
-        if (other) { centerOn(other); toggleSelect(other); }
+        if (other) navigateArticle(other);
       });
       list.appendChild(row);
-    });
-    if (!d.edges.length)
-      list.appendChild(el("div", "hint", d.node.vault
-        ? "No ties above the threshold — their page shares no links, "
-          + "sources or orgs with the rest of the web yet."
-        : "No contact-to-contact ties above the threshold — connected "
-          + "through you only."));
-    else
+      });
+      edgeCursor = end;
+      more.remove();
+      if (edgeCursor < visibleEdges.length) {
+        more.textContent = `Show 30 more · ${visibleEdges.length - edgeCursor} remaining`;
+        list.appendChild(more);
+      }
+    };
+    more.addEventListener("click", appendEdges);
+    appendEdges();
+    if (!visibleEdges.length)
       list.appendChild(el("div", "hint",
-        "Click a tie — or more people on the map — to add them to the "
-        + "selection and see how everyone connects."));
+        "No visible relations at this point on the selected timeline."));
     card.appendChild(list);
+
+    if (isPerson && S.sel.size === 1 && S.sel.has(S.byId.get(d.node.id))) {
+      try {
+        const media = await api("/api/person/" + encodeURIComponent(d.node.id)
+          + "/media");
+        if (token !== S.detailToken || !S.sel.has(S.byId.get(d.node.id))) return;
+        const photos = (media.photos || []).map((item) => ({
+          src: "/api/media/thumb/" + item.id,
+          href: "/api/media/file/" + item.id,
+          label: item.context?.text || item.name || "Shared image",
+        }));
+        if (photos.length)
+          card.insertBefore(renderImageRail(photos,
+            `Shared images · ${photos.length}`), list);
+        if ((media.links || []).length)
+          card.insertBefore(renderExternalLinks(media.links), list);
+      } catch { /* media is enrichment; the article remains useful */ }
+    }
+  }
+
+  function renderPersonArticle(person) {
+    const profile = person.profile || {};
+    const master = person.master || {};
+    const section = el("section", "atlas-person-article");
+    const summary = profile.relationship_summary || profile.summary
+      || master.relationship;
+    if (summary) section.appendChild(el("p", "atlas-lede", String(summary)));
+    if (profile.how_we_met)
+      section.appendChild(articleBlock("How we met", profile.how_we_met));
+    const lists = [
+      ["Personal context", profile.personal_facts],
+      ["Open loops", profile.open_loops],
+      ["Conversation hooks", profile.hooks],
+    ];
+    for (const [label, rows] of lists) {
+      if (!Array.isArray(rows) || !rows.length) continue;
+      const block = el("div", "atlas-profile-block");
+      block.appendChild(el("div", "atlas-card-sub", label));
+      const ul = document.createElement("ul");
+      rows.forEach((row) => {
+        const value = typeof row === "string" ? row
+          : row.what || row.fact || row.text || row.hook || row.note;
+        if (value) ul.appendChild(el("li", null, String(value)));
+      });
+      if (ul.children.length) block.appendChild(ul);
+      section.appendChild(block);
+    }
+    if (!section.children.length)
+      section.appendChild(el("div", "hint",
+        "No written CRM narrative is available for this person yet."));
+    card.appendChild(section);
+  }
+
+  function articleBlock(label, value) {
+    const block = el("div", "atlas-profile-block");
+    block.appendChild(el("div", "atlas-card-sub", label));
+    block.appendChild(el("p", null, String(value)));
+    return block;
+  }
+
+  function renderImageRail(images, title) {
+    const section = el("section", "atlas-media-section");
+    const head = el("div", "atlas-media-head");
+    head.appendChild(el("div", "atlas-card-sub", title));
+    const controls = el("div", "atlas-media-controls");
+    const prev = el("button", "atlas-nav-btn", "Previous");
+    const next = el("button", "atlas-nav-btn", "Next");
+    controls.append(prev, next); head.appendChild(controls);
+    section.appendChild(head);
+    const rail = el("div", "atlas-image-rail");
+    section.appendChild(rail);
+    let cursor = 0;
+    const batch = el("button", "atlas-more", "");
+    const add = () => {
+      const end = Math.min(images.length, cursor + 24);
+      images.slice(cursor, end).forEach((item) => {
+        const link = el("a", "atlas-image-card");
+        link.href = item.href || item.src;
+        link.target = "_blank";
+        link.rel = "noopener";
+        const img = document.createElement("img");
+        img.loading = "lazy"; img.src = item.src; img.alt = item.label || "";
+        link.appendChild(img);
+        if (item.label) link.appendChild(el("span", null, item.label));
+        rail.appendChild(link);
+      });
+      cursor = end;
+      batch.remove();
+      if (cursor < images.length) {
+        batch.textContent = `Load 24 more · ${images.length - cursor} remaining`;
+        section.appendChild(batch);
+      }
+    };
+    batch.addEventListener("click", add);
+    prev.addEventListener("click", () => rail.scrollBy(
+      { left: -rail.clientWidth * .82, behavior: "smooth" }));
+    next.addEventListener("click", () => rail.scrollBy(
+      { left: rail.clientWidth * .82, behavior: "smooth" }));
+    add();
+    return section;
+  }
+
+  function renderExternalLinks(links) {
+    const section = el("section", "atlas-related-links");
+    section.appendChild(el("div", "atlas-card-sub",
+      `Relevant links · ${links.length}`));
+    let cursor = 0;
+    const more = el("button", "atlas-more", "");
+    const add = () => {
+      const end = Math.min(links.length, cursor + 20);
+      links.slice(cursor, end).forEach((item) => {
+        const a = el("a", "atlas-related-link");
+        a.href = item.url; a.target = "_blank"; a.rel = "noopener";
+        a.appendChild(el("b", null, item.title || item.domain || item.url));
+        if (item.context?.text)
+          a.appendChild(el("span", null, item.context.text));
+        section.appendChild(a);
+      });
+      cursor = end; more.remove();
+      if (cursor < links.length) {
+        more.textContent = `Show 20 more · ${links.length - cursor} remaining`;
+        section.appendChild(more);
+      }
+    };
+    more.addEventListener("click", add); add();
+    return section;
+  }
+
+  async function followArticleLink(ref, fromPath) {
+    const clean = String(ref || "").split("#")[0].split("^")[0].trim();
+    const stem = clean.split("/").pop().replace(/\.md$/i, "").toLowerCase();
+    let hit = S.nodes.find((node) => {
+      const path = String(node.ref || node.note_ref || "");
+      const nodeStem = path.split("/").pop().replace(/\.md$/i, "").toLowerCase();
+      return nodeStem === stem || String(node.name || "").toLowerCase() === stem;
+    });
+    if (hit) { navigateArticle(hit); return; }
+    try {
+      const resolved = await api("/api/vault/resolve?ref="
+        + encodeURIComponent(clean) + (fromPath ? "&from_path="
+        + encodeURIComponent(fromPath) : ""));
+      const path = resolved.path || resolved.ref;
+      hit = S.nodes.find((node) =>
+        (node.ref || node.note_ref) === path);
+      if (hit) navigateArticle(hit);
+      else if (path) openNote(path, resolved.title || clean);
+    } catch { toast("No page is available for " + clean); }
+  }
+
+  function kindLabel(kind) {
+    return String(kind || "item").replace(/_/g, " ")
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  }
+
+  function shortDate(value, precision) {
+    const time = Date.parse(value);
+    if (!Number.isFinite(time)) return "undated";
+    const date = new Date(time);
+    if (precision === "year")
+      return date.toLocaleDateString(undefined,
+        { year: "numeric", timeZone: "UTC" });
+    if (precision === "month")
+      return date.toLocaleDateString(undefined,
+        { year: "numeric", month: "short", timeZone: "UTC" });
+    return date.toLocaleDateString(undefined,
+      { year: "numeric", month: "short", day: "numeric",
+        timeZone: "UTC" });
+  }
+
+  function timeSourceLabel(source) {
+    const labels = {
+      file_birthtime: "filesystem creation time (fallback)",
+      file_ctime: "filesystem change time (fallback)",
+      filename_date: "date in filename",
+      tagged_notes: "supporting notes",
+    };
+    return labels[source] || String(source || "unknown");
+  }
+
+  function timeRange(from, to, precision = {}) {
+    return from && to
+      ? `${shortDate(from, precision.valid_from)} – ${shortDate(to,
+          precision.valid_to)}`
+      : from ? `from ${shortDate(from, precision.valid_from)}`
+        : `until ${shortDate(to, precision.valid_to)}`;
+  }
+
+  function receiptLabel(receipts) {
+    const row = (receipts || [])[0];
+    return row ? `receipt: ${row.label || row.ref || row.kind}` : "";
+  }
+
+  function openWorldNode(node) {
+    if (node.open_kind === "person" || (node.kind === "person" && !node.ref))
+      openPerson(node.id);
+    else if (node.ref || node.note_ref)
+      openNote(node.ref || node.note_ref, node.name);
+    else
+      toast("This derived item has no standalone source page yet");
   }
 
   function centerOn(p) {
@@ -1499,13 +2257,20 @@
       tip.innerHTML = "";
       tip.appendChild(el("div", "atlas-tip-name", p.name));
       const clab = S.bands.find((b) => b.id === p.band);
-      const bits = [p.vault && "in your notes",
-                    p.degree && ["1st", "2nd", "3rd"][p.degree - 1],
-                    clab?.label, p.company].filter(Boolean);
+      const bits = [kindLabel(p.kind), clab?.label, p.company,
+                    p.source_name].filter(Boolean);
       if (bits.length)
         tip.appendChild(el("div", "atlas-tip-sub", bits.join(" \u00b7 ")));
-      if (p.vault && p.qualifier)
+      if (p.qualifier)
         tip.appendChild(el("div", "atlas-tip-sub", p.qualifier));
+      if (p.valid_from || p.valid_to)
+        tip.appendChild(el("div", "atlas-tip-sub",
+          "Content · " + timeRange(
+            p.valid_from, p.valid_to, p.time_precision).replace(/^from /, "")));
+      if (p.recorded_at)
+        tip.appendChild(el("div", "atlas-tip-sub",
+          "Learned · " + shortDate(
+            p.recorded_at, p.time_precision?.recorded_at)));
     } else {
       tip.style.display = "none";
     }
@@ -1513,12 +2278,14 @@
 
   function hitSelect(p) {
     if (editorId) editorToggle(p);
-    else toggleSelect(p);
+    else {
+      centerOn(p);
+      toggleSelect(p);
+    }
   }
 
   function hitOpen(p) {
-    if (p.vault) openNote(p.ref, p.name);
-    else openPerson(p.id);
+    openWorldNode(p);
   }
 
   function hitEmpty() {
@@ -1527,22 +2294,30 @@
   }
 
   function hitContext(p, e) {
-    const ctxObj = { component: "Visual Network",
-                     person: p.vault ? null : { pid: p.id, name: p.name },
-                     snippet: p.vault
-                       ? `${p.name} \u2014 vault wiki page ${p.ref}` : "" };
+    const isPerson = p.kind === "person" && p.open_kind === "person";
+    const ctxObj = { component: "World",
+                     person: isPerson ? { pid: p.id, name: p.name } : null,
+                     snippet: `${p.name} — ${kindLabel(p.kind)}`
+                       + (p.ref ? ` · ${p.ref}` : "") };
     showContextMenu(e.clientX, e.clientY, [
-      { head: "Network \u00b7 " + p.name },
-      p.vault
-        ? { label: "Open wiki page", run: () => openNote(p.ref, p.name) }
-        : { label: "Open profile", run: () => openPerson(p.id) },
+      { head: "World \u00b7 " + p.name },
+      { label: isPerson ? "Open profile" : "Open source",
+        run: () => openWorldNode(p) },
       { label: "Feature connections", run: () => setSelection([p]) },
       { label: S.sel.has(p) ? "Remove from selection"
                             : "Add to selection",
         run: () => toggleSelect(p) },
+      { label: S.starred.has(p.id) ? "Remove from starred" : "Star node",
+        run: () => {
+          if (S.starred.has(p.id)) S.starred.delete(p.id);
+          else S.starred.add(p.id);
+          saveControls();
+          paintFilterCount();
+          if (S.starredOnly) isoChanged(false); else draw();
+        } },
       // group assignments key on CRM pids; a vault id has no row to hold
       // one, so the chooser is CRM-only
-      !p.vault && { label: "Set group\u2026",
+      isPerson && S.graph.clusters?.length && { label: "Set group\u2026",
         run: () => groupChooser(e.clientX, e.clientY, p) },
       { sep: true },
       { label: "New idea about this\u2026",
@@ -1657,20 +2432,217 @@
 
   // ---------- toolbar ----------
 
+  function setOutput(id, value) {
+    const output = $(id);
+    if (output) output.textContent = Math.round(value * 100) + "%";
+  }
+
+  function syncControlInputs() {
+    const values = {
+      "#atlas-filter-mode": S.filterSearch,
+      "#atlas-hide-orphans": S.hideOrphans,
+      "#atlas-starred-only": S.starredOnly,
+      "#atlas-physics": S.physics.enabled,
+      "#atlas-auto-rotate": S.display.autoRotate,
+      "#atlas-curved-links": S.display.curvedLinks,
+      "#atlas-spherical-nodes": S.display.sphericalNodes,
+    };
+    for (const [id, value] of Object.entries(values))
+      if ($(id)) $(id).checked = value;
+    const ranges = {
+      "#atlas-geometry": S.display.scale * 100,
+      "#atlas-node-size": S.display.nodeSize * 100,
+      "#atlas-node-opacity": S.display.nodeOpacity * 100,
+      "#atlas-link-thickness": S.display.linkThickness * 100,
+      "#atlas-link-curve": S.display.linkCurve * 100,
+      "#atlas-center": S.physics.center * 100,
+      "#atlas-repel": S.physics.repel * 100,
+      "#atlas-link-force": S.physics.link * 100,
+      "#atlas-link-distance": S.physics.distance * 100,
+      "#atlas-semantic": S.physics.semantic * 100,
+    };
+    for (const [id, value] of Object.entries(ranges))
+      if ($(id)) $(id).value = String(Math.round(value));
+    setOutput("#atlas-geometry-out", S.display.scale);
+    setOutput("#atlas-node-size-out", S.display.nodeSize);
+    setOutput("#atlas-node-opacity-out", S.display.nodeOpacity);
+    setOutput("#atlas-link-thickness-out", S.display.linkThickness);
+    setOutput("#atlas-link-curve-out", S.display.linkCurve);
+    setOutput("#atlas-center-out", S.physics.center);
+    setOutput("#atlas-repel-out", S.physics.repel);
+    setOutput("#atlas-link-force-out", S.physics.link);
+    setOutput("#atlas-link-distance-out", S.physics.distance);
+    setOutput("#atlas-semantic-out", S.physics.semantic);
+    $("#atlas-link-curve-row")?.classList.toggle(
+      "disabled", !S.display.curvedLinks);
+    if ($("#atlas-link-curve"))
+      $("#atlas-link-curve").disabled = !S.display.curvedLinks;
+    if ($("#world-speed")) $("#world-speed").value = String(S.time.speed);
+    paintFilterCount();
+  }
+
+  function applyGeometry(resetPositions = false) {
+    for (const p of S.nodes) {
+      p.homeX = p.baseX * S.display.scale;
+      p.homeY = p.baseY * S.display.scale;
+      p.homeZ = p.baseZ * S.display.scale;
+      p.r = p.baseR * S.display.nodeSize;
+      if (resetPositions) {
+        p.x = p.homeX; p.y = p.homeY; p.z = p.homeZ;
+        p.vx = p.vy = p.vz = 0;
+      }
+    }
+    saveControls();
+    if (R3) R3.geometryChanged(resetPositions);
+    else draw();
+  }
+
+  function paintPhysicsStatus(info) {
+    const target = $("#atlas-physics-status");
+    if (!target) return;
+    if (!S.physics.enabled) {
+      target.textContent = "Physics off. Dragging still moves individual nodes.";
+      return;
+    }
+    if (!info || !info.count) {
+      target.textContent = S.nodes.length > 4000
+        ? "Full-vault mode: select or drag a node to engage local physics."
+        : "Global physics ready.";
+      return;
+    }
+    target.textContent = (info.mode === "global" ? "Global" : "Local")
+      + " physics · " + info.count.toLocaleString() + " nodes"
+      + (info.mode === "local" ? " · two connection rings" : "")
+      + (info.limited ? " · 1,400-node performance ceiling" : "");
+  }
+
+  function physicsChanged() {
+    saveControls();
+    syncControlInputs();
+    // The full graph deliberately does not simulate every node at once.
+    // A force slider still needs visible feedback before the owner has made
+    // a selection, so heat the neighborhood of the most connected visible
+    // node instead of handing the renderer an empty seed.
+    const seed = [...S.sel][0] || S.hover || S.nodes.reduce((best, node) =>
+      isShown(node) && (!best || (node.graph_degree || node.degree || 0)
+        > (best.graph_degree || best.degree || 0)) ? node : best, null);
+    if (R3) R3.refreshPhysics(seed, true);
+    else draw();
+  }
+
+  function bindPercentRange(id, target, key, low, high, geometry) {
+    $(id)?.addEventListener("input", (e) => {
+      target[key] = clamp(Number(e.target.value) / 100,
+                          low, high, target[key]);
+      setOutput(id + "-out", target[key]);
+      if (geometry) applyGeometry(geometry === "positions");
+      else physicsChanged();
+    });
+  }
+
   $("#atlas-search")?.addEventListener("input", (e) => {
     S.match = e.target.value.trim().toLowerCase();
-    draw();
+    isoChanged(false);
+  });
+  $("#atlas-search-clear")?.addEventListener("click", () => {
+    S.match = "";
+    $("#atlas-search").value = "";
+    isoChanged(false);
+  });
+  $("#atlas-filter-mode")?.addEventListener("change", (e) => {
+    S.filterSearch = e.target.checked;
+    saveControls();
+    isoChanged(false);
+  });
+  $("#atlas-hide-orphans")?.addEventListener("change", (e) => {
+    S.hideOrphans = e.target.checked;
+    saveControls();
+    isoChanged(false);
+  });
+  $("#atlas-starred-only")?.addEventListener("change", (e) => {
+    S.starredOnly = e.target.checked;
+    saveControls();
+    isoChanged(false);
   });
   $("#atlas-search")?.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !S.match) return;
-    const hit = S.nodes.find((p) => isShown(p)
-      && (p.name || "").toLowerCase().includes(S.match));
-    // Enter ADDS to the selection — search out far-apart people one by
+    const hit = filteredNodes().find((p) => isShown(p));
+    // Enter ADDS to the selection — search out far-apart items one by
     // one and watch how they connect
     if (hit) {
       centerOn(hit);
       if (!S.sel.has(hit)) toggleSelect(hit);
     }
+  });
+
+  bindPercentRange("#atlas-geometry", S.display, "scale", .35, 2.5,
+                   "positions");
+  bindPercentRange("#atlas-node-size", S.display, "nodeSize", .6, 1.8,
+                   true);
+  bindPercentRange("#atlas-node-opacity", S.display, "nodeOpacity", .1, 1,
+                   true);
+  bindPercentRange("#atlas-link-thickness", S.display, "linkThickness",
+                   .25, 2.5, true);
+  $("#atlas-link-curve")?.addEventListener("input", (e) => {
+    S.display.linkCurve = clamp(Number(e.target.value) / 100, 0, .3, .10);
+    setOutput("#atlas-link-curve-out", S.display.linkCurve);
+    saveControls();
+    draw();
+  });
+  bindPercentRange("#atlas-center", S.physics, "center", 0, 1, false);
+  bindPercentRange("#atlas-repel", S.physics, "repel", 0, 1, false);
+  bindPercentRange("#atlas-link-force", S.physics, "link", 0, 1, false);
+  bindPercentRange("#atlas-link-distance", S.physics, "distance",
+                   .4, 2.2, false);
+  bindPercentRange("#atlas-semantic", S.physics, "semantic", 0, 1, false);
+  $("#atlas-physics")?.addEventListener("change", (e) => {
+    S.physics.enabled = e.target.checked;
+    physicsChanged();
+  });
+  $("#atlas-auto-rotate")?.addEventListener("change", (e) => {
+    S.display.autoRotate = e.target.checked;
+    saveControls();
+  });
+  $("#atlas-curved-links")?.addEventListener("change", (e) => {
+    S.display.curvedLinks = e.target.checked;
+    saveControls();
+    syncControlInputs();
+    if (R3) R3.linkGeometryChanged();
+    else draw();
+  });
+  $("#atlas-spherical-nodes")?.addEventListener("change", (e) => {
+    S.display.sphericalNodes = e.target.checked;
+    saveControls();
+    draw();
+  });
+  $("#atlas-reset-colors")?.addEventListener("click", () => {
+    const prefix = `${S.lens}|`;
+    for (const key of Object.keys(S.colorOverrides))
+      if (key.startsWith(prefix)) delete S.colorOverrides[key];
+    assignColors();
+    saveControls();
+    renderLegend();
+    draw();
+  });
+  $("#atlas-reset-geometry")?.addEventListener("click", () =>
+    applyGeometry(true));
+  $("#atlas-reset-controls")?.addEventListener("click", () => {
+    S.filterSearch = CONTROL_DEFAULTS.filterSearch;
+    S.hideOrphans = CONTROL_DEFAULTS.hideOrphans;
+    S.starredOnly = CONTROL_DEFAULTS.starredOnly;
+    S.display = { ...CONTROL_DEFAULTS.display };
+    S.physics = { ...CONTROL_DEFAULTS.physics };
+    S.colorOverrides = {};
+    S.enabledKinds = new Set((S.graph?.kinds || []).map((row) => row.id));
+    S.match = "";
+    if ($("#atlas-search")) $("#atlas-search").value = "";
+    syncControlInputs();
+    renderKindFilters();
+    assignColors();
+    renderLegend();
+    applyGeometry(true);
+    physicsChanged();
+    isoChanged(false);
   });
 
   // The gear is the module's whole control surface on both widths.
@@ -1695,15 +2667,36 @@
     } else if (chromeOpen()) setChrome(false);
   });
 
-  $("#atlas-vault")?.addEventListener("click", (e) => {
-    const on = !vaultOn();
-    lsSet(VAULT_KEY, on);
-    e.target.classList.toggle("on", on);
-    // the node set genuinely changes, so this is a re-init, not a redraw
-    S.loadedGen = null;
-    atlasLoad(true);
+  function setTimeAxis(axis) {
+    if (axis === S.time.axis) return;
+    stopTimelinePlayback(false);
+    S.time.axis = axis;
+    setTimelineBounds();
+    syncTimelineRange();
+    timelineChanged();
+  }
+  $("#world-axis-valid")?.addEventListener("click", () => setTimeAxis("valid"));
+  $("#world-axis-recorded")?.addEventListener(
+    "click", () => setTimeAxis("recorded"));
+  $("#world-time")?.addEventListener("input", (e) => {
+    stopTimelinePlayback(false);
+    const value = Number(e.target.value);
+    const span = Math.max(1, S.time.max - S.time.min);
+    S.time.at = value >= 999 ? null : S.time.min + span * (value / 1000);
+    timelineChanged();
   });
-  $("#atlas-vault")?.classList.toggle("on", vaultOn());
+  $("#world-now")?.addEventListener("click", () => {
+    stopTimelinePlayback(false);
+    S.time.at = null;
+    const range = $("#world-time");
+    if (range) range.value = "1000";
+    timelineChanged();
+  });
+  $("#world-play")?.addEventListener("click", toggleTimelinePlayback);
+  $("#world-speed")?.addEventListener("change", (e) => {
+    S.time.speed = clamp(e.target.value, .5, 4, 1);
+    saveControls();
+  });
 
   $("#atlas-ego")?.addEventListener("click", (e) => {
     S.hideEgo = !S.hideEgo;
@@ -1715,22 +2708,14 @@
   $("#atlas-rescan")?.addEventListener("click", async () => {
     const btn = $("#atlas-rescan");
     btn.disabled = true;
-    btn.textContent = "rebuilding…";
-    const was = S.graph?.generated;
-    try { await post("/api/atlas/refresh", {}); } catch { /* best effort */ }
-    let tries = 0;
-    const poll = setInterval(async () => {
-      tries += 1;
-      try {
-        const g = await api("/api/atlas");
-        if ((g.generated && g.generated !== was) || tries > 30) {
-          clearInterval(poll);
-          btn.disabled = false;
-          btn.textContent = "Rescan";
-          if (g.status === "ok") { S.loadedGen = null; atlasLoad(true); }
-        }
-      } catch { /* keep polling */ }
-    }, 3000);
+    btn.textContent = "scanning…";
+    try { await post("/api/world/refresh", {}); } catch { /* best effort */ }
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = "Rescan";
+      S.loadedGen = null;
+      atlasLoad(true);
+    }, 1800);
   });
 
   // ---------- lifecycle: pause when hidden ----------
@@ -1746,6 +2731,7 @@
         wake(0.2);
         if (R3) R3.setRunning(true);
       } else {
+        stopTimelinePlayback(false);
         if (R3) R3.setRunning(false);
         S.running = false;
         cancelAnimationFrame(S.raf);
@@ -1755,6 +2741,7 @@
   io.observe(stage);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      stopTimelinePlayback(false);
       if (R3) R3.setRunning(false);
       S.running = false;
       cancelAnimationFrame(S.raf);

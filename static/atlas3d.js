@@ -1,4 +1,4 @@
-/* Visual Network — the 3D renderer.
+/* World — the 3D graph renderer.
 
    The module the Visual Network draws through when WebGL is available.
    atlas.js still owns the data, the state object S, and every piece of
@@ -50,6 +50,9 @@ export const NAV = {
 const CAM_KEY = "vira-atlas-cam.v1";
 const RING_W = 0.17;        // ring band as a fraction of the node's half-size
 const LABEL_MAX = 70;       // DOM labels are cheap but not free
+const POINT_CLOUD_AT = 2500; // all nodes remain visible; glyph detail adapts
+const PHYSICS_GLOBAL_AT = 4000;
+const PHYSICS_LOCAL_LIMIT = 1400;
 
 export function create(host) {
   const { stage, S } = host;
@@ -87,7 +90,12 @@ export function create(host) {
   const textures = new Map();       // sim node id -> THREE.Texture
   const labels = new Map();         // sim node id -> span
   let edgeMesh = null, edgeGeo = null, edgeList = [];
+  let edgeSegments = 1;
+  let edgeIndicesByNode = new Map();
+  let pointCloud = null, pointGeo = null, pointMat = null, pointList = [];
   let stars = null;
+  let physicsNodes = [], physicsEdges = [], physicsIds = new Set();
+  let physicsMode = "local";
 
   const requestRender = () => { needsRender = true; };
   let lastCards = [];   // what the last pass laid out, for cards()
@@ -111,6 +119,7 @@ export function create(host) {
     uniform float uAlpha;
     uniform float uDash;
     uniform float uRingW;
+    uniform float uSphere;
     varying vec2 vUv;
     void main(){
       vec2 p = vUv * 2.0 - 1.0;
@@ -131,6 +140,14 @@ export function create(host) {
         }
         if (on < 0.5) discard;
         rgb = uRing;
+      }
+      if (uSphere > 0.5) {
+        float z = sqrt(max(0.0, 1.0 - dot(p, p)));
+        vec3 normal = normalize(vec3(p.x, -p.y, z));
+        vec3 lightDir = normalize(vec3(-0.45, 0.55, 0.72));
+        float diffuse = 0.48 + 0.62 * max(0.0, dot(normal, lightDir));
+        float specular = pow(max(0.0, dot(normal, lightDir)), 18.0) * 0.32;
+        rgb = rgb * diffuse + vec3(specular);
       }
       gl_FragColor = vec4(rgb, uAlpha * edge);
       #include <colorspace_fragment>
@@ -176,6 +193,46 @@ export function create(host) {
     vertexShader: EDGE_VERT, fragmentShader: EDGE_FRAG,
     transparent: true, depthWrite: false, depthTest: true,
   });
+
+  // A full vault is tens of thousands of nodes. One Mesh + ShaderMaterial +
+  // texture per item would spend the frame on draw-call overhead. The large
+  // graph path draws every node as one attribute-driven point cloud;
+  // selection, kind colors and time filters remain per-node buffer data.
+  const POINT_VERT = `
+    uniform float uScale;
+    attribute float aSize;
+    attribute vec3 aColor;
+    attribute float aAlpha;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main(){
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = clamp(aSize * uScale / max(1.0, -mv.z), 1.5, 72.0);
+      vColor = aColor;
+      vAlpha = aAlpha;
+    }`;
+  const POINT_FRAG = `
+    uniform float uSphere;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main(){
+      vec2 p = gl_PointCoord * 2.0 - 1.0;
+      float d = length(p);
+      if (d > 1.0 || vAlpha <= 0.002) discard;
+      float edge = 1.0 - smoothstep(0.84, 1.0, d);
+      vec3 rgb = vColor;
+      if (uSphere > 0.5) {
+        float z = sqrt(max(0.0, 1.0 - dot(p, p)));
+        vec3 normal = normalize(vec3(p.x, -p.y, z));
+        vec3 lightDir = normalize(vec3(-0.45, 0.55, 0.72));
+        float diffuse = 0.48 + 0.62 * max(0.0, dot(normal, lightDir));
+        float specular = pow(max(0.0, dot(normal, lightDir)), 18.0) * 0.32;
+        rgb = rgb * diffuse + vec3(specular);
+      }
+      gl_FragColor = vec4(rgb, vAlpha * edge);
+      #include <colorspace_fragment>
+    }`;
 
   function tileTexture(name, letters) {
     const c = document.createElement("canvas");
@@ -228,6 +285,15 @@ export function create(host) {
   // contiguous positions put each community on its own patch of the shell -
   // the 3D reading of the flat build's angular cluster homes.
   function seed() {
+    if (S.fixedLayout) {
+      S.nodes.forEach((p) => {
+        p.z = Number(p.z || 0);
+        p.vx = p.vy = p.vz = 0;
+      });
+      S.ego.x = S.ego.y = S.ego.z = 0;
+      S.ego.vx = S.ego.vy = S.ego.vz = 0;
+      return;
+    }
     const n = S.nodes.length || 1;
     const gold = Math.PI * (3 - Math.sqrt(5));
     S.nodes.forEach((p, i) => {
@@ -254,46 +320,118 @@ export function create(host) {
     if (!b.pin) { b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f; }
   }
 
-  // The flat build's force model, extended to three axes. Constants are the
-  // same; only the geometry gained a dimension.
-  function tick(dt) {
-    const nodes = S.nodes;
-    const repel = 1300;
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-        let d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 > 240 * 240) continue;
-        if (d2 < 1) { dx = (i % 2 ? 1 : -1); dy = 0.5; dz = 0.3; d2 = 1.34; }
-        const f = repel / d2;
-        const d = Math.sqrt(d2);
-        const fx = (dx / d) * f, fy = (dy / d) * f, fz = (dz / d) * f;
-        a.vx += fx; a.vy += fy; a.vz += fz;
-        b.vx -= fx; b.vy -= fy; b.vz -= fz;
+  function refreshPhysics(seed = null, heat = false) {
+    const visibleNodes = S.nodes.filter((p) => host.isShown(p));
+    physicsNodes = [];
+    physicsEdges = [];
+    physicsIds = new Set();
+    if (!S.physics.enabled) {
+      host.onPhysicsScope?.({ mode: "off", count: 0,
+                              total: visibleNodes.length });
+      S.alpha = 0;
+      paint();
+      return;
+    }
+
+    if (visibleNodes.length <= PHYSICS_GLOBAL_AT) {
+      physicsMode = "global";
+      physicsNodes = visibleNodes;
+      physicsIds = new Set(visibleNodes.map((p) => p.id));
+    } else {
+      physicsMode = "local";
+      const queue = [];
+      const add = (p, depth) => {
+        if (!p || p.ego || physicsIds.has(p.id) || !host.isShown(p)
+            || physicsIds.size >= PHYSICS_LOCAL_LIMIT) return;
+        physicsIds.add(p.id);
+        physicsNodes.push(p);
+        queue.push([p, depth]);
+      };
+      add(seed || S.dragNode, 0);
+      for (const p of S.sel) add(p, 0);
+      while (queue.length && physicsIds.size < PHYSICS_LOCAL_LIMIT) {
+        const [p, depth] = queue.shift();
+        if (depth >= 2) continue;
+        for (const row of S.adj.get(p.id) || []) add(row.n, depth + 1);
       }
     }
-    for (const e of S.edges) {
+
+    const seen = new Set();
+    for (const p of physicsNodes) {
+      for (const row of S.adj.get(p.id) || []) {
+        if (!physicsIds.has(row.n.id) || seen.has(row.e)) continue;
+        seen.add(row.e);
+        physicsEdges.push(row.e);
+      }
+    }
+    host.onPhysicsScope?.({
+      mode: physicsMode, count: physicsNodes.length,
+      total: visibleNodes.length, depth: physicsMode === "local" ? 2 : null,
+      limited: physicsMode === "local"
+        && physicsNodes.length >= PHYSICS_LOCAL_LIMIT,
+    });
+    if (heat && physicsNodes.length) {
+      S.alpha = Math.max(S.alpha || 0, .72);
+      setRunning(true);
+    }
+    paint();
+  }
+
+  // Obsidian-style center, repel, link and link-distance controls, with a
+  // semantic-home force that keeps the embedding neighborhoods meaningful.
+  // Full-vault physics is explicitly local: selected/dragged nodes plus two
+  // connection rings. A filtered graph under PHYSICS_GLOBAL_AT runs global.
+  function tick(dt) {
+    if (!S.physics.enabled || !physicsNodes.length) {
+      S.alpha = 0; return;
+    }
+    const nodes = physicsNodes;
+    const range = 180 * S.physics.distance * S.display.scale;
+    const range2 = range * range;
+    const cells = new Map();
+    const cell = (value) => Math.floor(value / Math.max(1, range));
+    for (const p of nodes) {
+      const key = cell(p.x) + "," + cell(p.y) + "," + cell(p.z);
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(p);
+    }
+    const repel = 5200 * S.physics.repel;
+    for (const a of nodes) {
+      const ax = cell(a.x), ay = cell(a.y), az = cell(a.z);
+      for (let ox = -1; ox <= 1; ox++)
+        for (let oy = -1; oy <= 1; oy++)
+          for (let oz = -1; oz <= 1; oz++)
+            for (const b of cells.get(
+              (ax + ox) + "," + (ay + oy) + "," + (az + oz)) || []) {
+              if (a.id >= b.id) continue;
+              let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+              let d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 > range2) continue;
+              if (d2 < 1) { dx = 1; dy = .5; dz = .3; d2 = 1.34; }
+              const d = Math.sqrt(d2);
+              const f = repel * (1 - d / range) / Math.max(25, d2);
+              const fx = dx / d * f, fy = dy / d * f, fz = dz / d * f;
+              if (!a.pin) { a.vx += fx; a.vy += fy; a.vz += fz; }
+              if (!b.pin) { b.vx -= fx; b.vy -= fy; b.vz -= fz; }
+            }
+    }
+    for (const e of physicsEdges) {
+      if (host.isEdgeShown && !host.isEdgeShown(e)) continue;
       const w = Math.min(1.5, e.weight) / 1.5;
-      const rest = 300 - 190 * w;
-      const k = (e.structural ? 0.045 : 0.012) * (0.4 + 0.6 * w);
+      const rest = (210 - 100 * w) * S.physics.distance * S.display.scale;
+      const k = (e.structural ? .032 : .012)
+        * S.physics.link * (0.4 + 0.6 * w);
       spring(e.an, e.bn, rest, k);
     }
-    if (!S.hideEgo) {
-      for (const e of S.egoEdges) {
-        const w = Math.min(1, e.weight);
-        spring(e.an, e.bn, e.bn.homeR * (1.15 - 0.35 * w), 0.012);
-      }
-    }
     for (const p of nodes) {
-      const d = Math.hypot(p.x, p.y, p.z) || 1;
-      const pull = (p.homeR - d) * 0.008;
-      p.vx += (p.x / d) * pull;
-      p.vy += (p.y / d) * pull;
-      p.vz += (p.z / d) * pull;
+      p.vx += -p.x * S.physics.center * .0007;
+      p.vy += -p.y * S.physics.center * .0007;
+      p.vz += -p.z * S.physics.center * .0007;
+      p.vx += (p.homeX - p.x) * S.physics.semantic * .003;
+      p.vy += (p.homeY - p.y) * S.physics.semantic * .003;
+      p.vz += (p.homeZ - p.z) * S.physics.semantic * .003;
       if (p.pin) { p.vx = p.vy = p.vz = 0; continue; }
-      p.vx *= 0.86; p.vy *= 0.86; p.vz *= 0.86;
+      p.vx *= 0.84; p.vy *= 0.84; p.vz *= 0.84;
       const sp = Math.hypot(p.vx, p.vy, p.vz);
       const cap = 260 * S.alpha + 20;
       if (sp > cap) { const s = cap / sp; p.vx *= s; p.vy *= s; p.vz *= s; }
@@ -301,7 +439,8 @@ export function create(host) {
       p.y += p.vy * dt * S.alpha * 3.2;
       p.z += p.vz * dt * S.alpha * 3.2;
     }
-    S.alpha = Math.max(0, S.alpha - dt * 0.14);
+    S.alpha = S.dragNode ? Math.max(.28, S.alpha)
+                         : Math.max(0, S.alpha - dt * .09);
   }
 
   function measure() {
@@ -332,10 +471,44 @@ export function create(host) {
       if (free) edgeGeo.dispose();
       edgeMesh = null;
     }
+    if (pointCloud) {
+      scene.remove(pointCloud);
+      if (free) {
+        pointGeo.dispose();
+        pointMat.dispose();
+      }
+      pointCloud = pointGeo = pointMat = null;
+      pointList = [];
+    }
   }
 
   function buildNodes() {
     const all = S.ego ? [...S.nodes, S.ego] : S.nodes;
+    if (S.nodes.length > POINT_CLOUD_AT) {
+      pointList = all;
+      const n = all.length;
+      pointGeo = new THREE.BufferGeometry();
+      pointGeo.setAttribute("position",
+        new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      pointGeo.setAttribute("aSize",
+        new THREE.BufferAttribute(new Float32Array(n), 1));
+      pointGeo.setAttribute("aColor",
+        new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      pointGeo.setAttribute("aAlpha",
+        new THREE.BufferAttribute(new Float32Array(n), 1));
+      pointMat = new THREE.ShaderMaterial({
+        uniforms: { uScale: { value: H / (2 * Math.tan(
+          (NAV.fov * Math.PI / 180) / 2)) },
+          uSphere: { value: S.display.sphericalNodes ? 1 : 0 } },
+        vertexShader: POINT_VERT, fragmentShader: POINT_FRAG,
+        transparent: true, depthWrite: true, depthTest: true,
+      });
+      pointCloud = new THREE.Points(pointGeo, pointMat);
+      pointCloud.frustumCulled = false;
+      pointCloud.renderOrder = 2;
+      scene.add(pointCloud);
+      return;
+    }
     for (const p of all) {
       const tex = textureFor(p);
       textures.set(p.id, tex);
@@ -346,6 +519,7 @@ export function create(host) {
           uAlpha: { value: 1 },
           uDash: { value: p.vault ? 1 : 0 },
           uRingW: { value: RING_W },
+          uSphere: { value: S.display.sphericalNodes ? 1 : 0 },
         },
         vertexShader: NODE_VERT, fragmentShader: NODE_FRAG,
         transparent: true, depthWrite: true, depthTest: true,
@@ -362,28 +536,42 @@ export function create(host) {
 
   function buildEdges() {
     edgeList = [];
+    edgeIndicesByNode = new Map();
     for (const e of S.egoEdges) edgeList.push({ e, ego: true });
     for (const e of S.edges) edgeList.push({ e, ego: false });
     const n = edgeList.length;
+    // Two chords are enough to make a slight arc legible at full-vault
+    // scale. Smaller graphs can afford a smoother five-chord curve.
+    edgeSegments = S.display.curvedLinks ? (n > 30000 ? 2 : 5) : 1;
+    const parts = n * edgeSegments;
     edgeGeo = new THREE.BufferGeometry();
     edgeGeo.setAttribute("position",
-      new THREE.BufferAttribute(new Float32Array(n * 12), 3));
+      new THREE.BufferAttribute(new Float32Array(parts * 12), 3));
     edgeGeo.setAttribute("aOther",
-      new THREE.BufferAttribute(new Float32Array(n * 12), 3));
+      new THREE.BufferAttribute(new Float32Array(parts * 12), 3));
     edgeGeo.setAttribute("aSide",
-      new THREE.BufferAttribute(new Float32Array(n * 4), 1));
+      new THREE.BufferAttribute(new Float32Array(parts * 4), 1));
     edgeGeo.setAttribute("aWidth",
-      new THREE.BufferAttribute(new Float32Array(n * 4), 1));
+      new THREE.BufferAttribute(new Float32Array(parts * 4), 1));
     edgeGeo.setAttribute("aColor",
-      new THREE.BufferAttribute(new Float32Array(n * 12), 3));
+      new THREE.BufferAttribute(new Float32Array(parts * 12), 3));
     edgeGeo.setAttribute("aAlpha",
-      new THREE.BufferAttribute(new Float32Array(n * 4), 1));
-    const idx = new Uint32Array(n * 6);
+      new THREE.BufferAttribute(new Float32Array(parts * 4), 1));
+    const idx = new Uint32Array(parts * 6);
     const side = edgeGeo.getAttribute("aSide").array;
     for (let i = 0; i < n; i++) {
-      const v = i * 4;
-      side[v] = -1; side[v + 1] = 1; side[v + 2] = -1; side[v + 3] = 1;
-      idx.set([v, v + 1, v + 3, v, v + 3, v + 2], i * 6);
+      const edge = edgeList[i].e;
+      for (const node of [edge.an, edge.bn]) {
+        if (!edgeIndicesByNode.has(node.id))
+          edgeIndicesByNode.set(node.id, []);
+        edgeIndicesByNode.get(node.id).push(i);
+      }
+      for (let segment = 0; segment < edgeSegments; segment++) {
+        const part = i * edgeSegments + segment, v = part * 4;
+        side[v] = -1; side[v + 1] = 1;
+        side[v + 2] = -1; side[v + 3] = 1;
+        idx.set([v, v + 1, v + 3, v, v + 3, v + 2], part * 6);
+      }
     }
     edgeGeo.setIndex(new THREE.BufferAttribute(idx, 1));
     edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
@@ -594,18 +782,45 @@ export function create(host) {
     } else if (host.matchDim(p) && !p.ego) {
       alpha = 0.22;
     }
-    return alpha;
+    return alpha * S.display.nodeOpacity;
   }
 
   function paintNodes() {
+    if (pointCloud) {
+      pointMat.uniforms.uSphere.value = S.display.sphericalNodes ? 1 : 0;
+      const pos = pointGeo.getAttribute("position");
+      const size = pointGeo.getAttribute("aSize");
+      const color = pointGeo.getAttribute("aColor");
+      const alpha = pointGeo.getAttribute("aAlpha");
+      const shade = new THREE.Color();
+      for (let i = 0; i < pointList.length; i++) {
+        const p = pointList[i];
+        const show = visible(p);
+        pos.setXYZ(i, p.x, p.y, p.z);
+        alpha.setX(i, show ? nodeAlpha(p) : 0);
+        const emphasized = S.sel.has(p) || p === S.hover;
+        size.setX(i, p.r * 2 * (emphasized ? 1.5 : 1));
+        const value = p.ego ? "#a39c8d"
+          : S.sel.has(p) ? "#d4ccba"
+          : (p.band && S.colors.get(p.band)) || "#6a6a64";
+        shade.set(value);
+        color.setXYZ(i, shade.r, shade.g, shade.b);
+      }
+      pos.needsUpdate = size.needsUpdate = true;
+      color.needsUpdate = alpha.needsUpdate = true;
+      return;
+    }
     for (const mesh of nodeMeshes.values()) {
       const p = mesh.userData.p;
       const show = visible(p);
       mesh.visible = show;
       if (!show) continue;
       mesh.position.set(p.x, p.y, p.z);
+      const meshSize = p.r * 2 / (1 - RING_W);
+      mesh.scale.set(meshSize, meshSize, 1);
       const u = mesh.material.uniforms;
       u.uAlpha.value = nodeAlpha(p);
+      u.uSphere.value = S.display.sphericalNodes ? 1 : 0;
       const isSel = S.sel.has(p);
       const col = p.ego ? "#a39c8d"
         : isSel ? "#d4ccba"
@@ -656,26 +871,80 @@ export function create(host) {
     const focus = hasSel ? null : S.hover;
     for (let i = 0; i < edgeList.length; i++) {
       const { e, ego } = edgeList[i];
-      const v = i * 4;
       const hide = ego ? (S.hideEgo || !!S.shown)
-        : (S.shown && !(S.shown.has(e.an.id) && S.shown.has(e.bn.id)));
+        : (host.isEdgeShown ? !host.isEdgeShown(e)
+                           : S.shown && !(S.shown.has(e.an.id)
+                                          && S.shown.has(e.bn.id)));
       let r = 0, g = 0, b = 0, a = 0, lw = 1;
       if (!hide) {
         const st = edgeStyle(e, ego, hasSel, focus);
-        r = st[0] / 255; g = st[1] / 255; b = st[2] / 255; a = st[3]; lw = st[4];
+        r = st[0] / 255; g = st[1] / 255; b = st[2] / 255; a = st[3];
+        lw = st[4] * S.display.linkThickness;
       }
       const A = e.an, B = e.bn;
-      for (let k = 0; k < 4; k++) {
-        const at = k < 2 ? A : B, ot = k < 2 ? B : A;
-        pos.setXYZ(v + k, at.x, at.y, at.z);
-        oth.setXYZ(v + k, ot.x, ot.y, ot.z);
-        col.setXYZ(v + k, r, g, b);
-        alp.setX(v + k, a);
-        wid.setX(v + k, lw);
+      writeEdgePositions(i, A, B, pos, oth);
+      for (let segment = 0; segment < edgeSegments; segment++) {
+        const v = (i * edgeSegments + segment) * 4;
+        for (let k = 0; k < 4; k++) {
+          col.setXYZ(v + k, r, g, b);
+          alp.setX(v + k, a);
+          wid.setX(v + k, lw);
+        }
       }
     }
     pos.needsUpdate = oth.needsUpdate = wid.needsUpdate = true;
     col.needsUpdate = alp.needsUpdate = true;
+  }
+
+  function paintMovingEdges(ids) {
+    if (!edgeMesh || !ids?.size) return;
+    const indexes = new Set();
+    for (const id of ids)
+      for (const index of edgeIndicesByNode.get(id) || []) indexes.add(index);
+    const pos = edgeGeo.getAttribute("position");
+    const oth = edgeGeo.getAttribute("aOther");
+    for (const i of indexes) {
+      const e = edgeList[i].e;
+      writeEdgePositions(i, e.an, e.bn, pos, oth);
+    }
+    pos.needsUpdate = oth.needsUpdate = true;
+  }
+
+  const edgeArc = new Float64Array(3);
+
+  function writeEdgePositions(index, A, B, pos, oth) {
+    let ax = 0, ay = 0, az = 0;
+    if (S.display.curvedLinks && S.display.linkCurve > 0) {
+      const dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z;
+      const length = Math.hypot(dx, dy, dz);
+      let nx = -dy, ny = dx, nz = 0;
+      let normal = Math.hypot(nx, ny);
+      if (normal < 1e-6) {
+        nx = 0; ny = -dz; nz = dy;
+        normal = Math.hypot(ny, nz);
+      }
+      const sign = index % 2 ? 1 : -1;
+      const amplitude = length * S.display.linkCurve * sign
+        / Math.max(normal, 1e-6);
+      ax = nx * amplitude; ay = ny * amplitude; az = nz * amplitude;
+    }
+    edgeArc[0] = ax; edgeArc[1] = ay; edgeArc[2] = az;
+    for (let segment = 0; segment < edgeSegments; segment++) {
+      const t0 = segment / edgeSegments;
+      const t1 = (segment + 1) / edgeSegments;
+      const q0 = 4 * t0 * (1 - t0), q1 = 4 * t1 * (1 - t1);
+      const x0 = A.x + (B.x - A.x) * t0 + edgeArc[0] * q0;
+      const y0 = A.y + (B.y - A.y) * t0 + edgeArc[1] * q0;
+      const z0 = A.z + (B.z - A.z) * t0 + edgeArc[2] * q0;
+      const x1 = A.x + (B.x - A.x) * t1 + edgeArc[0] * q1;
+      const y1 = A.y + (B.y - A.y) * t1 + edgeArc[1] * q1;
+      const z1 = A.z + (B.z - A.z) * t1 + edgeArc[2] * q1;
+      const v = (index * edgeSegments + segment) * 4;
+      pos.setXYZ(v, x0, y0, z0); pos.setXYZ(v + 1, x0, y0, z0);
+      pos.setXYZ(v + 2, x1, y1, z1); pos.setXYZ(v + 3, x1, y1, z1);
+      oth.setXYZ(v, x1, y1, z1); oth.setXYZ(v + 1, x1, y1, z1);
+      oth.setXYZ(v + 2, x0, y0, z0); oth.setXYZ(v + 3, x0, y0, z0);
+    }
   }
 
   // ---------- name cards -------------------------------------------------
@@ -960,10 +1229,13 @@ export function create(host) {
     if (!controls || !camera) return;
     const dt = Math.min(0.05, clock.getDelta());
     idleT += dt;
-    if (S.alpha > 0.005) { tick(dt); paintNodes(); paintEdges(); needsRender = true; }
+    if (S.alpha > 0.005) {
+      tick(dt); paintNodes(); paintMovingEdges(physicsIds); needsRender = true;
+    }
     // slow drift - the Image Atlas's idle auto-orbit, paused while a
     // selection owns the stage (its analogue of a focused photo)
-    if (!host.reducedMotion && idleT > NAV.driftAfter && !S.sel.size
+    if (S.display.autoRotate && !host.reducedMotion
+        && idleT > NAV.driftAfter && !S.sel.size
         && (interacted || !restoredCam)) {
       controls.azimuthAngle += NAV.driftRate * dt;
       needsRender = true;
@@ -986,6 +1258,10 @@ export function create(host) {
   }
 
   function wake(heat = 0.6) {
+    if (!physicsNodes.length) refreshPhysics();
+    if (!S.physics.enabled || !physicsNodes.length) {
+      S.alpha = 0; paint(); return;
+    }
     S.alpha = Math.max(S.alpha || 0, heat);
     if (host.reducedMotion) {
       for (let i = 0; i < 260; i++) tick(1 / 60);
@@ -1003,6 +1279,9 @@ export function create(host) {
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     edgeMat.uniforms.uHalfRes.value.set(w / 2, h / 2);
+    if (pointMat)
+      pointMat.uniforms.uScale.value = h / (2 * Math.tan(
+        (NAV.fov * Math.PI / 180) / 2));
     if (camera) {
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -1017,6 +1296,18 @@ export function create(host) {
     return [e.clientX - r.left, e.clientY - r.top];
   };
   let downXY = [0, 0], rightXY = [0, 0];
+  let drag3 = null;
+  const dragRay = new THREE.Raycaster();
+  const dragPlane = new THREE.Plane();
+  const dragHit = new THREE.Vector3();
+  const dragNormal = new THREE.Vector3();
+  const dragMouse = new THREE.Vector2();
+
+  function pointOnDragPlane(x, y, target) {
+    dragMouse.set(x / W * 2 - 1, -(y / H) * 2 + 1);
+    dragRay.setFromCamera(dragMouse, camera);
+    return dragRay.ray.intersectPlane(dragPlane, target);
+  }
 
   // capture phase: the orbit re-anchor must run BEFORE camera-controls'
   // own pointerdown snapshots its drag state, or the anchor is ignored
@@ -1026,14 +1317,69 @@ export function create(host) {
     downXY = [x, y];
     if (e.button === 2) rightXY = [e.clientX, e.clientY];
     anchorOrbit(x, y);          // every press, as the Image Atlas does
+    if (e.button !== 0 || e.shiftKey || !camera || !controls) return;
+    const p = pickAt(x, y, 0);
+    if (!p || p.ego) return;
+    camera.getWorldDirection(dragNormal);
+    dragPlane.setFromNormalAndCoplanarPoint(
+      dragNormal, dragHit.set(p.x, p.y, p.z));
+    const hit = pointOnDragPlane(x, y, new THREE.Vector3());
+    drag3 = {
+      p, x, y, moved: false,
+      offset: hit ? new THREE.Vector3(p.x, p.y, p.z).sub(hit)
+                  : new THREE.Vector3(),
+    };
+    S.dragNode = p;
+    p.pin = true;
+    controls.enabled = false;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = "grabbing";
+    refreshPhysics(p, true);
+    e.preventDefault();
+    e.stopImmediatePropagation();
   }, true);
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag3) return;
+    const [x, y] = xy(e);
+    const hit = pointOnDragPlane(x, y, dragHit);
+    if (hit) {
+      hit.add(drag3.offset);
+      drag3.p.x = hit.x; drag3.p.y = hit.y; drag3.p.z = hit.z;
+      drag3.moved ||= Math.hypot(x - drag3.x, y - drag3.y) > 3;
+      S.alpha = Math.max(S.alpha || 0, .72);
+      paintNodes();
+      paintMovingEdges(new Set([drag3.p.id]));
+      requestRender();
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+
+  const finishNodeDrag = (e, cancelled = false) => {
+    if (!drag3) return;
+    const { p, moved } = drag3;
+    drag3 = null;
+    p.pin = false;
+    S.dragNode = null;
+    if (controls) controls.enabled = true;
+    canvas.style.cursor = moved ? "grab" : "pointer";
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* released */ }
+    if (!cancelled && !moved) host.onSelect(p);
+    else if (!cancelled) refreshPhysics(p, true);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  canvas.addEventListener("pointerup", (e) => finishNodeDrag(e), true);
+  canvas.addEventListener("pointercancel",
+    (e) => finishNodeDrag(e, true), true);
 
   canvas.addEventListener("pointermove", (e) => {
     const [x, y] = xy(e);
     const p = pickAt(x, y, 0);
     if (p !== S.hover) {
       S.hover = p;
-      canvas.style.cursor = p ? "pointer" : "grab";
+      canvas.style.cursor = "grab";
       host.onHover(p, x, y);
       paint();
     } else if (p) {
@@ -1091,7 +1437,9 @@ export function create(host) {
   function setGraph() {
     clearScene();
     seed();
-    if (host.reducedMotion) {
+    if (S.fixedLayout) {
+      S.alpha = 0;
+    } else if (host.reducedMotion) {
       S.alpha = 1;
       for (let i = 0; i < 420; i++) tick(1 / 60);
       S.alpha = 0;
@@ -1104,7 +1452,30 @@ export function create(host) {
     buildEdges();
     buildStars();
     buildCamera();
+    refreshPhysics();
     paint();
+  }
+
+  function geometryChanged(resetPositions = false) {
+    measure();
+    if (camera) {
+      camera.near = bounds.radius * NAV.nearFactor;
+      camera.far = bounds.radius * NAV.farFactor;
+      camera.updateProjectionMatrix();
+      controls.minDistance = bounds.radius * NAV.minDistanceFactor;
+      controls.maxDistance = bounds.radius * NAV.maxDistanceFactor;
+    }
+    refreshPhysics();
+    paint();
+  }
+
+  function linkGeometryChanged() {
+    if (edgeMesh) scene.remove(edgeMesh);
+    edgeGeo?.dispose();
+    edgeMesh = edgeGeo = null;
+    buildEdges();
+    paintEdges();
+    requestRender();
   }
 
   function focusOn(p) {
@@ -1149,6 +1520,8 @@ export function create(host) {
                  middle: controls.mouseButtons.middle,
                  right: controls.mouseButtons.right,
                  wheel: controls.mouseButtons.wheel },
+      physics: { enabled: S.physics.enabled, mode: physicsMode,
+                 nodes: physicsNodes.length, alpha: S.alpha },
       nodes: nodeMeshes.size, edges: edgeList.length, radius: bounds.radius,
     };
   }
@@ -1168,5 +1541,6 @@ export function create(host) {
 
   resize();
   return { setGraph, paint, wake, resize, focusOn, setRunning, faceLoaded,
+           geometryChanged, linkGeometryChanged, refreshPhysics,
            dispose, canvas, state, cards, NAV, ACTION: CameraControls.ACTION };
 }
