@@ -7171,6 +7171,9 @@ async function revealOrphan(key, branch = "") {
   if (!node) { toast("That branch is no longer waiting"); return; }
   node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
   revealHighlight(node);
+  const orphan = runsState.orphan.find((it) => it.key === key)
+    || runsState.orphan.find((it) => it.branch === branch);
+  if (orphan) openOrphanFocus(orphan);
 }
 
 async function revealBoardsHealth() {
@@ -7188,7 +7191,7 @@ async function revealBoardsHealth() {
 // itself (jobHistRow — judge chip/button, transcript copy, click-to-
 // reopen), because those affordances are the point of a ledger row and a
 // second implementation of them would be two chances to drift.
-function runCard(it) {
+function runCard(it, opts = {}) {
   if (it.kind === "history") {
     const row = jobHistRow(it.src);
     row.classList.add("k-history");
@@ -7216,7 +7219,7 @@ function runCard(it) {
   card.appendChild(head);
 
   if (it.kind === "flow") flowBody(card, it.src);
-  else if (it.kind === "unlanded") orphanBody(card, it.src);
+  else if (it.kind === "unlanded") orphanBody(card, it.src, opts);
   else if (it.kind === "shipped") shippedBody(card, it);
   else cardAction(card, () => openSession(it.src.id));
   return card;
@@ -7412,7 +7415,7 @@ function orphanBits(it) {
 // Fetched on FIRST EXPAND, never with the sweep: the sweep runs on every
 // view open and this shells out to git per item. Read-only end to end, so
 // it opens on a passive instance exactly as it does on live.
-function orphanContext(it) {
+function orphanContext(it, opts = {}) {
   const box = document.createElement("details");
   box.className = "run-result run-ctx";
   box.appendChild(el("summary", "", "Full context — the whole prompt, "
@@ -7425,7 +7428,8 @@ function orphanContext(it) {
     loaded = true;
     try {
       fillOrphanContext(body,
-        await api("/api/orphanwork/context?key=" + encodeURIComponent(it.key)));
+        await api("/api/orphanwork/context?key=" + encodeURIComponent(it.key)),
+        opts);
     } catch (e) {
       loaded = false;                       // a failed read may be retried
       body.textContent = "Could not read the context: " + errText(e);
@@ -7434,7 +7438,7 @@ function orphanContext(it) {
   return box;
 }
 
-function fillOrphanContext(body, c) {
+function fillOrphanContext(body, c, opts = {}) {
   body.innerHTML = "";
   const section = (title, node) => {
     if (!node) return;
@@ -7475,6 +7479,7 @@ function fillOrphanContext(body, c) {
     // reading the instruction, not inferring it from a button label.
     const inner = document.createElement("details");
     inner.className = "run-ctx-sub";
+    inner.open = !!opts.expandAll;
     inner.appendChild(el("summary", "", "The prompt a Resume would send"));
     inner.appendChild(el("pre", "run-ctx-pre", c.resume_prompt));
     const copy = el("button", "fchip sm", "Copy prompt");
@@ -7490,7 +7495,55 @@ function fillOrphanContext(body, c) {
   }
 }
 
-function orphanBody(card, it) {
+let runFocusClose = null;
+
+function orphanRunItem(it) {
+  return runItems().find((row) => row.kind === "unlanded"
+    && row.src.key === it.key) || {
+      kind: "unlanded", key: "orphan:" + it.key, src: it,
+      ts: runTs(it.last_activity) || runTs(it.last_activity_iso),
+      tsWord: "last touched",
+      title: (it.branch || "").replace(/^claude\//, ""),
+      state: "unlanded", stateLabel: orphanBits(it),
+    };
+}
+
+// The decision card breaks out of the Forge window into the foreground.
+// It is rebuilt from the same source item rather than cloning DOM, so every
+// action keeps its real listener and the full context can load normally.
+function openOrphanFocus(it) {
+  runFocusClose?.();
+  const back = el("div", "run-focus-scrim");
+  const shell = el("section", "run-focus-shell");
+  shell.setAttribute("role", "dialog");
+  shell.setAttribute("aria-modal", "true");
+  shell.setAttribute("aria-label", "Full unlanded branch context");
+  const closeBtn = el("button", "run-focus-close", "Close");
+  const card = runCard(orphanRunItem(it), { focused: true });
+  card.classList.add("run-focus-card");
+  shell.append(closeBtn, card);
+  back.appendChild(shell);
+
+  const close = () => {
+    if (!back.isConnected) return;
+    back.remove();
+    document.body.classList.remove("run-focus-active");
+    document.removeEventListener("keydown", key, true);
+    if (runFocusClose === close) runFocusClose = null;
+  };
+  const key = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); close(); }
+  };
+  runFocusClose = close;
+  closeBtn.addEventListener("click", close);
+  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  document.addEventListener("keydown", key, true);
+  document.body.classList.add("run-focus-active");
+  document.body.appendChild(back);
+  closeBtn.focus({ preventScroll: true });
+}
+
+function orphanBody(card, it, opts = {}) {
   // The evidence the decision needs, on the row (owner, 2026-08-05: "I
   // just have to arbitrarily decide"): what was asked, what the commits
   // say, which files changed.
@@ -7533,19 +7586,27 @@ function orphanBody(card, it) {
       card.appendChild(fx);
     }
 
-    const context = orphanContext(it);
-    card.appendChild(context);
-    card.setAttribute("aria-expanded", "false");
-    context.addEventListener("toggle", () => {
-      card.classList.toggle("context-open", context.open);
-      card.setAttribute("aria-expanded", context.open ? "true" : "false");
-    });
-    // The disclosure label remains a visible affordance and collapse
-    // control, but the card itself opens the full context. Embedded action
-    // buttons and text selection keep their own behaviour through cardAction.
-    cardAction(card, () => {
-      if (!context.open) context.open = true;
-    }, { hint: "Expand the full worktree context" });
+    if (opts.focused) {
+      const context = orphanContext(it, { expandAll: true });
+      card.appendChild(context);
+      card.setAttribute("aria-expanded", "true");
+      context.addEventListener("toggle", () => {
+        card.classList.toggle("context-open", context.open);
+        card.setAttribute("aria-expanded", context.open ? "true" : "false");
+      });
+      context.open = true;
+      card.classList.add("context-open");
+    } else {
+      card.appendChild(el("div", "run-context-launch",
+        "Full context — opens in the foreground"));
+      // The row is the only launch surface for the foreground decision card;
+      // there is no competing inline disclosure left on the compact version.
+      // Embedded actions and text selection keep their own behaviour through
+      // cardAction.
+      cardAction(card, () => openOrphanFocus(it), {
+        hint: "Open the complete worktree context",
+      });
+    }
 
     const foot = el("div", "run-foot orphan-foot");
     if (it.action && it.action.status === "running") {
@@ -7578,18 +7639,20 @@ function orphanBody(card, it) {
     }
   }
 
-  const dis = el("button", "idea-del", "×");
-  dis.title = "Dismiss this row";
-  dis.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    await post("/api/orphanwork/dismiss", { key: it.key });
-    card.remove();
-    toast("Dismissed", [["Undo", async () => {
-      await post("/api/orphanwork/dismiss", { key: it.key, restore: true });
-      loadOrphans();
-    }]]);
-  });
-  card.appendChild(dis);
+  if (!opts.focused) {
+    const dis = el("button", "idea-del", "×");
+    dis.title = "Dismiss this row";
+    dis.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await post("/api/orphanwork/dismiss", { key: it.key });
+      card.remove();
+      toast("Dismissed", [["Undo", async () => {
+        await post("/api/orphanwork/dismiss", { key: it.key, restore: true });
+        loadOrphans();
+      }]]);
+    });
+    card.appendChild(dis);
+  }
 }
 
 // ---------- loaders ----------

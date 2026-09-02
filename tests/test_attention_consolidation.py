@@ -77,12 +77,20 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertEqual(self.app.count('revealHighlight(node);'), 4)
         self.assertIn('outline: 2px solid var(--accent)', self.css)
 
-    def test_record_card_click_expands_its_full_context(self):
+    def test_record_card_click_opens_a_fully_expanded_focus_view(self):
         self.assertIn(
-            'card.classList.toggle("context-open", context.open);', self.app)
+            'cardAction(card, () => openOrphanFocus(it)', self.app)
         self.assertIn(
-            'if (!context.open) context.open = true;', self.app)
-        self.assertIn('.run-card.k-unlanded.context-open', self.css)
+            'const card = runCard(orphanRunItem(it), { focused: true });',
+            self.app)
+        self.assertIn('inner.open = !!opts.expandAll;', self.app)
+        self.assertIn('context.open = true;', self.app)
+        self.assertIn('"Full context — opens in the foreground"', self.app)
+        self.assertIn('.run-focus-scrim', self.css)
+        self.assertIn('.run-focus-card .run-ctx-body', self.css)
+
+    def test_attention_reveal_opens_the_same_focus_view(self):
+        self.assertIn('if (orphan) openOrphanFocus(orphan);', self.app)
 
     def test_attention_prose_wraps_instead_of_ellipsizing(self):
         self.assertIn('Global to the combined Attention module', self.css)
