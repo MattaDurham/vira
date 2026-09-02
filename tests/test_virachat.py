@@ -65,11 +65,17 @@ class TheStore(ChatBase):
 
 
 class SendingATurn(ChatBase):
-    def test_the_first_turn_launches_a_read_only_session_on_the_tools(self):
+    def test_the_first_turn_launches_a_session_on_the_tools_at_the_default_rung(self):
         s = virachat.send("What is on my calendar tomorrow?")
         self.assertEqual(len(self.launched), 1)
         args, kw = self.launched[0]
-        self.assertTrue(kw["read_only"])           # no cards, no writes
+        # NOT read-only and NO rung named here: a chat is an owner session
+        # and runs on session_default_mode like every other dispatch. The
+        # read-only first cut could see /api/subs and could not call it.
+        self.assertFalse(kw.get("read_only", False))
+        self.assertNotIn("mode", kw)
+        self.assertNotIn("permission_mode", kw)
+        self.assertIn("/api/subs", args[0])
         self.assertEqual(kw["meta"], {"kind": "chat"})
         self.assertEqual(kw["provider"], "anthropic")   # the engine with the tools
         self.assertIn("mcp__vira__find first", args[0])
