@@ -57,7 +57,7 @@ class AttentionConsolidationContracts(unittest.TestCase):
 
     def test_attention_cards_activate_their_one_safe_primary_destination(self):
         self.assertIn(
-            'cardAction(row, () => verb.run(btn), { hint: verb.title });',
+            'cardAction(row, () => verb.run(btn, row), { hint: verb.title });',
             self.app)
         self.assertIn(
             'cardAction(row, () => openReviewTarget(it), {', self.app)
@@ -100,7 +100,42 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.run-brief-visuals', self.css)
 
     def test_attention_reveal_opens_the_same_focus_view(self):
-        self.assertIn('if (orphan) openOrphanFocus(orphan);', self.app)
+        self.assertIn('openOrphanFocus(orphan);', self.app)
+        self.assertIn('requestAnimationFrame(() => trace.cancel());',
+                      self.app)
+
+    def test_attention_to_forge_wait_has_an_honest_signal_trace(self):
+        self.assertIn(
+            'function beginOrphanTrace(sourceNode, branch = "", summary = {})',
+                      self.app)
+        self.assertIn(
+            'const trace = beginOrphanTrace(sourceNode, branch, summary);',
+            self.app)
+        self.assertIn('trace.stage("forge");', self.app)
+        self.assertIn('trace.stage("context");', self.app)
+        self.assertIn('trace.stage("ready");', self.app)
+        self.assertIn('"Still gathering full context"', self.app)
+        self.assertIn('"Nothing will be hidden"', self.app)
+        self.assertIn('const clock = setInterval(updateClock, 1000);', self.app)
+        self.assertIn('.run-trace-source', self.css)
+        self.assertIn('.run-trace-target', self.css)
+        self.assertIn('.run-trace-packet', self.css)
+        self.assertIn('@keyframes run-trace-draw', self.css)
+        self.assertIn('@media (prefers-reduced-motion: reduce)', self.css)
+        self.assertNotIn('run-trace-percent', self.app + self.css)
+
+    def test_signal_trace_first_frame_is_a_truthful_evidence_receipt(self):
+        self.assertIn('"Instant branch evidence"', self.app)
+        self.assertIn('"Decision route"', self.app)
+        self.assertIn('"Full context manifest"', self.app)
+        self.assertIn('"Fills only when Forge returns evidence"', self.app)
+        self.assertIn('countFrom(/(\\d+)\\s+dirty files?/i)', self.app)
+        for label in ("Prompt", "Commits", "Files", "Visuals",
+                      "Resume instructions"):
+            self.assertIn(f'"{label}"', self.app)
+        self.assertIn('.run-trace-receipt', self.css)
+        self.assertIn('.run-trace-flow-steps', self.css)
+        self.assertIn('.run-trace-manifest-row', self.css)
 
     def test_attention_prose_wraps_instead_of_ellipsizing(self):
         self.assertIn('Global to the combined Attention module', self.css)
@@ -115,7 +150,8 @@ class AttentionConsolidationContracts(unittest.TestCase):
 
     def test_attention_verbs_reveal_exact_objects(self):
         self.assertIn(
-            'run: () => revealOrphan(r.orphan_key, r.orphan_branch)',
+            'run: (_btn, source) => revealOrphan(\n'
+            '               r.orphan_key, r.orphan_branch, source, r)',
             self.app)
         self.assertIn('n.dataset.runBranch === branch', self.app)
         self.assertIn(

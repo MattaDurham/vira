@@ -256,6 +256,7 @@ def _orphan_rows():
     rows = []
     for it in orphanwork.compose()["items"]:
         kind = it.get("kind") or "unmerged"
+        read = it.get("read") or {}
         if kind == "unpushed":
             sub = f"{it.get('ahead', 0)} commits not pushed"
         else:
@@ -264,7 +265,6 @@ def _orphan_rows():
                 bits.append(f"{it['dirty']} dirty files")
             if it.get("ahead"):
                 bits.append(f"{it['ahead']} unmerged commits")
-            read = it.get("read") or {}
             if read.get("verdict"):
                 bits.append("Vira: " + read["verdict"])
             sub = " — ".join(bits) or "unlanded"
@@ -273,6 +273,9 @@ def _orphan_rows():
             it.get("branch") or it.get("key"), sub, verb="review",
             age_days=it.get("age_days"), orphan_key=it.get("key"),
             orphan_branch=it.get("branch"),
+            orphan_kind=kind, dirty=int(it.get("dirty") or 0),
+            ahead=int(it.get("ahead") or 0),
+            verdict=read.get("verdict") or "",
             activity_at=it.get("last_activity")))
     return rows
 

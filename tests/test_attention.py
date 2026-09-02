@@ -264,6 +264,10 @@ class Orphans(Base):
         self.assertIn("3 dirty files", r["sub"])
         self.assertIn("Vira: land", r["sub"])
         self.assertEqual(r["orphan_branch"], "claude/x")
+        self.assertEqual(r["orphan_kind"], "dirty")
+        self.assertEqual(r["dirty"], 3)
+        self.assertEqual(r["ahead"], 1)
+        self.assertEqual(r["verdict"], "land")
 
 
 class Health(Base):

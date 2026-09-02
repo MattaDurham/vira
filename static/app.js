@@ -7164,24 +7164,279 @@ function renderRuns() {
   }
 }
 
+let runTraceActive = null;
+
+function runTraceSvg(name, attrs = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+  return node;
+}
+
+// The Attention card is the origin and the foreground Forge card is the
+// destination. Keep both visible throughout the expensive Record refresh so
+// a long request reads as navigation and assembly, never a swallowed click.
+// Stages move only when their underlying client event really happened; time
+// is the one continuous measure we can report honestly during the opaque
+// server wait.
+function beginOrphanTrace(sourceNode, branch = "", summary = {}) {
+  runTraceActive?.cancel();
+
+  const layer = el("div", "run-trace-layer");
+  layer.dataset.phase = "signal";
+  layer.setAttribute("role", "status");
+  layer.setAttribute("aria-live", "polite");
+  layer.setAttribute("aria-label", "Opening this branch in the Forge");
+  layer.appendChild(el("div", "run-trace-wash"));
+
+  const source = el("div", "run-trace-source");
+  source.appendChild(el("span", "run-trace-source-kicker", "Selected in Attention"));
+  source.appendChild(el("strong", "", (branch || "Branch review")
+    .replace(/^claude\//, "").slice(0, 72)));
+  layer.appendChild(source);
+
+  const target = el("section", "run-trace-target");
+  const targetHead = el("div", "run-trace-head");
+  const words = el("div", "run-trace-words");
+  const status = el("strong", "run-trace-status", "Signal acquired");
+  const detail = el("span", "run-trace-detail", "Opening this decision in the Forge");
+  words.append(status, detail);
+  const elapsed = el("span", "run-trace-elapsed", "0s");
+  targetHead.append(words, elapsed);
+  target.appendChild(targetHead);
+
+  // This receipt is intentionally limited to the already-loaded Attention
+  // row. It can paint on the first frame without pretending the slower Git,
+  // prompt, file, and visual evidence has returned from Record.
+  const scaffold = el("div", "run-trace-scaffold");
+  const receipt = el("section", "run-trace-receipt");
+  receipt.appendChild(el("span", "run-trace-kicker", "Instant branch evidence"));
+  receipt.appendChild(el("h2", "run-trace-branch",
+    summary.title || branch || "Branch review"));
+  if (summary.sub)
+    receipt.appendChild(el("p", "run-trace-summary", summary.sub));
+
+  const facts = el("div", "run-trace-facts");
+  const fact = (label, value, tone = "") => {
+    const node = el("div", `run-trace-fact${tone ? ` ${tone}` : ""}`);
+    node.append(el("span", "", label), el("strong", "", value));
+    facts.appendChild(node);
+  };
+  // The structured fields are the current contract. Reading our own older
+  // subtitle shape keeps an already-open page useful across a server restart
+  // instead of briefly regressing its known counts to zero.
+  const summaryLine = String(summary.sub || "");
+  const countFrom = (pattern) => Number((summaryLine.match(pattern) || [])[1] || 0);
+  const dirty = Number(summary.dirty ?? countFrom(/(\d+)\s+dirty files?/i));
+  const ahead = Number(summary.ahead
+    ?? countFrom(/(\d+)\s+(?:unmerged commits?|commits? not pushed)/i));
+  const verdict = summary.verdict
+    || (summaryLine.match(/Vira:\s*([^\s—]+)/i) || [])[1] || "";
+  fact("Changed", `${dirty} ${dirty === 1 ? "file" : "files"}`);
+  fact("Unmerged", `${ahead} ${ahead === 1 ? "commit" : "commits"}`);
+  if (summary.age_days != null) fact("Last touched", briefDays(summary.age_days));
+  if (verdict) fact("Vira read", String(verdict), "is-verdict");
+  receipt.appendChild(facts);
+
+  const flow = el("section", "run-trace-flow");
+  flow.appendChild(el("span", "run-trace-section-label", "Decision route"));
+  const flowSteps = el("div", "run-trace-flow-steps");
+  const buildDetail = (dirty || ahead)
+    ? `${ahead} commit${ahead === 1 ? "" : "s"} · ${dirty} change${dirty === 1 ? "" : "s"}`
+    : "Branch located";
+  [
+    ["01", "Request", "Selected in Attention", "is-done"],
+    ["02", "Build", buildDetail, "is-done"],
+    ["03", "Review", "Gathering evidence", "is-active"],
+    ["04", "Decide", verdict
+      ? `Vira recommends ${verdict}` : "Land, resume, or discard", ""],
+  ].forEach(([number, label, note, state]) => {
+    const step = el("div", `run-trace-step ${state}`.trim());
+    step.append(el("span", "run-trace-step-number", number),
+      el("strong", "", label), el("small", "", note));
+    flowSteps.appendChild(step);
+  });
+  flow.appendChild(flowSteps);
+
+  const manifest = el("section", "run-trace-manifest");
+  const manifestHead = el("div", "run-trace-manifest-head");
+  manifestHead.append(el("span", "run-trace-section-label", "Full context manifest"),
+    el("small", "", "Fills only when Forge returns evidence"));
+  manifest.appendChild(manifestHead);
+  const manifestRows = el("div", "run-trace-manifest-rows");
+  [
+    ["Prompt", "waiting"],
+    ["Commits", ahead ? `${ahead} counted · details pending` : "waiting"],
+    ["Files", dirty ? `${dirty} counted · details pending` : "waiting"],
+    ["Visuals", "waiting"],
+    ["Resume instructions", "waiting"],
+  ].forEach(([label, note]) => {
+    const row = el("div", "run-trace-manifest-row");
+    row.append(el("i", "run-trace-manifest-dot"), el("strong", "", label),
+      el("span", "", note));
+    manifestRows.appendChild(row);
+  });
+  manifest.appendChild(manifestRows);
+  scaffold.append(receipt, flow, manifest);
+  target.appendChild(scaffold);
+  layer.appendChild(target);
+
+  const svg = runTraceSvg("svg", {
+    class: "run-trace-svg", "aria-hidden": "true",
+    preserveAspectRatio: "none",
+  });
+  const path = runTraceSvg("path", { class: "run-trace-path", pathLength: "1" });
+  svg.appendChild(path);
+  const nodes = [];
+  for (let i = 0; i < 3; i += 1) {
+    const dot = runTraceSvg("circle", { class: "run-trace-node", r: "5" });
+    nodes.push(dot);
+    svg.appendChild(dot);
+  }
+  const packets = [];
+  for (let i = 0; i < 4; i += 1) {
+    const packet = runTraceSvg("circle", {
+      class: "run-trace-packet", r: String(3.4 - i * .55),
+    });
+    const motion = runTraceSvg("animateMotion", {
+      dur: "1.85s", begin: `${-i * .09}s`, repeatCount: "indefinite",
+    });
+    packet.appendChild(motion);
+    packets.push(motion);
+    svg.appendChild(packet);
+  }
+  layer.appendChild(svg);
+
+  const rect = sourceNode?.getBoundingClientRect();
+  if (rect && rect.width > 20 && rect.height > 20) {
+    source.style.left = `${rect.left}px`;
+    source.style.top = `${rect.top}px`;
+    source.style.width = `${rect.width}px`;
+    source.style.height = `${rect.height}px`;
+    sourceNode.classList.add("run-trace-origin");
+    sourceNode.setAttribute("aria-busy", "true");
+  } else {
+    source.hidden = true;
+  }
+
+  document.body.classList.add("run-trace-active");
+  document.body.appendChild(layer);
+
+  let stopped = false;
+  const started = performance.now();
+  const copy = {
+    signal: ["Signal acquired", "Opening this decision in the Forge"],
+    forge: ["Forge located", "Requesting the complete Record context"],
+    context: ["Gathering context", "Full prompt, commits, files, and visuals"],
+    ready: ["Context received", "Opening the complete foreground review"],
+    missing: ["Branch moved", "This work is no longer waiting for review"],
+  };
+
+  const updateClock = () => {
+    const seconds = Math.max(0, Math.floor((performance.now() - started) / 1000));
+    elapsed.textContent = `${seconds}s`;
+    if (seconds >= 20 && layer.dataset.phase === "context") {
+      status.textContent = "Still gathering full context";
+      detail.textContent = "Nothing will be hidden";
+    }
+  };
+  const clock = setInterval(updateClock, 1000);
+
+  const curvePoint = (values, t) => {
+    const mt = 1 - t;
+    const [p0, p1, p2, p3] = values;
+    return mt ** 3 * p0 + 3 * mt ** 2 * t * p1
+      + 3 * mt * t ** 2 * p2 + t ** 3 * p3;
+  };
+  const layout = () => {
+    if (stopped || !layer.isConnected) return;
+    svg.setAttribute("viewBox", `0 0 ${innerWidth} ${innerHeight}`);
+    const from = source.hidden ? {
+      left: innerWidth - 26, top: innerHeight * .42,
+      width: 1, height: 1,
+    } : source.getBoundingClientRect();
+    const to = target.getBoundingClientRect();
+    const sx = from.left;
+    const sy = from.top + Math.min(from.height * .42, 110);
+    const tx = to.right;
+    const ty = to.top + Math.min(to.height * .45, 260);
+    const bend = Math.max(55, Math.min(180, Math.abs(sx - tx) * .32));
+    const xs = [sx, sx - bend, tx + bend, tx];
+    const ys = [sy, sy, ty, ty];
+    const d = `M ${sx} ${sy} C ${xs[1]} ${ys[1]}, ${xs[2]} ${ys[2]}, ${tx} ${ty}`;
+    path.setAttribute("d", d);
+    packets.forEach((motion) => motion.setAttribute("path", d));
+    nodes.forEach((node, index) => {
+      const t = (index + 1) / 4;
+      node.setAttribute("cx", curvePoint(xs, t));
+      node.setAttribute("cy", curvePoint(ys, t));
+    });
+  };
+  addEventListener("resize", layout);
+  requestAnimationFrame(layout);
+
+  const stage = (phase) => {
+    if (stopped) return;
+    layer.dataset.phase = phase;
+    const next = copy[phase] || copy.context;
+    status.textContent = next[0];
+    detail.textContent = next[1];
+    updateClock();
+  };
+  const cancel = (delay = 0) => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(clock);
+    removeEventListener("resize", layout);
+    sourceNode?.classList.remove("run-trace-origin");
+    sourceNode?.removeAttribute("aria-busy");
+    layer.classList.add("is-leaving");
+    setTimeout(() => {
+      layer.remove();
+      // A second card can be chosen while the first layer is fading. Its
+      // replacement owns the busy cursor now; the old timeout must not clear
+      // that newer state out from underneath it.
+      if (!runTraceActive) document.body.classList.remove("run-trace-active");
+    }, delay || (REDUCED_MOTION ? 0 : 260));
+    if (runTraceActive?.layer === layer) runTraceActive = null;
+  };
+  const controller = { layer, stage, cancel };
+  runTraceActive = controller;
+  return controller;
+}
+
 // Open one exact unlanded item, never the generic Record landing page. This
 // is the source-link contract Attention rows follow: clear any filter that
 // could hide the object, fetch the owning surface, then scroll and mark it.
-async function revealOrphan(key, branch = "") {
+async function revealOrphan(key, branch = "", sourceNode = null, summary = {}) {
+  const trace = beginOrphanTrace(sourceNode, branch, summary);
   setWorkTab("live", { defer: true });
   setRunsFilter("unlanded");
   openApp("work");
+  trace.stage("forge");
+  trace.stage("context");
   await loadRuns().catch(() => {});
   const want = "orphan:" + key;
   const cards = [...document.querySelectorAll("[data-run-key]")];
   const node = cards.find((n) => n.dataset.runKey === want)
     || (branch && cards.find((n) => n.dataset.runBranch === branch));
-  if (!node) { toast("That branch is no longer waiting"); return; }
+  if (!node) {
+    trace.stage("missing");
+    setTimeout(() => trace.cancel(), REDUCED_MOTION ? 0 : 700);
+    toast("That branch is no longer waiting");
+    return;
+  }
   node.scrollIntoView({ block: "center", behavior: REDUCED_MOTION ? "auto" : "smooth" });
   revealHighlight(node);
   const orphan = runsState.orphan.find((it) => it.key === key)
     || runsState.orphan.find((it) => it.branch === branch);
-  if (orphan) openOrphanFocus(orphan);
+  if (orphan) {
+    trace.stage("ready");
+    trace.layer.classList.add("is-ready");
+    openOrphanFocus(orphan);
+    requestAnimationFrame(() => trace.cancel());
+  } else {
+    trace.cancel();
+  }
 }
 
 async function revealBoardsHealth() {
@@ -9455,7 +9710,8 @@ function attnVerb(r) {
   if (r.kind === "orphan")
     return { label: "review",
              title: "Open this exact unlanded branch with its full context",
-             run: () => revealOrphan(r.orphan_key, r.orphan_branch) };
+             run: (_btn, source) => revealOrphan(
+               r.orphan_key, r.orphan_branch, source, r) };
   if (r.id === "health:ai")
     return { label: "recheck",
              title: "Probe the AI backend again right now",
@@ -9522,13 +9778,13 @@ function attnRow(sec, r) {
     btn.title = verb.title;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      verb.run(btn);
+      verb.run(btn, row);
     });
     foot.appendChild(btn);
     // Every Now card has one canonical verb. The visible button names it;
     // the full card is the generous hit target, including for non-session
     // rows such as Review, Forge traces, health, and unlanded branches.
-    cardAction(row, () => verb.run(btn), { hint: verb.title });
+    cardAction(row, () => verb.run(btn, row), { hint: verb.title });
   }
   if (foot.childElementCount) main.appendChild(foot);
   row.appendChild(main);
