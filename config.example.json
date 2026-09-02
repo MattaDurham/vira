@@ -87,6 +87,8 @@
   "_atlas_max_nodes": "Contact Atlas node cap - the N most-active tiered contacts rendered in the graph. Keeps the mesh legible and the O(n^2) edge passes cheap.",
   "atlas_min_edge_weight": 0.15,
   "_atlas_min_edge_weight": "Edges whose fused multi-signal weight falls below this are dropped from the atlas.",
+  "circle_refresh_min": 60,
+  "_circle_refresh_min": "Minutes between circle sync passes (server/circles.py): re-matches the Visual Network's social circles to their stable identities and re-reads (one model call each, at most four per pass) only the circles whose members or shared group chats changed.",
 
   "media_archive_enabled": true,
   "_media_archive_enabled": "Keep Vira's own copy of every iMessage attachment. macOS treats ~/Library/Messages/Attachments as an evictable cache - Messages in iCloud offloads the bytes under storage pressure and leaves the chat.db row - so without this a conversation's media history decays into a list of filenames.",

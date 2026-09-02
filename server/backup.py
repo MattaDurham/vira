@@ -37,6 +37,7 @@ FILES = ("ideas.json", "config.json", "subscriptions.json",
          # the missing-file skip below is the correct behavior, not a dead
          # entry (verified against the writer 2026-08-10).
          "atlas-groups.json", "jobs-log.json", "applications.json",
+         "atlas-circles.json",   # circle names, stories, history, renames
          "mail-accounts.json", "circuits.json", "evidence.json",
          # The Reader's queue: which documents are worth reading and which are
          # read. The documents themselves live at their sources, but the

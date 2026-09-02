@@ -771,9 +771,21 @@ def build_graph(narrate=False):
                 narrate_edges(graph, c)
             with _lock, locked(GRAPH):
                 _write(graph)
+            _after_build(graph)
             return graph
         finally:
             _building.clear()
+
+
+def _after_build(graph):
+    """A rebuild renumbers every circle; the circles store re-matches
+    identities and re-reads what changed (server/circles.py), in its own
+    thread so the build lock is not held across model calls."""
+    try:
+        from . import circles
+        circles.sync_async(graph)
+    except Exception:  # noqa: BLE001 — never a reason to lose the graph
+        pass
 
 
 def refresh(narrate=False):
@@ -792,6 +804,14 @@ def compose(vault=False):
         graph = _read()
     if not graph:
         return {"status": "empty", "building": _building.is_set()}
+    # Circle names first, then the owner's group edits: apply_overrides
+    # keys its dissolve list on the label, so it must see the name the
+    # legend showed when the owner removed it (server/circles.py).
+    from . import circles
+    try:
+        circles.apply(graph)
+    except Exception:  # noqa: BLE001 — a bad store costs names, not the web
+        pass
     apply_overrides(graph)
     if vault:
         from . import atlasvault
@@ -852,7 +872,8 @@ def apply_overrides(graph):
         return graph
     dissolved = {d.lower() for d in ov["dissolved"]}
     dead = {c["id"] for c in graph.get("clusters", [])
-            if (c.get("label") or "").lower() in dissolved}
+            if (c.get("label") or "").lower() in dissolved
+            or (c.get("raw_label") or "").lower() in dissolved}
     custom = {g["id"] for g in ov["groups"]}
     for n in graph.get("nodes", []):
         if n.get("cluster") in dead:
@@ -1007,7 +1028,12 @@ def person_groups(pid):
         # not a rendered node — the store may still designate them
         cur = _groups_read()["assign"].get(pid) or None
     meta = next((c for c in g["clusters"] if c["id"] == cur), None)
+    story = None
+    if meta and meta.get("circle"):
+        from . import circles
+        story = circles.brief(meta["circle"])
     return {"status": "ok", "current": meta, "groups": g["clusters"],
+            "story": story,
             "in_atlas": any(n["id"] == pid for n in g["nodes"])}
 
 

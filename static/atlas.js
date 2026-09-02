@@ -806,6 +806,17 @@
           selectionChanged();
         } },
     ];
+    // A circle with a stable identity (server/circles.py) has a story of
+    // its own and a name the owner can override — that rename lives in
+    // the circles store, keyed on the identity, so it survives rebuilds.
+    if (c.circle)
+      items.push(
+        { label: c.story ? "About this circle"
+                         : "About this circle (not read yet)",
+          run: () => { S.iso = { ids: new Set([c.id]), ring: 0 };
+                       isoChanged(); } },
+        { label: "Rename circle…", run: () => renameCircle(c) },
+        { label: "Have Vira read it again", run: () => rereadCircle(c) });
     // Only the Groups lens is a store the owner owns. Companies, circles
     // and locations are derived every read, so a rename there would be
     // an edit with a shelf life of one refresh.
@@ -1082,7 +1093,18 @@
 
   async function renderSelCard() {
     if (editorId) { renderGroupEditor(); return; }
-    if (!S.sel.size) { card.style.display = "none"; return; }
+    if (!S.sel.size) {
+      // one circle isolated and nothing selected: the card is the
+      // circle's own story — click a chip, read what it is
+      const iso = [...S.iso.ids];
+      const band = iso.length === 1
+        && S.bands.find((b) => b.id === iso[0] && b.circle);
+      if (band) { renderCircleCard(band); return; }
+      circleShown = null;
+      card.style.display = "none";
+      return;
+    }
+    circleShown = null;
     if (S.sel.size >= 2) { renderMultiCard(); return; }
     const p = [...S.sel][0];
     card.style.display = "";
@@ -1187,6 +1209,182 @@
         "No ties, bridges, or shared connections among the selected — "
         + "they only connect through you."));
     card.appendChild(list);
+  }
+
+  // ---------- the circle card (server/circles.py) ----------
+
+  let circleShown = null;          // stable circle id the card is showing
+
+  function relDays(iso) {
+    if (!iso) return "";
+    const d = (Date.now() - Date.parse(iso)) / 864e5;
+    if (d < 1) return "today";
+    if (d < 2) return "yesterday";
+    if (d < 30) return `${Math.floor(d)}d ago`;
+    return iso.slice(0, 10);
+  }
+
+  async function renderCircleCard(band, quiet = false) {
+    if (editorId) return;
+    circleShown = band.circle;
+    card.style.display = "";
+    if (!quiet) {
+      card.innerHTML = "";
+      card.appendChild(el("div", "hint", "reading the circle…"));
+    }
+    let d;
+    try { d = await api("/api/atlas/circles/" + band.circle); }
+    catch {
+      card.innerHTML = "";
+      card.appendChild(el("div", "hint", "circle unavailable"));
+      return;
+    }
+    if (circleShown !== band.circle || S.sel.size || editorId) return;
+    paintCircle(band, d);
+  }
+
+  function paintCircle(band, d) {
+    card.innerHTML = "";
+    const head = el("div", "atlas-card-head");
+    const dot = el("span", "atlas-dot atlas-dot-big");
+    dot.style.background = S.colors.get(band.id) || "#888";
+    head.appendChild(dot);
+    const mid = el("div", "atlas-card-name");
+    mid.appendChild(el("div", null, d.display_label));
+    const n = d.members.length;
+    mid.appendChild(el("div", "hint",
+      `circle · ${n} people`
+      + (d.story?.since ? ` · since ${d.story.since}` : "")));
+    head.appendChild(mid);
+    const x = el("button", "idea-del", "×");
+    x.addEventListener("click", () => {
+      circleShown = null;
+      S.iso = { ids: new Set(), ring: 0 };
+      isoChanged(false);
+    });
+    head.appendChild(x);
+    card.appendChild(head);
+
+    const story = el("div", "atlas-story");
+    if (d.read_at) {
+      if (d.why) story.appendChild(el("p", "hint", d.why));
+      story.appendChild(el("div", "atlas-card-sub", "How you're connected"));
+      story.appendChild(el("p", null, d.story?.you || ""));
+      story.appendChild(el("div", "atlas-card-sub", "How they connect"));
+      story.appendChild(el("p", null, d.story?.them || ""));
+      if (d.held?.label)
+        story.appendChild(el("p", "hint",
+          `Vira proposed "${d.held.label}" and held it — ${d.held.reason}.`));
+      story.appendChild(el("div", "hint atlas-read-when",
+        "read " + relDays(d.read_at)
+        + (d.read_reason ? ` · ${d.read_reason}` : "")));
+    } else {
+      story.appendChild(el("p", "hint", d.read_error
+        ? "Vira could not read this circle yet: " + d.read_error
+        : "Vira has not read this circle yet. Until it has, the name is "
+          + "its most-shared named group chat, or its hub's."));
+    }
+    card.appendChild(story);
+
+    card.appendChild(el("div", "atlas-card-sub", `Members (${n})`));
+    const chips = el("div", "atlas-card-chips");
+    const hub = d.story?.hub || d.ev?.hub;
+    for (const m of d.members) {
+      const c = el("button", "atlas-deg atlas-selchip",
+        firstLast(m.name) + (m.id === hub ? " · hub" : ""));
+      c.title = m.id === hub ? "Holds the circle together — click to feature"
+                             : "Click to feature this person";
+      c.addEventListener("click", () => {
+        const p = S.nodes.find((q) => q.id === m.id);
+        if (p) toggleSelect(p);
+        else openPerson(m.id);
+      });
+      chips.appendChild(c);
+    }
+    card.appendChild(chips);
+
+    const chats = (d.ev?.chats || []).filter((g) => g.named).slice(0, 6);
+    if (chats.length) {
+      card.appendChild(el("div", "atlas-card-sub", "Group chats they share"));
+      const list = el("div", "atlas-card-edges");
+      for (const g of chats) {
+        const row = el("div", "atlas-edge");
+        row.appendChild(el("div", "atlas-edge-name", g.label));
+        row.appendChild(el("div", "atlas-edge-why",
+          `${g.covers} of ${n} here · ${g.messages} messages`
+          + (g.last ? ` · last ${g.last}` : "")));
+        list.appendChild(row);
+      }
+      card.appendChild(list);
+    }
+
+    const hist = (d.history || []).slice(-6).reverse();
+    if (hist.length) {
+      card.appendChild(el("div", "atlas-card-sub", "What changed"));
+      const list = el("div", "atlas-hist");
+      for (const h of hist)
+        list.appendChild(el("div", null,
+          `${(h.when || "").slice(0, 10)} — ${h.what}`));
+      card.appendChild(list);
+    }
+
+    const foot = el("div", "atlas-card-chips");
+    const rn = el("button", "fchip sm", "Rename");
+    rn.addEventListener("click", () => renameCircle(band));
+    foot.appendChild(rn);
+    const rr = el("button", "fchip sm", "Read again");
+    rr.addEventListener("click", () => rereadCircle(band));
+    foot.appendChild(rr);
+    card.appendChild(foot);
+  }
+
+  async function refreshCircleLens(band) {
+    // names live on the served graph: re-read it and patch clusters +
+    // lenses in place (no re-layout), then repaint the card if it is up
+    try {
+      const g = await api("/api/atlas" + (vaultOn() ? "?vault=1" : ""));
+      if (g.status === "ok") applyGroups(g);
+    } catch { /* the next load carries it */ }
+    if (circleShown === band.circle && !S.sel.size)
+      renderCircleCard(band, true);
+  }
+
+  async function renameCircle(band) {
+    const name = prompt("Name this circle (empty clears your name)",
+                        band.label);
+    if (name === null) return;
+    try {
+      await post(`/api/atlas/circles/${band.circle}/rename`,
+                 { label: name.trim() });
+      toast(name.trim() ? "Circle renamed" : "Your name cleared");
+      await refreshCircleLens(band);
+    } catch (e) { toast("Rename failed: " + e.message); }
+  }
+
+  async function rereadCircle(band) {
+    let before = null;
+    try {
+      const d = await api("/api/atlas/circles/" + band.circle);
+      before = d.read_at || null;
+      await post(`/api/atlas/circles/${band.circle}/reread`, {});
+    } catch (e) { toast("Read failed: " + e.message); return; }
+    toast("Vira is reading the circle…");
+    // one model call, typically well under two minutes; poll until the
+    // read lands rather than sleeping a fixed time
+    const until = Date.now() + 180000;
+    const tick = async () => {
+      try {
+        const d = await api("/api/atlas/circles/" + band.circle);
+        if ((d.read_at || null) !== before || d.read_error) {
+          toast(d.read_error ? "Vira could not read it: " + d.read_error
+                             : `Read as "${d.display_label}"`);
+          await refreshCircleLens(band);
+          return;
+        }
+      } catch { /* keep polling */ }
+      if (Date.now() < until) setTimeout(tick, 3000);
+    };
+    setTimeout(tick, 3000);
   }
 
   function renderCard(d) {

@@ -93,6 +93,7 @@ DEFAULTS = {
     "atlas_anchor_org": "",              # pinned anchor-org cluster in the Contact Atlas
     "atlas_max_nodes": 200,              # atlas node cap (most-active contacts)
     "atlas_min_edge_weight": 0.15,       # edges below this fused weight are dropped
+    "circle_refresh_min": 60,            # minutes between circle sync passes (server/circles.py)
     # Vira's own copy of every iMessage attachment (server/mediaarchive.py).
     # macOS evicts ~/Library/Messages/Attachments under storage pressure and
     # keeps the chat.db row, so without this the media history decays into a
