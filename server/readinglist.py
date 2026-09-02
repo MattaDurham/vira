@@ -412,6 +412,19 @@ def _keep(items, best):
     return [it for it in items if id(it) in keep]
 
 
+def _newest_key(it):
+    """Document date first, then the moment it first landed in the Reader.
+
+    Producers encode dates at different precision: some know an exact time,
+    others only YYYY-MM-DD. Comparing those raw strings lets the formatting
+    decide their same-day order. The calendar day is the shared first rung;
+    within it, the later Reader arrival wins.
+    """
+    created = str(it.get("created") or "")
+    added = str(it.get("added") or "")
+    return ((created or added)[:10], added or created, created)
+
+
 def queue():
     """What is left to read, newest first. Completed entries are NOT here,
     and neither are rooms — a room is its own card in the Reader, tracked by
@@ -420,7 +433,7 @@ def queue():
     live = [i for i in _load()["items"]
             if not i.get("completed") and i.get("kind") != "room"
             and i.get("slug") not in read]
-    live.sort(key=lambda i: i.get("created") or i.get("added") or "", reverse=True)
+    live.sort(key=_newest_key, reverse=True)
     return [_decorate(i) for i in _dedupe(live)]
 
 
@@ -448,8 +461,7 @@ def library():
     lists (the _read_slugs case) — a merged copy's own `completed` stamp is
     its read state."""
     items = [i for i in _load()["items"] if i.get("kind") != "room"]
-    items.sort(key=lambda i: i.get("created") or i.get("added") or "",
-               reverse=True)
+    items.sort(key=_newest_key, reverse=True)
     rows = []
     for i in _dedupe(items):
         row = _decorate(i, with_progress=False)
