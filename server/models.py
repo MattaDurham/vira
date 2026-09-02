@@ -32,9 +32,10 @@ from them:
      is right the week Opus 5 ships and no one has to edit anything.
   2. **The LIVE `/v1/models` list**, when a key is on file. The provider
      is the authority on its own catalog.
-  3. **A value read out of the provider's OWN CONFIG on this machine**
-     (`cli_config` below — codex keeps its model in ~/.codex/config.toml).
-     Reading it is a probe like find_binary, not a pin.
+  3. **The installed provider CLI's OWN CATALOG OR CONFIG** on this machine.
+     Codex exposes its bundled catalog through ``debug models --bundled``;
+     config.toml remains the compatibility fallback for older binaries.
+     Both are probes like find_binary, not product pins.
 
 Anything else is a guess with a shelf life, and a guess renders exactly
 like a fact. That is how "Opus 4.8" and "GPT-5.6 Sol" stayed on screen
@@ -101,8 +102,9 @@ PROVIDERS = {
         "models_url": "https://api.anthropic.com/v1/models?limit=100",
         # The data/config.json keys each dropdown writes (suggest.DEFAULTS).
         "config_keys": {"cli": "cli_model", "api": "api_model"},
-        # Live agent sessions are Claude Agent SDK — only this provider
-        # drives Circuits, Judge, Agent Loops and the Ideas cockpit.
+        # Detailed session features are negotiated through
+        # agentbackend.capabilities; this coarse flag remains for callers
+        # that only need to know whether a live session exists.
         "can": {"draft": True, "sessions": True},
     },
     "openai": {
@@ -117,26 +119,22 @@ PROVIDERS = {
         "key_url": "https://platform.openai.com/api-keys",
         "install_url": "https://openai.com/codex",
         "install_cmd": "npm install -g @openai/codex",
-        # codex has no model ALIASES — it takes real ids, which rot loudly
-        # (a ChatGPT-account codex hard-rejects a stale generation name:
-        # "gpt-5.1-codex is not supported"). So its CLI list is read from
-        # codex's own config instead of pinned here: whatever codex is set
-        # to run is what Vira offers, and it updates when codex does.
+        # codex has no model ALIASES — it takes real ids, which rot loudly.
+        # cli_models asks the installed binary for its bundled catalog and
+        # falls back to this config value only when that command is absent.
         "models": {"cli": [], "api": []},
         "cli_config": {"path": "~/.codex/config.toml", "key": "model",
                        "label": "codex's own configured model"},
         "models_url": "https://api.openai.com/v1/models",
         "config_keys": {"cli": "openai_cli_model", "api": "openai_api_model"},
-        # codex exec serves drafts AND, since 2026-07-28, live agent
-        # sessions — best-effort grade: the runner drives `codex exec`
-        # inside its own harness, containment is codex's sandbox rather
-        # than Vira's per-tool gate (server/agentbackend.py says the rest).
+        # Drafts use codex exec. Live sessions use Codex App Server through
+        # Vira's native tool/approval/owner-interaction control plane;
+        # codex exec remains a compatibility fallback for older binaries.
         "can": {"draft": True, "sessions": True},
     },
-    # The API-only rows. Both have CLIs that may exist on a machine (gemini,
-    # grok) — presence is probed and shown — but Vira talks to them through
-    # their APIs: neither exposes the cheap auth-status probe the two rows
-    # above rely on, so status_cmd is None and auth derives from the key.
+    # The API-function rows. Both have CLIs that may exist on a machine
+    # (gemini, grok), but Vira's verified session path is their public
+    # function-calling API; status therefore derives from the API key.
     "google": {
         "label": "Google",
         "sub_name": "Gemini",
@@ -153,7 +151,7 @@ PROVIDERS = {
         "models_url": ("https://generativelanguage.googleapis.com"
                        "/v1beta/models?pageSize=200"),
         "config_keys": {"api": "google_api_model"},
-        "can": {"draft": True, "sessions": False},
+        "can": {"draft": True, "sessions": True},
     },
     "xai": {
         "label": "xAI",
@@ -168,7 +166,7 @@ PROVIDERS = {
         "models": {"cli": [], "api": []},
         "models_url": "https://api.x.ai/v1/models",
         "config_keys": {"api": "xai_api_model"},
-        "can": {"draft": True, "sessions": False},
+        "can": {"draft": True, "sessions": True},
     },
 }
 
@@ -176,6 +174,8 @@ PROVIDERS = {
 # the resolved paths for the process; a login state change does NOT need
 # this invalidated because auth is probed separately every time.
 _bin_cache = {}
+_cli_catalog_cache = {}
+_model_provider_cache = {}
 _lock = threading.Lock()
 
 
@@ -234,18 +234,61 @@ def cli_default_model(pid):
 
 
 def cli_models(pid):
-    """The CLI list for a provider: its aliases, or — for a CLI that has
-    no aliases — whatever that CLI is configured to run today."""
+    """The CLI list verified from the provider's own installed surface."""
     spec = PROVIDERS.get(pid)
     if not spec:
         return []
     listed = [{"id": i, "label": lb} for i, lb in spec["models"]["cli"]]
     if listed:
         return listed
+    if pid == "openai":
+        bundled = _codex_bundled_models()
+        if bundled:
+            return bundled
     found = cli_default_model(pid)
     if found and spec.get("cli_config"):
         return [{"id": found, "label": spec["cli_config"]["label"]}]
     return []
+
+
+def _codex_bundled_models():
+    """The installed Codex binary's own model catalog, or an empty list.
+
+    ``codex debug models --bundled`` is deterministic and does not make a
+    model call. It is a stronger source than config.toml: the config proves
+    one selected id, while the bundled catalog proves every id this exact
+    installation offers. Cache by binary path for the process lifetime.
+    """
+    binary = find_binary("openai")
+    if not binary:
+        return []
+    with _lock:
+        if binary in _cli_catalog_cache:
+            return list(_cli_catalog_cache[binary])
+    try:
+        proc = subprocess.run(
+            [binary, "debug", "models", "--bundled"],
+            capture_output=True, text=True, timeout=4,
+            env=settings.strip_env())
+        payload = json.loads(proc.stdout) if proc.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        payload = {}
+    out = []
+    for row in payload.get("models", []) if isinstance(payload, dict) else []:
+        mid = str(row.get("slug") or "").strip()
+        if not mid or row.get("visibility") == "hidden":
+            continue
+        out.append({"id": mid,
+                    "label": str(row.get("display_name") or mid),
+                    "description": str(row.get("description") or ""),
+                    "reasoning": [str(level.get("effort"))
+                                  for level in row.get("supported_reasoning_levels", [])
+                                  if level.get("effort")]})
+        if len(out) >= 40:
+            break
+    with _lock:
+        _cli_catalog_cache[binary] = list(out)
+    return out
 
 
 def install_command(pid):
@@ -516,6 +559,8 @@ def probe(pid):
         auth, detail = ABSENT, f"{spec['bin']} not found on this {where}"
 
     login_cmd = login_command(pid, binary)
+    from . import agentbackend
+    caps = agentbackend.capabilities(pid)
     return {
         "id": pid,
         "label": spec["label"],
@@ -526,7 +571,9 @@ def probe(pid):
         "detail": detail,
         "has_key": bool(key),
         "models": [m["id"] for m in cli_models(pid)],
-        "can": dict(spec["can"]),
+        "can": {"draft": bool(caps.get("draft")),
+                "sessions": bool(caps.get("sessions"))},
+        "capabilities": caps,
         "sessions_quality": _sessions_quality(pid, spec["can"]["sessions"]),
         "login_cmd": login_cmd,
         "key_url": spec.get("key_url", ""),
@@ -781,14 +828,19 @@ def options(refresh=False):
     provs = []
     for pid, spec in PROVIDERS.items():
         rec = probe(pid) or {}
+        caps = dict(rec.get("capabilities") or {})
+        if not caps:
+            from . import agentbackend
+            caps = agentbackend.capabilities(pid)
         provs.append({
             "id": pid, "label": spec["label"],
             "connected": bool(rec.get("connected")),
             "auth": rec.get("auth", ABSENT),
             "has_key": bool(rec.get("has_key")),
-            "sessions": bool(spec["can"]["sessions"]),
+            "sessions": bool(caps.get("sessions")),
             "sessions_quality": _sessions_quality(pid,
-                                                  spec["can"]["sessions"]),
+                                                  caps.get("sessions")),
+            "capabilities": caps,
             "config_keys": dict(spec["config_keys"]),
             **catalog(pid, refresh),
         })
@@ -803,6 +855,39 @@ def options(refresh=False):
                "active": want if want in usable else next(iter(usable), ""),
                "roster": [str(m) for m in roster]
                if isinstance(roster, list) else []}
+    known = {}
+    for provider in provs:
+        rows = list(provider.get("cli") or []) + list(provider.get("api") or [])
+        for row in rows:
+            mid = str(row.get("id") or "").strip()
+            if not mid:
+                continue
+            # An ambiguous id cannot safely choose a provider. UI launches
+            # carry provider explicitly; legacy callers fall through rather
+            # than silently choosing whichever row happened to come first.
+            if mid in known and known[mid] != provider["id"]:
+                known[mid] = ""
+            else:
+                known[mid] = provider["id"]
     with _lock:
+        _model_provider_cache.clear()
+        _model_provider_cache.update(known)
         _options_cache.update(at=now, payload=payload)
     return payload
+
+
+def provider_for_model(model):
+    """Provider owning a catalog-verified model id, or empty if unknown.
+
+    Model ids are opaque provider values. Prefixes are only a legacy fallback;
+    the live catalog is what lets a future model route without a code update.
+    """
+    mid = str(model or "").strip()
+    if not mid:
+        return ""
+    with _lock:
+        if mid in _model_provider_cache:
+            return _model_provider_cache[mid]
+    options()
+    with _lock:
+        return _model_provider_cache.get(mid, "")

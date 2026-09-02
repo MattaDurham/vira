@@ -195,24 +195,41 @@ class LoginCommandTest(unittest.TestCase):
 
 class CapabilityTest(unittest.TestCase):
     def test_session_grades_per_provider(self):
-        # Anthropic is the gated engine (SDK, per-tool cards); OpenAI hosts
-        # sessions best-effort via codex exec (2026-07-28); the API-only
-        # rows cannot host sessions at all. The UI says which grade BEFORE
-        # a dispatch, so these three facts are load-bearing.
+        # Every configured cloud provider implements Vira's gated native-tool
+        # contract; the detailed capabilities disclose workspace differences.
         from server import agentbackend
         self.assertTrue(models.PROVIDERS["anthropic"]["can"]["sessions"])
         self.assertTrue(models.PROVIDERS["openai"]["can"]["sessions"])
         self.assertEqual(agentbackend.sessions_quality("anthropic"), "gated")
-        self.assertEqual(agentbackend.sessions_quality("openai"),
-                         "best_effort")
-        self.assertEqual(agentbackend.sessions_quality("google"), "")
-        self.assertFalse(models.PROVIDERS["google"]["can"]["sessions"])
-        self.assertFalse(models.PROVIDERS["xai"]["can"]["sessions"])
+        self.assertEqual(agentbackend.sessions_quality("openai"), "gated")
+        self.assertEqual(agentbackend.sessions_quality("google"), "gated")
+        self.assertEqual(agentbackend.sessions_quality("xai"), "gated")
+        self.assertTrue(models.PROVIDERS["google"]["can"]["sessions"])
+        self.assertTrue(models.PROVIDERS["xai"]["can"]["sessions"])
+        self.assertFalse(
+            agentbackend.capabilities("google")["workspace_tools"])
+        self.assertFalse(agentbackend.capabilities("xai")["interrupt"])
+
+    def test_codex_capabilities_are_first_class(self):
+        from server import agentbackend
+        caps = agentbackend.capabilities("openai")
+        for name in ("sessions", "native_tools", "approvals",
+                     "owner_questions", "resume", "steering", "interrupt",
+                     "model_catalog"):
+            self.assertTrue(caps[name], name)
+        caps["sessions"] = False
+        self.assertTrue(agentbackend.capabilities("openai")["sessions"])
 
 
 class CliConfigModelTest(unittest.TestCase):
     """Source 3: read the id out of the provider's OWN config rather than
     pinning it here, so codex's model and Vira's picker cannot disagree."""
+
+    def setUp(self):
+        self.catalog = mock.patch.object(models, "_codex_bundled_models",
+                                         return_value=[])
+        self.catalog.start()
+        self.addCleanup(self.catalog.stop)
 
     def _write(self, body):
         d = tempfile.mkdtemp()
@@ -254,6 +271,29 @@ class CliConfigModelTest(unittest.TestCase):
         self.assertEqual(models.cli_default_model("anthropic"), "")
         self.assertEqual([m["id"] for m in models.cli_models("anthropic")],
                          ["sonnet", "opus", "haiku", "fable"])
+
+
+class CodexBundledCatalogTest(unittest.TestCase):
+    def setUp(self):
+        models._cli_catalog_cache.clear()
+        self.addCleanup(models._cli_catalog_cache.clear)
+
+    def test_all_listed_models_come_from_the_installed_binary(self):
+        payload = {"models": [
+            {"slug": "gpt-future", "display_name": "GPT Future",
+             "description": "frontier", "visibility": "list",
+             "supported_reasoning_levels": [{"effort": "high"}]},
+            {"slug": "gpt-hidden", "display_name": "Hidden",
+             "visibility": "hidden"},
+        ]}
+        proc = mock.Mock(returncode=0, stdout=json.dumps(payload))
+        run = mock.Mock(return_value=proc)
+        with mock.patch.object(models, "find_binary", return_value="/bin/codex"), \
+             mock.patch.object(models.subprocess, "run", run):
+            got = models._codex_bundled_models()
+        self.assertEqual([m["id"] for m in got], ["gpt-future"])
+        self.assertEqual(got[0]["reasoning"], ["high"])
+        self.assertIn("--bundled", run.call_args.args[0])
 
 
 class DefaultApiModelTest(unittest.TestCase):
@@ -385,12 +425,28 @@ class CatalogTest(unittest.TestCase):
                          {"cli": "cli_model", "api": "api_model"})
         self.assertEqual(by_id["openai"]["config_keys"],
                          {"cli": "openai_cli_model", "api": "openai_api_model"})
-        # Session-capable providers feed the run-sheet/circuit pickers,
-        # each carrying its grade so the UI can caveat best-effort.
+        # Session-capable providers feed the run-sheet/circuit pickers with
+        # the explicit contract the UI uses to disclose behavior.
         self.assertTrue(by_id["anthropic"]["sessions"])
         self.assertTrue(by_id["openai"]["sessions"])
         self.assertEqual(by_id["anthropic"]["sessions_quality"], "gated")
-        self.assertEqual(by_id["openai"]["sessions_quality"], "best_effort")
+        self.assertEqual(by_id["openai"]["sessions_quality"], "gated")
+        self.assertTrue(by_id["openai"]["capabilities"]["native_tools"])
+
+    def test_options_builds_opaque_model_provider_index(self):
+        def catalog(pid, refresh=False):
+            return {"cli": [{"id": f"opaque-{pid}", "label": pid}],
+                    "api": [], "api_live": False, "api_detail": "",
+                    "cli_detail": ""}
+
+        with mock.patch.object(models, "probe",
+                               return_value={"connected": True,
+                                             "auth": models.SIGNED_IN,
+                                             "has_key": False}), \
+             mock.patch.object(models, "catalog", side_effect=catalog), \
+             mock.patch.object(models.settings, "raw", return_value={}):
+            models.options(refresh=True)
+        self.assertEqual(models.provider_for_model("opaque-google"), "google")
 
     def test_active_is_the_configured_provider_when_it_is_usable(self):
         def probe(pid):

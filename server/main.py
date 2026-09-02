@@ -997,6 +997,7 @@ def api_applications_evidence_map_download(uid: str):
 class AppApplyReq(BaseModel):
     note: str | None = ""
     model: str | None = None
+    provider: str | None = None
 
 
 @app.post("/api/applications/{uid}/apply")
@@ -1007,7 +1008,7 @@ def api_applications_apply(uid: str, req: AppApplyReq):
     prompt = applications.apply_prompt(role, req.note or "")
     try:
         jid = jobs.launch(prompt, str(applications.self_record()),
-                          None, req.model)
+                          None, req.model, provider=req.provider)
     except ValueError as e:
         raise HTTPException(429, str(e))
     applications.update_state(uid, job_id=jid)
@@ -2974,9 +2975,9 @@ class RunReq(BaseModel):
     # box). Every rung is steerable — the mode decides what the gate stops,
     # never whether the owner can talk to the session.
     mode: str | None = None
-    # Which engine drives the session ("anthropic" | "openai"); absent, the
-    # model names it, else the configured session-capable go-to. See
-    # server/agentbackend.py.
+    # Which engine drives the session (a server/models.py provider id);
+    # absent, the verified model catalog names it, else the configured
+    # session-capable go-to. See server/agentbackend.py.
     provider: str | None = None
 
 
@@ -3090,8 +3091,8 @@ def _job_from_disk(jid):
         "permission_mode": r.get("permission_mode"),
         # A replayed job must still name the engine that answered it — the
         # live snapshot carries `provider`, so the ledger replay has to as
-        # well or the terminal banner regrades a finished best-effort
-        # session as gated the moment it leaves the live registry. Rows
+        # well or the terminal banner can regrade a finished session the
+        # moment it leaves the live registry. Rows
         # written before the ledger persisted it fall back to the model's
         # own provider, the same heuristic the launch used to pick it.
         "provider": (r.get("provider")

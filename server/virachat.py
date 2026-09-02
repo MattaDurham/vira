@@ -55,7 +55,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import jsonstore, settings
+from . import agentbackend, jsonstore, settings
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "vira-chat.json"
 MAX_SESSIONS = 20
@@ -161,7 +161,7 @@ Answer the message below directly, in plain prose, in a few sentences \
 unless more is genuinely asked for.
 
 Before answering anything about {owner}'s life or records, LOOK IT UP with \
-the mcp__vira__* tools - mcp__vira__find first (it spans notes, media with \
+the {tool_prefix}* tools - {tool_prefix}find first (it spans notes, media with \
 OCR, people and the text of messages and mail), then the single-corpus \
 tools when you know where the answer lives (calendar, daily_brief, \
 crm_lookup, imessage_thread, mail_search, media_search, vault_search, \
@@ -177,7 +177,7 @@ the thing you found; when a vault note grounds a claim, cite it as a \
 nothing in the data answers, say so plainly and name what you searched. \
 You can act as well as answer - draft, file, look things up, run what is \
 needed - and when an action is genuinely {owner}'s call, ask with \
-mcp__vira__ask_owner rather than guessing.
+{tool_prefix}ask_owner rather than guessing.
 
 Do not narrate your tool calls or your plan, and do not end with offers or \
 status - the reply box under this chat stays open on its own.
@@ -206,9 +206,11 @@ status - the reply box under this chat stays open on its own.
 {question}"""
 
 
-def _launch_prompt(question, native=True):
+def _launch_prompt(question, native=True, provider="anthropic"):
     brief = CHAT_BRIEF if native else CHAT_BRIEF_HTTP
-    return brief.format(owner=_owner(), question=question.strip())
+    prefix = "mcp__vira__" if provider == "anthropic" else "vira."
+    return brief.format(owner=_owner(), question=question.strip(),
+                        tool_prefix=prefix)
 
 
 def _session_snapshot(job_id):
@@ -220,19 +222,22 @@ def _session_snapshot(job_id):
 
 
 def chat_provider():
-    """THE TOOLS ARE THE POINT, so the chat runs on the engine that has
-    them. Only the Anthropic SDK path mounts the in-process mcp__vira__*
-    server; a CLI-exec provider (codex) gets the HTTP-API preamble and,
-    on the first live run, shelled straight into the sqlite indexes to
-    answer. The owner's configured go-to is honoured everywhere else in
-    Vira; here it is overridden whenever Anthropic is connected, and the
-    fallback is named on the session so the surface can say which engine
-    answered. Returns (provider, native_tools)."""
+    """Choose the owner's session-capable go-to with native Vira tools.
+
+    Claude and Codex now consume the same registry, so Chat no longer has a
+    reason to override an OpenAI go-to merely to gain data access. A future
+    provider enters this path by declaring session quality, not by adding a
+    new name check here. Returns (provider, native_tools).
+    """
     try:
-        from . import models, session
-        ids = {p.get("id") for p in models.connected()}
-        if "anthropic" in ids and getattr(session, "SDK_AVAILABLE", True):
-            return "anthropic", True
+        from . import models
+        connected = [p.get("id") for p in models.connected()]
+        want = str(settings.raw().get("ai_provider") or "").strip().lower()
+        ordered = ([want] if want in connected else []) + connected
+        for pid in ordered:
+            quality = agentbackend.sessions_quality(pid)
+            if quality:
+                return pid, quality == "gated"
     except Exception:  # noqa: BLE001 - a broken probe falls to the default
         pass
     return None, False
@@ -246,7 +251,7 @@ def _open_session(job_id, question):
         model = (settings.get("chat_model") or "").strip() or None
         provider, native = chat_provider()
         return session.sessions.launch(
-            _launch_prompt(question, native), model=model,
+            _launch_prompt(question, native, provider or ""), model=model,
             provider=provider, meta={"kind": "chat"})
     out = session.sessions.say(job_id, question)
     return out.get("job") or job_id

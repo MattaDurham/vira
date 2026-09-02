@@ -1,9 +1,9 @@
-"""Claude Code cockpit: enumerate the central library's skills and commands as
+"""Agent cockpit: enumerate the central library's skills and commands as
 buttons. Scanning is deterministic file reads.
 
 Running a job is the live-session registry in server/session.py
-(session.sessions) — the Claude Agent SDK path with steering + permission
-gating when available, the legacy subprocess --print path when not.
+(session.sessions) — the provider adapter path with steering + permission
+gating when available, and a compatibility subprocess path when not.
 main.py's `jobs` handle points at that registry directly; the old
 actions.Jobs wrapper (verbatim delegation) was deleted 2026-07-21.
 """

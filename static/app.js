@@ -6583,7 +6583,7 @@ const ideaRunSheet = bindSheet("#idea-run-sheet", "#idea-run-cancel");
 $("#idea-run-perm").addEventListener("change", () => {
   if (ideaRunCtx) $("#idea-run-note").textContent = ideaRunNote(ideaRunCtx.mode);
 });
-// Picking an OpenAI model changes what "session" means — restate the note.
+// Picking a provider adapter can change its capability note.
 $("#idea-run-model").addEventListener("change", () => {
   if (ideaRunCtx) $("#idea-run-note").textContent = ideaRunNote(ideaRunCtx.mode);
 });
@@ -6593,6 +6593,8 @@ $("#idea-run-go").addEventListener("click", async () => {
   const { it, mode } = ideaRunCtx;
   const cwd = $("#idea-run-cwd").value.trim() || "~/workspace/vira";
   const model = $("#idea-run-model").value;
+  const provider = $("#idea-run-model").selectedOptions[0]?.dataset.provider
+    || null;
   const extra = $("#idea-run-extra").value;
   const perm = mode === "plan" ? PERM_DEFAULT : $("#idea-run-perm").value;
   localStorage.setItem("vira-idea-cwd", cwd);
@@ -6613,7 +6615,7 @@ $("#idea-run-go").addEventListener("click", async () => {
   const runMode = perm;
   ideaRunSheet.close();
   const jid = await launchJob(prompt, cwd,
-    { permission_mode, model, publish_plan, read_only, idea_id: it.id,
+    { permission_mode, model, provider, publish_plan, read_only, idea_id: it.id,
       mode: runMode });
   // stamp the idea so the dispatch is visible next time it's opened
   const day = new Date().toISOString().slice(0, 10);
@@ -6658,6 +6660,7 @@ async function launchJob(promptText, cwd, opts = {}) {
     cwd: cwd || null,
     permission_mode: opts.permission_mode || null,
     model: opts.model || null,
+    provider: opts.provider || null,
     publish_plan: opts.publish_plan || false,
     read_only: opts.read_only || false,
     idea_id: opts.idea_id || null,
@@ -8005,6 +8008,8 @@ function providerBadge(j) {
   const p = j.provider || providerOfModel(j.model_used || j.model)
     || "anthropic";
   if (p === "openai") return { id: p, legend: "Codex", auth: "OpenAI" };
+  if (p === "google") return { id: p, legend: "Gemini", auth: "Google" };
+  if (p === "xai") return { id: p, legend: "Grok", auth: "xAI" };
   return { id: p, legend: "Claude Code", auth: "Claude Max" };
 }
 let _instCfg = null;
@@ -8025,8 +8030,8 @@ async function defaultModelLabel() {
 }
 
 // ---------- the model catalog: every dropdown's single source ----------
-// What THIS machine can actually be pointed at — each provider's CLI
-// aliases, and for the API backend the live list from the key on file.
+// What THIS machine can actually be pointed at — each provider's installed
+// CLI catalog/aliases, and for API backends the live list from the key.
 // Fetched once per page (the server probes each CLI, so it is not free)
 // and shared by Setup's default-model block, the circuit stage tray and
 // the idea-run sheet, so no picker can offer a model that isn't there.
@@ -8039,8 +8044,7 @@ function modelCatalog(refresh) {
 }
 
 // Every model a live session can run on THIS install: each session-capable
-// provider's list (Anthropic's aliases always offered — the gated default —
-// plus any connected best-effort provider). Labels carry the provider name
+// provider's list. Labels carry the provider name
 // whenever more than one is on offer, so a codex model reads as OpenAI's.
 function sessionModels(cat) {
   const provs = (cat.providers || []).filter((p) =>
@@ -8051,6 +8055,7 @@ function sessionModels(cat) {
     const list = (p.cli && p.cli.length ? p.cli : p.api) || [];
     list.forEach((m) => out.push({
       id: m.id,
+      provider: p.id,
       label: (multi ? p.label + " · " : "") + (m.label || m.id),
     }));
   });
@@ -8064,8 +8069,8 @@ function sessionModels(cat) {
   return out;
 }
 
-// The server's provider_of_model heuristic, mirrored: which engine a model
-// id will run its session on. Drives the honest best-effort note.
+// Compatibility fallback for old ledger rows that predate an explicit
+// provider. New launches and catalog rows carry the provider directly.
 function providerOfModel(mid) {
   const m = String(mid || "").toLowerCase();
   if (!m) return "";
@@ -8075,11 +8080,13 @@ function providerOfModel(mid) {
   return "anthropic";
 }
 
-// "" for the gated default; a plain-language caveat for best-effort engines.
+// "" for a gated adapter; a caveat only for compatibility-grade engines.
 function sessionQualityNote(mid) {
-  if (providerOfModel(mid) === "openai")
-    return " OpenAI sessions run best-effort: no per-tool approval cards — "
-      + "containment is Codex's own sandbox, inside the branch worktree.";
+  const p = providerOfModel(mid);
+  if (p === "google" || p === "xai")
+    return " Vira tools, approvals, owner questions, and resume are native; "
+      + "this API adapter does not provide local shell/file tools, in-flight "
+      + "steering, or immediate interruption.";
   return "";
 }
 
@@ -8098,6 +8105,7 @@ function fillModelSelect(sel, list, current, firstLabel) {
     const o = el("option", null,
                  m.label && m.label !== m.id ? m.label + " · " + m.id : m.id);
     o.value = m.id;
+    if (m.provider) o.dataset.provider = m.provider;
     sel.appendChild(o);
   });
   if (cur && !(list || []).some((m) => m.id === cur)) {
@@ -8125,8 +8133,15 @@ function fillModelSelect(sel, list, current, firstLabel) {
       const v = (prompt("Model id, exactly as the provider names it:") || "")
         .trim();
       if (v) {
+        const providers = [...new Set((list || [])
+          .map((m) => m.provider).filter(Boolean))];
+        let provider = providers.length === 1 ? providers[0] : "";
+        if (!provider && providers.length)
+          provider = (prompt("Provider id (" + providers.join(", ")
+            + "):") || "").trim().toLowerCase();
         const o = el("option", null, v + " (custom)");
         o.value = v;
+        if (providers.includes(provider)) o.dataset.provider = provider;
         sel.insertBefore(o, sel.querySelector("option[value='__custom__']"));
         sel.value = v;
       } else {
@@ -8155,7 +8170,6 @@ function renderCCBanner(host, j, defModel, inst) {
   const model = ccModelLabel(j.model_used || j.model) || defModel;
   const badge = providerBadge(j);
   const mode = j.publish_plan ? (j.read_only ? "plan (read-only)" : "plan")
-    : badge.id === "openai" ? (j.mode || "run") + " (best-effort — sandboxed, no cards)"
     : normPermMode(j.mode) === "bypassPermissions"
         ? (j.worktree ? "bypassPermissions (branch-guarded)"
                       : "bypassPermissions")
@@ -11535,13 +11549,20 @@ function provCard(card, pr, st, ai) {
   card.appendChild(el("p", "hint", pr.detail));
   if (!pr.can.sessions)
     card.appendChild(el("p", "hint",
-      "Drafts, dossiers and the brief — live agent sessions need Anthropic "
-      + "or OpenAI."));
+      "Drafts, dossiers and the brief are available. This provider does not "
+      + "yet expose Vira's live-session contract."));
   else if (pr.sessions_quality === "best_effort")
     card.appendChild(el("p", "hint",
       "Drafts, dossiers, the brief, and live agent sessions (best-effort: "
       + "no per-tool approval cards — the provider's own sandbox contains "
       + "them)."));
+  if (pr.can.sessions && pr.capabilities
+      && !pr.capabilities.workspace_tools)
+    card.appendChild(el("p", "hint",
+      "Live Vira sessions include the shared Vira tool registry, approval "
+      + "cards, owner questions, and durable resume. This provider's API "
+      + "does not expose the local shell/file harness or immediate in-flight "
+      + "interrupts."));
 
   const row = el("div", "setup-row");
   if (pr.connected) {
@@ -18507,18 +18528,20 @@ const appRunSheet = bindSheet("#app-run-sheet", "#app-run-cancel");
 
 function appRunFields() {
   const model = $("#app-run-model").value;
+  const provider = $("#app-run-model").selectedOptions[0]?.dataset.provider
+    || null;
   localStorage.setItem("vira-app-model", model);
-  return { note: $("#app-run-extra").value.trim(), model };
+  return { note: $("#app-run-extra").value.trim(), model, provider };
 }
 
 $("#app-run-go").addEventListener("click", async () => {
   const r = appRunCtx;
   if (!r) return;
-  const { note, model } = appRunFields();
+  const { note, model, provider } = appRunFields();
   appRunSheet.close();
   try {
     const { job_id } =
-      await post(`/api/applications/${r.uid}/apply`, { note, model });
+      await post(`/api/applications/${r.uid}/apply`, { note, model, provider });
     r.last_job = job_id;
     toast("Application package dispatched");
     openSession(job_id);

@@ -701,19 +701,21 @@ class ApplyRouteTest(ApplicationsBase):
         calls = {}
 
         def fake_launch(prompt, cwd, permission_mode=None, model=None,
-                        publish_plan=False, idea_id=None, mode=None):
+                        publish_plan=False, idea_id=None, mode=None,
+                        provider=None):
             calls.update(prompt=prompt, cwd=cwd, model=model, mode=mode,
-                         permission_mode=permission_mode)
+                         permission_mode=permission_mode, provider=provider)
             return "job-123"
 
         with mock.patch.object(self.main.jobs, "launch", fake_launch):
             out = self.main.api_applications_apply(
                 "g-examplelabs-1234567",
                 self.main.AppApplyReq(note="emphasize the caveat",
-                                      model="opus"))
+                                      model="opus", provider="anthropic"))
         self.assertEqual(out["job_id"], "job-123")
         self.assertIn("emphasize the caveat", calls["prompt"])
         self.assertEqual(calls["model"], "opus")
+        self.assertEqual(calls["provider"], "anthropic")
         # No hardcoded mode: the dispatch derives from session_default_mode
         # (owner's call, 2026-08-12 — Apply used to pin "manual").
         self.assertIsNone(calls["mode"])
