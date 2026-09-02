@@ -2973,9 +2973,7 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 
 /* ---------- World (typed temporal knowledge graph) ----------
    THE MODULE IS THE WEB. Secondary controls live behind one gear in the
-   stage's lower-left corner, on BOTH widths — a legend, a lens row, a
-   search box and two buttons laid out around the picture is a control
-   panel with a web attached. The panel floats over the stage from that
+   stage's lower-left corner, on BOTH widths. The panel floats over the stage from that
    corner, so opening it costs the web nothing and closing it leaves
    nothing but the web. */
 .atlas-gear {
@@ -3006,6 +3004,69 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
   border-radius: 2px;
 }
 .atlas-chrome.open { display: block; }
+.atlas-controls-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 8px;
+}
+.atlas-controls-head strong {
+  color: var(--text-head); font-size: 12px; letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.atlas-controls-head .linkish {
+  border: 0; background: none; color: var(--accent); cursor: pointer;
+  padding: 2px 0; font: inherit; font-size: 10.5px;
+}
+.atlas-control-section {
+  border-top: 1px solid var(--line); padding: 8px 0; margin: 0;
+}
+.atlas-control-section > summary {
+  color: var(--text); cursor: pointer; font-size: 11px;
+  letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px;
+}
+.atlas-control-section:not([open]) > summary { margin-bottom: 0; }
+.atlas-toggle-row {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0;
+  color: var(--text-dim); font-size: 11px;
+}
+.atlas-toggle-row label, .atlas-physics-enable {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+}
+.atlas-filter-kinds { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.atlas-kind-filter {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  background: var(--bg-card); border: 1px solid var(--line);
+  color: var(--text-dim); border-radius: 2px; padding: 3px 7px;
+  font-size: 10.5px;
+}
+.atlas-kind-filter:has(input:checked) {
+  color: var(--accent-bright); border-color: var(--accent-line);
+}
+.atlas-kind-filter input { margin: 0; }
+.atlas-filter-count { margin-top: 6px; }
+.atlas-search-results {
+  display: none; max-height: 170px; overflow-y: auto; margin-top: 6px;
+  border: 1px solid var(--line); background: var(--bg-hud-deep);
+}
+.atlas-search-results.live { display: block; }
+.atlas-search-result {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 10px;
+  width: 100%; border: 0; border-bottom: 1px solid var(--line);
+  background: none; color: var(--text); cursor: pointer; text-align: left;
+  padding: 6px 8px; font: inherit;
+}
+.atlas-search-result:last-child { border-bottom: 0; }
+.atlas-search-result:hover { background: var(--bg-card); }
+.atlas-search-result b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-search-result span { color: var(--text-faint); font-size: 10px; }
+.atlas-slider { display: block; margin: 8px 0; }
+.atlas-slider > span {
+  display: flex; justify-content: space-between; gap: 10px;
+  color: var(--text-dim); font-size: 11px;
+}
+.atlas-slider output { color: var(--text); font-variant-numeric: tabular-nums; }
+.atlas-slider input[type="range"] { width: 100%; margin: 4px 0 0; accent-color: var(--accent); }
+.atlas-physics-enable { color: var(--text); font-size: 11.5px; margin-bottom: 3px; }
+.atlas-actions { margin-top: 8px; }
 /* The lens row is the question being asked of the web, so it leads the
    panel and reads as a segmented control, not as more chips. */
 .atlas-lenses { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
@@ -3061,8 +3122,16 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 }
 .world-axis-btn + .world-axis-btn { border-left: 1px solid var(--line); }
 .world-axis-btn.on { color: var(--accent-bright); }
-.world-time input[type="range"] {
+.world-time-track { flex: 1; min-width: 80px; }
+.world-time-bounds, .world-time-summary {
+  display: flex; justify-content: space-between; gap: 8px;
+  color: var(--text-faint); font-size: 8.5px; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.world-time-summary { justify-content: center; margin-top: 1px; }
+.world-time-track input[type="range"] {
   flex: 1; min-width: 80px; margin: 0; accent-color: var(--accent);
+  width: 100%;
 }
 .world-time-label {
   min-width: 82px; color: var(--text); font-size: 11px;

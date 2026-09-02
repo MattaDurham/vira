@@ -135,6 +135,9 @@ Built with [[Acme Lab]].
         # not at the latest note that happened to reuse it.
         self.assertEqual(topic["recorded_at"],
                          "2024-02-10T00:00:00+00:00")
+        self.assertEqual(topic["valid_from"],
+                         "2021-04-01T00:00:00+00:00")
+        self.assertEqual(topic["time_source"]["valid_from"], "tagged_notes")
 
     def test_valid_time_replay_and_kind_filter(self):
         graph = worldgraph.compose(at="2022-01-01", axis="valid")
@@ -200,6 +203,36 @@ Built with [[Acme Lab]].
         first = worldgraph.encoded()
         second = worldgraph.encoded()
         self.assertIs(first, second)
+
+    def test_legacy_notes_participate_in_both_time_axes(self):
+        (self.root / "wiki" / "legacy-undated.md").write_text(
+            "# Legacy note\n", encoding="utf-8")
+        graph = worldgraph.compose()
+        note = next(node for node in graph["nodes"]
+                    if node["name"] == "legacy undated")
+        self.assertIsNotNone(note["valid_from"])
+        self.assertIsNotNone(note["recorded_at"])
+        self.assertIn(note["time_source"]["valid_from"],
+                      {"file_birthtime", "file_ctime"})
+        self.assertIn(note["time_source"]["recorded_at"],
+                      {"file_birthtime", "file_ctime"})
+        self.assertGreaterEqual(graph["timeline"]["valid"]["dated_nodes"], 4)
+        self.assertGreaterEqual(
+            graph["timeline"]["recorded"]["dated_nodes"], 4)
+
+    def test_created_date_is_content_time_not_learned_time(self):
+        (self.root / "wiki" / "dated-content.md").write_text(
+            "---\ncreated: 2019-05-04\n---\nA dated note.\n",
+            encoding="utf-8")
+        graph = worldgraph.compose()
+        note = next(node for node in graph["nodes"]
+                    if node["name"] == "dated content")
+        self.assertEqual(note["valid_from"],
+                         "2019-05-04T00:00:00+00:00")
+        self.assertEqual(note["time_source"]["valid_from"], "created")
+        self.assertNotEqual(note["recorded_at"], note["valid_from"])
+        self.assertIn(note["time_source"]["recorded_at"],
+                      {"file_birthtime", "file_ctime"})
 
 
 if __name__ == "__main__":

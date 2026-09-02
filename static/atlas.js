@@ -58,11 +58,60 @@
     shown: null,             // Set of visible node ids (null = everyone)
     hideEgo: false,
     match: "",            // search filter
+    filterSearch: true,
+    hideOrphans: false,
+    enabledKinds: new Set(),
     time: { axis: "valid", at: null, min: null, max: null, timeline: {} },
     fixedLayout: false,      // server-supplied semantic coordinates
+    display: { scale: 1, nodeSize: 1, linkThickness: 1 },
+    physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
+               distance: 1, semantic: 0.18 },
     loading: false,
     loadedGen: null,
   };
+
+  const CONTROL_KEY = "vira-world-controls";
+  const CONTROL_DEFAULTS = {
+    filterSearch: true, hideOrphans: false,
+    display: { scale: 1, nodeSize: 1, linkThickness: 1 },
+    physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
+               distance: 1, semantic: 0.18 },
+  };
+
+  function clamp(value, low, high, fallback) {
+    value = Number(value);
+    return Number.isFinite(value) ? Math.max(low, Math.min(high, value))
+                                  : fallback;
+  }
+
+  function loadControls() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(CONTROL_KEY) || "null"); }
+    catch { saved = null; }
+    if (!saved || typeof saved !== "object") return;
+    S.filterSearch = saved.filterSearch !== false;
+    S.hideOrphans = !!saved.hideOrphans;
+    S.display.scale = clamp(saved.display?.scale, .35, 2.5, 1);
+    S.display.nodeSize = clamp(saved.display?.nodeSize, .6, 1.8, 1);
+    S.display.linkThickness = clamp(
+      saved.display?.linkThickness, .25, 2.5, 1);
+    S.physics.enabled = saved.physics?.enabled !== false;
+    S.physics.center = clamp(saved.physics?.center, 0, 1, .08);
+    S.physics.repel = clamp(saved.physics?.repel, 0, 1, .30);
+    S.physics.link = clamp(saved.physics?.link, 0, 1, .25);
+    S.physics.distance = clamp(saved.physics?.distance, .4, 2.2, 1);
+    S.physics.semantic = clamp(saved.physics?.semantic, 0, 1, .18);
+  }
+
+  function saveControls() {
+    try {
+      localStorage.setItem(CONTROL_KEY, JSON.stringify({
+        filterSearch: S.filterSearch, hideOrphans: S.hideOrphans,
+        display: S.display, physics: S.physics,
+      }));
+    } catch { /* private browsing or a full origin: controls stay in memory */ }
+  }
+  loadControls();
 
   // ---------- the 3D renderer ----------
 
@@ -89,6 +138,7 @@
         onOpen: hitOpen,
         onContext: hitContext,
         onEmpty: hitEmpty,
+        onPhysicsScope: paintPhysicsStatus,
       });
       if (r) {
         R3 = r;
@@ -233,6 +283,7 @@
   function initGraph(g) {
     S.graph = g;
     S.fixedLayout = !!g.layout?.basis;
+    S.enabledKinds = new Set((g.kinds || []).map((row) => row.id));
     S.lens = lsGet(LENS_KEY, null) || (g.lenses || [])[0]?.id || null;
 
     const n = g.nodes.length;
@@ -251,13 +302,20 @@
       const r = ring(node.degree || 3) * (0.92 + 0.16 * ((i * 7919) % 13) / 13);
       const position = Array.isArray(node.position)
         && node.position.length === 3 ? node.position : null;
+      const baseX = position ? Number(position[0]) : Math.cos(ang) * r;
+      const baseY = position ? Number(position[1]) : Math.sin(ang) * r;
+      const baseZ = position ? Number(position[2]) : 0;
+      const baseR = nodeRadius(node);
       const sim = {
         ...node,
-        x: position ? Number(position[0]) : Math.cos(ang) * r,
-        y: position ? Number(position[1]) : Math.sin(ang) * r,
-        z: position ? Number(position[2]) : 0,
+        x: baseX * S.display.scale, y: baseY * S.display.scale,
+        z: baseZ * S.display.scale,
+        baseX, baseY, baseZ,
+        homeX: baseX * S.display.scale,
+        homeY: baseY * S.display.scale,
+        homeZ: baseZ * S.display.scale,
         vx: 0, vy: 0, vz: 0,
-        r: nodeRadius(node),
+        baseR, r: baseR * S.display.nodeSize,
         homeR: ring(node.degree || 3),
         pin: false,
       };
@@ -297,6 +355,9 @@
     recomputeSel();
     card.style.display = "none";
     applyLens(false);
+    renderKindFilters();
+    renderSearchResults();
+    syncControlInputs();
     updateIsoBar();
     initTimeline(g.timeline || {});
     const missing = g.scope?.unreadable
@@ -487,6 +548,50 @@
 
   const parseTime = (value) => value ? Date.parse(value) : NaN;
 
+  function queryTerms(query) {
+    const terms = [];
+    const re = /(-?)(?:(kind|type|tag|source|company|title):)?(?:"([^"]+)"|(\S+))/gi;
+    let match;
+    while ((match = re.exec(query || ""))) {
+      terms.push({ not: match[1] === "-", key: (match[2] || "").toLowerCase(),
+                   value: (match[3] || match[4] || "").toLowerCase() });
+    }
+    return terms;
+  }
+
+  function searchText(node, key) {
+    const fields = {
+      kind: [node.kind], type: [node.kind], tag: node.tags || [],
+      source: [node.source_name, node.source_id, node.ref],
+      company: [node.company], title: [node.title],
+    };
+    const values = key ? (fields[key] || []) : [
+      node.name, node.kind, node.company, node.title, node.qualifier,
+      node.source_name, node.source_id, node.ref, ...(node.tags || []),
+    ];
+    return values.filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function matchesSearch(node) {
+    if (!S.match) return true;
+    return queryTerms(S.match).every((term) => {
+      const hit = searchText(node, term.key).includes(term.value);
+      return term.not ? !hit : hit;
+    });
+  }
+
+  function passesNodeFilters(node) {
+    return S.enabledKinds.has(node.kind)
+      && (!S.hideOrphans || Number(node.graph_degree || 0) > 0)
+      && (!S.filterSearch || matchesSearch(node));
+  }
+
+  function hasNodeFilters() {
+    const totalKinds = (S.graph?.kinds || []).length;
+    return S.hideOrphans || (S.filterSearch && !!S.match)
+      || S.enabledKinds.size !== totalKinds;
+  }
+
   function timeActive(item) {
     if (!S.time.at) return true;
     const at = S.time.at;
@@ -515,8 +620,9 @@
   function setTimelineBounds() {
     const row = S.time.timeline[S.time.axis] || S.time.timeline;
     const min = parseTime(row.min);
-    const max = Math.max(parseTime(row.max) || 0, Date.now());
-    S.time.min = Number.isFinite(min) ? min : max;
+    const max = parseTime(row.max);
+    S.time.min = Number.isFinite(min) ? min
+      : Number.isFinite(max) ? max : Date.now();
     S.time.max = Number.isFinite(max) ? max : S.time.min;
     if (S.time.at)
       S.time.at = Math.max(S.time.min, Math.min(S.time.max, S.time.at));
@@ -540,7 +646,21 @@
       ? new Date(S.time.at).toLocaleDateString(undefined,
           { year: "numeric", month: "short", day: "numeric",
             timeZone: "UTC" })
-      : "Now";
+      : "Latest";
+    const minLabel = $("#world-time-min");
+    const maxLabel = $("#world-time-max");
+    if (minLabel) minLabel.textContent = shortDate(
+      new Date(S.time.min).toISOString(), "day");
+    if (maxLabel) maxLabel.textContent = shortDate(
+      new Date(S.time.max).toISOString(), "day");
+    const row = S.time.timeline[S.time.axis] || {};
+    const active = S.nodes.filter((p) => timeActive(p)).length;
+    const summary = $("#world-time-summary");
+    if (summary) summary.textContent =
+      active.toLocaleString() + " of " + S.nodes.length.toLocaleString()
+      + " items" + (row.undated_nodes
+        ? " · " + row.undated_nodes + " without this date"
+        : " · every item dated");
   }
 
   function timelineChanged() {
@@ -548,16 +668,22 @@
     recomputeSel();
     updateIsoBar();
     renderSelCard();
+    renderSearchResults();
+    paintFilterCount();
     paintTimeline();
+    if (R3) R3.refreshPhysics();
     wake(0.18);
     draw();
   }
 
   function recomputeIso() {
-    if (!S.iso.ids.size && !S.time.at) { S.shown = null; return; }
+    if (!S.iso.ids.size && !S.time.at && !hasNodeFilters()) {
+      S.shown = null; return;
+    }
     const shown = new Set();
     for (const p of S.nodes) {
       if (!timeActive(p)) continue;
+      if (!passesNodeFilters(p)) continue;
       if (!S.iso.ids.size || (p.band && S.iso.ids.has(p.band)))
         shown.add(p.id);
     }
@@ -567,7 +693,8 @@
       for (const e of S.edges) {
         if (!timeActive(e)) continue;
         const a = shown.has(e.an.id), b = shown.has(e.bn.id);
-        if (a !== b) add.push(a ? e.bn.id : e.an.id);
+        const other = a ? e.bn : e.an;
+        if (a !== b && passesNodeFilters(other)) add.push(other.id);
       }
       if (!add.length) break;
       add.forEach((id) => shown.add(id));
@@ -582,7 +709,11 @@
         if (!S.shown.has(p.id)) S.sel.delete(p);
     recomputeSel();
     syncLegend();
+    syncKindFilters();
+    renderSearchResults();
+    paintFilterCount();
     updateIsoBar();
+    if (R3) R3.refreshPhysics();
     if (fit && S.shown && S.shown.size) fitShown();
     draw();
     renderSelCard();
@@ -650,8 +781,7 @@
   }
 
   function matchDim(node) {
-    return S.match
-      && !(node.name || "").toLowerCase().includes(S.match);
+    return S.match && !S.filterSearch && !matchesSearch(node);
   }
 
   function draw() {
@@ -683,7 +813,7 @@
                            : focus && (e.bn === focus || S.ego === focus);
         ctx.strokeStyle = hot ? "rgba(138,132,120,.4)"
                               : `rgba(138,132,120,${hasSel ? 0.02 : 0.05})`;
-        ctx.lineWidth = hot ? 1.4 : 1;
+        ctx.lineWidth = (hot ? 1.4 : 1) * S.display.linkThickness;
         ctx.beginPath();
         ctx.moveTo(w2sX(S.ego.x), w2sY(S.ego.y));
         ctx.lineTo(w2sX(e.bn.x), w2sY(e.bn.y));
@@ -699,25 +829,25 @@
       if (hasSel && S.selEdges.has(e)) {
         // the featured links — ties among the selected
         ctx.strokeStyle = "rgba(222,214,197,.95)";
-        ctx.lineWidth = 1.6 + 2.2 * w;
+        ctx.lineWidth = (1.6 + 2.2 * w) * S.display.linkThickness;
       } else if (hasSel && S.selPathEdges.has(e)) {
         // bridge chains connecting selections that share no direct tie
         ctx.strokeStyle = "rgba(163,156,141,.75)";
-        ctx.lineWidth = 1.3 + 1.2 * w;
+        ctx.lineWidth = (1.3 + 1.2 * w) * S.display.linkThickness;
       } else if (hasSel && (S.sel.has(e.an) || S.sel.has(e.bn))) {
         // spokes from a selected node out to its world — prominent for a
         // single selection, quieter once the story is between selections
         const spoke = S.sel.size === 1 ? 0.45 : 0.16;
         ctx.strokeStyle = `rgba(207,203,194,${spoke * (0.5 + 0.5 * w)})`;
-        ctx.lineWidth = 0.8 + 1.4 * w;
+        ctx.lineWidth = (0.8 + 1.4 * w) * S.display.linkThickness;
       } else if (hasSel) {
         // the hint of what's left
         ctx.strokeStyle = `rgba(143,141,133,${0.015 + 0.03 * w})`;
-        ctx.lineWidth = 0.6 + w;
+        ctx.lineWidth = (0.6 + w) * S.display.linkThickness;
       } else if (hot) {
         ctx.strokeStyle = e.shared_interest
           ? "rgba(138,132,120,.85)" : "rgba(207,203,194,.55)";
-        ctx.lineWidth = 1 + 2 * w;
+        ctx.lineWidth = (1 + 2 * w) * S.display.linkThickness;
       } else {
         let alpha = 0.05 + 0.3 * w * w;
         // isolating strips the noise — let the remaining ties read clearly
@@ -726,7 +856,7 @@
         ctx.strokeStyle = e.shared_interest
           ? `rgba(138,132,120,${alpha + 0.08})`
           : `rgba(143,141,133,${alpha})`;
-        ctx.lineWidth = 0.6 + 1.8 * w;
+        ctx.lineWidth = (0.6 + 1.8 * w) * S.display.linkThickness;
       }
       ctx.beginPath();
       ctx.moveTo(w2sX(e.an.x), w2sY(e.an.y));
@@ -866,6 +996,80 @@
   function syncLegend() {
     for (const [cid, chip] of legendChips)
       chip.classList.toggle("on", S.iso.ids.has(cid));
+  }
+
+  function renderKindFilters() {
+    const host = $("#atlas-filter-kinds");
+    if (!host) return;
+    host.innerHTML = "";
+    for (const row of S.graph?.kinds || []) {
+      const label = el("label", "atlas-kind-filter");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = S.enabledKinds.has(row.id);
+      input.dataset.kind = row.id;
+      input.addEventListener("change", () => {
+        if (input.checked) S.enabledKinds.add(row.id);
+        else S.enabledKinds.delete(row.id);
+        isoChanged(false);
+      });
+      label.append(input, document.createTextNode(`${row.label} ${row.count}`));
+      host.appendChild(label);
+    }
+  }
+
+  function syncKindFilters() {
+    document.querySelectorAll("#atlas-filter-kinds input[data-kind]")
+      .forEach((input) => {
+        input.checked = S.enabledKinds.has(input.dataset.kind);
+      });
+  }
+
+  function filteredNodes(ignoreSearch = false) {
+    return S.nodes.filter((p) => timeActive(p)
+      && S.enabledKinds.has(p.kind)
+      && (!S.hideOrphans || Number(p.graph_degree || 0) > 0)
+      && (ignoreSearch || matchesSearch(p)));
+  }
+
+  function renderSearchResults() {
+    const host = $("#atlas-search-results");
+    if (!host) return;
+    host.innerHTML = "";
+    host.classList.toggle("live", !!S.match);
+    if (!S.match) return;
+    const matches = filteredNodes().sort((a, b) =>
+      Number(b.graph_degree || 0) - Number(a.graph_degree || 0)
+      || String(a.name).localeCompare(String(b.name)));
+    for (const p of matches.slice(0, 12)) {
+      const button = el("button", "atlas-search-result");
+      button.type = "button";
+      button.appendChild(el("b", null, p.name));
+      button.appendChild(el("span", null, kindLabel(p.kind)));
+      if (p.source_name)
+        button.appendChild(el("span", null, p.source_name));
+      button.addEventListener("click", () => {
+        if (S.filterSearch && S.shown && !S.shown.has(p.id)) return;
+        centerOn(p);
+        if (!S.sel.has(p)) toggleSelect(p);
+      });
+      host.appendChild(button);
+    }
+    if (!matches.length)
+      host.appendChild(el("div", "hint atlas-member", "No matching items"));
+    else if (matches.length > 12)
+      host.appendChild(el("div", "hint atlas-member",
+        `${matches.length - 12} more matches`));
+  }
+
+  function paintFilterCount() {
+    const host = $("#atlas-filter-count");
+    if (!host || !S.graph) return;
+    const shown = S.shown ? S.shown.size : S.nodes.length;
+    const matches = S.match ? filteredNodes().length : shown;
+    host.textContent = `${shown.toLocaleString()} of `
+      + `${S.nodes.length.toLocaleString()} items visible`
+      + (S.match ? ` · ${matches.toLocaleString()} search matches` : "");
   }
 
   // ---------- group curation (rename / members / remove / create) ----------
@@ -1168,6 +1372,7 @@
   function selectionChanged() {
     recomputeSel();
     syncLegend();
+    if (R3) R3.refreshPhysics(null, true);
     draw();
     renderSelCard();
   }
@@ -1503,14 +1708,22 @@
     if (d.node.degree)
       chips.appendChild(el("span", "atlas-deg",
         ["1st", "2nd", "3rd"][d.node.degree - 1] || d.node.degree + "th"));
-    if (d.node.valid_from || d.node.valid_to)
-      chips.appendChild(el("span", "atlas-deg",
-        timeRange(d.node.valid_from, d.node.valid_to,
-          d.node.time_precision)));
-    if (d.node.recorded_at)
-      chips.appendChild(el("span", "atlas-deg",
-        "known " + shortDate(d.node.recorded_at,
-          d.node.time_precision?.recorded_at)));
+    if (d.node.valid_from || d.node.valid_to) {
+      const timeChip = el("span", "atlas-deg",
+        "content " + timeRange(d.node.valid_from, d.node.valid_to,
+          d.node.time_precision).replace(/^from /, ""));
+      timeChip.title = "Date source: "
+        + timeSourceLabel(d.node.time_source?.valid_from);
+      chips.appendChild(timeChip);
+    }
+    if (d.node.recorded_at) {
+      const learnedChip = el("span", "atlas-deg",
+        "learned " + shortDate(d.node.recorded_at,
+          d.node.time_precision?.recorded_at));
+      learnedChip.title = "Date source: "
+        + timeSourceLabel(d.node.time_source?.recorded_at);
+      chips.appendChild(learnedChip);
+    }
     const clab = S.bands.find((b) => b.id === S.byId.get(d.node.id)?.band);
     if (clab) {
       const cc = el("span", "atlas-deg");
@@ -1596,6 +1809,16 @@
         timeZone: "UTC" });
   }
 
+  function timeSourceLabel(source) {
+    const labels = {
+      file_birthtime: "filesystem creation time (fallback)",
+      file_ctime: "filesystem change time (fallback)",
+      filename_date: "date in filename",
+      tagged_notes: "supporting notes",
+    };
+    return labels[source] || String(source || "unknown");
+  }
+
   function timeRange(from, to, precision = {}) {
     return from && to
       ? `${shortDate(from, precision.valid_from)} – ${shortDate(to,
@@ -1654,7 +1877,12 @@
         tip.appendChild(el("div", "atlas-tip-sub", p.qualifier));
       if (p.valid_from || p.valid_to)
         tip.appendChild(el("div", "atlas-tip-sub",
-          timeRange(p.valid_from, p.valid_to, p.time_precision)));
+          "Content · " + timeRange(
+            p.valid_from, p.valid_to, p.time_precision).replace(/^from /, "")));
+      if (p.recorded_at)
+        tip.appendChild(el("div", "atlas-tip-sub",
+          "Learned · " + shortDate(
+            p.recorded_at, p.time_precision?.recorded_at)));
     } else {
       tip.style.display = "none";
     }
@@ -1805,20 +2033,155 @@
 
   // ---------- toolbar ----------
 
+  function setOutput(id, value) {
+    const output = $(id);
+    if (output) output.textContent = Math.round(value * 100) + "%";
+  }
+
+  function syncControlInputs() {
+    const values = {
+      "#atlas-filter-mode": S.filterSearch,
+      "#atlas-hide-orphans": S.hideOrphans,
+      "#atlas-physics": S.physics.enabled,
+    };
+    for (const [id, value] of Object.entries(values))
+      if ($(id)) $(id).checked = value;
+    const ranges = {
+      "#atlas-geometry": S.display.scale * 100,
+      "#atlas-node-size": S.display.nodeSize * 100,
+      "#atlas-link-thickness": S.display.linkThickness * 100,
+      "#atlas-center": S.physics.center * 100,
+      "#atlas-repel": S.physics.repel * 100,
+      "#atlas-link-force": S.physics.link * 100,
+      "#atlas-link-distance": S.physics.distance * 100,
+      "#atlas-semantic": S.physics.semantic * 100,
+    };
+    for (const [id, value] of Object.entries(ranges))
+      if ($(id)) $(id).value = String(Math.round(value));
+    setOutput("#atlas-geometry-out", S.display.scale);
+    setOutput("#atlas-node-size-out", S.display.nodeSize);
+    setOutput("#atlas-link-thickness-out", S.display.linkThickness);
+    setOutput("#atlas-center-out", S.physics.center);
+    setOutput("#atlas-repel-out", S.physics.repel);
+    setOutput("#atlas-link-force-out", S.physics.link);
+    setOutput("#atlas-link-distance-out", S.physics.distance);
+    setOutput("#atlas-semantic-out", S.physics.semantic);
+    paintFilterCount();
+  }
+
+  function applyGeometry(resetPositions = false) {
+    for (const p of S.nodes) {
+      p.homeX = p.baseX * S.display.scale;
+      p.homeY = p.baseY * S.display.scale;
+      p.homeZ = p.baseZ * S.display.scale;
+      p.r = p.baseR * S.display.nodeSize;
+      if (resetPositions) {
+        p.x = p.homeX; p.y = p.homeY; p.z = p.homeZ;
+        p.vx = p.vy = p.vz = 0;
+      }
+    }
+    saveControls();
+    if (R3) R3.geometryChanged(resetPositions);
+    else draw();
+  }
+
+  function paintPhysicsStatus(info) {
+    const target = $("#atlas-physics-status");
+    if (!target) return;
+    if (!S.physics.enabled) {
+      target.textContent = "Physics off. Dragging still moves individual nodes.";
+      return;
+    }
+    if (!info || !info.count) {
+      target.textContent = S.nodes.length > 4000
+        ? "Full-vault mode: select or drag a node to engage local physics."
+        : "Global physics ready.";
+      return;
+    }
+    target.textContent = (info.mode === "global" ? "Global" : "Local")
+      + " physics · " + info.count.toLocaleString() + " nodes"
+      + (info.mode === "local" ? " · two connection rings" : "")
+      + (info.limited ? " · 1,400-node performance ceiling" : "");
+  }
+
+  function physicsChanged() {
+    saveControls();
+    syncControlInputs();
+    if (R3) R3.refreshPhysics(null, true);
+    else draw();
+  }
+
+  function bindPercentRange(id, target, key, low, high, geometry) {
+    $(id)?.addEventListener("input", (e) => {
+      target[key] = clamp(Number(e.target.value) / 100,
+                          low, high, target[key]);
+      setOutput(id + "-out", target[key]);
+      if (geometry) applyGeometry(geometry === "positions");
+      else physicsChanged();
+    });
+  }
+
   $("#atlas-search")?.addEventListener("input", (e) => {
     S.match = e.target.value.trim().toLowerCase();
-    draw();
+    isoChanged(false);
+  });
+  $("#atlas-search-clear")?.addEventListener("click", () => {
+    S.match = "";
+    $("#atlas-search").value = "";
+    isoChanged(false);
+  });
+  $("#atlas-filter-mode")?.addEventListener("change", (e) => {
+    S.filterSearch = e.target.checked;
+    saveControls();
+    isoChanged(false);
+  });
+  $("#atlas-hide-orphans")?.addEventListener("change", (e) => {
+    S.hideOrphans = e.target.checked;
+    saveControls();
+    isoChanged(false);
   });
   $("#atlas-search")?.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !S.match) return;
-    const hit = S.nodes.find((p) => isShown(p)
-      && (p.name || "").toLowerCase().includes(S.match));
+    const hit = filteredNodes().find((p) => isShown(p));
     // Enter ADDS to the selection — search out far-apart items one by
     // one and watch how they connect
     if (hit) {
       centerOn(hit);
       if (!S.sel.has(hit)) toggleSelect(hit);
     }
+  });
+
+  bindPercentRange("#atlas-geometry", S.display, "scale", .35, 2.5,
+                   "positions");
+  bindPercentRange("#atlas-node-size", S.display, "nodeSize", .6, 1.8,
+                   true);
+  bindPercentRange("#atlas-link-thickness", S.display, "linkThickness",
+                   .25, 2.5, true);
+  bindPercentRange("#atlas-center", S.physics, "center", 0, 1, false);
+  bindPercentRange("#atlas-repel", S.physics, "repel", 0, 1, false);
+  bindPercentRange("#atlas-link-force", S.physics, "link", 0, 1, false);
+  bindPercentRange("#atlas-link-distance", S.physics, "distance",
+                   .4, 2.2, false);
+  bindPercentRange("#atlas-semantic", S.physics, "semantic", 0, 1, false);
+  $("#atlas-physics")?.addEventListener("change", (e) => {
+    S.physics.enabled = e.target.checked;
+    physicsChanged();
+  });
+  $("#atlas-reset-geometry")?.addEventListener("click", () =>
+    applyGeometry(true));
+  $("#atlas-reset-controls")?.addEventListener("click", () => {
+    S.filterSearch = CONTROL_DEFAULTS.filterSearch;
+    S.hideOrphans = CONTROL_DEFAULTS.hideOrphans;
+    S.display = { ...CONTROL_DEFAULTS.display };
+    S.physics = { ...CONTROL_DEFAULTS.physics };
+    S.enabledKinds = new Set((S.graph?.kinds || []).map((row) => row.id));
+    S.match = "";
+    if ($("#atlas-search")) $("#atlas-search").value = "";
+    syncControlInputs();
+    renderKindFilters();
+    applyGeometry(true);
+    physicsChanged();
+    isoChanged(false);
   });
 
   // The gear is the module's whole control surface on both widths.

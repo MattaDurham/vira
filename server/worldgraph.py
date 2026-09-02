@@ -65,7 +65,11 @@ KIND_LABELS = {
 }
 
 DATE_KEYS = {
-    "recorded": ("recorded_at", "created_at", "created", "date", "added_at"),
+    # Transaction time: when this Vira learned or received the item.
+    "recorded": ("recorded_at", "learned_at", "added_at", "ingested_at"),
+    # Content time: when the note or the knowledge it records was created.
+    "created": ("created_at", "created", "date", "published_at",
+                "published"),
     "from": ("valid_from", "start_date", "starts", "start", "event_date",
              "met_on", "first_met", "date_met", "met"),
     "to": ("valid_to", "end_date", "ends", "end"),
@@ -178,6 +182,19 @@ def _first_date(mapping, keys):
     return None, None, None
 
 
+def _filename_date(path):
+    """Best-effort content date from a dated filename, with provenance."""
+    match = re.search(
+        r"(?<!\d)((?:19|20)\d{2})[-_]?([01]\d)[-_]?([0-3]\d)(?!\d)",
+        Path(path).stem)
+    if not match:
+        return None, None, None
+    value, precision = _iso_date("-".join(match.groups()))
+    if not value:
+        return None, None, None
+    return value, precision, "filename_date"
+
+
 def _public_ref(spec, rel):
     rel = str(rel).replace("\\", "/").lstrip("/")
     return rel if spec.get("primary") else f"@{spec['id']}/{rel}"
@@ -204,16 +221,21 @@ def _note_paths(spec):
             if key in seen or any(part.startswith(".") for part in rel.parts):
                 continue
             seen.add(key)
-            rows.append((stat.st_mtime, resolved, rel))
+            learned = getattr(stat, "st_birthtime", None)
+            learned_source = "file_birthtime"
+            if learned is None:
+                learned = getattr(stat, "st_ctime", stat.st_mtime)
+                learned_source = "file_ctime"
+            rows.append((stat.st_mtime, learned, learned_source, resolved, rel))
     # Stable newest-first ordering makes rebuilds deterministic.  World does
     # not truncate this list: the user asked for the actual connected vault,
     # and scale is the renderer's problem rather than a reason to hide data.
-    rows.sort(key=lambda row: (-row[0], row[2].as_posix().lower()))
+    rows.sort(key=lambda row: (-row[0], row[4].as_posix().lower()))
     return rows
 
 
 def _read_note(spec, row):
-    mtime, path, relpath = row
+    _mtime, learned_time, learned_source, path, relpath = row
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read()
@@ -226,9 +248,19 @@ def _read_note(spec, row):
     recorded, recorded_precision, recorded_key = _first_date(
         meta, DATE_KEYS["recorded"])
     if not recorded:
-        recorded = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
-        recorded_precision, recorded_key = "instant", "file_mtime"
+        recorded = datetime.fromtimestamp(
+            learned_time, timezone.utc).isoformat()
+        recorded_precision, recorded_key = "instant", learned_source
     valid_from, from_precision, from_key = _first_date(meta, DATE_KEYS["from"])
+    if not valid_from:
+        valid_from, from_precision, from_key = _first_date(
+            meta, DATE_KEYS["created"])
+    if not valid_from:
+        valid_from, from_precision, from_key = _filename_date(relpath)
+    if not valid_from:
+        valid_from = datetime.fromtimestamp(
+            learned_time, timezone.utc).isoformat()
+        from_precision, from_key = "instant", learned_source
     valid_to, to_precision, to_key = _first_date(meta, DATE_KEYS["to"])
     kind = _kind(meta.get("type") or meta.get("kind"), relpath.as_posix())
     tags = meta.get("tags") or []
@@ -274,7 +306,7 @@ def _vault_pages():
     for spec in specs:
         rows = _note_paths(spec)
         total += len(rows)
-        names = "\n".join(row[2].as_posix() for row in rows)
+        names = "\n".join(row[4].as_posix() for row in rows)
         fingerprints.append((
             spec["id"], str(Path(spec["root"]).expanduser()), len(rows),
             max((row[0] for row in rows), default=0),
@@ -451,12 +483,19 @@ def _timeline(nodes, edges):
     recorded = sorted(item.get("recorded_at") for item in items
                       if item.get("recorded_at"))
     values = sorted([*valid, *recorded])
+    valid_nodes = sum(bool(n.get("valid_from") or n.get("valid_to"))
+                      for n in nodes)
+    recorded_nodes = sum(bool(n.get("recorded_at")) for n in nodes)
     return {"min": values[0] if values else None,
             "max": values[-1] if values else None,
             "valid": {"min": valid[0] if valid else None,
-                      "max": valid[-1] if valid else None},
+                      "max": valid[-1] if valid else None,
+                      "dated_nodes": valid_nodes,
+                      "undated_nodes": len(nodes) - valid_nodes},
             "recorded": {"min": recorded[0] if recorded else None,
-                         "max": recorded[-1] if recorded else None},
+                         "max": recorded[-1] if recorded else None,
+                         "dated_nodes": recorded_nodes,
+                         "undated_nodes": len(nodes) - recorded_nodes},
             "dated_nodes": sum(bool(n.get("valid_from") or
                                     n.get("recorded_at")) for n in nodes),
             "undated_nodes": sum(not (n.get("valid_from") or
@@ -567,17 +606,23 @@ def compose(at=None, axis="valid", kinds=None):
                             if row[1].get("recorded_at")})
             first_shared = known[1] if len(known) > 1 else (
                 known[0] if known else None)
+            valid_known = sorted({row[1].get("valid_from") for row in rows
+                                  if row[1].get("valid_from")})
+            valid_shared = valid_known[1] if len(valid_known) > 1 else (
+                valid_known[0] if valid_known else None)
             topic = {"id": tid, "name": rows[0][2], "kind": "topic",
                      "open_kind": None, "source_id": "derived",
                      "source_name": "Vault tags", "ref": None,
                      "note_ref": None, "vault": False, "face": None,
                      "company": "", "title": "", "qualifier": "",
                      "degree": None, "cluster": None, "act": len(rows),
-                     "valid_from": None, "valid_to": None,
+                     "valid_from": valid_shared, "valid_to": None,
                      "recorded_at": first_shared,
-                     "time_precision": {"valid_from": None, "valid_to": None,
+                     "time_precision": {"valid_from": "derived",
+                                        "valid_to": None,
                                         "recorded_at": "derived"},
-                     "time_source": {"valid_from": None, "valid_to": None,
+                     "time_source": {"valid_from": "tagged_notes",
+                                     "valid_to": None,
                                      "recorded_at": "tagged_notes"},
                      "tags": [], "receipts": []}
             nodes.append(topic)

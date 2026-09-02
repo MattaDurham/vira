@@ -23,7 +23,9 @@ class WorldGraphUiTests(unittest.TestCase):
 
     def test_two_time_axes_are_visible_and_wired(self):
         for needle in ('id="world-axis-valid"', 'id="world-axis-recorded"',
-                       'id="world-time"', 'id="world-time-label"'):
+                       'id="world-time"', 'id="world-time-label"',
+                       'id="world-time-summary"', '>Content date</button>',
+                       '>Learned by</button>'):
             self.assertIn(needle, self.html)
         self.assertIn('function timeActive(item)', self.atlas)
         self.assertIn('S.time.axis === "recorded"', self.atlas)
@@ -32,7 +34,32 @@ class WorldGraphUiTests(unittest.TestCase):
         self.assertIn('timeZone: "UTC"', self.atlas)
         self.assertIn('host.isEdgeShown ? !host.isEdgeShown(e)', self.renderer)
         self.assertIn('const POINT_CLOUD_AT = 2500', self.renderer)
-        self.assertIn('if (S.fixedLayout)', self.renderer)
+        self.assertIn('semantic_coverage', (ROOT / "server" /
+                      "worldlayout.py").read_text(encoding="utf-8"))
+
+    def test_filter_panel_supports_structured_queries_and_kinds(self):
+        for needle in ('id="atlas-filter-mode"', 'id="atlas-hide-orphans"',
+                       'id="atlas-filter-kinds"',
+                       'id="atlas-search-results"'):
+            self.assertIn(needle, self.html)
+        self.assertIn('function queryTerms(query)', self.atlas)
+        self.assertIn('kind|type|tag|source|company|title', self.atlas)
+        self.assertIn('function matchesSearch(node)', self.atlas)
+        self.assertIn('function renderSearchResults()', self.atlas)
+
+    def test_geometry_physics_and_node_dragging_are_wired(self):
+        for needle in ('id="atlas-geometry"', 'id="atlas-center"',
+                       'id="atlas-repel"', 'id="atlas-link-force"',
+                       'id="atlas-link-distance"',
+                       'id="atlas-semantic"'):
+            self.assertIn(needle, self.html)
+        self.assertIn('const PHYSICS_GLOBAL_AT = 4000', self.renderer)
+        self.assertIn('const PHYSICS_LOCAL_LIMIT = 1400', self.renderer)
+        self.assertIn('1,400-node performance ceiling', self.atlas)
+        self.assertIn('function refreshPhysics(', self.renderer)
+        self.assertIn('function pointOnDragPlane(', self.renderer)
+        self.assertIn('S.dragNode = p', self.renderer)
+        self.assertIn('semantic-home force', self.renderer)
 
     def test_world_api_replaces_atlas_only_for_this_window(self):
         self.assertIn('api("/api/world")', self.atlas)
@@ -45,7 +72,7 @@ class WorldGraphUiTests(unittest.TestCase):
         self.assertIn('kindLabel(d.node.kind)', self.atlas)
         self.assertIn('p.kind === "person"', self.atlas)
         self.assertIn('Receipt · ${receipt.ref}', self.atlas)
-        self.assertIn('placeholder="Find anything', self.html)
+        self.assertIn("placeholder='Search, or try kind:person", self.html)
 
 
 if __name__ == "__main__":
