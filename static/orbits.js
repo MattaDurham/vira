@@ -1,6 +1,8 @@
 /* Orbits - the network as time.
 
-   A fresh take on the Visual Network (2026-09-02). You are the sun. Every
+   A second VIEW of the World window (2026-09-02; folded in from its own
+   dock window the same day, owner's call - the galaxy and the orbits are
+   two views of one module, toggled in the head). You are the sun. Every
    contact is a CARD in orbit around you, and the one thing the picture
    encodes that no force layout can is WHEN: the radius of a card's orbit
    is how long since you last spoke - today at the inner ring, this week,

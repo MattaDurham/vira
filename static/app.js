@@ -13851,13 +13851,7 @@ function viewLoad(id) {
   // so it only needs a repaint — opening the window must not blank it.
   if (id === "find-define") requestAnimationFrame(renderDefines);
   if (id === "people") peopleTabLoad(peopleTab);
-  if (id === "atlas") window.atlasLoad?.();
-  if (id === "orbits") {
-    // an ES module, loaded on first open so a Vira that never opens
-    // Orbits never fetches it
-    if (window.orbitsLoad) window.orbitsLoad();
-    else import("/orbits.js").then((m) => m.load()).catch((e) => console.warn("Orbits:", e));
-  }
+  if (id === "atlas") worldViewLoad();
   if (id === "map") {
     const f = $("#map-frame");             // load the atlas page on first open
     if (f && !f.getAttribute("src")) f.src = "/explainer/modules.html";
@@ -13886,6 +13880,47 @@ function viewLoad(id) {
 // dock icon / launcher aside. "launchpad" itself is the overlay on mobile.
 // A folded cockpit id (ideas/actions/jobs/circuits/routines) opens Work on
 // the right tab.
+// ---------- World views: the galaxy and Orbits are two views of ONE module ----------
+// (owner's call, 2026-09-02). Orbits shipped as its own dock window beside the
+// Visual Network; main then folded the network into World, so Orbits is a
+// second view of that window - toggled in the head - rather than a sibling
+// app. Both stages live inside #view-atlas; exactly one is shown. The
+// choice persists per browser (`vira-world-view`). orbits.js is an ES
+// module loaded on first use, so a Vira that never opens the view never
+// fetches it; the hidden stage does not intersect, so each module's own
+// wake/sleep observer pauses the view that is not showing.
+const WORLD_VIEWS = ["galaxy", "orbits"];
+let worldView = WORLD_VIEWS.includes(lsGet("vira-world-view", "galaxy"))
+  ? lsGet("vira-world-view", "galaxy") : "galaxy";
+function setWorldView(v, { load = true } = {}) {
+  if (!WORLD_VIEWS.includes(v)) v = "galaxy";
+  worldView = v;
+  lsSet("vira-world-view", v);
+  const orbits = v === "orbits";
+  const stage = $("#atlas-stage"), ostage = $("#orbits-stage");
+  if (stage) stage.hidden = orbits;
+  if (ostage) ostage.hidden = !orbits;
+  const am = $("#atlas-meta"), om = $("#orbits-meta");
+  if (am) am.hidden = orbits;
+  if (om) om.hidden = !orbits;
+  // querySelectorAll directly: `$$` is declared further down app.js and this
+  // runs at boot, where a const in its temporal dead zone would throw
+  document.querySelectorAll("#world-views [data-view]").forEach((b) =>
+    b.classList.toggle("on", b.dataset.view === v));
+  if (load) worldViewLoad();
+}
+function worldViewLoad() {
+  if (worldView === "orbits") {
+    if (window.orbitsLoad) window.orbitsLoad();
+    else import("/orbits.js").then((m) => m.load()).catch((e) => console.warn("Orbits:", e));
+  } else window.atlasLoad?.();
+}
+$("#world-views")?.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-view]");
+  if (b) setWorldView(b.dataset.view);
+});
+setWorldView(worldView, { load: false });   // paint the saved choice at boot, load on open
+
 function openApp(id) {
   const attention = ATTENTION_ALIAS[id];
   if (attention) {
@@ -19365,10 +19400,6 @@ const WINDOWS = [
   // for Find and the five cockpit windows do for Work.
   { id: "atlas", title: "World", w: 1040,
     icon: "M12 12m-2.4 0a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0M5 5.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M19 6.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M5.5 18.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M18.5 18m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M10.3 10.3L6.3 6.9M13.7 10.6L17.5 7.6M10.5 13.7L6.8 17.2M13.6 13.5L17 16.7" },
-  // Orbits - the network as time (2026-09-02): a fresh take beside the
-  // Visual Network, not a replacement. static/orbits.js is the whole module.
-  { id: "orbits", title: "Orbits", w: 980, h: 660,
-    icon: "M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M12 12m-6 0a6 6 0 1 0 12 0a6 6 0 1 0-12 0M12 12m-9.5 0a9.5 9.5 0 1 0 19 0a9.5 9.5 0 1 0-19 0M17.2 8.8m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0M5.5 15.5m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0" },
   { id: "map", title: "System Map", w: 1000,
     icon: "M9 4L4 6v14l5-2 6 2 5-2V4l-5 2-6-2zM9 4v14M15 6v14" },
   { id: "imageatlas", title: "Image Atlas", w: 1100,
@@ -23075,6 +23106,9 @@ function paletteMatches(q) {
     { label: "Radar — People · Networking", kind: "people",
       run: () => { setPeopleTab("networking", { defer: true });
                    openWindow("people"); } },
+    // Orbits is a VIEW of World, not a window, so the palette names it itself
+    { label: "Orbits — World · the network as time", kind: "window",
+      run: () => { setWorldView("orbits", { load: false }); openWindow("atlas"); } },
     { label: "Settings", kind: "sheet", run: () => $("#settings-btn").click() },
     { label: "Layout: Freeform", kind: "layout",
       run: () => setLayout("freeform") },
@@ -23504,7 +23538,9 @@ const HASH_ROUTES = {
   },
   "atlas": "atlas",
   "network": "atlas",
-  "orbits": "orbits",
+  // #orbits lands on World with the Orbits view up (2026-09-02)
+  "orbits": () => { setWorldView("orbits", { load: false }); openApp("atlas"); },
+  "world": "atlas",
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
   "work": (rest) => {           // #work, #work/queue|dispatch|live|record

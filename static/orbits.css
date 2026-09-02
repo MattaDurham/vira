@@ -77,8 +77,10 @@
   .orbits-card { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 55%; }
   .orbits-chrome { max-width: 70%; }
 }
+/* Orbits is a VIEW of the World window: exactly one stage shows. style.css
+   carries no global [hidden] rule, so the attribute needs a rule here. */
+.orbits-stage[hidden], .atlas-stage[hidden] { display: none !important; }
+.world-views { display: flex; gap: 6px; margin-left: 14px; }
 @media (min-width: 1100px) {
-  #win-orbits .fwin-body { display: flex; flex-direction: column; overflow: hidden; }
-  #win-orbits #view-orbits { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  #win-orbits .orbits-stage { flex: 1; height: auto; min-height: 240px; }
+  #win-atlas .orbits-stage { flex: 1; height: auto; min-height: 240px; }
 }
