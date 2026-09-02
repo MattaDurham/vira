@@ -65,6 +65,43 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.attn-item.card-actionable:hover', self.css)
         self.assertIn('.review-card.card-actionable:hover', self.css)
 
+    def test_now_renders_one_newest_first_chronology(self):
+        self.assertIn('briefSection(body, "Newest activity first")', self.app)
+        self.assertIn('new Map(cards.map((c) => [c.card.req_id, c]))',
+                      self.app)
+        self.assertNotIn('briefSection(body, "Waiting on you")', self.app)
+        self.assertNotIn('briefSection(body, "Working")', self.app)
+
+    def test_revealed_destinations_hold_a_strong_ten_second_highlight(self):
+        self.assertIn('const REVEAL_HIGHLIGHT_MS = 10000;', self.app)
+        self.assertEqual(self.app.count('revealHighlight(node);'), 4)
+        self.assertIn('outline: 2px solid var(--accent)', self.css)
+
+    def test_record_card_click_opens_a_fully_expanded_focus_view(self):
+        self.assertIn(
+            'cardAction(card, () => openOrphanFocus(it)', self.app)
+        self.assertIn(
+            'const card = runCard(orphanRunItem(it), { focused: true });',
+            self.app)
+        self.assertIn('inner.open = !!opts.expandAll;', self.app)
+        self.assertIn('context.open = true;', self.app)
+        self.assertIn('"Full context — opens in the foreground"', self.app)
+        self.assertIn('.run-focus-scrim', self.css)
+        self.assertIn('.run-focus-card .run-ctx-body', self.css)
+
+    def test_foreground_review_is_visual_and_retroactive(self):
+        self.assertIn('function orphanVisualBrief(c)', self.app)
+        self.assertIn('body.appendChild(orphanVisualBrief(c));', self.app)
+        self.assertIn('function orphanChangeAreas(paths)', self.app)
+        self.assertIn('/api/orphanwork/visual?key=', self.app)
+        self.assertIn('"Decision brief"', self.app)
+        self.assertIn('"run-brief-table"', self.app)
+        self.assertIn('.run-brief-flow', self.css)
+        self.assertIn('.run-brief-visuals', self.css)
+
+    def test_attention_reveal_opens_the_same_focus_view(self):
+        self.assertIn('if (orphan) openOrphanFocus(orphan);', self.app)
+
     def test_attention_prose_wraps_instead_of_ellipsizing(self):
         self.assertIn('Global to the combined Attention module', self.css)
         self.assertIn('text-overflow: clip; overflow-wrap: anywhere', self.css)
@@ -77,7 +114,14 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.attention-map-flow', self.css)
 
     def test_attention_verbs_reveal_exact_objects(self):
-        self.assertIn('run: () => revealOrphan(r.orphan_key)', self.app)
+        self.assertIn(
+            'run: () => revealOrphan(r.orphan_key, r.orphan_branch)',
+            self.app)
+        self.assertIn('n.dataset.runBranch === branch', self.app)
+        self.assertIn(
+            'card.dataset.runBranch = it.src.branch || "";', self.app)
+        self.assertIn('if (runsLoadPromise) return runsLoadPromise;',
+                      self.app)
         self.assertIn('run: () => revealBoardsHealth()', self.app)
         self.assertNotIn(
             'run: () => { openApp("work"); setWorkTab("live"); }', self.app)

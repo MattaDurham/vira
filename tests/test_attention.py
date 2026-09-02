@@ -166,6 +166,7 @@ class Flows(Base):
         from server import circuits
         circuits.list_runs.return_value = [{
             "id": "run_1", "status": "running", "circuit_name": "PBJ",
+            "started": iso(0.25),
             "stages": {"plan": {"status": "done"},
                        "build": {"status": "running"},
                        "judge": {"status": "pending"}}}]
@@ -175,6 +176,7 @@ class Flows(Base):
         self.assertIn("stage 2 of 3", r["sub"])
         self.assertIn("build", r["sub"])
         self.assertEqual(r["stages_done"], 1)
+        self.assertGreater(r["activity_at"], 0)
 
     def test_a_finished_flow_makes_no_row(self):
         from server import circuits
@@ -261,6 +263,7 @@ class Orphans(Base):
         self.assertTrue(r["needs_you"])
         self.assertIn("3 dirty files", r["sub"])
         self.assertIn("Vira: land", r["sub"])
+        self.assertEqual(r["orphan_branch"], "claude/x")
 
 
 class Health(Base):
@@ -321,15 +324,21 @@ class Contract(Base):
         self.assertIn("orphans", p["errors"])
         self.assertIn("store corrupt", p["errors"]["orphans"])
 
-    def test_needs_you_rows_lead_the_sort(self):
+    def test_newest_activity_leads_across_waiting_and_working_states(self):
         from server import orphanwork
         orphanwork.compose.return_value = {"items": [{
             "key": "k1", "branch": "claude/x", "kind": "unmerged",
-            "ahead": 2, "age_days": 5.0}]}
-        h = self.handle("j1", {"status": "running", "awaiting": None})
-        p = self.compose([h])
+            "ahead": 2, "age_days": 5.0, "last_activity": 100.0}]}
+        h = self.handle("j1", {"status": "running", "awaiting": None},
+                        spec={"started": 200.0})
+        card = {"req_id": "rq1", "kind": "ask", "created": 300.0}
+        p = self.compose([h], pending=[{"job_id": "j2", "card": card}])
+        self.assertEqual([r["kind"] for r in p["rows"]],
+                         ["card", "working", "orphan"])
         self.assertEqual([r["needs_you"] for r in p["rows"]],
-                         [True, False])
+                         [True, False, True])
+        self.assertEqual([r["activity_at"] for r in p["rows"]],
+                         [300.0, 200.0, 100.0])
 
     def test_tokens_mirror_the_rows(self):
         h = self.handle("j1", {"status": "running", "awaiting": "reply"})

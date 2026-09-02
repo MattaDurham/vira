@@ -518,6 +518,24 @@ class RouteLayer(_RepoCase):
         r = self.client.get("/api/orphanwork/context?key=nope")
         self.assertEqual(r.status_code, 404)
 
+    def test_visual_route_serves_only_a_changed_raster_on_passive(self):
+        wt = self.make_worktree("ctx-visual-route", commits=0)
+        shot = wt / "review.png"
+        shot.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+        _git("add", "review.png", cwd=wt)
+        _git("commit", "-qm", "add review visual", cwd=wt)
+        orphanwork.refresh()
+        key = orphanwork.compose()["items"][0]["key"]
+        os.environ["VIRA_PASSIVE"] = "1"
+        r = self.client.get("/api/orphanwork/visual",
+                            params={"key": key, "path": "review.png"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content, shot.read_bytes())
+        blocked = self.client.get("/api/orphanwork/visual",
+                                  params={"key": key,
+                                          "path": "server/main.py"})
+        self.assertEqual(blocked.status_code, 404)
+
     def test_resume_prompt_404_on_unknown_key(self):
         r = self.client.get("/api/orphanwork/resume-prompt",
                             params={"key": "nope"})
@@ -966,6 +984,49 @@ class FullContext(_RepoCase):
         self.assertEqual(len(it["job"]["prompt_head"]), 280)   # the row
         self.assertEqual(c["prompt"], long_prompt)             # the read
 
+    def test_the_authored_handoff_and_objective_join_the_visual_brief(self):
+        wt = self.make_worktree("ctx-report", dirty=True)
+        row = {"id": "j-report", "branch": "claude/ctx-report",
+               "status": "done", "prompt": "Build the review map",
+               "command": "Implement — visual review map",
+               "result": "## Outcome\nThe review map is working.",
+               "cwd": str(wt)}
+        with mock.patch("server.joblog.list_records", return_value=[row]), \
+             mock.patch("server.joblog.name", return_value="Visual review"):
+            c = orphanwork.context(orphanwork.sweep()[0])
+        self.assertEqual(c["objective"], "Implement — visual review map")
+        self.assertIn("review map is working", c["report"])
+
+    def test_a_machine_landing_title_falls_back_to_the_branch_name(self):
+        row = {"command": "Finishing stalled work in a branch-first repository"}
+        self.assertEqual(orphanwork._review_objective(row, [row], "clear-name"),
+                         "clear-name")
+
+    def test_changed_raster_becomes_visual_evidence(self):
+        wt = self.make_worktree("ctx-visual", commits=0)
+        (wt / "screen.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+        _git("add", "screen.png", cwd=wt)
+        _git("commit", "-qm", "add screenshot", cwd=wt)
+        it = orphanwork.sweep()[0]
+        c = orphanwork.context(it)
+        self.assertIn("screen.png", c["changed_files"])
+        self.assertEqual(c["visuals"][0]["source"], "branch")
+        self.assertEqual(c["visuals"][0]["path"], "screen.png")
+        self.assertEqual(orphanwork.visual_path(it, "screen.png"),
+                         (wt / "screen.png").resolve())
+        self.assertIsNone(orphanwork.visual_path(it, "server/main.py"))
+
+    def test_visual_discovery_opens_untracked_screenshot_directories(self):
+        wt = self.make_worktree("ctx-untracked-visual", commits=0)
+        shots = wt / ".playwright-mcp"
+        shots.mkdir()
+        (shots / "review.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+        it = orphanwork.sweep()[0]
+        c = orphanwork.context(it)
+        self.assertIn(".playwright-mcp/review.png", c["changed_files"])
+        self.assertEqual(c["visuals"][0]["path"],
+                         ".playwright-mcp/review.png")
+
     def test_it_carries_the_prompt_a_resume_would_send(self):
         self.make_worktree("ctx-resume", dirty=True)
         it = orphanwork.sweep()[0]
@@ -1003,4 +1064,3 @@ class FullContext(_RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
-
