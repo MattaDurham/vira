@@ -13302,6 +13302,12 @@ function viewLoad(id) {
   if (id === "find-define") requestAnimationFrame(renderDefines);
   if (id === "people") peopleTabLoad(peopleTab);
   if (id === "atlas") window.atlasLoad?.();
+  if (id === "relief") {
+    // the module is an ES module (three.js), loaded on first open so a Vira
+    // that never opens Relief never fetches it
+    if (window.reliefLoad) window.reliefLoad();
+    else import("/relief.js").then((m) => m.load()).catch((e) => console.warn("Relief:", e));
+  }
   if (id === "map") {
     const f = $("#map-frame");             // load the atlas page on first open
     if (f && !f.getAttribute("src")) f.src = "/explainer/modules.html";
@@ -18807,6 +18813,10 @@ const WINDOWS = [
   // for Find and the five cockpit windows do for Work.
   { id: "atlas", title: "Visual Network", w: 900,
     icon: "M12 12m-2.4 0a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0M5 5.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M19 6.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M5.5 18.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M18.5 18m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M10.3 10.3L6.3 6.9M13.7 10.6L17.5 7.6M10.5 13.7L6.8 17.2M13.6 13.5L17 16.7" },
+  // Relief - the network as terrain (2026-09-02): a fresh take beside the
+  // Visual Network, not a replacement. static/relief.js is the whole module.
+  { id: "relief", title: "Relief", w: 980, h: 640,
+    icon: "M4 17l4-7 3 4 3-8 3 6 3-3v8H4zM4 20h16" },
   { id: "map", title: "System Map", w: 1000,
     icon: "M9 4L4 6v14l5-2 6 2 5-2V4l-5 2-6-2zM9 4v14M15 6v14" },
   { id: "imageatlas", title: "Image Atlas", w: 1100,
@@ -22422,6 +22432,8 @@ const HASH_ROUTES = {
   },
   "atlas": "atlas",
   "network": "atlas",
+  "relief": "relief",
+  "terrain": "relief",
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
   "work": (rest) => {           // #work, #work/queue|dispatch|live|record

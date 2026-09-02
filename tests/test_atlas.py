@@ -225,6 +225,26 @@ class AtlasTests(unittest.TestCase):
         self.assertEqual(d["edges"][0]["pid"], "p_bob")   # strongest first
         self.assertIsNone(atlas.node_detail("p_nobody"))
 
+    def test_compose_overlays_last_contact_live(self):
+        """`last` is stamped at read time from the registry snapshot, lifted
+        by the live chat.db read - and never written into the cache."""
+        atlas.build_graph()
+        self.cache["by_id"]["p_alice"]["handles"]["imessage"].append("5550100001")
+        self.cache["by_id"]["p_bob"]["activity"]["imsg_last"] = "2026-03-04"
+        with mock.patch("server.brief._live_imsg_last",
+                        return_value={"5550100001": "2026-09-01T09:00:00"}):
+            g = atlas.compose()
+        by = {n["id"]: n for n in g["nodes"]}
+        for n in g["nodes"]:
+            self.assertIn("last", n)
+        self.assertEqual(by["p_alice"]["last"], "2026-09-01")   # live lifts
+        self.assertEqual(by["p_bob"]["last"], "2026-03-04")     # snapshot alone
+        self.assertIsNone(by["p_erin"]["last"])                 # no dated contact
+        with atlas._lock:
+            cached = atlas._read()
+        self.assertTrue(all("last" not in n for n in cached["nodes"]),
+                        "recency must never be written into the cache")
+
     def test_narration_survives_rebuild(self):
         g = atlas.build_graph()
         g["edges"][0]["narrative"] = "old friends from the lake house"

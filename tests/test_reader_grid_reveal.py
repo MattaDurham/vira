@@ -134,9 +134,13 @@ class EveryRevealObserverContract(unittest.TestCase):
         # sentinel (2026-09-01 -- appends the next page of cards; the sentinel
         # is itself a clickable button, so a miss degrades to a click rather
         # than hiding content, and it uses threshold 0 regardless).
+        # relief.js: the Relief window's wake/sleep observer (2026-09-02) -- it
+        # pauses the render loop off-screen and never grants a class, so a
+        # miss costs frames, not content.
         found = [n for n, _ in _observers()]
         self.assertEqual(sorted(found),
-                         ["app.js", "app.js", "app.js", "app.js", "atlas.js"])
+                         ["app.js", "app.js", "app.js", "app.js", "atlas.js",
+                          "relief.js"])
 
 
 if __name__ == "__main__":

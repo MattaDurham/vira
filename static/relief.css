@@ -1,0 +1,120 @@
+/* Relief - the network as terrain. Tokens only, so every skin reaches it. */
+.relief-stage {
+  position: relative; border: 1px solid var(--line); border-radius: 2px;
+  background: radial-gradient(ellipse at center, var(--bg-stage-glow) 0%, var(--bg-stage) 80%);
+  height: calc(100dvh - 320px); min-height: 320px; overflow: hidden;
+  outline: none;
+}
+.relief-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+  touch-action: none; display: block; }
+.relief-stage.relief-lost canvas { opacity: .18; }
+.relief-stage.relief-lost::after {
+  content: "The terrain lost its graphics context. It comes back on its own; reopen the window if it does not.";
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  z-index: 3; max-width: 320px; text-align: center; color: var(--text-dim);
+  font-size: 12px; background: var(--bg-hud-panel); padding: 10px 14px;
+  border: 1px solid var(--line); border-radius: 2px;
+}
+/* DOM labels ride above the canvas so they inherit the module's type */
+.relief-labels { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.relief-isl {
+  position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer;
+  display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-dim);
+  padding: 2px 8px; border-radius: 2px; background: var(--bg-hud-glass);
+  border: 1px solid var(--line); border-left: 3px solid var(--c, var(--accent));
+  transition: opacity .25s;
+}
+.relief-isl:hover { color: var(--text); border-color: var(--accent); }
+.relief-isl-n { color: var(--text-faint); }
+.relief-name {
+  position: absolute; left: 0; top: 0; pointer-events: none; white-space: nowrap;
+  font-family: var(--display); font-size: 13.5px; color: var(--text-head);
+  padding: 3px 9px; background: var(--bg-hud-glass); border: 1px solid var(--accent-line);
+  border-radius: 2px;
+}
+.relief-tip {
+  position: absolute; z-index: 3; pointer-events: none; max-width: 220px;
+  background: var(--bg-hud-glass); border: 1px solid var(--line); border-radius: 2px;
+  padding: 6px 9px; font-size: 12px; color: var(--text);
+}
+.relief-tip-name { font-weight: 500; }
+.relief-empty {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  color: var(--text-dim); font-size: 12.5px; text-align: center; max-width: 320px;
+  background: var(--bg-hud-panel); padding: 12px 16px; border: 1px solid var(--line);
+  border-radius: 2px; z-index: 3;
+}
+/* chrome: lenses top-left, search bottom-left - the web stays clear */
+.relief-chrome {
+  position: absolute; left: 10px; top: 10px; z-index: 3;
+  display: flex; flex-direction: column; gap: 6px; max-width: min(360px, 60%);
+}
+.relief-lenses { display: flex; flex-wrap: wrap; gap: 4px; }
+.relief-bar {
+  position: absolute; left: 10px; bottom: 10px; z-index: 3;
+  display: flex; gap: 6px; align-items: center; max-width: min(420px, 70%);
+}
+.relief-bar .search { flex: 1 1 160px; min-width: 0; }
+.relief-hint { font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+  color: var(--text-faint); text-transform: uppercase; }
+/* the plaque - docked at the stage's right edge */
+.relief-card {
+  position: absolute; right: 10px; top: 10px; bottom: 10px; z-index: 4;
+  width: min(330px, 46%); overflow: auto;
+  background: var(--bg-hud-panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 12px; font-size: 12.5px; color: var(--text);
+  box-shadow: 0 12px 40px rgba(0,0,0,.45);
+}
+.relief-card-head { display: flex; gap: 10px; align-items: center; }
+.relief-card-head .avatar { width: 46px; height: 46px; flex: none; }
+.relief-card-name { flex: 1; min-width: 0; font-weight: 500; }
+.relief-card-name .click { cursor: pointer; font-family: var(--display); font-size: 16px;
+  color: var(--text-head); }
+.relief-card-name .click:hover { color: var(--accent-bright); }
+.relief-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 10px; }
+.relief-chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-dim); border: 1px solid var(--line); border-radius: 2px; padding: 2px 7px;
+  cursor: default;
+}
+.relief-chip.you { color: var(--oxidized); border-color: var(--amber-line); }
+.relief-card-body { border-top: 1px solid var(--line); padding-top: 8px; }
+.relief-h { font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-faint); margin: 10px 0 5px; }
+.relief-fact { display: flex; gap: 8px; align-items: baseline; margin: 2px 0 6px; }
+.relief-k { font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-faint); }
+.relief-summary { margin: 0 0 6px; line-height: 1.45; color: var(--text); }
+.relief-loop { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; line-height: 1.35; }
+.relief-owe { flex: none; font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em;
+  text-transform: uppercase; padding: 1px 5px; border-radius: 2px; border: 1px solid var(--line); }
+.relief-owe.me { color: var(--oxidized); border-color: var(--amber-line); }
+.relief-owe.them { color: var(--steel); border-color: var(--steel-line); }
+.relief-hook { margin: 3px 0; padding-left: 8px; border-left: 2px solid var(--accent-line);
+  color: var(--text); line-height: 1.35; }
+.relief-open { margin-top: 10px; }
+.relief-ties { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 4px; }
+.relief-tie { padding: 6px 4px; border-radius: 2px; cursor: pointer; }
+.relief-tie:hover { background: var(--hover-wash); }
+.relief-tie-name { display: flex; align-items: center; gap: 8px; }
+.relief-wwrap { flex: 1; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.relief-w { display: block; height: 100%; background: var(--accent); }
+.relief-tie-why { color: var(--text-dim); font-size: 11.5px; margin-top: 2px; }
+@media (max-width: 1099px) {
+  .relief-stage { height: calc(100dvh - 210px); }
+  .relief-card { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 55%; }
+  .relief-chrome { max-width: 70%; }
+}
+@media (min-width: 1100px) {
+  #win-relief .fwin-body { display: flex; flex-direction: column; overflow: hidden; }
+  #win-relief #view-relief { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #win-relief .relief-stage { flex: 1; height: auto; min-height: 240px; }
+}
+.relief-isl.dim { color: var(--text-faint); border-left-color: var(--line-warm-bright); }
+.relief-you {
+  position: absolute; left: 0; top: 0; pointer-events: none;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--accent-bright);
+}
