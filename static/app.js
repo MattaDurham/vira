@@ -7178,7 +7178,7 @@ function runTraceSvg(name, attrs = {}) {
 // Stages move only when their underlying client event really happened; time
 // is the one continuous measure we can report honestly during the opaque
 // server wait.
-function beginOrphanTrace(sourceNode, branch = "") {
+function beginOrphanTrace(sourceNode, branch = "", summary = {}) {
   runTraceActive?.cancel();
 
   const layer = el("div", "run-trace-layer");
@@ -7204,18 +7204,79 @@ function beginOrphanTrace(sourceNode, branch = "") {
   targetHead.append(words, elapsed);
   target.appendChild(targetHead);
 
+  // This receipt is intentionally limited to the already-loaded Attention
+  // row. It can paint on the first frame without pretending the slower Git,
+  // prompt, file, and visual evidence has returned from Record.
   const scaffold = el("div", "run-trace-scaffold");
-  const hero = el("div", "run-trace-ghost hero");
-  hero.append(el("i"), el("i"), el("i"));
-  const body = el("div", "run-trace-ghost body");
-  for (let i = 0; i < 7; i += 1) body.appendChild(el("i"));
-  const cells = el("div", "run-trace-cells");
-  for (let i = 0; i < 4; i += 1) {
-    const cell = el("div", "run-trace-cell");
-    cell.append(el("i"), el("i"), el("i"));
-    cells.appendChild(cell);
-  }
-  scaffold.append(hero, body, cells);
+  const receipt = el("section", "run-trace-receipt");
+  receipt.appendChild(el("span", "run-trace-kicker", "Instant branch evidence"));
+  receipt.appendChild(el("h2", "run-trace-branch",
+    summary.title || branch || "Branch review"));
+  if (summary.sub)
+    receipt.appendChild(el("p", "run-trace-summary", summary.sub));
+
+  const facts = el("div", "run-trace-facts");
+  const fact = (label, value, tone = "") => {
+    const node = el("div", `run-trace-fact${tone ? ` ${tone}` : ""}`);
+    node.append(el("span", "", label), el("strong", "", value));
+    facts.appendChild(node);
+  };
+  // The structured fields are the current contract. Reading our own older
+  // subtitle shape keeps an already-open page useful across a server restart
+  // instead of briefly regressing its known counts to zero.
+  const summaryLine = String(summary.sub || "");
+  const countFrom = (pattern) => Number((summaryLine.match(pattern) || [])[1] || 0);
+  const dirty = Number(summary.dirty ?? countFrom(/(\d+)\s+dirty files?/i));
+  const ahead = Number(summary.ahead
+    ?? countFrom(/(\d+)\s+(?:unmerged commits?|commits? not pushed)/i));
+  const verdict = summary.verdict
+    || (summaryLine.match(/Vira:\s*([^\s—]+)/i) || [])[1] || "";
+  fact("Changed", `${dirty} ${dirty === 1 ? "file" : "files"}`);
+  fact("Unmerged", `${ahead} ${ahead === 1 ? "commit" : "commits"}`);
+  if (summary.age_days != null) fact("Last touched", briefDays(summary.age_days));
+  if (verdict) fact("Vira read", String(verdict), "is-verdict");
+  receipt.appendChild(facts);
+
+  const flow = el("section", "run-trace-flow");
+  flow.appendChild(el("span", "run-trace-section-label", "Decision route"));
+  const flowSteps = el("div", "run-trace-flow-steps");
+  const buildDetail = (dirty || ahead)
+    ? `${ahead} commit${ahead === 1 ? "" : "s"} · ${dirty} change${dirty === 1 ? "" : "s"}`
+    : "Branch located";
+  [
+    ["01", "Request", "Selected in Attention", "is-done"],
+    ["02", "Build", buildDetail, "is-done"],
+    ["03", "Review", "Gathering evidence", "is-active"],
+    ["04", "Decide", verdict
+      ? `Vira recommends ${verdict}` : "Land, resume, or discard", ""],
+  ].forEach(([number, label, note, state]) => {
+    const step = el("div", `run-trace-step ${state}`.trim());
+    step.append(el("span", "run-trace-step-number", number),
+      el("strong", "", label), el("small", "", note));
+    flowSteps.appendChild(step);
+  });
+  flow.appendChild(flowSteps);
+
+  const manifest = el("section", "run-trace-manifest");
+  const manifestHead = el("div", "run-trace-manifest-head");
+  manifestHead.append(el("span", "run-trace-section-label", "Full context manifest"),
+    el("small", "", "Fills only when Forge returns evidence"));
+  manifest.appendChild(manifestHead);
+  const manifestRows = el("div", "run-trace-manifest-rows");
+  [
+    ["Prompt", "waiting"],
+    ["Commits", ahead ? `${ahead} counted · details pending` : "waiting"],
+    ["Files", dirty ? `${dirty} counted · details pending` : "waiting"],
+    ["Visuals", "waiting"],
+    ["Resume instructions", "waiting"],
+  ].forEach(([label, note]) => {
+    const row = el("div", "run-trace-manifest-row");
+    row.append(el("i", "run-trace-manifest-dot"), el("strong", "", label),
+      el("span", "", note));
+    manifestRows.appendChild(row);
+  });
+  manifest.appendChild(manifestRows);
+  scaffold.append(receipt, flow, manifest);
   target.appendChild(scaffold);
   layer.appendChild(target);
 
@@ -7346,8 +7407,8 @@ function beginOrphanTrace(sourceNode, branch = "") {
 // Open one exact unlanded item, never the generic Record landing page. This
 // is the source-link contract Attention rows follow: clear any filter that
 // could hide the object, fetch the owning surface, then scroll and mark it.
-async function revealOrphan(key, branch = "", sourceNode = null) {
-  const trace = beginOrphanTrace(sourceNode, branch);
+async function revealOrphan(key, branch = "", sourceNode = null, summary = {}) {
+  const trace = beginOrphanTrace(sourceNode, branch, summary);
   setWorkTab("live", { defer: true });
   setRunsFilter("unlanded");
   openApp("work");
@@ -9650,7 +9711,7 @@ function attnVerb(r) {
     return { label: "review",
              title: "Open this exact unlanded branch with its full context",
              run: (_btn, source) => revealOrphan(
-               r.orphan_key, r.orphan_branch, source) };
+               r.orphan_key, r.orphan_branch, source, r) };
   if (r.id === "health:ai")
     return { label: "recheck",
              title: "Probe the AI backend again right now",
