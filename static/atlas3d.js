@@ -90,6 +90,7 @@ export function create(host) {
   const textures = new Map();       // sim node id -> THREE.Texture
   const labels = new Map();         // sim node id -> span
   let edgeMesh = null, edgeGeo = null, edgeList = [];
+  let edgeSegments = 1;
   let edgeIndicesByNode = new Map();
   let pointCloud = null, pointGeo = null, pointMat = null, pointList = [];
   let stars = null;
@@ -518,20 +519,24 @@ export function create(host) {
     for (const e of S.egoEdges) edgeList.push({ e, ego: true });
     for (const e of S.edges) edgeList.push({ e, ego: false });
     const n = edgeList.length;
+    // Two chords are enough to make a slight arc legible at full-vault
+    // scale. Smaller graphs can afford a smoother five-chord curve.
+    edgeSegments = S.display.curvedLinks ? (n > 30000 ? 2 : 5) : 1;
+    const parts = n * edgeSegments;
     edgeGeo = new THREE.BufferGeometry();
     edgeGeo.setAttribute("position",
-      new THREE.BufferAttribute(new Float32Array(n * 12), 3));
+      new THREE.BufferAttribute(new Float32Array(parts * 12), 3));
     edgeGeo.setAttribute("aOther",
-      new THREE.BufferAttribute(new Float32Array(n * 12), 3));
+      new THREE.BufferAttribute(new Float32Array(parts * 12), 3));
     edgeGeo.setAttribute("aSide",
-      new THREE.BufferAttribute(new Float32Array(n * 4), 1));
+      new THREE.BufferAttribute(new Float32Array(parts * 4), 1));
     edgeGeo.setAttribute("aWidth",
-      new THREE.BufferAttribute(new Float32Array(n * 4), 1));
+      new THREE.BufferAttribute(new Float32Array(parts * 4), 1));
     edgeGeo.setAttribute("aColor",
-      new THREE.BufferAttribute(new Float32Array(n * 12), 3));
+      new THREE.BufferAttribute(new Float32Array(parts * 12), 3));
     edgeGeo.setAttribute("aAlpha",
-      new THREE.BufferAttribute(new Float32Array(n * 4), 1));
-    const idx = new Uint32Array(n * 6);
+      new THREE.BufferAttribute(new Float32Array(parts * 4), 1));
+    const idx = new Uint32Array(parts * 6);
     const side = edgeGeo.getAttribute("aSide").array;
     for (let i = 0; i < n; i++) {
       const edge = edgeList[i].e;
@@ -540,9 +545,12 @@ export function create(host) {
           edgeIndicesByNode.set(node.id, []);
         edgeIndicesByNode.get(node.id).push(i);
       }
-      const v = i * 4;
-      side[v] = -1; side[v + 1] = 1; side[v + 2] = -1; side[v + 3] = 1;
-      idx.set([v, v + 1, v + 3, v, v + 3, v + 2], i * 6);
+      for (let segment = 0; segment < edgeSegments; segment++) {
+        const part = i * edgeSegments + segment, v = part * 4;
+        side[v] = -1; side[v + 1] = 1;
+        side[v + 2] = -1; side[v + 3] = 1;
+        idx.set([v, v + 1, v + 3, v, v + 3, v + 2], part * 6);
+      }
     }
     edgeGeo.setIndex(new THREE.BufferAttribute(idx, 1));
     edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
@@ -840,7 +848,6 @@ export function create(host) {
     const focus = hasSel ? null : S.hover;
     for (let i = 0; i < edgeList.length; i++) {
       const { e, ego } = edgeList[i];
-      const v = i * 4;
       const hide = ego ? (S.hideEgo || !!S.shown)
         : (host.isEdgeShown ? !host.isEdgeShown(e)
                            : S.shown && !(S.shown.has(e.an.id)
@@ -852,13 +859,14 @@ export function create(host) {
         lw = st[4] * S.display.linkThickness;
       }
       const A = e.an, B = e.bn;
-      for (let k = 0; k < 4; k++) {
-        const at = k < 2 ? A : B, ot = k < 2 ? B : A;
-        pos.setXYZ(v + k, at.x, at.y, at.z);
-        oth.setXYZ(v + k, ot.x, ot.y, ot.z);
-        col.setXYZ(v + k, r, g, b);
-        alp.setX(v + k, a);
-        wid.setX(v + k, lw);
+      writeEdgePositions(i, A, B, pos, oth);
+      for (let segment = 0; segment < edgeSegments; segment++) {
+        const v = (i * edgeSegments + segment) * 4;
+        for (let k = 0; k < 4; k++) {
+          col.setXYZ(v + k, r, g, b);
+          alp.setX(v + k, a);
+          wid.setX(v + k, lw);
+        }
       }
     }
     pos.needsUpdate = oth.needsUpdate = wid.needsUpdate = true;
@@ -873,14 +881,47 @@ export function create(host) {
     const pos = edgeGeo.getAttribute("position");
     const oth = edgeGeo.getAttribute("aOther");
     for (const i of indexes) {
-      const e = edgeList[i].e, v = i * 4, A = e.an, B = e.bn;
-      for (let k = 0; k < 4; k++) {
-        const at = k < 2 ? A : B, ot = k < 2 ? B : A;
-        pos.setXYZ(v + k, at.x, at.y, at.z);
-        oth.setXYZ(v + k, ot.x, ot.y, ot.z);
-      }
+      const e = edgeList[i].e;
+      writeEdgePositions(i, e.an, e.bn, pos, oth);
     }
     pos.needsUpdate = oth.needsUpdate = true;
+  }
+
+  const edgeArc = new Float64Array(3);
+
+  function writeEdgePositions(index, A, B, pos, oth) {
+    let ax = 0, ay = 0, az = 0;
+    if (S.display.curvedLinks && S.display.linkCurve > 0) {
+      const dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z;
+      const length = Math.hypot(dx, dy, dz);
+      let nx = -dy, ny = dx, nz = 0;
+      let normal = Math.hypot(nx, ny);
+      if (normal < 1e-6) {
+        nx = 0; ny = -dz; nz = dy;
+        normal = Math.hypot(ny, nz);
+      }
+      const sign = index % 2 ? 1 : -1;
+      const amplitude = length * S.display.linkCurve * sign
+        / Math.max(normal, 1e-6);
+      ax = nx * amplitude; ay = ny * amplitude; az = nz * amplitude;
+    }
+    edgeArc[0] = ax; edgeArc[1] = ay; edgeArc[2] = az;
+    for (let segment = 0; segment < edgeSegments; segment++) {
+      const t0 = segment / edgeSegments;
+      const t1 = (segment + 1) / edgeSegments;
+      const q0 = 4 * t0 * (1 - t0), q1 = 4 * t1 * (1 - t1);
+      const x0 = A.x + (B.x - A.x) * t0 + edgeArc[0] * q0;
+      const y0 = A.y + (B.y - A.y) * t0 + edgeArc[1] * q0;
+      const z0 = A.z + (B.z - A.z) * t0 + edgeArc[2] * q0;
+      const x1 = A.x + (B.x - A.x) * t1 + edgeArc[0] * q1;
+      const y1 = A.y + (B.y - A.y) * t1 + edgeArc[1] * q1;
+      const z1 = A.z + (B.z - A.z) * t1 + edgeArc[2] * q1;
+      const v = (index * edgeSegments + segment) * 4;
+      pos.setXYZ(v, x0, y0, z0); pos.setXYZ(v + 1, x0, y0, z0);
+      pos.setXYZ(v + 2, x1, y1, z1); pos.setXYZ(v + 3, x1, y1, z1);
+      oth.setXYZ(v, x1, y1, z1); oth.setXYZ(v + 1, x1, y1, z1);
+      oth.setXYZ(v + 2, x0, y0, z0); oth.setXYZ(v + 3, x0, y0, z0);
+    }
   }
 
   // ---------- name cards -------------------------------------------------
@@ -1170,7 +1211,8 @@ export function create(host) {
     }
     // slow drift - the Image Atlas's idle auto-orbit, paused while a
     // selection owns the stage (its analogue of a focused photo)
-    if (!host.reducedMotion && idleT > NAV.driftAfter && !S.sel.size
+    if (S.display.autoRotate && !host.reducedMotion
+        && idleT > NAV.driftAfter && !S.sel.size
         && (interacted || !restoredCam)) {
       controls.azimuthAngle += NAV.driftRate * dt;
       needsRender = true;
@@ -1404,6 +1446,15 @@ export function create(host) {
     paint();
   }
 
+  function linkGeometryChanged() {
+    if (edgeMesh) scene.remove(edgeMesh);
+    edgeGeo?.dispose();
+    edgeMesh = edgeGeo = null;
+    buildEdges();
+    paintEdges();
+    requestRender();
+  }
+
   function focusOn(p) {
     if (!controls) return;
     const d = Math.max(bounds.radius * 0.12, p.r * 26);
@@ -1467,6 +1518,6 @@ export function create(host) {
 
   resize();
   return { setGraph, paint, wake, resize, focusOn, setRunning, faceLoaded,
-           geometryChanged, refreshPhysics,
+           geometryChanged, linkGeometryChanged, refreshPhysics,
            dispose, canvas, state, cards, NAV, ACTION: CameraControls.ACTION };
 }

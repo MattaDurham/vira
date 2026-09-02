@@ -63,7 +63,9 @@
     enabledKinds: new Set(),
     time: { axis: "valid", at: null, min: null, max: null, timeline: {} },
     fixedLayout: false,      // server-supplied semantic coordinates
-    display: { scale: 1, nodeSize: 1, linkThickness: 1 },
+    display: { scale: 1, nodeSize: 1, linkThickness: 1, autoRotate: true,
+               curvedLinks: true, linkCurve: .10 },
+    colorOverrides: {},
     physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
                distance: 1, semantic: 0.18 },
     loading: false,
@@ -73,7 +75,8 @@
   const CONTROL_KEY = "vira-world-controls";
   const CONTROL_DEFAULTS = {
     filterSearch: true, hideOrphans: false,
-    display: { scale: 1, nodeSize: 1, linkThickness: 1 },
+    display: { scale: 1, nodeSize: 1, linkThickness: 1, autoRotate: true,
+               curvedLinks: true, linkCurve: .10 },
     physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
                distance: 1, semantic: 0.18 },
   };
@@ -95,6 +98,13 @@
     S.display.nodeSize = clamp(saved.display?.nodeSize, .6, 1.8, 1);
     S.display.linkThickness = clamp(
       saved.display?.linkThickness, .25, 2.5, 1);
+    S.display.autoRotate = saved.display?.autoRotate !== false;
+    S.display.curvedLinks = saved.display?.curvedLinks !== false;
+    S.display.linkCurve = clamp(saved.display?.linkCurve, 0, .3, .10);
+    if (saved.colorOverrides && typeof saved.colorOverrides === "object") {
+      for (const [key, color] of Object.entries(saved.colorOverrides))
+        if (/^#[0-9a-f]{6}$/i.test(color)) S.colorOverrides[key] = color;
+    }
     S.physics.enabled = saved.physics?.enabled !== false;
     S.physics.center = clamp(saved.physics?.center, 0, 1, .08);
     S.physics.repel = clamp(saved.physics?.repel, 0, 1, .30);
@@ -108,6 +118,7 @@
       localStorage.setItem(CONTROL_KEY, JSON.stringify({
         filterSearch: S.filterSearch, hideOrphans: S.hideOrphans,
         display: S.display, physics: S.physics,
+        colorOverrides: S.colorOverrides,
       }));
     } catch { /* private browsing or a full origin: controls stay in memory */ }
   }
@@ -219,9 +230,10 @@
   function assignColors() {
     S.colors.clear();
     S.bands.forEach((b, i) => {
-      S.colors.set(b.id, b.anchor ? "#a39c8d"
+      const fallback = b.anchor ? "#a39c8d"
         : CLUSTER_COLORS[(i + (S.bands.some((x) => x.anchor) ? 0 : 1))
-                         % CLUSTER_COLORS.length]);
+                         % CLUSTER_COLORS.length];
+      S.colors.set(b.id, S.colorOverrides[`${S.lens}|${b.id}`] || fallback);
     });
   }
 
@@ -815,8 +827,7 @@
                               : `rgba(138,132,120,${hasSel ? 0.02 : 0.05})`;
         ctx.lineWidth = (hot ? 1.4 : 1) * S.display.linkThickness;
         ctx.beginPath();
-        ctx.moveTo(w2sX(S.ego.x), w2sY(S.ego.y));
-        ctx.lineTo(w2sX(e.bn.x), w2sY(e.bn.y));
+        traceFlatEdge(e, S.ego, e.bn);
         ctx.stroke();
       }
     }
@@ -859,8 +870,7 @@
         ctx.lineWidth = (0.6 + 1.8 * w) * S.display.linkThickness;
       }
       ctx.beginPath();
-      ctx.moveTo(w2sX(e.an.x), w2sY(e.an.y));
-      ctx.lineTo(w2sX(e.bn.x), w2sY(e.bn.y));
+      traceFlatEdge(e, e.an, e.bn);
       ctx.stroke();
     }
 
@@ -870,6 +880,25 @@
       drawNode(p, focus);
     }
     if (!S.hideEgo && !S.shown) drawNode(S.ego, focus);
+  }
+
+  function traceFlatEdge(edge, A, B) {
+    const ax = w2sX(A.x), ay = w2sY(A.y);
+    const bx = w2sX(B.x), by = w2sY(B.y);
+    ctx.moveTo(ax, ay);
+    if (!S.display.curvedLinks || S.display.linkCurve <= 0) {
+      ctx.lineTo(bx, by);
+      return;
+    }
+    const dx = bx - ax, dy = by - ay;
+    const distance = Math.hypot(dx, dy) || 1;
+    let hash = 0;
+    for (const ch of `${edge.an?.id || "ego"}|${edge.bn?.id || ""}`)
+      hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+    const sign = hash & 1 ? 1 : -1;
+    const offset = distance * S.display.linkCurve * 2 * sign;
+    ctx.quadraticCurveTo((ax + bx) / 2 - dy / distance * offset,
+                         (ay + by) / 2 + dx / distance * offset, bx, by);
   }
 
   function drawNode(p, focus) {
@@ -966,6 +995,13 @@
     legendChips.clear();
     const editable = !!activeLens()?.editable;
     S.bands.forEach((c) => {
+      const item = el("span", "atlas-legend-item");
+      const picker = document.createElement("input");
+      picker.type = "color";
+      picker.className = "atlas-color";
+      picker.value = S.colors.get(c.id);
+      picker.title = `Change the color for ${c.label}`;
+      picker.setAttribute("aria-label", `Color for ${c.label}`);
       const chip = el("button", "atlas-chip");
       const dot = el("span", "atlas-dot");
       dot.style.background = S.colors.get(c.id);
@@ -988,8 +1024,17 @@
         ev.stopPropagation();
         groupMenu(ev.clientX, ev.clientY, c.id);
       });
+      picker.addEventListener("input", () => {
+        S.colorOverrides[`${S.lens}|${c.id}`] = picker.value;
+        S.colors.set(c.id, picker.value);
+        dot.style.background = picker.value;
+        saveControls();
+        draw();
+      });
       legendChips.set(c.id, chip);
-      host.appendChild(chip);
+      item.appendChild(picker);
+      item.appendChild(chip);
+      host.appendChild(item);
     });
   }
 
@@ -2043,6 +2088,8 @@
       "#atlas-filter-mode": S.filterSearch,
       "#atlas-hide-orphans": S.hideOrphans,
       "#atlas-physics": S.physics.enabled,
+      "#atlas-auto-rotate": S.display.autoRotate,
+      "#atlas-curved-links": S.display.curvedLinks,
     };
     for (const [id, value] of Object.entries(values))
       if ($(id)) $(id).checked = value;
@@ -2050,6 +2097,7 @@
       "#atlas-geometry": S.display.scale * 100,
       "#atlas-node-size": S.display.nodeSize * 100,
       "#atlas-link-thickness": S.display.linkThickness * 100,
+      "#atlas-link-curve": S.display.linkCurve * 100,
       "#atlas-center": S.physics.center * 100,
       "#atlas-repel": S.physics.repel * 100,
       "#atlas-link-force": S.physics.link * 100,
@@ -2061,11 +2109,16 @@
     setOutput("#atlas-geometry-out", S.display.scale);
     setOutput("#atlas-node-size-out", S.display.nodeSize);
     setOutput("#atlas-link-thickness-out", S.display.linkThickness);
+    setOutput("#atlas-link-curve-out", S.display.linkCurve);
     setOutput("#atlas-center-out", S.physics.center);
     setOutput("#atlas-repel-out", S.physics.repel);
     setOutput("#atlas-link-force-out", S.physics.link);
     setOutput("#atlas-link-distance-out", S.physics.distance);
     setOutput("#atlas-semantic-out", S.physics.semantic);
+    $("#atlas-link-curve-row")?.classList.toggle(
+      "disabled", !S.display.curvedLinks);
+    if ($("#atlas-link-curve"))
+      $("#atlas-link-curve").disabled = !S.display.curvedLinks;
     paintFilterCount();
   }
 
@@ -2107,7 +2160,14 @@
   function physicsChanged() {
     saveControls();
     syncControlInputs();
-    if (R3) R3.refreshPhysics(null, true);
+    // The full graph deliberately does not simulate every node at once.
+    // A force slider still needs visible feedback before the owner has made
+    // a selection, so heat the neighborhood of the most connected visible
+    // node instead of handing the renderer an empty seed.
+    const seed = [...S.sel][0] || S.hover || S.nodes.reduce((best, node) =>
+      isShown(node) && (!best || (node.graph_degree || node.degree || 0)
+        > (best.graph_degree || best.degree || 0)) ? node : best, null);
+    if (R3) R3.refreshPhysics(seed, true);
     else draw();
   }
 
@@ -2157,6 +2217,12 @@
                    true);
   bindPercentRange("#atlas-link-thickness", S.display, "linkThickness",
                    .25, 2.5, true);
+  $("#atlas-link-curve")?.addEventListener("input", (e) => {
+    S.display.linkCurve = clamp(Number(e.target.value) / 100, 0, .3, .10);
+    setOutput("#atlas-link-curve-out", S.display.linkCurve);
+    saveControls();
+    draw();
+  });
   bindPercentRange("#atlas-center", S.physics, "center", 0, 1, false);
   bindPercentRange("#atlas-repel", S.physics, "repel", 0, 1, false);
   bindPercentRange("#atlas-link-force", S.physics, "link", 0, 1, false);
@@ -2167,6 +2233,26 @@
     S.physics.enabled = e.target.checked;
     physicsChanged();
   });
+  $("#atlas-auto-rotate")?.addEventListener("change", (e) => {
+    S.display.autoRotate = e.target.checked;
+    saveControls();
+  });
+  $("#atlas-curved-links")?.addEventListener("change", (e) => {
+    S.display.curvedLinks = e.target.checked;
+    saveControls();
+    syncControlInputs();
+    if (R3) R3.linkGeometryChanged();
+    else draw();
+  });
+  $("#atlas-reset-colors")?.addEventListener("click", () => {
+    const prefix = `${S.lens}|`;
+    for (const key of Object.keys(S.colorOverrides))
+      if (key.startsWith(prefix)) delete S.colorOverrides[key];
+    assignColors();
+    saveControls();
+    renderLegend();
+    draw();
+  });
   $("#atlas-reset-geometry")?.addEventListener("click", () =>
     applyGeometry(true));
   $("#atlas-reset-controls")?.addEventListener("click", () => {
@@ -2174,11 +2260,14 @@
     S.hideOrphans = CONTROL_DEFAULTS.hideOrphans;
     S.display = { ...CONTROL_DEFAULTS.display };
     S.physics = { ...CONTROL_DEFAULTS.physics };
+    S.colorOverrides = {};
     S.enabledKinds = new Set((S.graph?.kinds || []).map((row) => row.id));
     S.match = "";
     if ($("#atlas-search")) $("#atlas-search").value = "";
     syncControlInputs();
     renderKindFilters();
+    assignColors();
+    renderLegend();
     applyGeometry(true);
     physicsChanged();
     isoChanged(false);

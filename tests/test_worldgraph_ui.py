@@ -61,6 +61,38 @@ class WorldGraphUiTests(unittest.TestCase):
         self.assertIn('S.dragNode = p', self.renderer)
         self.assertIn('semantic-home force', self.renderer)
 
+    def test_rotation_colors_arcs_and_every_slider_reach_the_renderer(self):
+        for needle in ('id="atlas-auto-rotate"', 'id="atlas-curved-links"',
+                       'id="atlas-link-curve"', 'id="atlas-reset-colors"'):
+            self.assertIn(needle, self.html)
+        self.assertIn('picker.type = "color"', self.atlas)
+        self.assertIn('colorOverrides: S.colorOverrides', self.atlas)
+        self.assertIn('S.display.autoRotate && !host.reducedMotion',
+                      self.renderer)
+        self.assertIn('function writeEdgePositions(', self.renderer)
+        self.assertIn('function linkGeometryChanged()', self.renderer)
+        self.assertIn('R3.refreshPhysics(seed, true)', self.atlas)
+
+        display_controls = {
+            "#atlas-geometry": "scale",
+            "#atlas-node-size": "nodeSize",
+            "#atlas-link-thickness": "linkThickness",
+        }
+        for control, field in display_controls.items():
+            self.assertIn(f'bindPercentRange("{control}", S.display, '
+                          f'"{field}"', self.atlas)
+        force_controls = {
+            "#atlas-center": "center",
+            "#atlas-repel": "repel",
+            "#atlas-link-force": "link",
+            "#atlas-link-distance": "distance",
+            "#atlas-semantic": "semantic",
+        }
+        for control, field in force_controls.items():
+            self.assertIn(f'bindPercentRange("{control}", S.physics, '
+                          f'"{field}"', self.atlas)
+            self.assertIn(f'S.physics.{field}', self.renderer)
+
     def test_world_api_replaces_atlas_only_for_this_window(self):
         self.assertIn('api("/api/world")', self.atlas)
         self.assertIn('api("/api/world/node/"', self.atlas)

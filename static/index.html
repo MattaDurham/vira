@@ -648,13 +648,19 @@
           <summary>Color and grouping</summary>
           <div class="atlas-lenses" id="atlas-lenses"></div>
           <div class="atlas-legend" id="atlas-legend"></div>
+          <button class="linkish atlas-reset-colors" id="atlas-reset-colors" type="button">Reset colors</button>
           <div class="hint atlas-coverage" id="atlas-coverage"></div>
         </details>
         <details class="atlas-control-section">
           <summary>Display and geometry</summary>
+          <div class="atlas-toggle-row">
+            <label><input id="atlas-auto-rotate" type="checkbox" checked> Auto rotate</label>
+            <label><input id="atlas-curved-links" type="checkbox" checked> Arc links</label>
+          </div>
           <label class="atlas-slider"><span>Graph spread <output id="atlas-geometry-out">100%</output></span><input id="atlas-geometry" type="range" min="35" max="250" value="100"></label>
           <label class="atlas-slider"><span>Node size <output id="atlas-node-size-out">100%</output></span><input id="atlas-node-size" type="range" min="60" max="180" value="100"></label>
           <label class="atlas-slider"><span>Link thickness <output id="atlas-link-thickness-out">100%</output></span><input id="atlas-link-thickness" type="range" min="25" max="250" value="100"></label>
+          <label class="atlas-slider" id="atlas-link-curve-row"><span>Link arc <output id="atlas-link-curve-out">10%</output></span><input id="atlas-link-curve" type="range" min="0" max="30" value="10"></label>
           <button class="fchip sm" id="atlas-reset-geometry" type="button">Reset positions</button>
         </details>
         <details class="atlas-control-section">
