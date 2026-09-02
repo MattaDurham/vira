@@ -537,6 +537,8 @@ who anchors it, which sub-groups sit inside it, what binds them.
 Return ONLY a JSON object with exactly those keys.
 
 CURRENT NAME: {current}
+FALLBACK NAME (answer with it when the evidence supports nothing more \
+specific - a plain true name beats an inventive one): {fallback}
 NAMES OTHER CIRCLES ALREADY CARRY (pick something distinct): {taken}
 {prior}
 MEMBERS ({n_members}):
@@ -621,6 +623,7 @@ def compose_prompt(ev, rec=None, changes=None, taken=()):
     return READ_PROMPT.format(
         owner=owner, rereading=rereading,
         current=ev.get("current_label") or "(unnamed)",
+        fallback=fallback_label(ev),
         taken=", ".join(t for t in taken if t) or "none yet",
         prior=_prior_block(rec, changes or []),
         n_members=len(ev["members"]), members=_members_block(ev),

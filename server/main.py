@@ -3980,6 +3980,10 @@ class CircleRefreshReq(BaseModel):
     force: bool = False
 
 
+class CircleLabelReq(BaseModel):
+    label: str
+
+
 @app.get("/api/atlas/circles")
 def api_atlas_circles():
     """Every circle the store knows — name, why, size, read state."""
@@ -4011,7 +4015,7 @@ def api_atlas_circle_reread(sid: str):
 
 
 @app.post("/api/atlas/circles/{sid}/rename")
-def api_atlas_circle_rename(sid: str, req: GroupLabelReq):
+def api_atlas_circle_rename(sid: str, req: CircleLabelReq):
     try:
         c = circles.rename(sid, req.label)
     except ValueError as e:

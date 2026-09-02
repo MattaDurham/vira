@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import atlas, atlaslens, circles, data as crm, imessage, settings
-from server import suggest
+from server import main, suggest
 
 ANN, RAJ, LEE, MAX, ZOE = ("+12125550101", "+12125550102", "+12125550103",
                            "+12125550104", "+12125550105")
@@ -350,6 +350,9 @@ class Evidence(CirclesBase):
         self.assertIn("PREVIOUS READ", prompt)
         self.assertIn("WHAT CHANGED SINCE: joined: Zoe", prompt)
         self.assertIn("CURRENT NAME: Ski trip", prompt)
+        self.assertIn("FALLBACK NAME", prompt)
+        self.assertIn("specific - a plain true name beats an inventive one): "
+                      "Ski trip", prompt)
 
 
 class Grounding(CirclesBase):
@@ -604,6 +607,47 @@ class Sync(CirclesBase):
         self.assertFalse((self.root / "atlas-circles.json").exists())
         self.assertEqual(self.reads, [])
         self.assertEqual(circles.status()["circles"], 0)
+
+
+class Routes(CirclesBase):
+    """The HTTP layer, through the real app. The rename route shipped
+    typed against a body model defined LATER in main.py, which FastAPI
+    read as a query parameter - every rename 422'd - so the shape is
+    pinned here, not inferred from the function."""
+
+    def setUp(self):
+        super().setUp()
+        from fastapi.testclient import TestClient
+        self.client = TestClient(main.app)
+
+    def test_rename_takes_a_json_body_and_returns_the_overlay(self):
+        self.stub_model(GOOD_READ)
+        circles.sync()
+        sid = self.only_sid()
+        r = self.client.post(f"/api/atlas/circles/{sid}/rename",
+                             json={"label": "The mountain people"})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertEqual(d["circle"]["display_label"], "The mountain people")
+        band = next(b for l in d["lenses"] if l["id"] == "circles"
+                    for b in l["bands"] if b["circle"] == sid)
+        self.assertEqual(band["label"], "The mountain people")
+        self.assertEqual(
+            self.client.post("/api/atlas/circles/nope/rename",
+                             json={"label": "x"}).status_code, 404)
+
+    def test_list_and_card_routes(self):
+        self.stub_model(GOOD_READ)
+        circles.sync()
+        sid = self.only_sid()
+        d = self.client.get("/api/atlas/circles").json()
+        self.assertEqual(d["status"]["read"], 1)
+        card = self.client.get(f"/api/atlas/circles/{sid}").json()
+        self.assertEqual(card["display_label"], "Ski trip crew")
+        self.assertEqual([m["name"] for m in card["members"]][0],
+                         "Ann Larkspur")
+        self.assertEqual(
+            self.client.get("/api/atlas/circles/nope").status_code, 404)
 
 
 class Wiring(unittest.TestCase):
