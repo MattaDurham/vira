@@ -132,8 +132,13 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "understanding: add a diagram for systems or sequences, an image or "
         "contact sheet for visual evidence, or a structured table/timeline "
         "when prose hides the comparison. Give every visual useful alt text. "
-        "Do not add decorative filler; when a visual would not clarify the "
-        "decision, use a deliberately structured, scannable document instead."
+        "For code work, make the final handoff a short review brief and capture "
+        "a representative screenshot or rendering when a safe test instance "
+        "and public fixture data make that honest; a Forge foreground card will "
+        "render that handoff and discover real visual files in the branch. "
+        "Never capture or commit personal data. Do not add decorative filler; "
+        "when a visual would not clarify the decision, use a deliberately "
+        "structured, scannable document instead."
         "\n\n")
     return (
         f"You are running inside Vira, {owner}'s personal AI chief-of-staff "

@@ -47,6 +47,7 @@ ReentryIntoExistingWorktree.
 """
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import subprocess
@@ -544,6 +545,13 @@ built, and carry it through to completion. Run the test suite. Do NOT \
 merge and do NOT push — the owner decides that. When you are done (or if \
 you get stuck and need the owner's judgment), end with the usual decision \
 menu: merge it, spin up a test instance, or discard it.
+
+Make that final handoff a compact review brief: lead with the outcome, name \
+the workflow or before/after relationship, list verification, and state what \
+remains. If this changes a visible surface, capture a representative public-\
+safe screenshot or rendering through the repo's test-instance process and \
+keep it in the branch with useful alt text. Never capture personal data and \
+never add a decorative image merely to fill space.
 """
 
 
@@ -580,6 +588,131 @@ def resume_prompt(item):
 # it. `context()` is the unsummarized read, fetched only when he opens it.
 CONTEXT_LOG = 200           # unmerged commits, with bodies
 CONTEXT_STATUS = 400        # porcelain lines
+VISUAL_MAX = 12             # enough for a useful contact sheet, not a wall
+VISUAL_SUFFIXES = frozenset((".png", ".jpg", ".jpeg", ".webp", ".gif",
+                             ".avif"))
+
+
+def _branch_paths(item):
+    """Every path this branch changes relative to main, plus dirty paths.
+
+    The compact row only needs dirty paths. The foreground review needs the
+    whole change map, including committed files, both to explain the work and
+    to find screenshots/renderings the branch deliberately carries.
+    """
+    wt = item.get("worktree") or ""
+    branch = item.get("branch") or ""
+    paths = []
+    if wt and branch and item.get("ahead"):
+        diff = gitutil.git(Path(wt), "diff", "--name-only", "--diff-filter=ACMR",
+                           f"main...{branch}", timeout=30)
+        if diff.returncode == 0:
+            paths.extend(l.strip() for l in (diff.stdout or "").splitlines()
+                         if l.strip())
+    if wt:
+        # Expand untracked directories here: browser harnesses commonly leave
+        # `.playwright-mcp/review.png` as one collapsed status row, and the
+        # image inside is exactly the evidence this review is meant to find.
+        st = gitutil.git(Path(wt), "status", "--porcelain",
+                         "--untracked-files=all", timeout=30)
+        if st.returncode == 0:
+            paths.extend(_porcelain_path(l) for l in
+                         (st.stdout or "").splitlines() if l.strip())
+    # Git can name the same path in the branch diff and the dirty overlay.
+    return list(dict.fromkeys(p for p in paths if p))
+
+
+def _safe_visual_path(item, rel, allowed):
+    """The filesystem half of visual_path, with an already-derived allowlist."""
+    wt = item.get("worktree") or ""
+    rel = str(rel or "")
+    if (not wt or rel not in allowed or
+            Path(rel).suffix.lower() not in VISUAL_SUFFIXES):
+        return None
+    try:
+        root = Path(wt).resolve(strict=True)
+        path = (root / rel).resolve(strict=True)
+        path.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    return path if path.is_file() else None
+
+
+def _visuals(item, job_row, changed_paths):
+    """Real image evidence already attached to the ask or made by the branch.
+
+    This is discovery, not generation. A foreground card must never invent a
+    screenshot merely to look richer. Idea images use their existing guarded
+    endpoint; branch files use visual_path() and a separately guarded route.
+    """
+    rows = []
+    idea_id = (job_row or {}).get("idea_id")
+    if idea_id:
+        try:
+            from . import ideas, ideaimages
+            idea = next((x for x in ideas.list_items()
+                         if x.get("id") == idea_id), None)
+            if idea:
+                for im in ideaimages.images_of(idea):
+                    if not im.get("missing"):
+                        image_text = " ".join(str(im.get("text") or "").split())[:400]
+                        rows.append({
+                            "source": "ask", "idea_id": idea_id,
+                            "id": im.get("id"), "name": im.get("name") or "Image",
+                            "alt": image_text or im.get("name") or
+                                   "Image attached to the original request",
+                            "caption": image_text or "Original visual reference",
+                        })
+        except Exception:  # noqa: BLE001 -- visuals are an honest enhancement
+            pass
+    allowed = set(changed_paths)
+    for rel in changed_paths:
+        if Path(rel).suffix.lower() not in VISUAL_SUFFIXES:
+            continue
+        if _safe_visual_path(item, rel, allowed):
+            rows.append({"source": "branch", "path": rel,
+                         "name": Path(rel).name,
+                         "alt": f"Visual artifact from {rel}",
+                         "caption": rel})
+    return rows[:VISUAL_MAX]
+
+
+def visual_path(item, rel):
+    """Resolve one review visual, constrained to a changed raster file.
+
+    The route calling this receives an owner-controlled query string. It may
+    serve only a path Git itself names as changed and only when the resolved
+    file remains under this item's worktree. SVG is intentionally excluded:
+    raster evidence cannot execute script when served back into the app.
+    """
+    wt = item.get("worktree") or ""
+    rel = str(rel or "")
+    if not wt:
+        return None
+    return _safe_visual_path(item, rel, set(_branch_paths(item)))
+
+
+def visual_mime(path):
+    """A conservative Content-Type for the raster-only review route."""
+    return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+
+def _review_objective(job_row, branch_rows, fallback):
+    """Recover the human objective even when the newest job is a Land run."""
+    prompt = (job_row or {}).get("prompt") or ""
+    origin = re.search(r'The originating job was:\s*"([^"]+)"', prompt)
+    if origin:
+        return origin.group(1).strip()
+    # An idea dispatch is the strongest durable human-intent signal. Otherwise
+    # the earliest branch job precedes any machine-authored Resume/Land runs.
+    source = next((r for r in branch_rows if r.get("idea_id")), None)
+    source = source or (branch_rows[0] if branch_rows else job_row)
+    if source:
+        value = source.get("command") or joblog.command(source)
+        if not re.match(r"^(Finishing|Resuming|Diagnosing) stalled work\b",
+                        value or "", re.I):
+            return value
+    return fallback
 
 
 def context(item):
@@ -591,19 +724,25 @@ def context(item):
     needs, and it is deliberately safe to open on a passive instance."""
     wt = item.get("worktree") or ""
     branch = item.get("branch") or ""
-    out = {"branch": branch, "worktree": wt, "kind": item.get("kind"),
+    out = {"key": item.get("key") or "", "branch": branch, "worktree": wt,
+           "kind": item.get("kind"),
            "prompt": "", "job": item.get("job"),
            "commits": [], "files": [], "status": "",
-           "resume_prompt": "", "notes": []}
+           "changed_files": [], "report": "", "objective": "",
+           "visuals": [], "resume_prompt": "", "notes": []}
 
     job = item.get("job") or {}
+    job_row = None
+    records = joblog.list_records() if (job.get("id") or branch) else []
+    branch_rows = [r for r in records if r.get("branch") == branch]
     if job.get("id"):
         # prompt_head on the row is squeezed to 280 chars for the sweep;
         # the ledger still holds what was actually asked.
-        row = next((r for r in joblog.list_records()
-                    if r.get("id") == job["id"]), None)
-        if row:
-            out["prompt"] = row.get("prompt") or ""
+        job_row = next((r for r in records
+                        if r.get("id") == job["id"]), None)
+        if job_row:
+            out["prompt"] = job_row.get("prompt") or ""
+            out["report"] = job_row.get("result") or ""
     if not out["prompt"]:
         out["prompt"] = job.get("prompt_head") or ""
 
@@ -646,6 +785,12 @@ def context(item):
         out["notes"].append(
             "no worktree on disk — Resume cannot run until one is recreated "
             "with scripts/branch.sh")
+    out["changed_files"] = _branch_paths(item)
+    visual_job = next((r for r in branch_rows if r.get("idea_id")), job_row)
+    out["visuals"] = _visuals(item, visual_job, out["changed_files"])
+    fallback = (job.get("title") or branch.replace("claude/", "")
+                or "Review this branch")
+    out["objective"] = _review_objective(job_row, branch_rows, fallback)
     return out
 
 
@@ -718,7 +863,11 @@ Do this, in order:
 3. Run the test suite and fix what it catches.
 4. COMMIT everything on this branch with a clear message. A clean, \
 committed tree is the signal Vira merges on.
-5. End with a short summary of what the branch now contains.
+5. End with a compact review brief: lead with the outcome, name the workflow \
+or before/after relationship, list verification, and state what remains. If \
+this changes a visible surface, capture a representative public-safe screenshot \
+or rendering through the repo's test-instance process and keep it in the branch \
+with useful alt text. Never capture personal data and never add decorative filler.
 
 If you conclude the work is WRONG — superseded, duplicated, or not worth \
 landing — do NOT commit: say so plainly and stop. An uncommitted tree is \
@@ -784,6 +933,10 @@ Never re-run a step you have just established will fail the same way. If \
 the cause is something you cannot fix from inside this worktree (a harness \
 limit, a missing credential, a change needed in the live checkout), say so \
 plainly in the question — that is a real finding, not a failure to deliver.
+
+Keep the final diagnosis short and scannable for the foreground Forge card: \
+outcome, workflow state, evidence, recommendation. Include real public-safe \
+visual evidence when it already exists; never manufacture or capture personal data.
 """
 
 

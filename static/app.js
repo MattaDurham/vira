@@ -6326,8 +6326,16 @@ function ideaImplementPrompt(it, extra, cwd, perm, fold) {
     "  the restart to the owner.",
     "- Obey the repo's conventions, including no emojis anywhere.",
     "",
-    "End with a concise report: the files you changed and why, how you verified",
-    "it works, and anything unfinished or needing the owner's decision.",
+    "End with a compact review brief for the foreground Forge card:",
+    "- Lead with the outcome in 2-4 short lines, then list verification and",
+    "  anything unfinished or needing the owner's decision.",
+    "- Name the workflow or before/after relationship, not only the files.",
+    "- If this changes a visible surface, capture a representative screenshot",
+    "  or rendering when the repo's test-instance process can do so safely.",
+    "  Keep only public-safe fixture/synthetic visuals in the branch and give",
+    "  each useful alt text; never capture or commit personal data.",
+    "- If the system or sequence needs a durable document, add a compact",
+    "  Mermaid workflow diagram there. Skip decorative filler.",
   ].join("\n");
 }
 
@@ -7438,6 +7446,172 @@ function orphanContext(it, opts = {}) {
   return box;
 }
 
+function orphanChangeAreas(paths) {
+  const rules = [
+    ["Interface", /^(static\/|templates\/)|\.(css|html|js|tsx?|jsx?)$/i],
+    ["Engine", /^(server\/)|\.py$/i],
+    ["Verification", /^(tests?\/)|(^|\/)(test|spec)[_.-]/i],
+    ["Documentation", /^(docs?\/)|\.(md|markdown|rst)$/i],
+    ["Visuals", /\.(png|jpe?g|webp|gif|avif|svg)$/i],
+    ["Configuration", /(^|\/)(package|requirements|pyproject|config|settings)|\.(json|ya?ml|toml)$/i],
+  ];
+  const groups = new Map();
+  (paths || []).forEach((path) => {
+    // Verification and visual evidence are more specific than their file
+    // extensions, so let those two win before the broad Interface/Engine rules.
+    const ordered = [rules[2], rules[4], ...rules.slice(0, 2), ...rules.slice(3, 4), rules[5]];
+    const hit = ordered.find(([, re]) => re.test(path));
+    const name = hit ? hit[0] : "Other";
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(path);
+  });
+  return groups;
+}
+
+function reviewReportNode(text) {
+  const box = el("div", "run-brief-report");
+  const lines = String(text || "").split("\n");
+  const cells = (line) => line.replace(/^\s*\|/, "").replace(/\|\s*$/, "")
+    .split("|").map((s) => s.trim());
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const line = raw.trim();
+    if (!line) continue;
+    // Existing handoffs often use a compact Markdown comparison table. Turn
+    // it into the visual structure it intended instead of printing pipe glyphs.
+    if (line.startsWith("|") && i + 1 < lines.length
+        && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1])
+        && lines[i + 1].includes("---")) {
+      const table = el("table", "run-brief-table");
+      const headings = cells(line);
+      if (headings.some(Boolean)) {
+        const head = document.createElement("thead");
+        const hr = document.createElement("tr");
+        headings.forEach((value) => {
+          const th = document.createElement("th"); appendInline(th, value); hr.appendChild(th);
+        });
+        head.appendChild(hr); table.appendChild(head);
+      }
+      const tbody = document.createElement("tbody");
+      i += 2;
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        const tr = document.createElement("tr");
+        cells(lines[i]).forEach((value) => {
+          const td = document.createElement("td"); appendInline(td, value); tr.appendChild(td);
+        });
+        tbody.appendChild(tr); i += 1;
+      }
+      i -= 1;
+      table.appendChild(tbody); box.appendChild(table);
+      continue;
+    }
+    const heading = line.match(/^#{1,4}\s+(.+)/);
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    const node = el(heading ? "h4" : bullet ? "div" : "p",
+      bullet ? "run-brief-bullet" : "");
+    if (bullet) node.appendChild(el("i", "", ""));
+    appendInline(node, (heading && heading[1]) || (bullet && bullet[1]) || line);
+    box.appendChild(node);
+  }
+  return box;
+}
+
+function openReviewVisual(src, alt, caption) {
+  const back = el("div", "img-lightbox");
+  const fig = el("figure", "img-lightbox-fig");
+  const img = document.createElement("img");
+  img.src = src; img.alt = alt || caption || "Review visual";
+  fig.appendChild(img);
+  if (caption) fig.appendChild(el("figcaption", "img-lightbox-cap", caption));
+  back.appendChild(fig);
+  const close = () => { back.remove(); document.removeEventListener("keydown", key); };
+  const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+  back.addEventListener("click", close);
+  document.addEventListener("keydown", key);
+  document.body.appendChild(back);
+}
+
+// A visual decision brief derived from evidence that already exists. It is
+// intentionally generated at READ time: old cards receive the same upgrade as
+// new ones, with no model sweep rewriting history. Real attached/changed images
+// render when present; no screenshot is invented to fill an empty gallery.
+function orphanVisualBrief(c) {
+  const brief = el("section", "run-brief");
+  brief.appendChild(el("div", "run-brief-kicker", "Decision brief"));
+  brief.appendChild(el("h3", "run-brief-title", c.objective || c.branch || "Review this work"));
+
+  const commits = (c.commits || []).length;
+  const files = (c.changed_files || []).length;
+  const dirty = (c.files || []).length;
+  const flow = el("div", "run-brief-flow");
+  const buildState = [
+    dirty && `${dirty} uncommitted path${dirty === 1 ? "" : "s"}`,
+    commits && `${commits} unmerged commit${commits === 1 ? "" : "s"}`,
+  ].filter(Boolean).join(" · ") || "Branch evidence on file";
+  const stages = [
+    ["01", "Request", "done", c.prompt ? "Original intent on file"
+      : "Inferred from branch evidence"],
+    ["02", dirty ? "Finish" : "Built", dirty ? "live" : "done", buildState],
+    ["03", "Review", "live", `${files} changed file${files === 1 ? "" : "s"}`],
+    ["04", "Decide", "next", "Land, resume, or discard"],
+  ];
+  stages.forEach(([num, label, state, note]) => {
+    const step = el("div", "run-brief-step " + state);
+    step.appendChild(el("span", "run-brief-num", num));
+    const words = el("div", "run-brief-stepwords");
+    words.appendChild(el("strong", "", label));
+    words.appendChild(el("span", "", note));
+    step.appendChild(words);
+    flow.appendChild(step);
+  });
+  brief.appendChild(flow);
+
+  const areas = orphanChangeAreas(c.changed_files || []);
+  if (areas.size) {
+    const map = el("div", "run-brief-map");
+    areas.forEach((paths, name) => {
+      const cell = el("div", "run-brief-area");
+      cell.appendChild(el("strong", "", name));
+      cell.appendChild(el("span", "", `${paths.length} file${paths.length === 1 ? "" : "s"}`));
+      cell.title = paths.join("\n");
+      map.appendChild(cell);
+    });
+    brief.appendChild(map);
+  }
+
+  if ((c.visuals || []).length) {
+    const gallery = el("div", "run-brief-visuals");
+    (c.visuals || []).forEach((v) => {
+      const src = v.source === "ask"
+        ? `/api/ideas/${encodeURIComponent(v.idea_id)}/images/${encodeURIComponent(v.id)}`
+        : "/api/orphanwork/visual?key=" + encodeURIComponent(c.key)
+          + "&path=" + encodeURIComponent(v.path);
+      const fig = el("figure", "run-brief-figure");
+      const img = document.createElement("img");
+      img.loading = "lazy"; img.src = src;
+      img.alt = v.alt || v.name || "Review visual";
+      fig.appendChild(img);
+      fig.appendChild(el("figcaption", "", v.caption || v.name || "Visual evidence"));
+      cardAction(fig, () => openReviewVisual(src, img.alt, v.caption || v.name), {
+        hint: "Open visual evidence",
+      });
+      gallery.appendChild(fig);
+    });
+    brief.appendChild(gallery);
+  }
+
+  if (c.report) {
+    const report = el("div", "run-brief-handoff");
+    report.appendChild(el("div", "run-brief-label", "Session handoff"));
+    report.appendChild(reviewReportNode(c.report));
+    brief.appendChild(report);
+  } else {
+    brief.appendChild(el("div", "run-brief-empty",
+      "No authored handoff is on file. The evidence map below is complete and reviewable."));
+  }
+  return brief;
+}
+
 function fillOrphanContext(body, c, opts = {}) {
   body.innerHTML = "";
   const section = (title, node) => {
@@ -7448,6 +7622,8 @@ function fillOrphanContext(body, c, opts = {}) {
   // Anything the read could not see is stated, never left to look like an
   // absence — the row is about to be acted on.
   (c.notes || []).forEach((n) => body.appendChild(el("div", "run-ctx-note", n)));
+
+  body.appendChild(orphanVisualBrief(c));
 
   if (c.job) {
     section("The session that started this", el("div", "run-ctx-line",

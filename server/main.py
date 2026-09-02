@@ -3803,6 +3803,25 @@ def api_orphanwork_context(key: str):
     return orphanwork.context(it)
 
 
+@app.get("/api/orphanwork/visual")
+def api_orphanwork_visual(key: str, path: str):
+    """One real raster artifact made by an unlanded branch.
+
+    orphanwork.visual_path applies both boundaries: Git must name the file as
+    changed, and its resolved path must remain inside this item's worktree.
+    This endpoint is read-only and therefore works on passive review instances.
+    """
+    it = _orphan_item(key)
+    if it is None:
+        raise HTTPException(404, "no such orphan-work item")
+    p = orphanwork.visual_path(it, path)
+    if not p:
+        raise HTTPException(404, "no such review visual")
+    return FileResponse(p, media_type=orphanwork.visual_mime(p),
+                        headers={"Cache-Control": "no-store",
+                                 "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/api/orphanwork/land-prompt")
 def api_orphanwork_land_prompt(key: str, mode: str = "diagnose"):
     """The composed landing prompt with no side effects — for a passive

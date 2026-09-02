@@ -89,6 +89,16 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.run-focus-scrim', self.css)
         self.assertIn('.run-focus-card .run-ctx-body', self.css)
 
+    def test_foreground_review_is_visual_and_retroactive(self):
+        self.assertIn('function orphanVisualBrief(c)', self.app)
+        self.assertIn('body.appendChild(orphanVisualBrief(c));', self.app)
+        self.assertIn('function orphanChangeAreas(paths)', self.app)
+        self.assertIn('/api/orphanwork/visual?key=', self.app)
+        self.assertIn('"Decision brief"', self.app)
+        self.assertIn('"run-brief-table"', self.app)
+        self.assertIn('.run-brief-flow', self.css)
+        self.assertIn('.run-brief-visuals', self.css)
+
     def test_attention_reveal_opens_the_same_focus_view(self):
         self.assertIn('if (orphan) openOrphanFocus(orphan);', self.app)
 
