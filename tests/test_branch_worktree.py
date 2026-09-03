@@ -268,7 +268,25 @@ class MergeChecklistSpecWarning(unittest.TestCase):
         (self.wt / "CLAUDE.md").write_text("the operational spec\nplus a line")
         r = run_in(self.live, 'cmd_merge feat')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("CLAUDE.md differs", r.stdout)
+        self.assertIn("CLAUDE.md", r.stdout)
+        # ...and it HOLDS the automatic teardown, because the port step diffs
+        # against this worktree: removing it first would delete the only copy
+        # of the session's spec edits.
+        self.assertIn("HELD", r.stdout)
+        self.assertTrue(self.wt.exists(), "worktree removed with unported spec")
+
+    def test_live_being_merely_ahead_is_not_an_unported_edit(self):
+        """One-way on purpose. Sessions write their spec section straight into
+        LIVE, so live is routinely ahead of a worktree snapshot; a plain
+        `diff -q` would warn on nearly every merge."""
+        (self.wt / "CLAUDE.md").write_text("the operational spec",
+                                           encoding="utf-8")
+        (self.live / "CLAUDE.md").write_text(
+            "the operational spec\nanother session's section",
+            encoding="utf-8")
+        r = run_in(self.live, 'cmd_merge feat')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("CLAUDE.md", r.stdout)
 
     def test_quiet_when_the_spec_matches(self):
         (self.wt / "CLAUDE.md").write_text("the operational spec")

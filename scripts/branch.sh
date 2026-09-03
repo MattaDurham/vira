@@ -1066,7 +1066,10 @@ cmd_merge() {
 wt_spec_unported() {
   local dir=$1
   [[ -f "$dir/CLAUDE.md" ]] || return 1
-  diff "$LIVE/CLAUDE.md" "$dir/CLAUDE.md" 2>/dev/null | grep -q '^>'
+  # Line-set containment, not a positional diff. `diff | grep "^>"` reports a
+  # CHANGED line as a worktree-only one, so two files differing solely in the
+  # trailing newline read as unported work — caught by its own test.
+  grep -qvxF -f "$LIVE/CLAUDE.md" "$dir/CLAUDE.md" 2>/dev/null
 }
 
 cmd_discard() {
