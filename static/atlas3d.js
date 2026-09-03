@@ -347,7 +347,7 @@ export function create(host) {
         physicsNodes.push(p);
         queue.push([p, depth]);
       };
-      add(seed || S.dragNode, 0);
+      add(seed, 0);
       for (const p of S.sel) add(p, 0);
       while (queue.length && physicsIds.size < PHYSICS_LOCAL_LIMIT) {
         const [p, depth] = queue.shift();
@@ -439,8 +439,7 @@ export function create(host) {
       p.y += p.vy * dt * S.alpha * 3.2;
       p.z += p.vz * dt * S.alpha * 3.2;
     }
-    S.alpha = S.dragNode ? Math.max(.28, S.alpha)
-                         : Math.max(0, S.alpha - dt * .09);
+    S.alpha = Math.max(0, S.alpha - dt * .09);
   }
 
   function measure() {
@@ -830,34 +829,50 @@ export function create(host) {
     }
   }
 
+  // A tie's colour BLENDS from one node's band colour to the other's along
+  // its length (per-vertex aColor, lerped by each chord's t), so a link
+  // reads as belonging to both ends. "White links" paints every tie white
+  // instead. The state branches below keep their alpha and width; their
+  // bone-grey colours survive only as a LIFT - how far a featured tie is
+  // pulled toward that grey so it still reads hot against the blend.
+  const tintCache = new Map();
+  function nodeTint(p) {
+    const hex = p.ego ? "#a39c8d"
+      : (p.band && S.colors.get(p.band)) || "#6a6a64";
+    let c = tintCache.get(hex);
+    if (!c) { c = new THREE.Color(hex); tintCache.set(hex, c); }
+    return c;
+  }
+
   // The flat build's edge branches, verbatim - only the destination changed.
+  // The sixth element is the lift (0 = the pure node blend).
   function edgeStyle(e, ego, hasSel, focus) {
     const w = Math.min(1.5, e.weight) / 1.5;
     if (ego) {
       const hot = hasSel ? S.sel.has(e.bn)
                          : focus && (e.bn === focus || S.ego === focus);
-      return hot ? [138, 132, 120, 0.4, 1.4]
-                 : [138, 132, 120, hasSel ? 0.02 : 0.05, 1];
+      return hot ? [138, 132, 120, 0.4, 1.4, 0.4]
+                 : [138, 132, 120, hasSel ? 0.02 : 0.05, 1, 0];
     }
     const hot = focus && (e.an === focus || e.bn === focus);
     if (hasSel && S.selEdges.has(e))
-      return [222, 214, 197, 0.95, 1.6 + 2.2 * w];
+      return [222, 214, 197, 0.95, 1.6 + 2.2 * w, 0.6];
     if (hasSel && S.selPathEdges.has(e))
-      return [163, 156, 141, 0.75, 1.3 + 1.2 * w];
+      return [163, 156, 141, 0.75, 1.3 + 1.2 * w, 0.45];
     if (hasSel && (S.sel.has(e.an) || S.sel.has(e.bn))) {
       const spoke = S.sel.size === 1 ? 0.45 : 0.16;
-      return [207, 203, 194, spoke * (0.5 + 0.5 * w), 0.8 + 1.4 * w];
+      return [207, 203, 194, spoke * (0.5 + 0.5 * w), 0.8 + 1.4 * w, 0.3];
     }
-    if (hasSel) return [143, 141, 133, 0.015 + 0.03 * w, 0.6 + w];
+    if (hasSel) return [143, 141, 133, 0.015 + 0.03 * w, 0.6 + w, 0];
     if (hot) return e.shared_interest
-      ? [138, 132, 120, 0.85, 1 + 2 * w]
-      : [207, 203, 194, 0.55, 1 + 2 * w];
+      ? [138, 132, 120, 0.85, 1 + 2 * w, 0.45]
+      : [207, 203, 194, 0.55, 1 + 2 * w, 0.45];
     let alpha = 0.05 + 0.3 * w * w;
     if (S.shown) alpha = Math.min(0.8, alpha * 3 + 0.12);
     if (host.matchDim(e.an) || host.matchDim(e.bn)) alpha *= 0.2;
     return e.shared_interest
-      ? [138, 132, 120, alpha + 0.08, 0.6 + 1.8 * w]
-      : [143, 141, 133, alpha, 0.6 + 1.8 * w];
+      ? [138, 132, 120, alpha + 0.08, 0.6 + 1.8 * w, 0]
+      : [143, 141, 133, alpha, 0.6 + 1.8 * w, 0];
   }
 
   function paintEdges() {
@@ -869,24 +884,42 @@ export function create(host) {
     const alp = edgeGeo.getAttribute("aAlpha");
     const hasSel = S.sel.size > 0;
     const focus = hasSel ? null : S.hover;
+    const white = !!S.display.whiteLinks;
+    const opacity = S.display.linkOpacity ?? 1;
     for (let i = 0; i < edgeList.length; i++) {
       const { e, ego } = edgeList[i];
       const hide = ego ? (S.hideEgo || !!S.shown)
         : (host.isEdgeShown ? !host.isEdgeShown(e)
                            : S.shown && !(S.shown.has(e.an.id)
                                           && S.shown.has(e.bn.id)));
-      let r = 0, g = 0, b = 0, a = 0, lw = 1;
+      let r = 0, g = 0, b = 0, a = 0, lw = 1, lift = 0;
       if (!hide) {
         const st = edgeStyle(e, ego, hasSel, focus);
-        r = st[0] / 255; g = st[1] / 255; b = st[2] / 255; a = st[3];
+        r = st[0] / 255; g = st[1] / 255; b = st[2] / 255;
+        a = Math.min(1, st[3] * opacity);
         lw = st[4] * S.display.linkThickness;
+        lift = st[5] || 0;
       }
       const A = e.an, B = e.bn;
       writeEdgePositions(i, A, B, pos, oth);
+      const ta = nodeTint(A), tb = nodeTint(B);
       for (let segment = 0; segment < edgeSegments; segment++) {
         const v = (i * edgeSegments + segment) * 4;
         for (let k = 0; k < 4; k++) {
-          col.setXYZ(v + k, r, g, b);
+          // vertices 0,1 sit at this chord's start, 2,3 at its end
+          const t = (segment + (k < 2 ? 0 : 1)) / edgeSegments;
+          let cr, cg, cb;
+          if (white) { cr = cg = cb = 1; }
+          else {
+            cr = ta.r + (tb.r - ta.r) * t;
+            cg = ta.g + (tb.g - ta.g) * t;
+            cb = ta.b + (tb.b - ta.b) * t;
+            if (lift > 0) {
+              cr += (r - cr) * lift; cg += (g - cg) * lift;
+              cb += (b - cb) * lift;
+            }
+          }
+          col.setXYZ(v + k, cr, cg, cb);
           alp.setX(v + k, a);
           wid.setX(v + k, lw);
         }
@@ -1296,19 +1329,12 @@ export function create(host) {
     return [e.clientX - r.left, e.clientY - r.top];
   };
   let downXY = [0, 0], rightXY = [0, 0];
-  let drag3 = null;
-  const dragRay = new THREE.Raycaster();
-  const dragPlane = new THREE.Plane();
-  const dragHit = new THREE.Vector3();
-  const dragNormal = new THREE.Vector3();
-  const dragMouse = new THREE.Vector2();
-
-  function pointOnDragPlane(x, y, target) {
-    dragMouse.set(x / W * 2 - 1, -(y / H) * 2 + 1);
-    dragRay.setFromCamera(dragMouse, camera);
-    return dragRay.ray.intersectPlane(dragPlane, target);
-  }
-
+  // A PRESS IS ALWAYS THE CAMERA'S (owner's call, 2026-09-02). There is no
+  // node drag and no single-click select: in a dense swarm nearly every
+  // press lands on a node, so a press that grabbed nodes made the galaxy
+  // impossible to rotate from inside it. Left-drag orbits, shift/middle/
+  // right-drag pans, and a DOUBLE-click is the only way to select a node.
+  //
   // capture phase: the orbit re-anchor must run BEFORE camera-controls'
   // own pointerdown snapshots its drag state, or the anchor is ignored
   // mid-gesture
@@ -1317,69 +1343,14 @@ export function create(host) {
     downXY = [x, y];
     if (e.button === 2) rightXY = [e.clientX, e.clientY];
     anchorOrbit(x, y);          // every press, as the Image Atlas does
-    if (e.button !== 0 || e.shiftKey || !camera || !controls) return;
-    const p = pickAt(x, y, 0);
-    if (!p || p.ego) return;
-    camera.getWorldDirection(dragNormal);
-    dragPlane.setFromNormalAndCoplanarPoint(
-      dragNormal, dragHit.set(p.x, p.y, p.z));
-    const hit = pointOnDragPlane(x, y, new THREE.Vector3());
-    drag3 = {
-      p, x, y, moved: false,
-      offset: hit ? new THREE.Vector3(p.x, p.y, p.z).sub(hit)
-                  : new THREE.Vector3(),
-    };
-    S.dragNode = p;
-    p.pin = true;
-    controls.enabled = false;
-    canvas.setPointerCapture(e.pointerId);
-    canvas.style.cursor = "grabbing";
-    refreshPhysics(p, true);
-    e.preventDefault();
-    e.stopImmediatePropagation();
   }, true);
-
-  canvas.addEventListener("pointermove", (e) => {
-    if (!drag3) return;
-    const [x, y] = xy(e);
-    const hit = pointOnDragPlane(x, y, dragHit);
-    if (hit) {
-      hit.add(drag3.offset);
-      drag3.p.x = hit.x; drag3.p.y = hit.y; drag3.p.z = hit.z;
-      drag3.moved ||= Math.hypot(x - drag3.x, y - drag3.y) > 3;
-      S.alpha = Math.max(S.alpha || 0, .72);
-      paintNodes();
-      paintMovingEdges(new Set([drag3.p.id]));
-      requestRender();
-    }
-    e.preventDefault();
-    e.stopImmediatePropagation();
-  }, true);
-
-  const finishNodeDrag = (e, cancelled = false) => {
-    if (!drag3) return;
-    const { p, moved } = drag3;
-    drag3 = null;
-    p.pin = false;
-    S.dragNode = null;
-    if (controls) controls.enabled = true;
-    canvas.style.cursor = moved ? "grab" : "pointer";
-    try { canvas.releasePointerCapture(e.pointerId); } catch { /* released */ }
-    if (!cancelled && !moved) host.onSelect(p);
-    else if (!cancelled) refreshPhysics(p, true);
-    e.preventDefault();
-    e.stopImmediatePropagation();
-  };
-  canvas.addEventListener("pointerup", (e) => finishNodeDrag(e), true);
-  canvas.addEventListener("pointercancel",
-    (e) => finishNodeDrag(e, true), true);
 
   canvas.addEventListener("pointermove", (e) => {
     const [x, y] = xy(e);
     const p = pickAt(x, y, 0);
     if (p !== S.hover) {
       S.hover = p;
-      canvas.style.cursor = "grab";
+      canvas.style.cursor = "grab";     // a press anywhere orbits
       host.onHover(p, x, y);
       paint();
     } else if (p) {
@@ -1387,19 +1358,23 @@ export function create(host) {
     }
   });
 
+  // A single click on a node does NOTHING - a click on empty sky still
+  // clears the selection, which is the one thing a stationary press means.
   canvas.addEventListener("pointerup", (e) => {
     if (e.button !== 0) return;
     const [x, y] = xy(e);
     if (Math.hypot(x - downXY[0], y - downXY[1]) > 5) return;   // was a drag
     const p = pickAt(x, y);
-    if (p && !p.ego) host.onSelect(p);
-    else if (!p) host.onEmpty();
+    if (!p) host.onEmpty();
   });
 
+  // Double-click SELECTS. Opening the full document lives on the side card
+  // the selection fills (its name and Open button), never on the canvas.
   canvas.addEventListener("dblclick", (e) => {
+    e.preventDefault();
     const [x, y] = xy(e);
     const p = pickAt(x, y);
-    if (p && !p.ego) host.onOpen(p);
+    if (p && !p.ego) host.onSelect(p);
   });
 
   // Right-drag pans (the Image Atlas binding), so a right press that MOVED

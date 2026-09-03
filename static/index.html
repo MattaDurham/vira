@@ -664,11 +664,13 @@
             <label><input id="atlas-auto-rotate" type="checkbox" checked> Auto rotate</label>
             <label><input id="atlas-curved-links" type="checkbox" checked> Arc links</label>
             <label><input id="atlas-spherical-nodes" type="checkbox" checked> Spherical nodes</label>
+            <label><input id="atlas-white-links" type="checkbox"> White links</label>
           </div>
           <label class="atlas-slider"><span>Graph spread <output id="atlas-geometry-out">100%</output></span><input id="atlas-geometry" type="range" min="35" max="250" value="100"></label>
           <label class="atlas-slider"><span>Node size <output id="atlas-node-size-out">100%</output></span><input id="atlas-node-size" type="range" min="60" max="180" value="100"></label>
           <label class="atlas-slider"><span>Node opacity <output id="atlas-node-opacity-out">100%</output></span><input id="atlas-node-opacity" type="range" min="10" max="100" value="100"></label>
           <label class="atlas-slider"><span>Link thickness <output id="atlas-link-thickness-out">100%</output></span><input id="atlas-link-thickness" type="range" min="25" max="250" value="100"></label>
+          <label class="atlas-slider"><span>Link opacity <output id="atlas-link-opacity-out">100%</output></span><input id="atlas-link-opacity" type="range" min="0" max="300" value="100"></label>
           <label class="atlas-slider" id="atlas-link-curve-row"><span>Link arc <output id="atlas-link-curve-out">10%</output></span><input id="atlas-link-curve" type="range" min="0" max="30" value="10"></label>
           <button class="fchip sm" id="atlas-reset-geometry" type="button">Reset positions</button>
         </details>
@@ -680,8 +682,8 @@
           <label class="atlas-slider"><span>Link force <output id="atlas-link-force-out">25%</output></span><input id="atlas-link-force" type="range" min="0" max="100" value="25"></label>
           <label class="atlas-slider"><span>Link distance <output id="atlas-link-distance-out">100%</output></span><input id="atlas-link-distance" type="range" min="40" max="220" value="100"></label>
           <label class="atlas-slider"><span>Semantic gravity <output id="atlas-semantic-out">18%</output></span><input id="atlas-semantic" type="range" min="0" max="100" value="18"></label>
-          <div class="hint">Drag a node to pull its neighborhood. Drag empty space to rotate; Shift-drag, middle-drag, or right-drag to pan.</div>
-          <div class="hint" id="atlas-physics-status">Select or drag a node to engage local physics.</div>
+          <div class="hint">Drag anywhere to rotate; Shift-drag, middle-drag, or right-drag to pan. Double-click a node to select it.</div>
+          <div class="hint" id="atlas-physics-status">Select a node to engage local physics.</div>
         </details>
         <div class="atlas-bar atlas-actions">
           <button class="fchip" id="atlas-ego" title="Hide the center node — the pure contact-to-contact mesh">Hide me</button>

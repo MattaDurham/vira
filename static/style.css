@@ -3241,8 +3241,14 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 .atlas-card-head { display: flex; gap: 10px; align-items: center; }
 .atlas-card-head .avatar { width: 44px; height: 44px; flex: none; }
 .atlas-card-name { flex: 1; min-width: 0; font-weight: 500; }
-.atlas-card-name .click { cursor: pointer; }
-.atlas-card-name .click:hover { color: var(--accent); }
+.atlas-card-name .click {
+  cursor: pointer; text-decoration: underline;
+  text-decoration-color: var(--line-warm); text-underline-offset: 3px;
+}
+.atlas-card-name .click:hover {
+  color: var(--accent); text-decoration-color: var(--accent);
+}
+.atlas-open { color: var(--accent-bright); }
 .atlas-star {
   border: 1px solid var(--accent-line); background: var(--bg-card);
   color: var(--accent-bright); border-radius: 2px; cursor: pointer;
