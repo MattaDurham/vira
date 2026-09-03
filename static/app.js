@@ -11203,6 +11203,454 @@ function renderReview(q) {
 $("#review-refresh")?.addEventListener("click",
                                        () => loadReview().catch(() => {}));
 
+// ==================== The Showroom - every draft branch as a card ====================
+// The viewer for what every other session left: each claude/* branch on
+// disk as a card - a title, a Vira-written blurb, what it touches, its PR
+// and its session - banded as a live session / unlanded work / landed and
+// never cleaned up. Launch opens a fresh tab that becomes the branch's own
+// passive test instance; the verdict buttons call the orphan-work sweeper's
+// routes (never a second implementation of landing); Clean up tears a
+// landed worktree down. It builds nothing (owner, 2026-09-03: take two).
+let shrData = null;
+let shrPoll = null;
+let shrFilter = lsGet("vira-shr-filter", "all");
+let shrQ = "";
+let shrHold = false;                 // an armed confirm is on the surface
+const shrOpen = new Set();           // branches whose detail is expanded
+const SHR_FILTERS = [
+  ["all", "All"], ["unlanded", "Unlanded"], ["session", "In session"],
+  ["landed", "Landed"], ["running", "Running"],
+];
+const SHR_BAND_LABEL = {
+  session: "session live", unlanded: "unlanded", landed: "landed - not cleaned up",
+};
+
+async function loadShowroom() {
+  const grid = $("#shr-grid");
+  if (!grid) return;
+  try {
+    shrData = await api("/api/showroom");
+    renderShowroom();
+  } catch (e) {
+    grid.innerHTML = "";
+    grid.appendChild(el("div", "brief-empty", "Showroom unavailable: " + errText(e)));
+    return;
+  }
+  // The cached sweep paints first; a fresh sweep follows in the background
+  // (the loadOrphans rule: a merge done elsewhere leaves dead cards in the
+  // cache, and already-landed work is exactly what must not read as live).
+  try {
+    shrData = await post("/api/showroom/refresh", {});
+    renderShowroom();
+  } catch (e) { /* the cached render stands */ }
+}
+
+function shrMaybePoll() {
+  const d = shrData || {};
+  const active = (d.items || []).some((it) =>
+    (it.serving && it.serving.status === "starting")
+    || (it.action && it.action.status === "running"))
+    || (d.describing || 0) > 0;
+  if (active && !shrPoll) {
+    shrPoll = startPoll(async () => {
+      if (shrHold) return;
+      shrData = await api("/api/showroom");
+      renderShowroom();
+    }, 4000);
+  }
+  if (!active && shrPoll) { shrPoll.stop(); shrPoll = null; }
+}
+
+function shrVisible(it) {
+  const inst = it.instance || {};
+  const running = inst.alive || (it.serving && it.serving.status === "starting");
+  if (shrFilter === "running" && !running) return false;
+  if (["unlanded", "session", "landed"].includes(shrFilter) && it.band !== shrFilter) return false;
+  const q = searchFold(shrQ);
+  if (!q) return true;
+  const hay = searchFold([it.title, it.blurb, it.branch,
+    (it.commits || []).join(" "), (it.pr || {}).title || ""].join(" "));
+  return q.split(" ").every((t) => !t || hay.includes(t));
+}
+
+function renderShowroom() {
+  const d = shrData;
+  const grid = $("#shr-grid");
+  if (!d || !grid) return;
+  shrMaybePoll();
+  if (shrHold) return;              // never repaint over an armed confirm
+  const st = $("#shr-status");
+  if (st) {
+    const c = d.counts || {};
+    const parts = [];
+    if (c.unlanded) parts.push(`${c.unlanded} unlanded`);
+    if (c.session) parts.push(`${c.session} in session`);
+    if (c.landed) parts.push(`${c.landed} landed but never cleaned up`);
+    if (d.running) parts.push(`${d.running} test instance${d.running === 1 ? "" : "s"} running`);
+    if (d.describing) parts.push(`Vira is reading ${d.describing}…`);
+    st.textContent = parts.length ? parts.join(" - ")
+      : "No draft branches on disk - every session's work has landed and been torn down.";
+  }
+  const bar = $("#shr-bar");
+  if (bar) {
+    bar.innerHTML = "";
+    const seg = el("div", "seg-tabs shr-seg");
+    SHR_FILTERS.forEach(([id, label]) => {
+      const b = el("button", "seg-btn" + (shrFilter === id ? " on" : ""), label);
+      const n = id === "all" ? (d.items || []).length
+        : id === "running" ? d.running : (d.counts || {})[id];
+      if (n) b.textContent = `${label} (${n})`;
+      b.addEventListener("click", () => {
+        shrFilter = id; lsSet("vira-shr-filter", id); renderShowroom();
+      });
+      seg.appendChild(b);
+    });
+    bar.appendChild(seg);
+    const q = el("input", "shr-q");
+    q.type = "search"; q.placeholder = "Filter branches…"; q.value = shrQ;
+    q.addEventListener("input", () => { shrQ = q.value || ""; renderShowroomGrid(); });
+    bar.appendChild(q);
+    if (d.passive) {
+      bar.appendChild(el("span", "hint",
+        "passive test instance - launching, stopping and cleaning up only run on the live Vira"));
+    }
+  }
+  renderShowroomGrid();
+}
+
+function renderShowroomGrid() {
+  const d = shrData;
+  const grid = $("#shr-grid");
+  if (!d || !grid) return;
+  grid.innerHTML = "";
+  const items = (d.items || []).filter(shrVisible);
+  if (!items.length) {
+    grid.appendChild(el("div", "brief-empty",
+      (d.items || []).length ? "Nothing matches that filter."
+        : "No draft branches on disk."));
+    return;
+  }
+  let band = "";
+  items.forEach((it) => {
+    if (shrFilter === "all" && it.band !== band) {
+      band = it.band;
+      grid.appendChild(el("div", "shr-band", SHR_BAND_LABEL[band] || band));
+    }
+    grid.appendChild(shrCard(it, d));
+  });
+}
+
+// The tile is DERIVED from what the branch touches - the area bars say
+// "mostly interface, a little engine, tests" at a glance. A real raster the
+// branch carries (a screenshot it made) outranks it; nothing is generated
+// to look richer (the sweeper's visuals rule).
+function shrThumb(it) {
+  const box = el("div", "shr-thumb");
+  if (it.visual && it.orphan_key) {
+    const img = el("img", "shr-shot");
+    img.alt = "Screenshot carried by " + it.branch;
+    img.loading = "lazy";
+    img.src = "/api/orphanwork/visual?key=" + encodeURIComponent(it.orphan_key)
+      + "&path=" + encodeURIComponent(it.visual);
+    img.addEventListener("error", () => { img.replaceWith(shrTile(it)); });
+    box.appendChild(img);
+    return box;
+  }
+  box.appendChild(shrTile(it));
+  return box;
+}
+
+function shrTile(it) {
+  const tile = el("div", "shr-tile band-" + it.band);
+  const initials = (it.title || it.branch).split(/\s+/).slice(0, 2)
+    .map((w) => w[0] || "").join("").toUpperCase();
+  tile.appendChild(el("div", "shr-initials", initials || "?"));
+  const areas = Object.entries(it.areas || {}).sort((a, b) => b[1] - a[1]);
+  const total = areas.reduce((n, [, v]) => n + v, 0) || 1;
+  const bars = el("div", "shr-bars");
+  areas.slice(0, 5).forEach(([name, n]) => {
+    const b = el("i", "shr-bar a-" + name);
+    b.style.width = Math.max(6, Math.round(100 * n / total)) + "%";
+    b.title = `${name}: ${n} file${n === 1 ? "" : "s"}`;
+    bars.appendChild(b);
+  });
+  if (!areas.length) bars.appendChild(el("i", "shr-bar a-none"));
+  tile.appendChild(bars);
+  tile.appendChild(el("div", "shr-tile-n",
+    it.paths_n ? `${it.paths_n} file${it.paths_n === 1 ? "" : "s"}` : "no diff read"));
+  return tile;
+}
+
+function shrAgo(days) {
+  if (days == null) return "";
+  if (days < 1) return "today";
+  if (days < 2) return "yesterday";
+  return `${Math.round(days)}d ago`;
+}
+
+function shrCard(it, d) {
+  const card = el("div", "shr-card band-" + it.band);
+  card.dataset.branch = it.branch;
+  card.appendChild(shrThumb(it));
+  const body = el("div", "shr-body");
+  const head = el("div", "shr-head");
+  head.appendChild(el("div", "shr-title", it.title || it.branch));
+  const inst = it.instance || {};
+  if (inst.alive && inst.port) head.appendChild(el("span", "shr-live", `live :${inst.port}`));
+  body.appendChild(head);
+
+  const meta = el("div", "shr-meta");
+  const chip = (text, cls) => meta.appendChild(el("span", "shr-chip " + (cls || ""), text));
+  chip(SHR_BAND_LABEL[it.band] || it.band, "b-" + it.band);
+  if (it.ahead) chip(`${it.ahead} commit${it.ahead === 1 ? "" : "s"} ahead`);
+  if (it.dirty) chip(`${it.dirty} uncommitted`, "warn");
+  if (it.behind) chip(`${it.behind} behind main`, "dim");
+  if (it.pr && it.pr.number) {
+    const a = el("a", "shr-chip pr", `PR #${it.pr.number} - ${it.pr.draft ? "draft" : (it.pr.state || "").toLowerCase()}`);
+    a.href = it.pr.url; a.target = "_blank"; a.rel = "noopener";
+    meta.appendChild(a);
+  }
+  chip(shrAgo(it.age_days), "dim");
+  body.appendChild(meta);
+  body.appendChild(el("div", "shr-branch", it.branch));
+
+  const blurb = el("div", "shr-blurb" + (it.blurb_source === "vira" ? " vira" : ""), it.blurb || "");
+  blurb.title = it.blurb_source === "vira" ? "Written by Vira from the branch's evidence"
+    : "Derived from the sweep - Vira's read is pending";
+  body.appendChild(blurb);
+
+  if (it.orphan_read && it.orphan_read.verdict) {
+    const r = el("div", "orphan-read " + it.orphan_read.verdict);
+    r.appendChild(el("span", "orphan-read-v", "Vira: " + it.orphan_read.verdict));
+    r.appendChild(document.createTextNode(" - " + (it.orphan_read.why || "")));
+    body.appendChild(r);
+  }
+  if (it.failure && it.failure.headline) {
+    const f = it.failure;
+    const fx = el("div", "orphan-fail" + (f.harness ? " harness" : ""));
+    fx.appendChild(el("span", "orphan-fail-tag",
+      f.repeated ? `${f.count} sessions failed the same way` : "Last session failed"));
+    fx.appendChild(document.createTextNode(" - " + f.headline));
+    body.appendChild(fx);
+  }
+  if (it.serving && it.serving.status === "failed") {
+    body.appendChild(el("div", "shr-err", "launch failed - " + (it.serving.text || "").split("\n").pop()));
+  }
+  if (it.action && it.action.status && it.action.status !== "running") {
+    const last = (it.action.output || "").trim().split("\n").pop() || "";
+    body.appendChild(el("div", "run-ev orphan-outcome",
+      `${it.action.name} ${it.action.status === "ok" ? "done" : "failed"} - ${last.slice(0, 180)}`));
+  }
+
+  const foot = el("div", "shr-foot");
+  body.appendChild(foot);
+  shrFoot(foot, it, d);
+  card.appendChild(body);
+
+  if (shrOpen.has(it.branch)) {
+    const det = el("div", "shr-detail", "Reading…");
+    card.appendChild(det);
+    shrFillDetail(det, it);
+  }
+  cardAction(card, () => {
+    if (shrOpen.has(it.branch)) shrOpen.delete(it.branch); else shrOpen.add(it.branch);
+    renderShowroomGrid();
+  }, { hint: "Expand for the full read" });
+  return card;
+}
+
+function shrFoot(foot, it, d) {
+  foot.innerHTML = "";
+  const btn = (label, run, cls, title) => {
+    const b = el("button", "fchip sm" + (cls ? " " + cls : ""), label);
+    if (title) b.title = title;
+    b.addEventListener("click", run);
+    foot.appendChild(b);
+    return b;
+  };
+  const inst = it.instance || {};
+  const sv = it.serving || {};
+  const busy = it.action && it.action.status === "running";
+  if (busy) {
+    foot.appendChild(el("span", "hint", `${it.action.name}… ${(it.action.output || "").slice(0, 100)}`));
+    return;
+  }
+  // Launch / Open / Stop - the test-drive verbs, on every band.
+  if (inst.alive && inst.port) {
+    const a = el("a", "fchip sm primary", `Open the test :${inst.port}`);
+    a.href = `http://localhost:${inst.port}/`; a.target = "_blank"; a.rel = "noopener";
+    foot.appendChild(a);
+    if (!d.passive) btn("Stop", () => shrAct("/api/showroom/stop", it, "Instance stopped"));
+  } else if (sv.status === "starting") {
+    foot.appendChild(el("span", "shr-starting", "starting the test instance…"));
+  } else if (!d.passive && it.worktree) {
+    btn("Launch the test", () => shrLaunch(it), "primary",
+      "Serve this branch as a passive local instance and open it in a new tab");
+  } else if (!it.worktree) {
+    foot.appendChild(el("span", "hint", "no worktree - branch ref only"));
+  }
+  // The verdicts. Unlanded rows use the sweeper's own routes and confirm
+  // copy; a landed row's only verb is Clean up; a session's are its own.
+  if (it.band === "unlanded" && it.orphan_key) {
+    const rec = it.orphan_read && it.orphan_read.verdict;
+    btn("Land", () => shrArm(foot, it, "land"), rec === "land" ? "rec" : "",
+      it.dirty ? "Dispatch a session that works out why this stopped, then asks you"
+        : "Merge this branch into live main and push");
+    btn("Resume", () => shrArm(foot, it, "resume"), rec === "resume" ? "rec" : "",
+      "Dispatch an agent into this worktree - it starts editing immediately");
+    btn("Discard", () => shrArm(foot, it, "discard"), rec === "discard" ? "rec" : "");
+  } else if (it.band === "landed" && !d.passive) {
+    btn("Clean up", () => shrArm(foot, it, "cleanup"), "",
+      "Remove the worktree, the local branch and origin's copy - the merge stays on main");
+  } else if (it.band === "session" && it.job && it.job.id) {
+    btn("Open the session", () => openSession(it.job.id));
+  }
+  if (it.band !== "session" && it.job && it.job.id) {
+    btn("Session", () => openSession(it.job.id), "", "The session that last worked this branch");
+  }
+}
+
+// Launch opens the tab INSIDE the click (a tab opened after an await is
+// popup-blocked), then starts the serve; the launch page polls and becomes
+// the instance when it answers.
+function shrLaunch(it) {
+  const url = "/showroom-launch.html?branch=" + encodeURIComponent(it.branch);
+  const tab = window.open(url, "_blank", "noopener");
+  post("/api/showroom/serve", { branch: it.branch })
+    .then(() => { toast("Launching " + it.branch.replace(/^claude\//, "") + "…"); })
+    .catch((e) => {
+      toast(errText(e));
+      if (tab && !tab.closed) { try { tab.close(); } catch (e2) { /* noopener */ } }
+    })
+    .finally(() => loadShowroomQuiet());
+}
+
+async function loadShowroomQuiet() {
+  try { shrData = await api("/api/showroom"); renderShowroom(); } catch (e) { /* keep */ }
+}
+
+async function shrAct(path, it, okMsg) {
+  try {
+    await post(path, { branch: it.branch });
+    if (okMsg) toast(okMsg);
+  } catch (e) {
+    toast(errText(e));
+  }
+  loadShowroomQuiet();
+}
+
+// The inline armed confirm (the armOrphanAction shape): the consequence is
+// named on the card, Cancel repaints, and the poll is HELD while it is up
+// so a background repaint cannot disarm it under the cursor.
+function shrArm(foot, it, name) {
+  foot.innerHTML = "";
+  const slug = it.branch.replace(/^claude\//, "");
+  const q = name === "land"
+    ? (it.dirty ? `Land ${slug}? It has uncommitted work, so a session runs in it first.`
+      : `Land ${slug}? Merges into live main and pushes.`)
+    : name === "resume"
+    ? `Resume ${slug}? Dispatches an agent into the worktree - it starts editing immediately.`
+    : name === "cleanup"
+    ? `Clean up ${slug}? Removes its worktree and branch; the merge on main is untouched.`
+    : (it.dirty ? `Discard ${it.dirty} uncommitted change${it.dirty === 1 ? "" : "s"}? This destroys them.`
+      : `Discard ${slug}? This deletes the branch (its PR keeps the diff).`);
+  foot.appendChild(el("span", "orphan-confirm-q", q));
+  const no = el("button", "fchip sm", "Cancel");
+  no.addEventListener("click", () => { shrHold = false; renderShowroomGrid(); });
+  const go = async (mode) => {
+    shrHold = false;
+    foot.textContent = name === "cleanup" ? "Cleaning up…" : name + "…";
+    try {
+      if (name === "cleanup") {
+        await post("/api/showroom/cleanup", { branch: it.branch });
+      } else if (name === "resume") {
+        const r = await post("/api/orphanwork/resume", { key: it.orphan_key });
+        if (r.job_id) openSession(r.job_id);
+      } else if (name === "discard") {
+        await post("/api/orphanwork/discard", { key: it.orphan_key, force: true });
+      } else {
+        const r = await post("/api/orphanwork/land", { key: it.orphan_key, mode: mode || "diagnose" });
+        if (r.job_id) openSession(r.job_id);
+      }
+    } catch (e) {
+      toast(errText(e));
+    }
+    loadShowroomQuiet();
+  };
+  if (name === "land" && it.dirty) {
+    const diag = el("button", "fchip sm rec", "Diagnose first");
+    diag.addEventListener("click", () => go("diagnose"));
+    const fin = el("button", "fchip sm warn", "Finish it now");
+    fin.addEventListener("click", () => go("finish"));
+    foot.append(diag, fin, no);
+  } else {
+    const yes = el("button", "fchip sm warn", "Confirm");
+    yes.addEventListener("click", () => go());
+    foot.append(yes, no);
+  }
+  shrHold = true;
+}
+
+async function shrFillDetail(det, it) {
+  let c;
+  try {
+    c = await api("/api/showroom/context?branch=" + encodeURIComponent(it.branch));
+  } catch (e) {
+    det.textContent = "Could not read the branch: " + errText(e);
+    return;
+  }
+  det.innerHTML = "";
+  const sec = (label, node) => {
+    const s = el("div", "shr-sec");
+    s.appendChild(el("div", "shr-sec-h", label));
+    s.appendChild(node);
+    det.appendChild(s);
+  };
+  const facts = [];
+  if (it.worktree) facts.push("worktree " + it.worktree);
+  if (c.disk_mb != null) facts.push(`${c.disk_mb >= 1024 ? (c.disk_mb / 1024).toFixed(1) + " GB" : c.disk_mb + " MB"} on disk`);
+  if (it.tip) facts.push("tip " + it.tip);
+  if (it.merged_at) facts.push("merged " + it.merged_at.slice(0, 10));
+  if (facts.length) sec("Facts", el("div", "shr-facts", facts.join(" · ")));
+  if (c.pr && (c.pr.body || c.pr.title)) {
+    const box = el("div", "shr-pre");
+    box.textContent = (c.pr.title ? c.pr.title + "\n\n" : "") + (c.pr.body || "(no PR text)");
+    const a = el("a", "shr-chip pr", "open PR #" + c.pr.number);
+    a.href = c.pr.url; a.target = "_blank"; a.rel = "noopener";
+    box.appendChild(document.createElement("br"));
+    box.appendChild(a);
+    sec("Pull request", box);
+  }
+  const o = c.orphan;
+  if (o) {
+    if (o.objective) sec("What was asked", el("div", "shr-pre", o.objective));
+    if (o.commits && o.commits.length) {
+      const list = el("div", "shr-commits");
+      o.commits.forEach((cm) => {
+        const row = el("div", "shr-commit");
+        row.appendChild(el("span", "shr-sha", cm.sha || ""));
+        row.appendChild(el("span", "shr-subject", cm.subject || ""));
+        if (cm.body) row.appendChild(el("div", "shr-cbody", cm.body));
+        list.appendChild(row);
+      });
+      sec(`Commits (${o.commits.length})`, list);
+    }
+    const files = (o.changed_files && o.changed_files.length) ? o.changed_files : (o.files || []);
+    if (files.length) sec(`Files (${files.length})`, el("div", "shr-pre", files.join("\n")));
+    if (o.status) sec("Working tree", el("div", "shr-pre", o.status));
+    if (o.report) sec("Last session's report", el("div", "shr-pre", o.report));
+  } else if (c.merge) {
+    sec("Merge", el("div", "shr-pre", c.merge));
+    if (c.merge_paths && c.merge_paths.length)
+      sec(`Files landed (${c.merge_paths.length})`, el("div", "shr-pre", c.merge_paths.join("\n")));
+  }
+  if (c.job && c.job.prompt && !o) sec("The session's prompt", el("div", "shr-pre", c.job.prompt));
+  if (c.job && c.job.result) sec("The session's last words", el("div", "shr-pre", c.job.result));
+  if (!det.childNodes.length) det.textContent = "Nothing more is on file for this branch.";
+}
+
+$("#shr-refresh")?.addEventListener("click", () => loadShowroom().catch(() => {}));
+
 function renderBrief(b) {
   const body = $("#brief-body");
   body.innerHTML = "";
@@ -14001,6 +14449,7 @@ function viewLoad(id) {
   if (id === "applications") loadApplications().catch(() => {});
   if (id === "research") window.loadResearch?.().catch(() => {});
   if (id === "journal") loadJournal().catch(() => {});
+  if (id === "showroom") loadShowroom().catch(() => {});
   if (id === "attention") attentionTabLoad(attentionTab);
   if (id === "subs") loadSubs().catch(() => {});
   if (id === "find") loadFindStatus().catch(() => {});
@@ -19533,6 +19982,8 @@ const WINDOWS = [
     icon: "M5 5h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 7.5h2.5c1 0 1.5-.5 1.5-1M10 7.5h1.5c2.5 0 2.5 10 2.5 10" },
   { id: "attention", title: "Attention", w: 720,
     icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
+  { id: "showroom", title: "Showroom", w: 900,
+    icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
   { id: "applications", title: "Applications", w: 780,

@@ -154,6 +154,22 @@
     </aside>
   </section>
 
+  <!-- SHOWROOM (server/showroom.py) - every draft branch on this machine
+       as a card: title, a Vira-written blurb, what it touches, its PR and
+       its session, and the verbs - Launch the test (a fresh tab that
+       becomes the branch's own passive instance), Land / Resume / Discard
+       through the orphan-work sweeper, Clean up for a landed worktree. It
+       builds nothing; it is the viewer for what every other session left. -->
+  <section id="view-showroom" class="view">
+    <div class="section-head">
+      <h2>Showroom</h2>
+      <button class="fchip sm" id="shr-refresh" style="margin-left:auto">Refresh</button>
+    </div>
+    <div class="radar-sub"><span id="shr-status">Loading…</span></div>
+    <div class="shr-bar" id="shr-bar"></div>
+    <div class="shr-grid" id="shr-grid"></div>
+  </section>
+
   <!-- JOURNAL (the record of everything told to Vira, moved out of the brief) -->
   <section id="view-journal" class="view">
     <div class="section-head"><h2>Journal</h2>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vira — launching a test</title>
+<!-- A standalone document (the reading-room rule): it links none of the
+     app's stylesheets, so it carries its own color-scheme and scrollbar. It
+     is opened by the Showroom's Launch button IN the click handler, so the
+     tab is never popup-blocked, then polls /api/showroom until the branch's
+     instance answers and replaces itself with it. -->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #0a0a0c; color: #cfcfd4;
+    font: 14px/1.6 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  ::-webkit-scrollbar { width: 11px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2a30; border: 3px solid transparent;
+    border-radius: 8px; background-clip: padding-box; }
+  main { min-height: 100%; display: flex; align-items: center; justify-content: center;
+    padding: 24px; }
+  .card { max-width: 520px; width: 100%; border: 1px solid #1d1d22; border-radius: 12px;
+    padding: 28px 30px; background: #101014; }
+  .kicker { font: 11px ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .22em;
+    text-transform: uppercase; color: #8d7a4a; }
+  h1 { font: 500 22px/1.25 "Iowan Old Style", Georgia, serif; color: #ece9df;
+    margin: 8px 0 14px; overflow-wrap: anywhere; }
+  .status { color: #a8a8b0; min-height: 44px; }
+  .status.bad { color: #d67a64; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px; }
+  .bar { height: 3px; border-radius: 2px; background: #1d1d22; overflow: hidden; margin: 18px 0 8px; }
+  .bar i { display: block; height: 100%; width: 30%; background: #c9a961;
+    animation: slide 1.6s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+  @media (prefers-reduced-motion: reduce) { .bar i { animation: none; width: 100%; opacity: .5; } }
+  .hint { font-size: 12px; color: #6f6f78; margin-top: 12px; }
+  a { color: #c9a961; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <div class="kicker">Vira — test instance</div>
+    <h1 id="title">Launching…</h1>
+    <div class="status" id="status">Cloning a snapshot of your data and booting the branch. A minute or so.</div>
+    <div class="bar" id="bar"><i></i></div>
+    <div class="hint" id="hint">This tab becomes the test the moment it answers. Passive, local only — it never sends anything.</div>
+  </div>
+</main>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var branch = q.get("branch") || "";
+  var title = document.getElementById("title");
+  var status = document.getElementById("status");
+  var bar = document.getElementById("bar");
+  title.textContent = branch ? branch.replace(/^claude\//, "") : "No branch named";
+  if (!branch) { status.textContent = "Open this page from a Showroom card."; bar.hidden = true; return; }
+  var started = Date.now();
+  var LIMIT_MS = 12 * 60 * 1000;
+  function fail(text) {
+    status.textContent = text;
+    status.className = "status bad";
+    bar.hidden = true;
+  }
+  function tick() {
+    fetch("/api/showroom", { cache: "no-store" }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        var it = (d.items || []).find(function (x) { return x.branch === branch; });
+        if (!it) { fail("The Showroom has no card for " + branch + " — refresh it and launch again."); return; }
+        var inst = it.instance || {};
+        var sv = it.serving || {};
+        if (inst.alive && inst.port) {
+          status.textContent = "Up on :" + inst.port + " — opening.";
+          location.replace("http://localhost:" + inst.port + "/");
+          return;
+        }
+        if (sv.status === "up" && sv.port) {
+          status.textContent = "Up on :" + sv.port + " — opening.";
+          location.replace("http://localhost:" + sv.port + "/");
+          return;
+        }
+        if (sv.status === "failed") {
+          fail("The instance could not start:\n" + (sv.text || "no output"));
+          return;
+        }
+        var secs = Math.round((Date.now() - started) / 1000);
+        status.textContent = (sv.status === "starting"
+          ? "Cloning a snapshot of your data and booting the branch"
+          : "Waiting for the launch to start") + " — " + secs + "s.";
+        if (Date.now() - started > LIMIT_MS) { fail("Gave up after 12 minutes. Check the Showroom card for the serve output."); return; }
+        setTimeout(tick, 2000);
+      })
+      .catch(function () {
+        status.textContent = "Vira did not answer — retrying.";
+        setTimeout(tick, 3000);
+      });
+  }
+  setTimeout(tick, 1500);
+})();
+</script>
+</body>
+</html>
