@@ -29,7 +29,12 @@ def _git(*args, cwd):
 
 class _RepoCase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors: on the Windows job a git child can still
+        # hold the fixture repo's directory when the tempdir is removed
+        # (WinError 32 at teardown, the test body already green); a leaked
+        # tempdir on a throwaway runner is nothing, a red job is a blocked
+        # merge.
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "repo"
         self.root.mkdir()
