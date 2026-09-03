@@ -308,6 +308,23 @@ DEFAULT_MODULES = [
      "keywords": ["session", "runner", "terminal", "permission", "durable",
                   "viratools"],
      "updated": TODAY},
+    {"id": "showroom", "name": "Showroom", "layer": "engine",
+     "group": "operate", "kind": "draft-branch organizer",
+     "what": "The organizer for many draft branches at once. The owner "
+             "picks an idea and says build it — one at a time, never the "
+             "whole queue — and each build gets its own branch, its own "
+             "fresh-session judge, and its own test instance on demand. "
+             "Candidates stay out of the orphan-work sweep until a verdict "
+             "(try, land, iterate, discard), so a dozen drafts in flight "
+             "never read as abandoned work. Landing one auto-rebases the "
+             "survivors onto the new main.",
+     "links": [{"to": "sessions", "how": "dispatches builds through"},
+               {"to": "ideas-store", "how": "builds candidates from"}],
+     "endpoints": ["/api/showroom", "/api/showroom/build",
+                   "/api/showroom/{id}/land"],
+     "keywords": ["showroom", "candidate", "draft branch", "parallel",
+                  "land", "iterate", "judge"],
+     "updated": TODAY},
     {"id": "circuits-engine", "name": "Flow execution engine", "layer": "engine",
      "group": "operate", "kind": "graph compiler + pipeline runner",
      "what": "Compiles Forge graphs into multi-step agent pipelines with "

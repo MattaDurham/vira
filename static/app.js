@@ -11040,14 +11040,23 @@ function renderReview(q) {
 $("#review-refresh")?.addEventListener("click",
                                        () => loadReview().catch(() => {}));
 
-// ==================== The Showroom — parallel candidate builds ====================
-// "Build the queue" dispatches every open Vira idea as a fleet of build
-// sessions (server/showroom.py drives them a few at a time); each finished
-// build is judged by a fresh session, and this surface is where the owner
-// delivers the verdict: Try / Land / Iterate / Discard. Candidate branches
-// stay OUT of the orphan-work sweep until that verdict, so a fleet in
-// flight never reads as abandoned work.
+// ==================== The Showroom — draft branches, organized ====================
+// The organizer for many draft branches at once. "Build it" stages ONE idea
+// (the picker stays open, so build-it-build-it-build-it is the gesture);
+// each build gets its own branch, its own judge, and its own test instance
+// on demand, and this surface is where the owner delivers the verdict:
+// Try / Land / Iterate / Discard. Candidate branches stay OUT of the
+// orphan-work sweep until that verdict, so a dozen drafts in flight never
+// read as abandoned work.
+//
+// There is deliberately NO build-everything button (owner, 2026-09-02) —
+// the app never decides to spend a dozen sessions on his behalf.
 let srPoll = null;
+let srPickerOpen = false;
+// The filter survives a build: staging repaints the whole surface, and
+// retyping the same word before every "build it" would fight the one
+// gesture this picker exists for.
+let srPickerQuery = "";
 
 const SR_STATE_LABEL = {
   queued: "queued", building: "building", built: "ready to review",
@@ -11226,37 +11235,97 @@ function renderShowroom(d) {
       parts.push(`${(cn.failed || 0) + (cn.conflict || 0)} need attention`);
     st.textContent = parts.length
       ? parts.join(" — ")
-      : "No candidates yet — build the queue to start a fleet";
+      : "No drafts yet — pick an idea and say build it";
   }
   const bar = $("#shr-bar");
   if (bar) {
     bar.innerHTML = "";
     if (d.passive) {
       bar.appendChild(el("span", "shr-warn",
-                         "passive test instance — the fleet only runs on "
-                         + "the live Vira"));
+                         "passive test instance — builds only run on the "
+                         + "live Vira"));
     } else {
-      const b = el("button", "fchip sm primary",
-                   `Build the queue (${d.eligible || 0})`);
-      b.disabled = !d.eligible;
-      b.addEventListener("click", () => srArm(
-        bar, `Dispatch build sessions for ${d.eligible} open ideas, `
-             + `${d.fleet?.max_building || 3} at a time?`,
-        "Build them",
-        () => srAct("/api/showroom/build", {}, "Fleet staged")));
+      const b = el("button", "fchip sm primary", "Build an idea…");
+      b.addEventListener("click", () => srTogglePicker(d));
       bar.appendChild(b);
+      const n = d.eligible || 0;
       bar.appendChild(el("span", "hint",
-                         "each idea builds on its own branch, gets judged, "
-                         + "then waits here for your verdict"));
+                         `${n} idea${n === 1 ? "" : "s"} ready to build — `
+                         + "each one gets its own branch, judge, and test "
+                         + "instance"));
+      if (srPickerOpen) bar.appendChild(srPickerBox());
     }
   }
   list.innerHTML = "";
   (d.candidates || []).forEach((c) => list.appendChild(srCard(c, d.passive)));
   if (!(d.candidates || []).length)
     list.appendChild(el("div", "brief-empty",
-                        "Nothing in the showroom. Build the queue, or "
-                        + "stage single ideas from the Queue's Implement "
-                        + "button as before."));
+                        "Nothing in the showroom yet. Build an idea to "
+                        + "start a draft branch — then another, and "
+                        + "another; this is where they stay organized."));
+}
+
+// The picker: pick one idea, it stages, the picker STAYS OPEN so the next
+// "build it" is one click away. That repetition is the whole gesture, so
+// nothing here closes on you or asks a second time — a queued candidate
+// costs nothing and Cancel un-stages it before a session ever launches.
+function srTogglePicker(d) {
+  srPickerOpen = !srPickerOpen;
+  renderShowroom(d);
+}
+
+function srPickerBox() {
+  const box = el("div", "shr-picker");
+  const filter = el("input", "shr-filter");
+  filter.type = "search";
+  filter.placeholder = "Filter ideas…";
+  filter.value = srPickerQuery;
+  const rows = el("div", "shr-picklist");
+  rows.appendChild(el("div", "hint", "Loading ideas…"));
+  box.appendChild(filter);
+  box.appendChild(rows);
+
+  let all = [];
+  const paint = () => {
+    const q = searchFold(filter.value || "");
+    const hits = q ? all.filter((i) => searchFold(i.text).includes(q)) : all;
+    rows.innerHTML = "";
+    if (!all.length) {
+      rows.appendChild(el("div", "hint",
+                          "No open Vira ideas without a draft already."));
+      return;
+    }
+    if (!hits.length) {
+      rows.appendChild(el("div", "hint", "Nothing matches that."));
+      return;
+    }
+    hits.slice(0, 40).forEach((i) => {
+      const row = el("div", "shr-pickrow");
+      row.appendChild(el("div", "shr-picktext", i.text || "(untitled idea)"));
+      const go = el("button", "fchip sm", "Build it");
+      go.addEventListener("click", () => {
+        go.disabled = true;
+        go.textContent = "staging…";
+        srAct("/api/showroom/build", { idea_ids: [i.id] }, "Staged — building");
+      });
+      row.appendChild(go);
+      rows.appendChild(row);
+    });
+    if (hits.length > 40)
+      rows.appendChild(el("div", "hint",
+                          `${hits.length - 40} more — filter to narrow`));
+  };
+  filter.addEventListener("input", () => {
+    srPickerQuery = filter.value || "";
+    paint();
+  });
+  api("/api/showroom/eligible")
+    .then((r) => { all = r.ideas || []; paint(); })
+    .catch((e) => {
+      rows.innerHTML = "";
+      rows.appendChild(el("div", "shr-err", errText(e)));
+    });
+  return box;
 }
 
 $("#shr-refresh")?.addEventListener("click", () => loadShowroom().catch(() => {}));

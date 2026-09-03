@@ -3992,10 +3992,14 @@ def api_world_refresh():
     return {"refreshing": True}
 
 
-# ---------- the Showroom (parallel candidate builds off the Queue) ----------
+# ---------- the Showroom (draft branches the owner stages one at a time) ----------
 
 class ShowroomBuildReq(BaseModel):
-    idea_ids: list[str] | None = None
+    # No default, deliberately: the Showroom stages what the owner names.
+    # A bodyless build used to mean "the whole backlog" - that mass path
+    # is gone by construction (showroom.build_queue refuses an empty call)
+    # rather than by nobody happening to press the button.
+    idea_ids: list[str]
     limit: int | None = None
 
 
@@ -4022,11 +4026,15 @@ def api_showroom():
     return showroom.compose()
 
 
+@app.get("/api/showroom/eligible")
+def api_showroom_eligible():
+    """The picker's feed - open Vira ideas with no candidate yet."""
+    return showroom.eligible_list()
+
+
 @app.post("/api/showroom/build")
-def api_showroom_build(req: ShowroomBuildReq | None = None):
-    return _showroom_call(showroom.build_queue,
-                          (req.idea_ids if req else None),
-                          (req.limit if req else None))
+def api_showroom_build(req: ShowroomBuildReq):
+    return _showroom_call(showroom.build_queue, req.idea_ids, req.limit)
 
 
 @app.post("/api/showroom/{idea_id}/serve")

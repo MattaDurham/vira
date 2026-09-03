@@ -154,11 +154,13 @@
     </aside>
   </section>
 
-  <!-- SHOWROOM — parallel candidate builds off the Queue (server/showroom.py).
-       "Build the queue" dispatches a fleet; each finished build is judged,
-       then reviewed here: Try (a local test instance on demand), Land,
-       Iterate, or Discard. Candidate branches are excluded from the
-       orphan-work sweep until the verdict. -->
+  <!-- SHOWROOM — the organizer for many draft branches (server/showroom.py).
+       "Build an idea…" stages ONE idea at a time (the picker stays open, so
+       build-it-build-it-build-it is the gesture); each build is judged, then
+       reviewed here: Try (a local test instance on demand), Land, Iterate,
+       or Discard. Candidate branches are excluded from the orphan-work sweep
+       until the verdict. There is deliberately no build-everything button —
+       the app never spends a dozen sessions on its own. -->
   <section id="view-showroom" class="view">
     <div class="section-head">
       <h2>Showroom</h2>

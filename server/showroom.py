@@ -1,20 +1,30 @@
-"""The Showroom - build every queued idea in parallel, judge each build,
-and hand the owner one surface to try, land, iterate on, or discard them.
+"""The Showroom - the organizer for many draft branches, each with its own
+test instance, so the owner can keep saying "build it" without losing track.
 
 The bottleneck this closes (owner, 2026-08-31): dispatching ideas one at a
 time, then losing track of the branches - "if I have too many branches, it
 gets really confusing... and I don't view the tests of all of these in an
-efficient way." Three missing pieces, all here:
+efficient way."
 
-1. A FLEET DISPATCHER. build_queue() stages open Vira ideas as CANDIDATES
+WHAT THIS IS NOT (owner's correction, 2026-09-02): it is NOT a button that
+builds the whole queue. "I don't think the button needs to automatically
+start building every single idea. The concept is just that the showroom is
+a way to organize a lot of draft branches with different test modules so
+that I can keep building and I can tell you, 'Build it, build it, build
+it.'" So staging is DELIBERATE and per-idea - build_queue REQUIRES the ids
+it is to build and refuses an empty call by name, rather than defaulting to
+everything. The parallelism is a consequence of the owner saying "build it"
+several times, never a fleet the app launches on his behalf. Three pieces:
+
+1. PER-IDEA STAGING. build_queue(ids) stages the NAMED ideas as CANDIDATES
    and the Driver launches Implement-style sessions for them a few at a
    time (showroom_max_building), through the EXISTING session engine -
    placement, the branch-first write guard, the ledger, the terminal all
    come for free because session.sessions.launch owns them.
 
-2. A CANDIDATE LIFECYCLE. A fleet-built branch is a candidate, not orphan
-   work: orphanwork.sweep excludes candidate_branches(), so twenty builds
-   in flight do not flood Runs/Attention with rows that look abandoned.
+2. A CANDIDATE LIFECYCLE. A Showroom-built branch is a candidate, not
+   orphan work: orphanwork.sweep excludes candidate_branches(), so a dozen
+   drafts in flight do not flood Runs/Attention with rows reading abandoned.
    The Showroom is their one surface until the owner delivers a verdict
    (land / discard), after which the ordinary machinery owns them again.
 
@@ -136,7 +146,8 @@ def _slug(candidate):
 # ---------------------------------------------------------------- staging
 
 def eligible_ideas():
-    """Open Vira-project ideas with no active candidate. The Showroom
+    """Open Vira-project ideas with no active candidate - what the picker
+    offers, NOT a work list anything dispatches on its own. The Showroom
     builds THIS repo: an idea filed under another project would be built
     against the wrong tree, so those stay on the Queue's ordinary
     dispatch (which takes a target repo)."""
@@ -155,35 +166,55 @@ def eligible_ideas():
     return out
 
 
-def build_queue(idea_ids=None, limit=None):
-    """Stage candidates. With idea_ids, exactly those (refusing non-Vira
-    or non-open ones by name); without, every eligible idea. Nothing
-    launches here - the Driver picks queued candidates up within a tick,
-    a few at a time. Returns {staged, skipped}."""
-    _refuse_if_passive("building the queue")
+def eligible_list():
+    """The picker's feed: id + text + project only, newest-updated first.
+    Its own route rather than a field on compose(), because compose() is
+    polled every few seconds while a build runs and the full backlog has
+    no business riding that poll."""
+    out = []
+    for it in eligible_ideas():
+        out.append({"id": it["id"], "text": it.get("text", ""),
+                    "status": it.get("status", "open"),
+                    "updated": it.get("updated") or it.get("created") or ""})
+    out.sort(key=lambda r: r.get("updated") or "", reverse=True)
+    return {"ideas": out}
+
+
+def build_queue(idea_ids, limit=None):
+    """Stage exactly the NAMED ideas as candidates, refusing non-Vira or
+    non-open ones by name. Nothing launches here - the Driver picks queued
+    candidates up within a tick, a few at a time. Returns {staged,skipped}.
+
+    idea_ids is REQUIRED and an empty call is refused (owner, 2026-09-02).
+    An `ids or everything` default is exactly the mass dispatch this
+    surface is not: a bodyless POST would build the whole backlog, which
+    is a loaded gun whether or not any button currently pulls it. The
+    owner names what to build, one "build it" at a time."""
+    _refuse_if_passive("staging a build")
+    if not idea_ids:
+        raise ValueError(
+            "name the idea(s) to build - the Showroom stages what you "
+            "pick, never the whole queue")
     from . import ideas
     by_id = {it["id"]: it for it in ideas.list_items()}
-    if idea_ids:
-        picks, skipped = [], []
-        for iid in idea_ids:
-            it = by_id.get(iid)
-            if not it:
-                skipped.append(f"{iid}: unknown idea")
-            elif (it.get("project") or "Vira") != "Vira":
-                skipped.append(f"{iid}: not a Vira idea - dispatch it from "
-                               "the Queue with a target repo")
-            elif it.get("status") not in ("open", "on-hold"):
-                skipped.append(f"{iid}: status {it.get('status')} - only "
-                               "open/on-hold ideas build")
-            else:
-                picks.append(it)
-    else:
-        picks, skipped = eligible_ideas(), []
+    picks, skipped = [], []
+    for iid in idea_ids:
+        it = by_id.get(iid)
+        if not it:
+            skipped.append(f"{iid}: unknown idea")
+        elif (it.get("project") or "Vira") != "Vira":
+            skipped.append(f"{iid}: not a Vira idea - dispatch it from "
+                           "the Queue with a target repo")
+        elif it.get("status") not in ("open", "on-hold"):
+            skipped.append(f"{iid}: status {it.get('status')} - only "
+                           "open/on-hold ideas build")
+        else:
+            picks.append(it)
     if limit:
         dropped = len(picks) - int(limit)
         picks = picks[:int(limit)]
         if dropped > 0:
-            skipped.append(f"{dropped} more eligible ideas past the limit")
+            skipped.append(f"{dropped} more past the limit")
     staged = []
 
     def fn(s):
