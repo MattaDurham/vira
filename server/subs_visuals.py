@@ -309,8 +309,15 @@ def apply(req: ApplyReq):
         # atomic write, the shared tmp+rename pattern (jsonstore)
         jsonstore.write_atomic(batch / "picks.json", req.picks,
                                newline=True, indent=2, sort_keys=True)
+        nvid = len(req.picks)
         jid = _jobs.launch(_apply_prompt(batch_dir), cwd=str(TCIL_ROOT),
-                           permission_mode="bypassPermissions")
+                           permission_mode="bypassPermissions",
+                           subject=f"Morning Picker batch {Path(batch_dir).name}",
+                           kind_label="Apply picks",
+                           about=(f"Apply the owner's Morning Picker picks "
+                                  f"({nvid} videos) from {batch_dir}: "
+                                  "extract, caption, Sage gate, apply, "
+                                  "scoped commit and push."))
         _apply_jobs[batch_dir] = jid
     frames = sum(len(v) for v in req.picks.values())
     return {"job_id": jid, "videos": len(req.picks), "picks": frames,

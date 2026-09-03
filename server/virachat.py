@@ -250,9 +250,12 @@ def _open_session(job_id, question):
     if not job_id:
         model = (settings.get("chat_model") or "").strip() or None
         provider, native = chat_provider()
+        q = " ".join((question or "").split())
         return session.sessions.launch(
             _launch_prompt(question, native, provider or ""), model=model,
-            provider=provider, meta={"kind": "chat"})
+            provider=provider, meta={"kind": "chat"},
+            subject=q[:140],
+            about=f"A conversation with Vira, opened with: {q[:600]}")
     out = session.sessions.say(job_id, question)
     return out.get("job") or job_id
 

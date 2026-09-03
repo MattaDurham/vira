@@ -2188,8 +2188,17 @@ html { scrollbar-width: thin; scrollbar-color: var(--line-warm) transparent; }
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12.5px; color: var(--term-fg); }
 .cc-firstcmd:empty { display: none; }
+.cc-firstcmd { flex-direction: column; gap: 4px; }
+.cc-fc-line { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
 .cc-fc-chev { color: var(--claude); font-weight: 500; flex: none; }
-.cc-fc-text { min-width: 0; }
+.cc-fc-text { min-width: 0; flex: 1 1 auto; }
+.cc-fc-line .run-pr { align-self: center; }
+/* The session's long form, folded under its first command. */
+.cc-fc-about { font-size: 11.5px; color: var(--text-dim); }
+.cc-fc-about summary { cursor: pointer; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: .08em; font-size: 10px; }
+.cc-fc-about-text { white-space: pre-wrap; margin-top: 4px;
+  font-family: var(--font); line-height: 1.5; }
 
 /* Editable session title in a job window bar — click to rename. */
 .fwin-title-edit { cursor: text; }
@@ -4404,6 +4413,53 @@ a.sub-name:hover { color: var(--accent); text-decoration: underline; }
   letter-spacing: .1em; color: var(--text-faint);
   border: 1px solid var(--line); border-radius: 2px; padding: 1px 5px;
 }
+/* The pull request a session's branch became - a link, always visible,
+   toned by its state so a merged row reads as landed at a glance. */
+.run-pr {
+  flex: none; font: 9.5px var(--mono); letter-spacing: .06em;
+  color: var(--accent); text-decoration: none;
+  border: 1px solid var(--accent); border-radius: 2px; padding: 1px 5px;
+}
+.run-pr:hover { background: var(--accent-soft); }
+.run-pr.draft { border-style: dashed; }
+.run-pr.merged { color: var(--green); border-color: var(--green); }
+.run-pr.closed { color: var(--text-faint); border-color: var(--line);
+  text-decoration: line-through; }
+/* "What this is" - the long form under a session row. A details, so the
+   list stays one line per run until the owner asks. */
+.run-about { margin-top: 5px; font-size: 12px; }
+.run-about summary {
+  cursor: pointer; color: var(--text-dim); list-style: none;
+  display: flex; gap: 8px; align-items: baseline; min-width: 0;
+}
+.run-about summary::-webkit-details-marker { display: none; }
+.run-about summary::before { content: "▸"; color: var(--text-faint);
+  font-size: 9px; flex: none; }
+.run-about[open] summary::before { content: "▾"; }
+.run-about-k { flex: none; font: 9px var(--mono); text-transform: uppercase;
+  letter-spacing: .1em; color: var(--text-faint); }
+.run-about-s { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text-dim); }
+.run-about-body { margin: 6px 0 2px 14px; color: var(--text-dim);
+  line-height: 1.5; }
+.run-about-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-about-h { margin-top: 8px; font: 9px var(--mono); text-transform: uppercase;
+  letter-spacing: .1em; color: var(--text-faint); }
+.run-about-outcome { color: var(--text); max-height: 220px; overflow: auto; }
+.run-about-meta { margin-top: 7px; display: flex; gap: 8px;
+  align-items: center; flex-wrap: wrap; }
+.run-about-branch { font: 10px var(--mono); color: var(--text-faint);
+  overflow-wrap: anywhere; }
+/* A phone's history row: the action chips (history / judge / transcript)
+   drop UNDER the title instead of squeezing it to a sliver beside them -
+   with the PR chip on the title row there was nothing left of the name. */
+@media (max-width: 1099px) {
+  .job-hist { flex-wrap: wrap; row-gap: 6px; }
+  .job-hist .link-main { flex: 1 1 calc(100% - 24px); min-width: 0; }
+  .job-hist > .fchip, .job-hist > .cir-grade { margin-left: 21px; }
+  .job-hist > .fchip ~ .fchip, .job-hist > .cir-grade ~ .fchip { margin-left: 0; }
+}
+.job-hist .run-titlerow { align-items: center; }
 .run-sub { margin-top: 3px; font-size: 12px; color: var(--text-dim); }
 .run-note {
   margin-top: 7px; font-size: 12px; line-height: 1.45;

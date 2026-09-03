@@ -265,6 +265,13 @@ def explore(pid):
         return {"status": "empty", "note": "fixture mode"}
     from . import session
     prompt = explore_prompt(pid)
+    detail = crm.get_person(pid) or {}
+    pname = (detail.get("person") or {}).get("name") or pid
     jid = session.sessions.launch(
-        prompt, meta={"kind": "profile-explore", "person_id": pid})
+        prompt, meta={"kind": "profile-explore", "person_id": pid},
+        subject=pname,
+        about=(f"Explore and refresh {pname}'s profile: dig through "
+               "messages, mail, the vault and shared media for more "
+               "about the relationship, then file the refreshed summary "
+               "through update_person_profile."))
     return {"status": "ok", "job_id": jid}

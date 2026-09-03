@@ -41,8 +41,26 @@ Record shape:
     "permission_mode": str|None, "publish_plan": bool, "idea_id": str|None,
     "mode": str|None, "status": running|done|error|orphaned,
     "command": human first-command line, "title": short editable name,
+    "subject": what the work is ABOUT (explicit, from the dispatch site),
+    "about": the long-form explanation - what this is, the goal, what is
+             being built (explicit, from the dispatch site),
+    "kind_label": what this run IS (Land / Implement / Plan / ...; derived
+                  when absent), "pr": {number, url, title, ...}|None,
+    "title_edited": True once the owner has renamed it by hand,
     "started": ISO, "finished": ISO|None,
     "result": first 4000 chars of the job's final text }
+
+The three-part name (2026-09-03). A session is displayed as
+    PR #<n> - <subject> - <what this is>
+composed at READ time by name(): the PR number is looked up through
+server/prindex.py (it arrives after launch, when the session opens its
+draft), the subject is the dispatch site's own statement of what the work
+is about (falling back to the PR's title, the idea, the question, or a
+humanized branch slug), and the kind is derived from the record. Before
+this every Land dispatch read "Finishing stalled work in a branch-first
+repository so it can LAND" - the prompt's preamble - because the name was
+cut from the first line of a machine-composed prompt. An owner rename
+still outranks all of it.
 """
 import json
 import re
@@ -54,6 +72,9 @@ from .filelock import locked
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "jobs-log.json"
 RESULT_CAP = 4000
+# The long-form explanation rides the ledger row; a dispatch site that
+# wants to say more than this is writing a prompt, not a description.
+ABOUT_CAP = 2400
 
 _lock = threading.Lock()
 
@@ -66,8 +87,11 @@ def _read():
     """Fresh read every time — runners and the server share this store, so
     a process-lifetime cache would clobber the other side's writes."""
     try:
-        s = json.loads(STORE.read_text())
-    except (OSError, json.JSONDecodeError):
+        s = json.loads(STORE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        # UnicodeDecodeError named because the read is pinned: a store an
+        # older, unpinned build wrote as cp1252 must degrade the way an
+        # unreadable one does, never raise into every caller.
         s = {"jobs": []}
     if not isinstance(s, dict) or "jobs" not in s:
         s = {"jobs": []}
@@ -77,7 +101,11 @@ def _read():
 def _write(s):
     STORE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STORE.with_name(STORE.name + ".tmp")
-    tmp.write_text(json.dumps(s, indent=1, ensure_ascii=False))
+    # Pinned on both ends (the Windows CI lesson): the composed title
+    # carries a non-ASCII separator, and an unpinned write lands as cp1252
+    # on Windows while every utf-8 reader of the row then fails on it.
+    tmp.write_text(json.dumps(s, indent=1, ensure_ascii=False),
+                   encoding="utf-8")
     tmp.replace(STORE)
 
 
@@ -177,8 +205,13 @@ def _prompt_head(prompt):
 
 def command(record, idea_text=None):
     """The human first-command line for a job record. Immutable — it is
-    what was asked."""
+    what was asked. A dispatch site that states its subject outright
+    names the line as `<kind> — <subject>`, so the terminal's first-command
+    echo reads as the work rather than as the prompt's preamble."""
     meta = record.get("meta") or {}
+    explicit = _collapse(record.get("subject") or "")
+    if explicit:
+        return f"{kind_label(record)} — {explicit}"
     if meta.get("kind") == "map-refresh" or meta.get("routine_id") == "system-map":
         return "System map — refresh the registry from the change log"
     if meta.get("kind") == "judge" or meta.get("judge_of"):
@@ -206,16 +239,190 @@ def command(record, idea_text=None):
 # does, and a second copy of 64 would let the two drift.
 TITLE_CAP = 64
 
+# The separator between the three parts of a session's name. One string,
+# read by the tests and by the client's parser.
+SEP = " · "
+
+# What a run IS, by the marks its launch record carries. Explicit
+# `kind_label` on the record wins (a dispatch site that knows better);
+# otherwise the ledger's own signals decide. `meta.kind` values are the
+# ones dispatch sites have used since 2026-07; the fallthrough is a plain
+# "Session" so nothing is ever labelled by a guess.
+_KIND_BY_META = {
+    "orphan-land": "Land", "orphan-resume": "Resume", "resume": "Resume",
+    "text-reply": "Text reply", "chat": "Chat", "journal": "Journal",
+    "board-score": "Score roles", "board-rescore": "Rescore roles",
+    "profile-explore": "Profile explore", "map-refresh": "System map",
+    "room-update": "Room refresh", "judge": "Judge",
+    "muse": "Routine", "watch": "Routine", "digest": "Routine",
+    "circuit": "Routine", "custom": "Routine",
+}
+
+
+def kind_label(record):
+    """What this run IS - one or two words, never the subject."""
+    explicit = _collapse(record.get("kind_label") or "")
+    if explicit:
+        return explicit
+    meta = record.get("meta") or {}
+    if meta.get("kind") == "orphan-land":
+        return ("Diagnose and land" if meta.get("land_mode") == "diagnose"
+                else "Land")
+    if meta.get("kind") == "map-refresh" or meta.get("routine_id") == "system-map":
+        return "System map"
+    if meta.get("judge_of"):
+        return "Judge"
+    if meta.get("routine_id"):
+        return "Routine"
+    if meta.get("stage") or meta.get("circuit_run"):
+        return "Flow step"
+    if meta.get("define_term"):
+        return "Define"
+    k = _KIND_BY_META.get(meta.get("kind") or "")
+    if k:
+        return k
+    if record.get("publish_plan"):
+        return "Plan"
+    if record.get("idea_id"):
+        return "Implement"
+    prompt = record.get("prompt", "")
+    quoted = _quoted(prompt)
+    if quoted and quoted == _prompt_head(prompt):
+        return "Ask"
+    return "Session"
+
+
+# "Implement — the idea" / "Routine — muse": the command's own leading
+# verb, which the three-part name states separately as the kind.
+_VERB_PREFIX = re.compile(
+    r"^(Implement|Plan|Ask Vira|Routine|Circuit step|Judge|System map)"
+    r"\s+[—-]\s+", re.I)
+
+
+def _humanize_branch(branch):
+    b = (branch or "").split("/", 1)[-1]
+    # the `-<jobid>` suffix session.launch appends never names anything
+    b = re.sub(r"-[0-9a-f]{6}$", "", b)
+    return _collapse(b.replace("-", " ").replace("_", " "))
+
+
+def _pr_of(record):
+    """The PR on the record, else the index's answer for its branch. The
+    index is a dict read (server/prindex.py) - never a gh call."""
+    pr = record.get("pr")
+    if isinstance(pr, dict) and pr.get("number"):
+        return pr
+    branch = record.get("branch") or (record.get("meta") or {}).get("branch")
+    if not branch:
+        return None
+    try:
+        from . import prindex     # lazy: prindex imports nothing of ours
+        return prindex.lookup(branch)
+    except Exception:  # noqa: BLE001 — naming must never raise
+        return None
+
+
+def subject(record, idea_text=None):
+    """What the work is ABOUT. The dispatch site's explicit statement
+    wins; then the PR's own title (the session's statement of its
+    subject, once it opened its draft); then the idea / question the
+    command already quotes; then a humanized branch slug - which is what
+    turns a legacy Land row from the prompt's preamble into the branch it
+    was landing."""
+    explicit = _collapse(record.get("subject") or "")
+    if explicit:
+        return explicit
+    pr = _pr_of(record)
+    if pr and pr.get("title"):
+        return _collapse(pr["title"])
+    cmd = command(record, idea_text)
+    meta = record.get("meta") or {}
+    branch = record.get("branch") or meta.get("branch")
+    # A machine-composed prompt's role ("Finishing stalled work in a
+    # branch-first repository so it can LAND") describes the KIND, not
+    # the subject; the branch does better.
+    if meta.get("kind") in ("orphan-land", "orphan-resume") and branch:
+        return _humanize_branch(branch)
+    stripped = _VERB_PREFIX.sub("", cmd)
+    if stripped and stripped != "(untitled job)":
+        return stripped
+    if branch:
+        return _humanize_branch(branch)
+    return ""
+
+
+def compose_name(pr, subj, kind, cap=TITLE_CAP):
+    """`PR #n · subject · kind`. The PR and the kind ALWAYS survive whole;
+    the subject is what gives way, cut on a word boundary (the
+    applications.session_slug budgeting rule - the parts that say WHICH
+    run this is must not be the parts an ellipsis eats)."""
+    head = f"PR #{pr['number']}" if pr and pr.get("number") else ""
+    tail = _collapse(kind or "")
+    fixed = [x for x in (head, tail) if x]
+    room = cap - sum(len(x) + len(SEP) for x in fixed)
+    subj = _collapse(subj or "")
+    if subj and room >= 12:
+        subj = _short(subj, room)
+    elif subj:
+        subj = ""
+    parts = [x for x in (head, subj, tail) if x]
+    return SEP.join(parts) if parts else "(untitled job)"
+
 
 def default_title(record, idea_text=None):
-    """The short session name a job is auto-given (before any edit)."""
+    """The session name a job is auto-given (before any edit): the
+    three-part composition when the record has a subject to compose
+    from, else the squeezed command as before."""
+    subj = subject(record, idea_text)
+    if not subj:
+        return _short(command(record, idea_text), TITLE_CAP)
+    return compose_name(_pr_of(record), subj, kind_label(record))
+
+
+def _legacy_default(record, idea_text=None):
     return _short(command(record, idea_text), TITLE_CAP)
 
 
 def name(record, idea_text=None):
-    """The effective display name: an owner edit wins, else the default."""
-    edited = (record.get("title") or "").strip()
-    return edited or default_title(record, idea_text)
+    """The effective display name: an owner edit wins, else the default.
+
+    record_launch has always STORED the derived default in `title`, so a
+    stored title is not evidence of an edit. An edit is one stamped
+    `title_edited` (set_title, since 2026-09-03) or - for rows written
+    before the stamp existed - a title that differs from what the old
+    derivation would have produced."""
+    stored = (record.get("title") or "").strip()
+    if stored:
+        if "title_edited" in record:
+            if record["title_edited"]:
+                return stored
+        elif stored not in (_legacy_default(record, idea_text),
+                            _legacy_default(record)):
+            # record_launch computed the stored default WITHOUT the idea
+            # text (from the quoted block), so a legacy row is compared
+            # against both readings before it counts as a hand-rename.
+            return stored
+    return default_title(record, idea_text)
+
+
+def about(record):
+    """The long-form explanation the dispatch site supplied, or ''."""
+    return (record.get("about") or "").strip()
+
+
+def describe(record, idea_text=None):
+    """Every naming field a surface renders, derived once: the name, the
+    kind, the subject, the PR, the long form, and the outcome (the
+    session's own closing text, when it has one - what it ACTUALLY did,
+    for rows dispatched before `about` existed)."""
+    return {
+        "title": name(record, idea_text),
+        "kind_label": kind_label(record),
+        "subject": subject(record, idea_text),
+        "pr": _pr_of(record),
+        "about": about(record),
+        "outcome": (record.get("result") or "").strip()[:600],
+    }
 
 
 # ---------- ledger operations ----------
@@ -259,14 +466,32 @@ def record_launch(job):
         "branch": job.get("branch") or "",
         "live_root": job.get("live_root") or "",
         "meta": job.get("meta") or {},
+        # The three-part name's inputs, from the dispatch site that knows
+        # them. `subject` is what the work is about, `about` the long
+        # form, `kind_label` an explicit override of the derived kind, `pr`
+        # a PR already known at launch (a Land on an existing branch).
+        "subject": _collapse(job.get("subject") or ""),
+        "about": (job.get("about") or "").strip()[:ABOUT_CAP],
+        "kind_label": _collapse(job.get("kind_label") or ""),
+        "pr": job.get("pr") if isinstance(job.get("pr"), dict) else None,
         "status": "running", "started": _now(), "finished": None,
         "result": "",
     }
+    # A continued conversation is about what the first one was about.
+    src = job.get("resumed_from")
+    if src and not row["subject"]:
+        prior = get_record(src) or {}
+        for k in ("subject", "about", "pr"):
+            if not row.get(k) and prior.get(k):
+                row[k] = prior[k]
     # Name the job at launch — the first-command line (immutable) and the
     # default session title (editable via set_title). idea_text resolves
     # from the record's own quoted block, so no cross-store read is needed.
     row["command"] = command(row)
     row["title"] = default_title(row)
+    # Stamped False so name() can tell this stored default from an edit
+    # without comparing strings; set_title flips it.
+    row["title_edited"] = False
 
     def fn(s):
         s["jobs"].append(row)
@@ -286,6 +511,9 @@ def set_title(jid, title):
         if not r:
             return False
         r["title"] = title
+        # An empty title clears the edit: name() then composes the default
+        # again, PR number and all.
+        r["title_edited"] = bool(title)
         out["rec"] = r
         return True
     _mutate(fn)
@@ -306,6 +534,29 @@ def record_model_used(jid, model):
             r["model_used"] = model
             return True
         return False
+    _mutate(fn)
+
+
+def record_pr(jid, number, url="", title=""):
+    """Stamp the PR a session's branch now has. Called by whatever just
+    learned it (the landing card opening a draft, a Land dispatch that read
+    it off the sweep); the index answers for every other row."""
+    if not isinstance(number, int):
+        return
+
+    def fn(s):
+        r = next((r for r in s["jobs"] if r["id"] == jid), None)
+        if not r:
+            return False
+        cur = r.get("pr") if isinstance(r.get("pr"), dict) else {}
+        new = dict(cur)
+        new.update({"number": number, "url": url or cur.get("url", "")})
+        if title:
+            new["title"] = title
+        if new == cur:
+            return False
+        r["pr"] = new
+        return True
     _mutate(fn)
 
 

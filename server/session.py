@@ -580,8 +580,13 @@ class Sessions:
     def launch(self, prompt, cwd=None, permission_mode=None, model=None,
                publish_plan=False, idea_id=None, mode=None,
                read_only=False, meta=None, provider=None,
-               resume_session=None, resumed_from=None):
-        """Start a run; returns the job id. `mode` is one of MODES — the
+               resume_session=None, resumed_from=None,
+               subject=None, about=None, kind_label=None, pr=None):
+        """Start a run; returns the job id. `subject` / `about` /
+        `kind_label` / `pr` are the three-part name's inputs (joblog): what
+        the work is about, its long-form explanation, what this run IS,
+        and a PR already known - stated by the dispatch site that knows
+        them, never cut from the prompt. `mode` is one of MODES — the
         permission ladder (manual / acceptEdits / bypassPermissions), and
         retired spellings still resolve via norm_mode; when absent it
         derives from the legacy permission_mode param, else the config
@@ -722,6 +727,12 @@ class Sessions:
                 # exclusion), so the runner reads it with no plumbing here.
                 "resume_session": (resume_session or "").strip(),
                 "resumed_from": (resumed_from or "").strip(),
+                # The name's inputs ride the spec too, so the runner's own
+                # ledger writes and the landing card can read them.
+                "subject": (subject or "").strip(),
+                "about": (about or "").strip(),
+                "kind_label": (kind_label or "").strip(),
+                "pr": pr if isinstance(pr, dict) else None,
                 "ask_timeout": float(_scfg("session_ask_timeout")),
                 # the landing card and its test instance (runner.offer_landing)
                 "landing_card": bool(_scfg("session_landing_card")),

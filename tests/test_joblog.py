@@ -69,7 +69,9 @@ class JobNamingTests(unittest.TestCase):
                         "deterministically without any duplicate rows")
         t = joblog.default_title(r)
         self.assertLessEqual(len(t), 65)
-        self.assertTrue(t.endswith("…"))
+        # the SUBJECT is what gives way; the kind survives whole at the end
+        self.assertIn("…", t)
+        self.assertTrue(t.endswith(joblog.SEP + "Session"), t)
         self.assertNotIn("  ", t)
 
     def test_owner_edit_wins(self):
@@ -79,7 +81,7 @@ class JobNamingTests(unittest.TestCase):
         # blank/whitespace title falls back to the derived default
         r2 = _rec(idea_id="i1", title="   ")
         self.assertEqual(joblog.name(r2, "Build the atlas graph"),
-                         "Implement — Build the atlas graph")
+                         "Build the atlas graph · Implement")
 
     def test_never_raises_on_empty(self):
         self.assertEqual(joblog.command(_rec()), "(untitled job)")

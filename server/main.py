@@ -923,8 +923,15 @@ def api_applications_evidence_map_material(uid: str, req: AppMapMaterialReq):
     prompt = out.pop("prompt", "")
     if prompt:
         try:
-            out["job_id"] = jobs.launch(prompt,
-                                        str(applications.self_record()))
+            out["job_id"] = jobs.launch(
+                prompt, str(applications.self_record()),
+                subject=f"{role.get('company') or 'role'} — "
+                        f"{req.lane} material",
+                kind_label="Fold in material",
+                about=(f"Fold the dropped file {out.get('name')} into the "
+                       f"{req.lane} lane of the application package for "
+                       f"{role.get('company')} — {role.get('title')}, "
+                       "under the claim gate."))
         except ValueError as e:
             # The file is staged and harmless — no read path globs the inbox —
             # so say what happened rather than pretending nothing did.
@@ -1009,9 +1016,21 @@ def api_applications_apply(uid: str, req: AppApplyReq):
     if role is None:
         raise HTTPException(404, "unknown role")
     prompt = applications.apply_prompt(role, req.note or "")
+    subj = " — ".join(x for x in (role.get("company"), role.get("title")) if x)
+    about = "\n".join(x for x in (
+        f"Write the application package for {subj}.",
+        f"Posting: {role.get('url')}" if role.get("url") else "",
+        f"Location: {role.get('location')}" if role.get("location") else "",
+        f"Dossier: tier {role.get('final_tier') or role.get('tier')}, "
+        f"fit {role.get('fit')} — {role.get('why_fit')}"
+        if role.get("why_fit") else "",
+        f"Owner note: {req.note.strip()}" if (req.note or "").strip() else "",
+    ) if x)
     try:
         jid = jobs.launch(prompt, str(applications.self_record()),
-                          None, req.model, provider=req.provider)
+                          None, req.model, provider=req.provider,
+                          subject=subj, about=about,
+                          kind_label="Write application")
     except ValueError as e:
         raise HTTPException(429, str(e))
     applications.update_state(uid, job_id=jid)
@@ -1105,7 +1124,12 @@ def api_jobboards_score(req: BoardScoreReq):
         raise HTTPException(400, "nothing unscored — the universe is current")
     try:
         jid = jobs.launch(prompt, str(applications.self_record()),
-                          None, req.model)
+                          None, req.model,
+                          subject=f"{n} unscored board roles",
+                          kind_label="Score roles",
+                          about=(f"Deep-read and two-score the {n} eligible "
+                                 "board roles that have no analysis yet, "
+                                 "filing each through record_role_scores."))
     except ValueError as e:
         raise HTTPException(429, str(e))
     return {"job_id": jid, "roles": n}
@@ -1140,7 +1164,12 @@ def api_map_refresh():
     """Dispatch the map-refresh job now (same prompt the weekly routine
     composes) — watch it in the Jobs window."""
     jid = jobs.launch(modulemap.refresh_prompt(), cwd=str(ROOT),
-                      meta={"kind": "map-refresh"})
+                      meta={"kind": "map-refresh"},
+                      subject="Module registry from the change log",
+                      about=("Re-read the recent Vira change log and submit "
+                             "the updated module registry through "
+                             "update_module_map, so the System Map page "
+                             "reflects what shipped."))
     return {"job_id": jid}
 
 
@@ -1678,7 +1707,13 @@ def api_frontdoor_setup(module_id: str, req: FrontDoorSetupReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:
-        jid = jobs.launch(prompt, str(ROOT), None, req.model)
+        jid = jobs.launch(prompt, str(ROOT), None, req.model,
+                          subject=f"Set up the {module_id} module",
+                          kind_label="Module setup",
+                          about=("The front-door interview for the "
+                                 f"{module_id} module: collect what setup "
+                                 "needs and configure it through the "
+                                 "validated setup tool."))
     except ValueError as e:
         raise HTTPException(429, str(e))
     frontdoor.record_run(module_id, jid, req.answers or {})
@@ -1929,7 +1964,11 @@ def api_reading_room_update(name: str):
     except (KeyError, ValueError):
         raise HTTPException(404, "no such reading room")
     jid = jobs.launch(prompt, cwd=str(ROOT),
-                      meta={"kind": "room-update", "room": name})
+                      meta={"kind": "room-update", "room": name},
+                      subject=f"Reading room {name}",
+                      about=(f"Refresh the reading room '{name}': sweep its "
+                             "feeds and the standing watch list since the "
+                             "last refresh and merge the new items in."))
     return {"job_id": jid}
 
 
@@ -2989,6 +3028,13 @@ class RunReq(BaseModel):
     # absent, the verified model catalog names it, else the configured
     # session-capable go-to. See server/agentbackend.py.
     provider: str | None = None
+    # The three-part name's inputs (server/joblog.py): what the work is
+    # about and its long-form explanation, stated by the surface that
+    # composed the prompt - the idea sheet knows the idea; the prompt's
+    # first line is a preamble.
+    subject: str | None = None
+    about: str | None = None
+    kind_label: str | None = None
 
 
 @app.post("/api/actions/run")
@@ -2996,7 +3042,9 @@ def api_run(req: RunReq):
     try:
         jid = jobs.launch(req.prompt, req.cwd, req.permission_mode, req.model,
                           req.publish_plan, req.idea_id, req.mode,
-                          read_only=req.read_only, provider=req.provider)
+                          read_only=req.read_only, provider=req.provider,
+                          subject=req.subject, about=req.about,
+                          kind_label=req.kind_label)
     except ValueError as e:
         raise HTTPException(429, str(e))
     return {"job_id": jid}
@@ -3018,8 +3066,17 @@ def _ensure_names(rows, records=None):
             if idea_map is None:
                 idea_map = {x["id"]: x["text"] for x in ideas.list_items()}
             it = idea_map.get(rec["idea_id"])
-        row["title"] = joblog.name(rec, it)
+        d = joblog.describe(rec, it)
+        row["title"] = d["title"]
         row["command"] = rec.get("command") or joblog.command(rec, it)
+        # The name's parts and the long form, for the surfaces that show
+        # more than the one line: the PR link, the kind, what this is.
+        row["kind_label"] = d["kind_label"]
+        row["subject"] = d["subject"]
+        row["pr"] = d["pr"]
+        row["about"] = d["about"]
+        row["outcome"] = d["outcome"]
+        row["branch"] = rec.get("branch") or row.get("branch") or ""
     return rows
 
 
@@ -3429,7 +3486,11 @@ def api_define_source(req: SourceReq):
                                  "live vault")
     try:
         jid = jobs.launch(define.source_prompt(term), cwd=str(ROOT),
-                          meta={"define_term": term})
+                          meta={"define_term": term},
+                          subject=term,
+                          about=(f"Source a definition of '{term}': browse "
+                                 "for it, cite only what could be fetched, "
+                                 "and bank the card as a vault page."))
     except ValueError as e:
         raise HTTPException(429, str(e))
     return {"job_id": jid}

@@ -51,6 +51,17 @@ class _Placed(RunnerCase):
         sh.chmod(0o755)
         self.wt = Path(self.tmp.name) / "wt"
         self.wt.mkdir()
+        # The card stamps the PR it found on the ledger and the PR index
+        # (2026-09-03); both are cross-process stores under data/, so a
+        # fixture must root them here or a fake PR #77 lands in the real
+        # index.
+        from server import joblog, prindex
+        for mod, name in ((joblog, "STORE"), (prindex, "STORE")):
+            pp = mock.patch.object(mod, name,
+                                   Path(self.tmp.name) / (name + ".json"))
+            pp.start()
+            self.addCleanup(pp.stop)
+        prindex._cache["mtime"] = None
 
     def placed(self, **over):
         over.setdefault("worktree", str(self.wt))

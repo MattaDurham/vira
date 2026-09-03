@@ -1393,7 +1393,13 @@ def maybe_auto_score():
         jid = session.sessions.launch(
             prompt, cwd=str(applications.self_record()),
             model=settings.raw().get("boards_score_model") or None,
-            meta={"kind": kind, "machine": True})
+            meta={"kind": kind, "machine": True},
+            subject=(f"{n} roles against today's canon"
+                     if kind == "board-rescore" else f"{n} unscored roles"),
+            about=(f"Auto-{'rescoring' if kind == 'board-rescore' else 'scoring'} "
+                   f"pass over {n} board roles: deep-read each posting "
+                   "and file a two-score judgment (fit and screen) through "
+                   "record_role_scores."))
     except ValueError as e:      # live-session cap — retry next tick
         return {"ok": False, "reason": str(e)[:160]}
     _record_score({"job": jid, "at": _now(), "roles": n, "kind": kind})

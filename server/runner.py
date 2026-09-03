@@ -624,6 +624,26 @@ class Runner:
         parts = (out.stdout or "").split()
         return parts[1] if len(parts) == 2 and parts[0] == "OPEN" else ""
 
+    def _note_pr(self, url):
+        """The PR number is the first part of this session's name, and it
+        exists from this moment: stamp it on the ledger row and the PR
+        index so the name reads `PR #n · ...` without waiting for a sweep.
+        Best-effort - a name is never a reason to withhold the card."""
+        m = re.search(r"/pull/(\d+)", url or "")
+        if not m:
+            return
+        num = int(m.group(1))
+        try:
+            joblog.record_pr(self.spec["id"], num, url)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from . import prindex
+            prindex.note(self.spec.get("branch") or "", num, url,
+                         self.spec.get("subject") or "")
+        except Exception:  # noqa: BLE001
+            pass
+
     def _ensure_pr(self):
         """The merge protocol REQUIRES an open PR (branch.sh pr_require), so
         a card offering Merge it over a branch with no PR would offer a
@@ -633,10 +653,12 @@ class Runner:
         and merge refuses with branch.sh's own message."""
         url = self._pr_url()
         if url:
+            self._note_pr(url)
             return url, ""
         ok, text = self._branch_sh(["pr", self._landing_slug()], PR_TIMEOUT)
         m = re.search(r"https://github\.com/\S+/pull/\d+", text)
         if ok and m:
+            self._note_pr(m.group(0))
             return m.group(0), ""
         tail = text.strip().splitlines()
         return "", ("no PR - " + (tail[-1] if tail else "branch.sh pr failed"))
