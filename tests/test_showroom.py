@@ -334,10 +334,10 @@ class Describing(_RepoCase):
     def test_kick_describe_refuses_on_a_passive_instance(self):
         os.environ["VIRA_PASSIVE"] = "1"
         with mock.patch.object(showroom, "describe_missing") as dm, \
-                mock.patch("threading.Thread") as th:
+                mock.patch.object(showroom, "_spawn") as sp:
             _REAL_KICK()
             dm.assert_not_called()
-            th.assert_not_called()
+            sp.assert_not_called()
 
 
 class Actions(_RepoCase):
@@ -345,9 +345,9 @@ class Actions(_RepoCase):
         self.make_worktree("s", commits=1)
         showroom.refresh()
         threads = []
-        with mock.patch("threading.Thread", side_effect=lambda **kw: threads.append(kw) or mock.Mock()):
+        with mock.patch.object(showroom, "_spawn", lambda target, name: threads.append(target)):
             self.assertEqual(showroom.serve("claude/s"), {"started": True})
-        threads[0]["target"]()
+        threads[0]()
         self.branch_sh.assert_called_with(["serve", "s", "--local"], showroom.SERVE_TIMEOUT)
         row = showroom.compose()["items"][0]
         self.assertEqual(row["serving"]["status"], "up")
@@ -356,7 +356,7 @@ class Actions(_RepoCase):
     def test_serve_never_bridges_to_the_tailnet(self):
         self.make_worktree("s", commits=1)
         showroom.refresh()
-        with mock.patch("threading.Thread", side_effect=lambda **kw: kw["target"]() or mock.Mock()):
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
             showroom.serve("claude/s")
         for call in self.branch_sh.call_args_list:
             if call[0][0][0] == "serve":
@@ -371,7 +371,7 @@ class Actions(_RepoCase):
              cwd=self.root)
         showroom.refresh()
         self.assertEqual(showroom._worktree_of("claude/gone"), None)
-        with mock.patch("threading.Thread", side_effect=lambda **kw: kw["target"]() or mock.Mock()):
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
             showroom.serve("claude/gone")
         wt = self.root / ".worktrees" / "gone"
         self.assertTrue((wt / "static" / "file0.js").exists())
@@ -382,7 +382,7 @@ class Actions(_RepoCase):
         # No sweep has run, so the store is empty - a launch still works
         # off git, and a branch git does not know fails by name.
         self.make_worktree("fresh", commits=1)
-        with mock.patch("threading.Thread", side_effect=lambda **kw: kw["target"]() or mock.Mock()):
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
             self.assertEqual(showroom.serve("claude/fresh"), {"started": True})
             showroom.serve("claude/never-existed")
         with showroom._serves_lock:
@@ -396,7 +396,7 @@ class Actions(_RepoCase):
         self.make_worktree("s", commits=1)
         showroom.refresh()
         self.branch_sh.return_value = (False, "error: no free port")
-        with mock.patch("threading.Thread", side_effect=lambda **kw: kw["target"]() or mock.Mock()):
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
             showroom.serve("claude/s")
         row = showroom.compose()["items"][0]
         self.assertEqual(row["serving"]["status"], "failed")

@@ -525,6 +525,15 @@ _serves = {}                  # branch -> {status, port, text, started}
 _serves_lock = threading.Lock()
 
 
+def _spawn(target, name):
+    """The one place a daemon thread is started - a SEAM the tests pin to
+    run the target inline. Patching threading.Thread itself is not an
+    option: on Windows, subprocess reads its pipes on threads, so a
+    module-wide patch breaks every git call the target makes (the CI
+    lesson of 2026-09-03)."""
+    threading.Thread(target=target, daemon=True, name=name[:60]).start()
+
+
 def _branch_sh(args, timeout):
     out = subprocess.run(
         [str(ROOT / "scripts" / "branch.sh"), *args], cwd=str(ROOT),
@@ -639,8 +648,7 @@ def serve(branch):
             refresh()
         except Exception:  # noqa: BLE001 - the serve outcome is already recorded
             pass
-    threading.Thread(target=run, daemon=True,
-                     name=f"vira-showroom-serve-{_slug(branch)}"[:60]).start()
+    _spawn(run, f"vira-showroom-serve-{_slug(branch)}")
     return {"started": True}
 
 
@@ -856,8 +864,7 @@ def _kick_describe():
         finally:
             with _describe_lock:
                 _describe_running = False
-    threading.Thread(target=run, daemon=True,
-                     name="vira-showroom-describe").start()
+    _spawn(run, "vira-showroom-describe")
 
 
 # ---------------------------------------------------------------- compose
