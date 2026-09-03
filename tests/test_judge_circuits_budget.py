@@ -214,7 +214,9 @@ class StubSessions:
 
     def launch(self, prompt, cwd=None, permission_mode=None, model=None,
                publish_plan=False, idea_id=None, mode=None,
-               read_only=False, meta=None):
+               read_only=False, meta=None, **name_inputs):
+        # name_inputs: subject / about / kind_label / pr - the three-part
+        # session name's inputs every dispatch carries since 2026-09-03.
         jid = f"stub{self.n:04d}"
         self.n += 1
         rec = {"id": jid, "prompt": prompt, "meta": meta or {}}
