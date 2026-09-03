@@ -241,8 +241,53 @@ class LandDispatch(_Store):
         self.assertEqual(orphanwork.branch_subject(
             self._item(job={"subject": "From the dispatch"})),
             "From the dispatch")
+        # no dispatch, no PR: the first unmerged commit names the work
         self.assertEqual(orphanwork.branch_subject(self._item(pr=None, job=None)),
-                         "qocha vault onboarding")
+                         "Vault commissioning: attach a folder of files")
+        # nothing at all: the slug, humanized
+        self.assertEqual(orphanwork.branch_subject(
+            self._item(pr=None, job=None, commits=[])), "qocha vault onboarding")
+        # a subject the ledger derived from the Land prompt is the ACT and
+        # never outranks the commit
+        self.assertEqual(orphanwork.branch_subject(self._item(
+            pr=None, job={"subject": "Finishing stalled work in a branch-first"})),
+            "Vault commissioning: attach a folder of files")
+
+    def test_a_preamble_slug_never_names_a_branch(self):
+        # the 2026-07-29 incident's branches: the slug is the prompt's
+        # first line and describes nothing
+        it = self._item(branch="claude/you-are-vira-s-coding-agent-work-a80ec5",
+                        pr=None, job={"subject": "you are vira s coding agent work"},
+                        commits=["Undeclared config keys fail loudly now"])
+        self.assertEqual(orphanwork.branch_subject(it),
+                         "Undeclared config keys fail loudly now")
+        self.assertEqual(joblog._humanize_branch(it["branch"]), "")
+        bare = self._item(branch=it["branch"], pr=None, job=None, commits=[])
+        # the raw slug is the honest last resort - never an empty title
+        self.assertEqual(orphanwork.branch_subject(bare),
+                         "you-are-vira-s-coding-agent-work-a80ec5")
+
+    def test_the_sweep_row_carries_the_subject(self):
+        with mock.patch.object(orphanwork, "_ahead_behind",
+                               return_value=(1, 0)), \
+                mock.patch.object(orphanwork, "_tip_sha", return_value="abc"), \
+                mock.patch.object(orphanwork, "_commit_time",
+                                  return_value=1.0), \
+                mock.patch.object(orphanwork, "_branch_commits",
+                                  return_value=["Fix the thing"]), \
+                mock.patch.object(orphanwork, "_failure_summary",
+                                  return_value=None):
+            item = orphanwork._make_item(
+                "claude/you-are-vira-s-coding-agent-work-a80ec5", None, [], {})
+        self.assertEqual(item["subject"], "Fix the thing")
+        self.assertIn("Fix the thing", item["about"])
+
+    def test_subject_hint_reads_the_cached_sweep(self):
+        with mock.patch.object(orphanwork, "_read", return_value={
+                "items": [{"branch": "claude/x", "subject": "The work"}]}):
+            self.assertEqual(orphanwork.subject_hint("claude/x"), "The work")
+            self.assertEqual(orphanwork.subject_hint("claude/none"), "")
+            self.assertEqual(orphanwork.subject_hint(""), "")
 
     def test_about_states_the_branch_and_why_it_stopped(self):
         a = orphanwork.branch_about(self._item(), "Finish and land")
@@ -287,6 +332,87 @@ class LandDispatch(_Store):
                                   return_value=None):
             item = orphanwork._make_item("claude/b", None, [], {})
         self.assertEqual(item["pr"]["number"], 3)
+
+
+class Retroactive(_Store):
+    """Rows written before the name existed - and branches whose
+    originating dispatch is gone - still get named for the work."""
+
+    def _land(self, branch, jid="j2"):
+        return _rec(id=jid, prompt="You are finishing stalled work in a "
+                    "branch-first repository so it can LAND.\n",
+                    meta={"kind": "orphan-land", "land_mode": "finish",
+                          "branch": branch}, branch=branch)
+
+    def test_a_land_row_is_named_for_the_job_that_started_the_branch(self):
+        impl = _rec(id="j1", prompt='You are Vira.\n"""\nAdd undo in Flows\n"""\n',
+                    idea_id="i1", branch="claude/undo-ab12cd")
+        land = self._land("claude/undo-ab12cd")
+        bb = joblog.by_branch_index([impl, land])
+        self.assertEqual(joblog.name(land, None, bb), "Add undo in Flows · Land")
+        self.assertEqual(joblog.about(land, bb), "Add undo in Flows")
+        # and without the index the ledger is read once
+        joblog.record_launch({"id": "k1", "prompt": impl["prompt"], "cwd": "/tmp",
+                              "idea_id": "i1", "branch": "claude/undo-ab12cd"})
+        joblog.record_launch({"id": "k2", "prompt": land["prompt"], "cwd": "/tmp",
+                              "meta": land["meta"], "branch": "claude/undo-ab12cd"})
+        self.assertEqual(joblog.name(joblog.get_record("k2")),
+                         "Add undo in Flows · Land")
+
+    def test_a_resumed_row_is_named_for_the_conversation_it_continues(self):
+        first = _rec(id="c1", prompt='You are Vira.\n"""\nwhat is due?\n"""\n')
+        resumed = _rec(id="c2", prompt="Pick this up where you left off.",
+                       meta={"kind": "resume", "resumed_from": "c1"})
+        idx = joblog.by_branch_index([first, resumed])
+        self.assertEqual(joblog.name(resumed, None, idx), "what is due? · Resume")
+        joblog.record_launch({"id": "c1", "prompt": first["prompt"], "cwd": "/tmp"})
+        joblog.record_launch({"id": "c2", "prompt": resumed["prompt"], "cwd": "/tmp",
+                              "meta": resumed["meta"]})
+        self.assertEqual(joblog.name(joblog.get_record("c2")), "what is due? · Resume")
+
+    def test_a_one_word_stage_subject_yields_to_the_commit(self):
+        it = {"branch": "claude/circuit-step-build-8c5f67", "pr": None,
+              "job": {"subject": "build"},
+              "commits": ["Triage resolver: the grounded-or-held verify"]}
+        self.assertEqual(orphanwork.branch_subject(it),
+                         "Triage resolver: the grounded-or-held verify")
+        it["commits"] = []
+        self.assertEqual(orphanwork.branch_subject(it), "build")
+
+    def test_a_legacy_stage_row_reads_the_flows_original_ask(self):
+        r = _rec(prompt="You are the BUILD stage of a pipeline. Implement "
+                        "the plan below.\nOriginal ask: Build a triage "
+                        "resolver for unknown senders\n\nPlan: ...",
+                 meta={"circuit_run": "r1", "stage": "build"})
+        self.assertEqual(joblog.subject(r),
+                         "Build a triage resolver for unknown senders")
+        self.assertEqual(joblog.name(r),
+                         "Build a triage resolver for unknown senders · Flow step")
+
+    def test_a_legacy_row_falls_back_to_what_it_was_asked(self):
+        r = _rec(prompt='You are Vira.\n"""\nwhat is due?\n"""\n')
+        self.assertEqual(joblog.about(r), "what is due?")
+
+    def test_a_continuation_never_reads_its_own_preamble_as_the_ask(self):
+        self.assertEqual(joblog.about(self._land("claude/x")), "")
+
+    def test_the_route_overlays_the_sweeps_name_when_the_origin_is_gone(self):
+        from fastapi.testclient import TestClient
+        from server import main
+        joblog.record_launch({"id": "h2", "prompt": "You are finishing stalled "
+                              "work in a branch-first repository so it can LAND.\n",
+                              "cwd": "/tmp",
+                              "meta": {"kind": "orphan-land", "land_mode": "finish",
+                                       "branch": "claude/you-are-vira-s-coding-agent-work-a80ec5"},
+                              "branch": "claude/you-are-vira-s-coding-agent-work-a80ec5"})
+        with mock.patch.object(orphanwork, "subject_hint",
+                               return_value="Undeclared config keys fail loudly"):
+            c = TestClient(main.app)
+            rows = c.get("/api/jobs/history?limit=500").json()["jobs"]
+        row = next(r for r in rows if r["id"] == "h2")
+        self.assertEqual(row["title"],
+                         "Undeclared config keys fail loudly · Land")
+        self.assertEqual(row["subject"], "Undeclared config keys fail loudly")
 
 
 class LandingCardStampsThePr(_Store):
@@ -352,6 +478,10 @@ class Surfaces(unittest.TestCase):
         self.assertIn('box.addEventListener("click", (e) => e.stopPropagation())',
                       _fn("aboutBlock"))
         self.assertIn('e.target.closest("details, a")', _fn("jobHistRow"))
+
+    def test_unlanded_cards_are_titled_by_the_subject(self):
+        f = _fn("runItems")
+        self.assertIn("title: o.subject || (o.branch", f)
 
     def test_the_styles_exist(self):
         for sel in (".run-pr", ".run-pr.merged", ".run-about", ".cc-fc-about"):
