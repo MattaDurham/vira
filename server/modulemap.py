@@ -308,6 +308,23 @@ DEFAULT_MODULES = [
      "keywords": ["session", "runner", "terminal", "permission", "durable",
                   "viratools"],
      "updated": TODAY},
+    {"id": "showroom", "name": "Showroom", "layer": "surface",
+     "group": "operate", "kind": "draft-branch gallery",
+     "what": "Every draft branch on this machine as a card: what it does "
+             "and what state it is in (a Vira-written blurb over the "
+             "sweeper's evidence and the pull request), banded as a live "
+             "session, unlanded work, or landed-and-never-cleaned-up. Each "
+             "card launches its own passive test instance in a fresh tab, "
+             "expands to the full read, and carries the verdict buttons - "
+             "Land / Resume / Discard through the orphan-work sweeper, "
+             "Clean up for a landed worktree. It builds nothing.",
+     "links": [{"to": "orphan-sweeper", "how": "joins its rows and calls its verbs"},
+               {"to": "sessions", "how": "reads the ledger for each branch's session"}],
+     "endpoints": ["/api/showroom", "/api/showroom/serve",
+                   "/api/showroom/context"],
+     "keywords": ["showroom", "draft branch", "test instance", "worktree",
+                  "pull request", "land", "cleanup"],
+     "updated": TODAY},
     {"id": "circuits-engine", "name": "Flow execution engine", "layer": "engine",
      "group": "operate", "kind": "graph compiler + pipeline runner",
      "what": "Compiles Forge graphs into multi-step agent pipelines with "

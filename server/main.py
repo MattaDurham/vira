@@ -62,6 +62,7 @@ from . import (
                mediaindex, mercury, models, modulemap, modulestory, msgraph,
                notify, onboard,
                orphanwork,
+               showroom,
                photos, pickfolder, plans, profilerefresh, radar, reconnect,
                textindex,
                receipts,
@@ -4062,6 +4063,59 @@ def api_world_refresh():
     threading.Thread(target=vault.scan_once, daemon=True,
                      name="vira-world-vault-refresh").start()
     return {"refreshing": True}
+
+
+# ---------- the Showroom (every draft branch as a card) ----------
+
+class ShowroomBranchReq(BaseModel):
+    branch: str
+
+
+def _showroom_call(fn, *args):
+    """Every Showroom action maps its refusals the same way: passive is a
+    403, an unknown branch a 404, a state refusal a 409 - each carrying
+    the engine's own named reason."""
+    try:
+        return fn(*args)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/showroom")
+def api_showroom():
+    return showroom.compose()
+
+
+@app.post("/api/showroom/refresh")
+def api_showroom_refresh():
+    showroom.refresh()
+    return showroom.compose()
+
+
+@app.get("/api/showroom/context")
+def api_showroom_context(branch: str):
+    """The full read behind one card. READ-ONLY, so safe on a passive
+    instance and safe to open before deciding anything."""
+    return _showroom_call(showroom.context, branch)
+
+
+@app.post("/api/showroom/serve")
+def api_showroom_serve(req: ShowroomBranchReq):
+    return _showroom_call(showroom.serve, req.branch)
+
+
+@app.post("/api/showroom/stop")
+def api_showroom_stop(req: ShowroomBranchReq):
+    return _showroom_call(showroom.stop, req.branch)
+
+
+@app.post("/api/showroom/cleanup")
+def api_showroom_cleanup(req: ShowroomBranchReq):
+    return _showroom_call(showroom.cleanup, req.branch)
 
 
 # ---------- contact atlas (legacy API + materialized CRM projection) -----
