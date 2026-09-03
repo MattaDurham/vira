@@ -612,14 +612,14 @@ def status():
     # Brain is fully wired while plans and ingestion still have nowhere to go.
     vault_ok = any(row["primary"] and row["connected"]
                    for row in vault_sources)
-    mail_accounts = 0
+    # Accounts plus the watcher's last health per row (mail.HEALTH), so a
+    # mailbox that stopped signing in reads as "needs attention" on the
+    # Config row instead of a green dot over a failing account.
+    from . import mail as _mail
     try:
-        acc = json.loads((settings.ROOT / "data" /
-                          "mail-accounts.json").read_text())
-        mail_accounts = len(acc if isinstance(acc, list)
-                            else acc.get("accounts", []))
-    except (OSError, json.JSONDecodeError):
-        pass
+        mail_sum = _mail.summary()
+    except Exception:  # noqa: BLE001 — a bad store is not a bad status
+        mail_sum = {"accounts": 0, "ok": 0, "failing": 0, "attention": ""}
     with _build_lock:
         build = dict(_build)
     return {
@@ -637,7 +637,7 @@ def status():
         "vault": {"root": vraw, "connected": vault_ok,
                   "notes": sum(row["notes"] for row in vault_sources),
                   "sources": vault_sources},
-        "mail": {"accounts": mail_accounts},
+        "mail": mail_sum,
         "dossiers": build,
         "sources": sources.discover(),
         # The platform in the registry's own vocabulary (mac/win/linux),
@@ -867,13 +867,22 @@ def steps():
                  if st["vault"]["connected"] else "No vault connected."),
                 unlocks="Brain — grounded answers from your own notes"))
         else:  # mail
+            n = st["mail"]["accounts"]
+            failing = st["mail"].get("failing", 0)
+            detail = (f"{n} account{'s' if n != 1 else ''} connected."
+                      if n else "No mail account connected.")
+            if failing:
+                detail = (f"{n - failing} of {n} polling — "
+                          + st["mail"].get("attention", "one needs attention"))
             out.append(mk(
                 sid, title, opens,
-                "done" if st["mail"]["accounts"] else "todo",
-                (f"{st['mail']['accounts']} account(s) connected."
-                 if st["mail"]["accounts"] else "No mail account connected."),
+                "done" if n else "todo",
+                detail,
                 unlocks="email in Incoming, drafts, receipts",
-                sources=mail_rows))
+                sources=mail_rows,
+                # done AND attention: the account exists, the sign-in does
+                # not. The dashboard paints the dot amber and says why.
+                attention=st["mail"].get("attention", "") if failing else ""))
 
     # A skipped step counts toward neither done nor total: off-Mac the
     # wizard can still complete, and "N of M" never counts a step that
