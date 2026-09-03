@@ -12,6 +12,7 @@ Run: .venv/bin/python -m unittest tests.test_landing_card
 """
 import asyncio
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -107,6 +108,11 @@ class TheCard(_Placed):
         self.assertIsNone(self.card(r))
         self.assertEqual(self.calls(), [])
 
+    @unittest.skipUnless(os.name == "posix",
+                         "drives a stand-in scripts/branch.sh - a shell script "
+                         "Windows CreateProcess cannot run (WinError 193), and "
+                         "branch.sh is Mac-side tooling a Windows install never "
+                         "runs; the card's own logic is covered by the other cases")
     def test_the_card_carries_the_served_instance_and_the_pr(self):
         r = self.placed()
         self.assertTrue(self.offer(r, work=(2, 1)))
@@ -143,6 +149,11 @@ class TheCard(_Placed):
         self.assertIsNotNone(c)
         self.assertEqual(c["test_url"], "")
 
+    @unittest.skipUnless(os.name == "posix",
+                         "drives a stand-in scripts/branch.sh - a shell script "
+                         "Windows CreateProcess cannot run (WinError 193), and "
+                         "branch.sh is Mac-side tooling a Windows install never "
+                         "runs; the card's own logic is covered by the other cases")
     def test_a_dead_branch_sh_is_a_note_on_the_card_never_no_card(self):
         (self.live / "scripts" / "branch.sh").write_text(
             "#!/bin/sh\necho 'error: no free port' >&2\nexit 1\n",
