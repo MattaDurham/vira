@@ -498,25 +498,64 @@ def _run_action(slug, argv, name, post_ok=None):
     return True, "started"
 
 
-def _push_and_note(merge_text):
-    """The post-merge epilogue: push (the standing push-by-default rule)
-    and, if server/ changed, name the restart the owner must run — the
-    server never restarts itself."""
+def _push_and_note(merge_text, slug=None):
+    """The post-merge epilogue: push (the standing push-by-default rule),
+    name the restart if server/ changed — the server never restarts
+    itself — and, once main is pushed, tear the spent branch down."""
     push = gitutil.git(ROOT, "push", timeout=60)
+    pushed = push.returncode == 0
     lines = [("push: " + ((push.stdout or "") + (push.stderr or "")).strip())
-             if push.returncode == 0 else
+             if pushed else
              ("push FAILED: "
               + ((push.stderr or "") + (push.stdout or "")).strip())]
     if "server/" in merge_text:
         lines.append(
             "server code changed — restart is the owner's: "
             "launchctl kickstart -k gui/501/nyc.durham.vira")
+    # TEARDOWN IS PART OF LANDING, NOT A STEP LEFT FOR SOMEONE.
+    #
+    # A landing that ended at the push left the worktree, the local branch
+    # and origin/<branch> behind every time — measured 2026-09-02: 26 of 30
+    # worktrees on this machine were finished work nobody tore down. The
+    # push is the gate, deliberately: `branch.sh discard` keeps a PR open
+    # and origin/<branch> in place while main is unpushed, so running it
+    # BEFORE the push would only do half the job and a failed push leaves
+    # the branch for the sweeper's unpushed-main row to name.
+    if pushed and slug:
+        lines.append(_teardown(slug))
     return "\n".join(lines)
 
 
+def _teardown(slug):
+    """The last hop of a landing: `branch.sh discard <slug>` after the
+    push. On a branch.sh whose merge already tore the local worktree and
+    branch down this finishes the PR side (the wait for GitHub's Merged
+    flip, then origin/<branch>); on one that did not, it does all of it.
+    cmd_discard tolerates a worktree and a local branch that are already
+    gone, which is what makes the same call right in both cases. Never a
+    second implementation of teardown — branch.sh owns the rules, and a
+    refusal there is passed through as a NOTE naming the manual command,
+    never as a failure of work that has already landed."""
+    argv = [str(ROOT / "scripts" / "branch.sh"), "discard", slug]
+    try:
+        out = subprocess.run(
+            argv, cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=ACTION_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        return (f"teardown did not run ({e}) — run: "
+                f"scripts/branch.sh discard {slug}")
+    text = ((out.stdout or "") + (out.stderr or "")).strip()
+    if out.returncode != 0:
+        return (f"teardown HELD — run: scripts/branch.sh discard {slug}\n"
+                + text)
+    return "teardown: " + text
+
+
 def merge(slug):
-    """branch.sh merge <slug>, then the push/restart epilogue."""
-    return _run_action(slug, ["merge", slug], "merge", post_ok=_push_and_note)
+    """branch.sh merge <slug>, then the push/restart/teardown epilogue."""
+    return _run_action(slug, ["merge", slug], "merge",
+                       post_ok=lambda text: _push_and_note(text, slug))
 
 
 def discard(slug, force=False):
@@ -1001,7 +1040,7 @@ def _merge_sync(slug):
     text = ((out.stdout or "") + (out.stderr or "")).strip()
     if out.returncode != 0:
         return False, text
-    extra = _push_and_note(text)
+    extra = _push_and_note(text, slug)
     if extra:
         text = text + "\n" + extra
     return True, text
