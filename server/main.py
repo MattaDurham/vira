@@ -2525,6 +2525,91 @@ def api_mail_imap_add(req: ImapAddReq):
         raise HTTPException(400, str(e))
 
 
+class ImapProbeReq(BaseModel):
+    email: str
+    host: str = ""
+    password: str
+
+
+@app.get("/api/mail/accounts")
+def api_mail_accounts():
+    """Every configured mailbox with its classified health — the Config
+    mail card. Live watcher health first, the on-disk snapshot behind it
+    (a passive clone runs no watcher and says so via `stale`)."""
+    return mail.accounts_view(mail_watcher.health, mail_watcher.poll)
+
+
+@app.get("/api/mail/imap/host")
+def api_mail_imap_host(email: str = ""):
+    return {"host": mail.default_host(email)}
+
+
+@app.post("/api/mail/imap/test")
+def api_mail_imap_test(req: ImapProbeReq):
+    """One real login, nothing written — so the form can say what is wrong
+    with a password BEFORE it is saved. Allowed on passive instances: it
+    reads the network and touches no store."""
+    return mail.probe_imap(req.email, req.host, req.password)
+
+
+class ImapReconnectReq(BaseModel):
+    email: str
+    password: str
+    host: str = ""
+    verify: bool = True
+
+
+@app.post("/api/mail/imap/reconnect")
+def api_mail_imap_reconnect(req: ImapReconnectReq):
+    if os.environ.get("VIRA_PASSIVE"):
+        raise HTTPException(400, "passive test instance — the password would "
+                                 "land in the machine-wide secrets store")
+    try:
+        r = mail.reconnect_imap(req.email, req.password, req.host, req.verify)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # The very next answer the card gets is a real poll, not last cycle's
+    # failure — a reconnect that still reads red for a minute reads as broken.
+    try:
+        r["health"] = mail_watcher.check_account(req.email)
+    except Exception as e:  # noqa: BLE001 — the reconnect itself landed
+        r["health_error"] = str(e)[:200]
+    return r
+
+
+class MailRemoveReq(BaseModel):
+    email: str
+    type: str | None = None
+
+
+@app.post("/api/mail/account/remove")
+def api_mail_account_remove(req: MailRemoveReq):
+    if os.environ.get("VIRA_PASSIVE"):
+        raise HTTPException(400, "passive test instance — mail accounts aren't "
+                                 "removed here")
+    r = mail.remove_account(req.email, req.type)
+    for a in ([req.email] if r["removed"] else []):
+        mail_watcher.status.pop(a, None)
+        for k in list(mail_watcher.health):
+            if k == a or k == "graph:" + a:
+                if req.type is None or (k.startswith("graph:")) == (req.type == "graph"):
+                    mail_watcher.health.pop(k, None)
+    return r
+
+
+class MailRecheckReq(BaseModel):
+    email: str
+
+
+@app.post("/api/mail/recheck")
+def api_mail_recheck(req: MailRecheckReq):
+    """Poll one mailbox now and return its fresh health."""
+    try:
+        return mail_watcher.check_account(req.email)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 class DraftReq(BaseModel):
     to: str
     subject: str = ""

@@ -28,10 +28,19 @@ from pathlib import Path
 
 from . import channels
 from . import data as crm
-from . import secrets, settings
+from . import jsonstore, secrets, settings
 
 ACCOUNTS = channels.ACCOUNTS
 STATE = Path(__file__).resolve().parent.parent / "data" / "mail-state.json"
+# The watcher's per-account health, written after every poll so a process
+# that does not hold the watcher (onboard.status, a CLI) can still say
+# which account is failing. Regenerable; the watcher rewrites it each cycle.
+HEALTH = Path(__file__).resolve().parent.parent / "data" / "mail-health.json"
+# A health entry older than this many poll intervals reads as "stale" —
+# the honest word for a snapshot nothing has refreshed (a passive clone,
+# a watcher that is down).
+STALE_POLLS = 3
+PROBE_TIMEOUT_S = 20
 
 
 def keychain_service():
@@ -80,6 +89,276 @@ def add_imap_account(account_email, host, password):
     accts.append({"email": account_email, "host": host})
     _save_accounts(accts)
     return {"email": account_email, "host": host, "added": True}
+
+
+
+# ---------- account kinds, hosts, and what a failure means ----------
+
+_HOSTS = {
+    "gmail.com": "imap.gmail.com", "googlemail.com": "imap.gmail.com",
+    "outlook.com": "outlook.office365.com", "hotmail.com": "outlook.office365.com",
+    "live.com": "outlook.office365.com", "msn.com": "outlook.office365.com",
+    "icloud.com": "imap.mail.me.com", "me.com": "imap.mail.me.com",
+    "mac.com": "imap.mail.me.com",
+    "yahoo.com": "imap.mail.yahoo.com", "aol.com": "imap.aol.com",
+    "fastmail.com": "imap.fastmail.com",
+}
+GMAIL_APP_PASSWORDS = "https://myaccount.google.com/apppasswords"
+
+
+def default_host(account_email):
+    """The IMAP host an address almost certainly uses — the consumer
+    providers by table, anything else the conventional imap.<domain>. A
+    suggestion for the form to prefill, never a fact the probe skips."""
+    addr = (account_email or "").strip().lower()
+    if "@" not in addr:
+        return ""
+    domain = addr.rsplit("@", 1)[1]
+    return _HOSTS.get(domain) or ("imap." + domain if domain else "")
+
+
+def account_kind(acct):
+    """graph | gmail | imap — what the row IS, for the card's glyph, its
+    label and the fix text a failure carries."""
+    if acct.get("type") == "graph":
+        return "graph"
+    host = (acct.get("host") or "").lower()
+    addr = (acct.get("email") or "").lower()
+    if "gmail" in host or addr.endswith(("@gmail.com", "@googlemail.com")):
+        return "gmail"
+    return "imap"
+
+
+KIND_LABEL = {"graph": "Microsoft 365", "gmail": "Gmail", "imap": "IMAP"}
+
+_AUTH_RE = re.compile(
+    r"authenticat|invalid credentials|login failed|invalid_grant|aadsts|"
+    r"token (?:has )?expired|refresh token|unauthori[sz]ed|\[authenticationfailed\]|"
+    r"application-specific password|app password", re.I)
+_NET_RE = re.compile(
+    r"timed? ?out|getaddrinfo|nodename nor servname|name or service not known|"
+    r"connection refused|unreachable|network is|ssl|eof occurred|"
+    r"connection reset|no route to host|temporarily unavailable", re.I)
+
+
+def classify(status_text, kind="imap"):
+    """The watcher's raw status string read as a state the owner can act
+    on. `fix` is the plain-English next step for THIS kind of account, so
+    the card never shows a bare IMAP error code as its whole explanation.
+    The raw text still rides along as `detail` — it is the evidence."""
+    raw = (status_text or "").strip()
+    low = raw.lower()
+    label = KIND_LABEL.get(kind, "IMAP")
+    if not raw:
+        return {"state": "unknown", "title": "Not checked yet",
+                "fix": "Vira checks every mailbox about once a minute.",
+                "detail": ""}
+    if low == "ok":
+        return {"state": "ok", "title": "Connected", "fix": "", "detail": ""}
+    if low.startswith("no password"):
+        return {"state": "no_password", "title": "No password on file",
+                "fix": f"Enter the {label} password below to connect this "
+                       "mailbox.", "detail": raw}
+    if kind == "graph" and low.startswith("not connected"):
+        return {"state": "not_connected", "title": "Not signed in",
+                "fix": "Sign in again with a one-time device login.",
+                "detail": raw}
+    if _AUTH_RE.search(low):
+        if kind == "gmail":
+            fix = ("Gmail rejected the app password. Google revokes app "
+                   "passwords when you change your Google password or turn "
+                   "off 2-step verification. Make a new one and reconnect.")
+        elif kind == "graph":
+            fix = ("Microsoft no longer accepts the saved sign-in. Reconnect "
+                   "with a fresh device login — no password is stored.")
+        else:
+            fix = ("The server rejected the sign-in. Enter the current "
+                   "password to reconnect.")
+        return {"state": "auth", "title": "Sign-in rejected", "fix": fix,
+                "detail": raw}
+    if _NET_RE.search(low):
+        return {"state": "network", "title": "Could not reach the server",
+                "fix": "Usually transient. If it persists, check the host "
+                       "name and that this machine is online.",
+                "detail": raw}
+    return {"state": "error", "title": "Polling failed",
+            "fix": "Check now to retry; reconnect if it keeps failing.",
+            "detail": raw}
+
+
+def probe_imap(account_email, host, password):
+    """One real IMAP login, then logout. Returns {ok: True, host} or
+    {ok: False, state, title, fix, detail} — the classified failure, never
+    an exception, so the form can render what went wrong before anything
+    is saved. Writes nothing."""
+    addr = (account_email or "").strip().lower()
+    host = (host or "").strip() or default_host(addr)
+    if "@" not in addr:
+        return {"ok": False, **classify("invalid address", "imap"),
+                "title": "Enter an email address", "state": "error"}
+    if not host:
+        return {"ok": False, "state": "error", "title": "Enter the IMAP host",
+                "fix": "Gmail is imap.gmail.com.", "detail": ""}
+    if not password:
+        return {"ok": False, "state": "no_password",
+                "title": "Enter the password", "fix": "", "detail": ""}
+    kind = account_kind({"email": addr, "host": host})
+    try:
+        con = imaplib.IMAP4_SSL(host, timeout=PROBE_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001 — network failures are the point
+        return {"ok": False, **classify(str(e)[:200] or "connect failed", kind)}
+    try:
+        con.login(addr, password)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, **classify(str(e)[:200] or "login failed", kind)}
+    finally:
+        try:
+            con.logout()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "host": host, "kind": kind}
+
+
+def reconnect_imap(account_email, password, host=None, verify=True):
+    """Replace the password on file for an EXISTING IMAP account — the
+    answer to a mailbox that stopped signing in. The watermark in
+    mail-state.json is kept, so nothing already seen is re-emitted into
+    the feed. With verify (the default) the new password is tried against
+    the server FIRST and a rejected one is never stored: saving a bad
+    password would only move the failure one poll later."""
+    addr = (account_email or "").strip().lower()
+    accts = load_accounts()
+    row = next((a for a in accts
+                if (a.get("email") or "").strip().lower() == addr
+                and a.get("type") != "graph"), None)
+    if row is None:
+        raise ValueError(f"{addr or 'that address'} is not a connected "
+                         "IMAP mailbox — add it instead")
+    if not password:
+        raise ValueError("a password is required")
+    host = (host or "").strip() or row.get("host") or default_host(addr)
+    if verify:
+        r = probe_imap(addr, host, password)
+        if not r["ok"]:
+            raise ValueError(f"{r['title']}: {r['fix']} ({r['detail']})"
+                             if r.get("detail") else f"{r['title']}. {r['fix']}")
+    secrets.set(keychain_service(), addr, password)
+    if row.get("host") != host:
+        row["host"] = host
+        _save_accounts(accts)
+    return {"email": addr, "host": host, "verified": bool(verify)}
+
+
+def remove_account(account_email, kind=None):
+    """Take a mailbox out of Vira: the row, its secret (the IMAP password
+    or the Graph refresh token), its watermark and its health entry.
+    `kind` narrows to graph or imap when one address carries both. Returns
+    how many rows went; zero is not an error."""
+    from . import msgraph
+    addr = (account_email or "").strip().lower()
+    accts = load_accounts()
+    keep, gone = [], []
+    for a in accts:
+        same = (a.get("email") or "").strip().lower() == addr
+        is_graph = a.get("type") == "graph"
+        if same and (kind is None or (kind == "graph") == is_graph):
+            gone.append(a)
+        else:
+            keep.append(a)
+    if not gone:
+        return {"removed": 0, "email": addr}
+    _save_accounts(keep)
+    for a in gone:
+        if a.get("type") == "graph":
+            secrets.delete(settings.keychain_service(msgraph.KEYCHAIN_SERVICE), addr)
+        else:
+            secrets.delete(keychain_service(), addr)
+    state = jsonstore.read(STATE, {})
+    for k in (addr, "graph:" + addr, "graph_seen:" + addr):
+        if kind is None or (k == addr) == (kind != "graph"):
+            state.pop(k, None)
+    jsonstore.write_atomic(STATE, state)
+    health = jsonstore.read(HEALTH, {})
+    for a in gone:
+        health.pop(_health_key(a), None)
+    jsonstore.write_atomic(HEALTH, health, indent=1)
+    return {"removed": len(gone), "email": addr}
+
+
+def _health_key(acct):
+    # One address can carry an IMAP row AND a Graph row; health is per row.
+    return (("graph:" if acct.get("type") == "graph" else "")
+            + (acct.get("email") or "").strip().lower())
+
+
+def health_snapshot():
+    """The last health the watcher wrote, for a process that does not hold
+    it (onboard.status reads this to say a mail row needs attention)."""
+    return jsonstore.read(HEALTH, {})
+
+
+def summary(health=None):
+    """{accounts, ok, failing, attention} over the configured rows — the
+    one sentence a Config row needs. A row with no health yet is neither
+    ok nor failing."""
+    health = health if health is not None else health_snapshot()
+    accts = load_accounts()
+    ok = failing = 0
+    names = []
+    for a in accts:
+        h = health.get(_health_key(a)) or {}
+        st = h.get("state")
+        if st == "ok":
+            ok += 1
+        elif st in ("auth", "no_password", "not_connected", "error", "network"):
+            failing += 1
+            names.append(a.get("email") or "")
+    attention = ""
+    if failing == 1:
+        attention = f"{names[0]} needs attention"
+    elif failing > 1:
+        attention = f"{failing} accounts need attention"
+    return {"accounts": len(accts), "ok": ok, "failing": failing,
+            "attention": attention}
+
+
+def accounts_view(live_health=None, poll_seconds=60):
+    """Every configured mailbox with its kind, host and classified health
+    — what the Config mail card renders. Live watcher health outranks the
+    snapshot; a snapshot older than STALE_POLLS polls is marked stale
+    rather than passed off as current."""
+    from . import msgraph
+    snap = health_snapshot()
+    now = time.time()
+    rows = []
+    for a in load_accounts():
+        key = _health_key(a)
+        h = (live_health or {}).get(key) or snap.get(key) or {}
+        kind = account_kind(a)
+        cls = classify(h.get("status", ""), kind)
+        checked = h.get("checked_at")
+        stale = bool(checked) and (now - checked) > STALE_POLLS * poll_seconds
+        if not checked:
+            cls = classify("", kind)
+        row = {
+            "email": (a.get("email") or "").strip().lower(),
+            "kind": kind, "label": KIND_LABEL[kind],
+            "host": a.get("host") or ("graph.microsoft.com" if kind == "graph" else ""),
+            "state": cls["state"], "title": cls["title"], "fix": cls["fix"],
+            "detail": cls["detail"], "checked_at": checked,
+            "ok_at": h.get("ok_at"), "fail_since": h.get("fail_since"),
+            "stale": stale, "key": key,
+        }
+        if kind == "graph":
+            row["signed_in"] = msgraph.connected(row["email"])
+            if not row["signed_in"] and row["state"] in ("ok", "unknown"):
+                row.update(classify("not connected", "graph"))
+        if kind == "gmail":
+            row["help_url"] = GMAIL_APP_PASSWORDS
+        rows.append(row)
+    return {"accounts": rows, "summary": summary(
+        {r["key"]: {"state": r["state"]} for r in rows}),
+        "poll_seconds": poll_seconds}
 
 
 def _decode_header(raw):
@@ -194,7 +473,10 @@ class MailWatcher:
         self.poll = poll_seconds
         self.state = {}
         self.status = {}                  # email -> ok | error text | "no password"
+        # per-row health: {status, state, checked_at, ok_at, fail_since}
+        self.health = {}
         self._stop = threading.Event()
+        self._lock = threading.RLock()    # one poll of one account at a time
 
     def accounts(self):
         return channels.mail_accounts(ACCOUNTS)
@@ -216,12 +498,62 @@ class MailWatcher:
     def _run(self):
         while not self._stop.is_set():
             for acct in self.accounts():
-                try:
-                    self._poll_account(acct)
-                    self.status[acct["email"]] = "ok"
-                except Exception as e:  # noqa: BLE001 — keep polling others
-                    self.status[acct["email"]] = str(e)[:200]
+                self._poll_one(acct)
+            self._write_health()
             self._stop.wait(self.poll)
+
+    def _poll_one(self, acct):
+        """Poll one account and record what happened. The status string
+        keeps its shape (the feed's filter chips read it); the health
+        entry carries the classified state and the clock."""
+        addr = acct["email"]
+        with self._lock:
+            # _poll_account names the two states it can see itself (no
+            # password / not connected) and otherwise says nothing, so the
+            # slot is cleared first: a clean return over a stale error
+            # text must read as ok, not as last cycle's failure.
+            self.status.pop(addr, None)
+            try:
+                self._poll_account(acct)
+                self.status[addr] = self.status.get(addr) or "ok"
+            except Exception as e:  # noqa: BLE001 — keep polling others
+                self.status[addr] = str(e)[:200] or "error"
+            return self._record(acct, self.status[addr])
+
+    def _record(self, acct, text):
+        now = time.time()
+        key = _health_key(acct)
+        prev = self.health.get(key) or {}
+        cls = classify(text, account_kind(acct))
+        entry = {"status": text, "state": cls["state"], "checked_at": now,
+                 "ok_at": now if cls["state"] == "ok" else prev.get("ok_at"),
+                 "fail_since": None if cls["state"] == "ok"
+                 else (prev.get("fail_since") or now)}
+        self.health[key] = entry
+        return entry
+
+    def _write_health(self):
+        try:
+            jsonstore.write_atomic(HEALTH, self.health, indent=1)
+        except OSError:
+            pass  # a snapshot nobody could write is not a reason to stop polling
+
+    def check_account(self, account_email):
+        """Poll ONE account right now (the card's Check now / the moment
+        after a reconnect) and return its fresh health entry. Same code
+        path as the loop, so the answer is what the loop would say."""
+        addr = (account_email or "").strip().lower()
+        if not self.state:
+            self._load_state()
+        hits = [a for a in self.accounts()
+                if (a.get("email") or "").strip().lower() == addr]
+        if not hits:
+            raise ValueError(f"{addr or 'that address'} is not a connected mailbox")
+        out = None
+        for acct in hits:
+            out = self._poll_one(acct)
+        self._write_health()
+        return out
 
     def _poll_account(self, acct):
         if acct.get("type") == "graph":

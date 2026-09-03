@@ -10399,86 +10399,421 @@ setTimeout(async () => {
   } catch { /* offline or not a clone — stay quiet */ }
 }, 6000);
 
-async function renderMailAccounts() {
-  const res = await api("/api/feed");
-  const box = $("#mail-accounts");
+// ---- mail accounts: the Config mail card's live list -------------------
+// Every row renders from /api/mail/accounts — kind, host, and the watcher's
+// CLASSIFIED health (server/mail.py classify): a bare IMAP error code is
+// evidence, never the whole explanation. A failing row carries its fix and
+// the one control that performs it, inline. Every action ends in
+// loadSetup(), which repaints the hero, the row and this list from the
+// world — the card never tells itself a state it did not just read.
+
+let mailView = null;      // the last /api/mail/accounts payload
+
+// After a mail action: repaint the account list from its own route (fast,
+// ~0.2s) and THEN refresh the dashboard (hero + row) through loadSetup,
+// whose /api/onboard/steps probes every provider CLI and takes seconds.
+// The owner sees the row they acted on change first.
+async function refreshMail() {
+  await renderMailAccounts().catch(() => {});
+  return loadSetup();
+}
+
+function mailWhen(ts) {
+  return ts ? appScoredWhen(new Date(ts * 1000).toISOString()) : "";
+}
+
+function mkInput(type, placeholder) {
+  const i = el("input");
+  i.className = "search";
+  i.type = type;
+  i.placeholder = placeholder;
+  i.spellcheck = false;
+  i.autocomplete = type === "password" ? "new-password" : "off";
+  return i;
+}
+
+// `box` is passed by cardMail because the card is built DETACHED (renderSetup
+// attaches the pane last) — a document query from inside the build misses
+// it and the list sits on "Reading account health…" forever (the
+// cardChannels / cardNotifications trap). Other callers query.
+async function renderMailAccounts(box) {
+  box = box || $("#mail-accounts");
   if (!box) return;
-  box.innerHTML = "";
-  const entries = Object.entries(res.mail || {});
-  if (!entries.length) {
-    box.appendChild(el("div", "hint", "No mail accounts configured."));
+  let v;
+  try {
+    v = await api("/api/mail/accounts");
+  } catch (e) {
+    box.replaceChildren(el("p", "hint warn",
+      "Could not read the mail accounts: " + errText(e)));
     return;
   }
-  entries.forEach(([addr, status]) => {
-    const line = el("div", "mail-acct");
-    line.appendChild(el("b", null, addr));
-    line.appendChild(el("span", "mail-status" + (status === "ok" ? " ok" : ""), status));
-    box.appendChild(line);
+  mailView = v;
+  box.replaceChildren();
+  if (!v.accounts.length) {
+    box.appendChild(el("p", "acct-empty",
+      "No mailbox connected yet. Add one below — Vira polls it about once a "
+      + "minute and folds new mail into Incoming."));
+    return;
+  }
+  v.accounts.forEach((a) => box.appendChild(acctRow(a)));
+}
+
+const ACCT_GLYPH = { graph: "M", gmail: "G", imap: "@" };
+
+function acctRow(a) {
+  const failing = !["ok", "unknown"].includes(a.state);
+  const row = el("div", "acct" + (failing ? " failing" : a.state === "ok" ? " ok" : ""));
+  row.dataset.email = a.email;
+  const head = el("div", "acct-head");
+  head.appendChild(el("span", "acct-glyph k-" + a.kind, ACCT_GLYPH[a.kind] || "@"));
+  const main = el("div", "acct-main");
+  main.appendChild(el("div", "acct-addr", a.email));
+  const meta = [a.label];
+  if (a.kind === "graph") meta.push("also feeds the work calendar");
+  else if (a.host) meta.push(a.host);
+  if (a.checked_at)
+    meta.push((a.stale ? "last checked " : "checked ") + mailWhen(a.checked_at));
+  else meta.push("not checked yet");
+  main.appendChild(el("div", "acct-meta", meta.join(" · ")));
+  head.appendChild(main);
+  let pillCls = "p-attn", pillTxt = a.title.toLowerCase();
+  if (a.state === "ok") { pillCls = a.stale ? "p-dim" : "p-ok"; pillTxt = a.stale ? "stale" : "polling"; }
+  else if (a.state === "unknown") { pillCls = "p-dim"; pillTxt = "not checked"; }
+  head.appendChild(el("span", "dash-pill " + pillCls, pillTxt));
+  const acts = el("div", "acct-acts");
+  const chk = el("button", "btn small ghost", "Check now");
+  chk.onclick = () => acctCheck(chk, a);
+  acts.appendChild(chk);
+  if (!failing) {
+    const re = el("button", "btn small ghost",
+      a.kind === "graph" ? "Sign in again" : "Change password");
+    re.onclick = () => toggleReconnect(row, a);
+    acts.appendChild(re);
+  }
+  const rm = el("button", "btn small ghost danger", "Remove");
+  rm.onclick = (e) => acctRemove(e, a);
+  acts.appendChild(rm);
+  head.appendChild(acts);
+  row.appendChild(head);
+
+  if (failing) {
+    const issue = el("div", "acct-issue");
+    const t = el("div", "acct-issue-title", a.title);
+    if (a.fail_since)
+      t.appendChild(el("span", "acct-since", "since " + mailWhen(a.fail_since)));
+    issue.appendChild(t);
+    if (a.fix) issue.appendChild(el("p", "acct-fix", a.fix));
+    if (a.detail) {
+      const d = el("code", "acct-detail", a.detail);
+      d.title = "what the server said";
+      issue.appendChild(d);
+    }
+    const ia = el("div", "acct-issue-acts");
+    const re = el("button", "btn small primary",
+      a.kind === "graph" ? "Sign in again" : "Reconnect");
+    re.onclick = () => toggleReconnect(row, a);
+    ia.appendChild(re);
+    if (a.help_url) {
+      const h = el("button", "btn small ghost ext", "Make a Gmail app password");
+      h.onclick = () => window.open(a.help_url, "_blank", "noopener");
+      ia.appendChild(h);
+    }
+    issue.appendChild(ia);
+    row.appendChild(issue);
+  }
+  row.appendChild(el("div", "acct-form-host"));
+  return row;
+}
+
+function toggleReconnect(row, a) {
+  const host = row.querySelector(".acct-form-host");
+  if (host.children.length) { host.replaceChildren(); return; }
+  host.appendChild(a.kind === "graph" ? graphReconnectForm(a) : imapReconnectForm(a));
+  const inp = host.querySelector("input");
+  if (inp) inp.focus();
+}
+
+// Paint a probe/reconnect result into the form's out line.
+function acctOut(out, r) {
+  out.hidden = false;
+  out.classList.toggle("ok", !!r.ok);
+  out.classList.toggle("warn", !r.ok);
+  out.replaceChildren();
+  if (r.ok) { out.textContent = r.text || "Signed in."; return; }
+  out.appendChild(el("b", "", r.title || "Failed"));
+  if (r.fix) out.appendChild(el("span", "", " " + r.fix));
+  if (r.detail) out.appendChild(el("code", "acct-detail", r.detail));
+}
+
+function imapReconnectForm(a) {
+  const f = el("div", "acct-form");
+  f.dataset.kind = "imap";
+  f.appendChild(el("div", "acct-form-title", "New password for " + a.email));
+  const grid = el("div", "acct-form-row");
+  const pw = mkInput("password", a.kind === "gmail" ? "new app password" : "password");
+  grid.appendChild(pw);
+  const hostIn = mkInput("text", "imap.example.com");
+  hostIn.value = a.host || "";
+  // Gmail's host never changes; a generic IMAP mailbox's might, and a
+  // network failure is exactly when the owner would want to correct it.
+  if (a.kind !== "gmail") grid.appendChild(hostIn);
+  f.appendChild(grid);
+  const acts = el("div", "acct-form-acts");
+  const test = el("button", "btn small ghost", "Test");
+  const save = el("button", "btn small primary", "Save & reconnect");
+  acts.appendChild(test); acts.appendChild(save);
+  f.appendChild(acts);
+  const out = el("p", "acct-form-out"); out.hidden = true;
+  f.appendChild(out);
+  const body = () => ({ email: a.email, host: hostIn.value.trim(), password: pw.value });
+  test.onclick = async () => {
+    if (!pw.value) { pw.focus(); return; }
+    test.disabled = true; test.textContent = "testing…";
+    try {
+      const r = await post("/api/mail/imap/test", body());
+      acctOut(out, r.ok ? { ok: true, text: "Signed in as " + a.email + " — save to reconnect." } : r);
+    } catch (e) { acctOut(out, { title: "Test failed", fix: errText(e) }); }
+    test.disabled = false; test.textContent = "Test";
+  };
+  save.onclick = async () => {
+    if (!pw.value) { pw.focus(); return; }
+    save.disabled = true; save.textContent = "reconnecting…";
+    try {
+      const r = await post("/api/mail/imap/reconnect", body());
+      toast(a.email + " reconnected" + (r.health && r.health.state === "ok"
+        ? " — polling again" : ""));
+      pw.value = "";
+      await refreshMail();
+    } catch (e) {
+      acctOut(out, { title: "Not saved", fix: errText(e) });
+      save.disabled = false; save.textContent = "Save & reconnect";
+    }
+  };
+  pw.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+  f.appendChild(el("p", "hint",
+    "Vira tries the password against the server before saving it — a rejected "
+    + "one is never stored. Your place in the mailbox is kept, so nothing "
+    + "already in Incoming repeats."));
+  return f;
+}
+
+function graphReconnectForm(a) {
+  const f = el("div", "acct-form");
+  f.dataset.kind = "graph";
+  f.appendChild(el("div", "acct-form-title", "Sign in to Microsoft 365 again"));
+  const acts = el("div", "acct-form-acts");
+  const btn = el("button", "btn small primary", "Start device login");
+  acts.appendChild(btn);
+  f.appendChild(acts);
+  const out = el("p", "acct-form-out"); out.hidden = true;
+  f.appendChild(out);
+  btn.onclick = () => graphConnect(a.email, out, btn, () => refreshMail());
+  f.appendChild(el("p", "hint",
+    "A one-time device login: a code appears here, you approve it at "
+    + "microsoft.com/devicelogin, and the mailbox and the work calendar "
+    + "reconnect. No password is stored."));
+  return f;
+}
+
+async function acctCheck(btn, a) {
+  btn.disabled = true; btn.textContent = "checking…";
+  try {
+    const h = await post("/api/mail/recheck", { email: a.email });
+    toast(a.email + ": " + (h.state === "ok" ? "polling — signed in fine"
+      : (h.status || h.state)));
+    await refreshMail();
+  } catch (e) {
+    toast(errText(e));
+    btn.disabled = false; btn.textContent = "Check now";
+  }
+}
+
+function acctRemove(e, a) {
+  confirmPopup({
+    x: e.clientX, y: e.clientY, danger: true,
+    title: "Remove " + a.email + "?",
+    body: ["Vira forgets the mailbox, its saved " + (a.kind === "graph"
+      ? "sign-in" : "password") + " and its place in the inbox.",
+      "Mail already in Incoming stays."],
+    cta: "Remove",
+    onConfirm: async () => {
+      try {
+        await post("/api/mail/account/remove", { email: a.email, type: a.kind === "graph" ? "graph" : "imap" });
+        toast(a.email + " removed");
+        await refreshMail();
+      } catch (err) { toast(errText(err)); }
+    },
   });
 }
 
+// ---- adding a mailbox --------------------------------------------------
+// The add forms hide behind two "+" buttons once a mailbox exists (a
+// continuing owner does not need three empty fields on every visit) and
+// open by themselves when there is nothing yet (a stranger should not have
+// to find a button to do the one thing the card is for).
+
+function mailAddForms(card, st) {
+  const bar = el("div", "dash-add");
+  bar.appendChild(el("span", "dash-add-label", "Add a mailbox"));
+  const bi = el("button", "btn small ghost add", "Gmail or IMAP");
+  const bm = el("button", "btn small ghost add", "Microsoft 365");
+  bar.appendChild(bi); bar.appendChild(bm);
+  const host = el("div", "acct-form-host add");
+  const show = (kind) => {
+    const cur = host.firstChild && host.firstChild.dataset.kind;
+    if (cur === kind) { host.replaceChildren(); bi.classList.remove("on"); bm.classList.remove("on"); return; }
+    host.replaceChildren(kind === "imap" ? imapAddForm(st) : graphAddForm());
+    bi.classList.toggle("on", kind === "imap");
+    bm.classList.toggle("on", kind === "graph");
+    const inp = host.querySelector("input");
+    if (inp) inp.focus({ preventScroll: true });
+  };
+  bi.onclick = () => show("imap");
+  bm.onclick = () => show("graph");
+  card.appendChild(bar);
+  card.appendChild(host);
+  if (!(st.mail && st.mail.accounts)) show("imap");
+}
+
+function imapAddForm(st) {
+  const f = el("div", "acct-form");
+  f.dataset.kind = "imap";
+  f.appendChild(el("div", "acct-form-title", "Connect a Gmail or IMAP mailbox"));
+  const r1 = el("div", "acct-form-row");
+  const email = mkInput("email", "you@gmail.com");
+  const hostIn = mkInput("text", "imap.gmail.com");
+  r1.appendChild(email); r1.appendChild(hostIn);
+  f.appendChild(r1);
+  const r2 = el("div", "acct-form-row");
+  const pw = mkInput("password", "app password");
+  r2.appendChild(pw);
+  f.appendChild(r2);
+  const acts = el("div", "acct-form-acts");
+  const test = el("button", "btn small ghost", "Test");
+  const add = el("button", "btn small primary", "Add mailbox");
+  const help = el("button", "btn small ghost ext", "Make a Gmail app password");
+  help.hidden = true;
+  help.onclick = () => window.open("https://myaccount.google.com/apppasswords", "_blank", "noopener");
+  acts.appendChild(test); acts.appendChild(add); acts.appendChild(help);
+  f.appendChild(acts);
+  const out = el("p", "acct-form-out"); out.hidden = true;
+  f.appendChild(out);
+  f.appendChild(el("p", "hint",
+    "Gmail needs an app password, not your Google password. "
+    + keyStoreSentence(st)));
+  // The host follows the address until the owner types one of their own.
+  let hostAuto = true;
+  hostIn.addEventListener("input", () => { hostAuto = !hostIn.value; });
+  email.addEventListener("input", async () => {
+    const v = email.value.trim().toLowerCase();
+    help.hidden = !/@(gmail|googlemail)\.com$/.test(v);
+    if (!hostAuto || !v.includes("@")) return;
+    try {
+      const r = await api("/api/mail/imap/host?email=" + encodeURIComponent(v));
+      if (hostAuto && r.host) hostIn.value = r.host;
+    } catch { /* the owner can type it */ }
+  });
+  const body = () => ({ email: email.value.trim(), host: hostIn.value.trim(), password: pw.value });
+  let verified = false, forced = false;
+  test.onclick = async () => {
+    test.disabled = true; test.textContent = "testing…";
+    try {
+      const r = await post("/api/mail/imap/test", body());
+      verified = !!r.ok;
+      if (r.ok && r.host && !hostIn.value) hostIn.value = r.host;
+      acctOut(out, r.ok ? { ok: true, text: "Signed in — add it to start polling." } : r);
+      add.textContent = r.ok ? "Add mailbox" : "Add anyway";
+      forced = !r.ok;
+    } catch (e) { acctOut(out, { title: "Test failed", fix: errText(e) }); }
+    test.disabled = false; test.textContent = "Test";
+  };
+  add.onclick = async () => {
+    if (!verified && !forced) { await test.onclick(); if (!verified) return; }
+    add.disabled = true; add.textContent = "adding…";
+    try {
+      const r = await post("/api/mail/imap/add", body());
+      toast((r.added ? "Added " : "Updated ") + r.email + " — new mail lands within a minute");
+      await refreshMail();
+    } catch (e) {
+      acctOut(out, { title: "Not added", fix: errText(e) });
+      add.disabled = false; add.textContent = "Add mailbox";
+    }
+  };
+  return f;
+}
+
+function graphAddForm() {
+  const f = el("div", "acct-form");
+  f.dataset.kind = "graph";
+  f.appendChild(el("div", "acct-form-title", "Connect Microsoft 365 / Outlook"));
+  const r1 = el("div", "acct-form-row");
+  const email = mkInput("email", "you@yourtenant.com");
+  r1.appendChild(email);
+  f.appendChild(r1);
+  const acts = el("div", "acct-form-acts");
+  const btn = el("button", "btn small primary", "Sign in with Microsoft");
+  acts.appendChild(btn);
+  f.appendChild(acts);
+  const out = el("p", "acct-form-out"); out.hidden = true;
+  f.appendChild(out);
+  btn.onclick = () => {
+    const v = email.value.trim().toLowerCase();
+    if (!v.includes("@")) { email.focus(); return; }
+    graphConnect(v, out, btn, () => refreshMail());
+  };
+  email.addEventListener("keydown", (e) => { if (e.key === "Enter") btn.click(); });
+  f.appendChild(el("p", "hint",
+    "A one-time device login — you approve a code in the browser; Vira keeps "
+    + "only the refresh token, in your secrets store. Mail and the work "
+    + "calendar both come through."));
+  return f;
+}
+
+// Microsoft 365 device-code login, rendered into `hint` (an element) with
+// `btn` as the control. Shared by the add form and a failing row's Sign in
+// again — one flow, one poller.
 let graphPoll;
-async function graphConnect() {
-  const emailAddr = $("#graph-email").value.trim();
+async function graphConnect(emailAddr, hint, btn, onDone) {
   if (!emailAddr) return;
-  const hint = $("#graph-hint");
-  const btn = $("#graph-connect");
   btn.disabled = true;
+  hint.hidden = false;
+  hint.classList.remove("ok", "warn");
   hint.textContent = "Starting device login…";
   try {
     const res = await post("/api/mail/graph/start", { email: emailAddr });
-    hint.innerHTML = "";
+    hint.replaceChildren();
     hint.append("Open ");
     const a = el("a", null, res.verification_uri.replace("https://", ""));
     a.href = res.verification_uri;
     a.target = "_blank";
-    a.style.color = "var(--accent)";
+    a.rel = "noopener";
     hint.appendChild(a);
-    hint.append(" and enter code ");
-    const code = el("b", null, res.user_code);
-    code.style.letterSpacing = ".08em";
-    hint.appendChild(code);
+    hint.append(" and enter the code ");
+    hint.appendChild(el("b", "acct-code", res.user_code));
+    hint.append(" — this card notices when you finish.");
     graphPoll?.stop();
     graphPoll = startPoll(async (h) => {
+      if (!hint.isConnected) { h.stop(); return; }
       try {
         const st = await api("/api/mail/graph/status?email=" + encodeURIComponent(emailAddr));
         if (st.connected) {
           h.stop();
+          hint.classList.add("ok");
           hint.textContent = "Connected — the feed picks up new mail within a minute.";
           btn.disabled = false;
-          renderMailAccounts().catch(() => {});
+          toast(emailAddr + " connected");
+          if (onDone) onDone();
         } else if (st.error) {
           h.stop();
+          hint.classList.add("warn");
           hint.textContent = "Failed: " + st.error;
           btn.disabled = false;
         }
       } catch { /* server briefly unreachable; keep polling */ }
     }, 3000);
   } catch (e) {
-    hint.textContent = "Failed: " + e.message;
-    btn.disabled = false;
-  }
-}
-
-// Add a Gmail/IMAP mailbox from the Setup mail card. The password rides the
-// server's secrets ladder (Keychain / Credential Manager), never the JSON.
-async function imapAdd(btn, fields) {
-  const hint = $("#imap-hint");
-  btn.disabled = true;
-  hint.textContent = "Adding…";
-  try {
-    const r = await post("/api/mail/imap/add", {
-      email: fields.email.value.trim(),
-      host: fields.host.value.trim(),
-      password: fields.password.value,
-    });
-    hint.textContent = (r.added ? "Added " : "Updated ") + r.email +
-      " — the feed picks up new mail within a minute.";
-    fields.password.value = "";
-    renderMailAccounts().catch(() => {});
-  } catch (e) {
-    hint.textContent = "Failed: " + e.message;
-  } finally {
+    hint.classList.add("warn");
+    hint.textContent = "Failed: " + errText(e);
     btn.disabled = false;
   }
 }
@@ -12571,23 +12906,58 @@ async function setupAct(btn, fn, okMsg) {
 }
 
 // ---- render: the Config dashboard --------------------------------------
-// Config is a boring status board, not a wizard (owner's call, 2026-07-28):
-// grouped rows, each showing its live derived state, each expanding in place
-// to the card that configures it. No sequence, no numbered rail — the
-// first-run sequence lives in the welcome overlay (openFirstrun), which this
-// dashboard buries under System > Welcome setup.
+// Config is a status board, not a wizard (owner's call, 2026-07-28):
+// grouped rows, each showing its live derived state, each expanding in
+// place to the card that configures it. Rebuilt 2026-09-03 to serve BOTH
+// readers at once: a stranger setting up (verb titles, open forms, "not
+// set up" in words) and the owner coming back weeks later (noun titles, a
+// hero that names the one thing that needs attention, forms folded away).
+// Nothing here is stored — every word is re-read from /api/onboard.
+
+// Once a step is done its row stops being an instruction. "Connect mail"
+// is what you do; "Mail" is what you have.
+const DASH_NOUNS = { disk: "Full Disk Access", contacts: "Contacts",
+                     dossiers: "Dossiers", brain: "Brain", mail: "Mail" };
+
+// The state word on the right of a row. The dot is the glance; the word is
+// what a glance cannot carry.
+function dashWord(r) {
+  if (r.pill) return r.pill;
+  if (r.attention) return "needs attention";
+  return { done: "connected", todo: "not set up", blocked: "blocked",
+           skipped: "not on this machine", running: "working",
+           manage: "" }[r.state] || "";
+}
+
+function dashPillClass(r) {
+  if (r.attention || r.state === "blocked") return "p-attn";
+  if (r.state === "done") return "p-ok";
+  if (r.state === "running") return "p-live";
+  return "p-dim";
+}
+
+// Expand one row and bring it into view — the hero's attention chips and
+// the fact tiles both land here.
+function dashJump(id) {
+  leaveManageCard();
+  setupActive = id;
+  if (setupFlow && setupSt) renderSetup(setupFlow, setupSt);
+  const item = $("#setup-body .dash-item.on");
+  if (item) item.scrollIntoView({ block: "start",
+                                  behavior: REDUCED_MOTION ? "auto" : "smooth" });
+}
+
+let setupFlow = null;            // the last /api/onboard/steps, for dashJump
 
 function renderSetup(flow, st) {
   const body = $("#setup-body");
   if (!body) return;
-  const mode = $("#setup-mode");
-  if (mode) mode.textContent = flow.complete
-    ? "all set" : `${flow.done} of ${flow.total} configured`;
-
+  setupFlow = flow;
   const byId = {};
   flow.steps.forEach((s) => { byId[s.id] = s; });
   const ai = byId.ai || { providers: [], active_id: "" };
   const cfg = (setupExtra && setupExtra.config) || {};
+  const x = setupExtra || {};
 
   // One row per AI provider, then the defaults row.
   const aiRows = (ai.providers || []).map((pr) => ({
@@ -12595,6 +12965,7 @@ function renderSetup(flow, st) {
     title: pr.sub_name,
     state: pr.connected ? "done" : "todo",
     tag: pr.id === ai.active_id ? "go-to" : "",
+    pill: pr.connected ? "signed in" : "not connected",
     sub: pr.detail,
     render: (card) => provCard(card, pr, st, ai),
   }));
@@ -12602,8 +12973,9 @@ function renderSetup(flow, st) {
     id: "models",
     title: "Models & backend",
     state: "manage",
+    pill: cfg.ai_backend ? (cfg.ai_backend === "cli" ? "subscription" : "API") : "",
     sub: cfg.ai_backend
-      ? `${cfg.ai_backend === "cli" ? "subscription login" : "API"} · ${cfg.cli_model || ""}`
+      ? `${cfg.ai_backend === "cli" ? "subscription login" : "API"} · ${cfg.cli_model || "provider default"}`
       : "default models per provider",
     render: (card) => backendBlock(card),
   });
@@ -12613,9 +12985,10 @@ function renderSetup(flow, st) {
     if (!s) return null;
     return {
       id,
-      title: s.title,
+      title: (s.state === "done" && DASH_NOUNS[id]) || s.title,
       state: s.state,
-      sub: s.state === "skipped" ? "not on this machine"
+      attention: s.attention || "",
+      sub: s.state === "skipped" ? s.detail
         : (s.blocker ? "blocked — " + s.blocker : s.detail),
       render: (card) => {
         ({ disk: cardDisk, contacts: cardContacts, dossiers: cardDossiers,
@@ -12630,7 +13003,7 @@ function renderSetup(flow, st) {
   const manageRow = (id) => {
     const m = SETUP_MANAGE.find((x) => x.id === id);
     return { id, title: m.title, state: "manage", sub: manageSubline(id),
-             render: (card) => m.render(card, st) };
+             pill: managePill(id), render: (card) => m.render(card, st) };
   };
 
   const groups = [
@@ -12648,7 +13021,24 @@ function renderSetup(flow, st) {
     ] },
   ];
 
+  // What needs the owner, across every group — the hero leads with it.
+  const attn = [];
+  flow.steps.forEach((s) => {
+    if (s.attention) attn.push({ id: s.id, text: s.attention });
+    else if (s.state === "blocked") attn.push({ id: s.id, text: s.title + " is blocked" });
+  });
+  if (x.update && x.update.git && x.update.behind > 0)
+    attn.push({ id: "updates", soft: true,
+                text: `${x.update.behind} update${x.update.behind > 1 ? "s" : ""} ready to install` });
+  const hard = attn.filter((a) => !a.soft);
+
+  const mode = $("#setup-mode");
+  if (mode) mode.textContent = hard.length
+    ? `${hard.length} need${hard.length === 1 ? "s" : ""} attention`
+    : flow.complete ? "all set" : `${flow.done} of ${flow.total} configured`;
+
   body.replaceChildren();
+  body.appendChild(dashHero(flow, st, ai, attn, hard));
   const wrap = el("div", "dash");
   groups.forEach((g) => {
     const sec = el("section", "dash-group");
@@ -12659,14 +13049,79 @@ function renderSetup(flow, st) {
   body.appendChild(wrap);
 }
 
-// A dashboard row: status dot + title + live subline, expanding in place to
-// its configuration card. One expanded at a time (setupActive), so the
-// channel/notify pollers never run for an off-screen card.
+// The hero: one sentence about the whole install, a strip of facts (each
+// a door into its row), and the attention chips. Every number on it is
+// read off the status payload that the rows themselves render from.
+function dashHero(flow, st, ai, attn, hard) {
+  const hero = el("div", "dash-hero" + (hard.length ? " attn" : flow.complete ? " ok" : ""));
+  const title = hard.length
+    ? (hard.length === 1 ? "One thing needs your attention."
+                         : `${hard.length} things need your attention.`)
+    : flow.complete ? "Everything is connected."
+    : `${flow.done} of ${flow.total} set up.`;
+  hero.appendChild(el("div", "dash-hero-title", title));
+  const sub = hard.length
+    ? "Everything else is running. Fix it below and this line goes quiet."
+    : flow.complete
+      ? "Vira is reading this machine, your contacts and your mail on its own. Nothing here needs you today."
+      : "Each row below opens to the one thing it needs. Nothing runs until you say so.";
+  hero.appendChild(el("div", "dash-hero-sub", sub));
+
+  const active = (ai.providers || []).find((p) => p.id === ai.active_id);
+  const nAi = (ai.providers || []).filter((p) => p.connected).length;
+  const m = st.mail || {};
+  const facts = [
+    { id: active ? "prov-" + active.id : "prov-anthropic", k: "go-to AI",
+      v: active ? active.sub_name : "none", ok: !!active },
+    { id: "disk", k: "this Mac", v: st.feed.chat_db === "ok" ? "granted" : "no access",
+      ok: st.feed.chat_db === "ok", na: st.feed.chat_db === "missing" && !(st.platform === "mac") },
+    { id: "contacts", k: "people", v: fmtNum(st.crm.people), ok: st.crm.people > 0 },
+    { id: "dossiers", k: "dossiers", v: fmtNum(st.crm.profiles), ok: st.crm.profiles > 0 },
+    { id: "brain", k: "notes", v: fmtNum(st.vault.notes), ok: st.vault.connected },
+    { id: "mail", k: "mailboxes",
+      v: m.accounts ? (m.failing ? `${m.ok} of ${m.accounts}` : String(m.accounts)) : "0",
+      ok: m.accounts > 0 && !m.failing, attn: !!m.failing },
+  ];
+  if (nAi > 1) facts[0].v += ` +${nAi - 1}`;
+  const strip = el("div", "dash-facts");
+  facts.forEach((f) => {
+    const b = el("button", "dash-fact" + (f.attn ? " attn" : f.ok ? " ok" : ""));
+    b.appendChild(el("span", "dash-fact-v", f.v));
+    b.appendChild(el("span", "dash-fact-k", f.k));
+    b.onclick = () => dashJump(f.id);
+    strip.appendChild(b);
+  });
+  hero.appendChild(strip);
+  if (attn.length) {
+    const chips = el("div", "dash-attn");
+    attn.forEach((a) => {
+      const c = el("button", "dash-chip" + (a.soft ? " soft" : ""));
+      c.appendChild(el("span", "dash-chip-dot"));
+      c.appendChild(el("span", "", a.text));
+      c.onclick = () => dashJump(a.id);
+      chips.appendChild(c);
+    });
+    hero.appendChild(chips);
+  }
+  return hero;
+}
+
+function fmtNum(n) {
+  n = Number(n) || 0;
+  return n >= 10000 ? (Math.round(n / 100) / 10) + "k" : n.toLocaleString();
+}
+
+// A dashboard row: status dot + title + live subline + the state in words,
+// expanding in place to its configuration card. One expanded at a time
+// (setupActive), so the channel/notify pollers never run for an off-screen
+// card.
 function dashRow(r, flow, st) {
   const item = el("div", "dash-item");
   const open = setupActive === r.id && r.render;
+  if (open) item.classList.add("on");
   const row = el("button",
-    "setup-step dash-row s-" + r.state + (open ? " on" : ""));
+    "setup-step dash-row s-" + r.state + (r.attention ? " s-attn" : "")
+    + (open ? " on" : ""));
   row.appendChild(el("span", "setup-dot"));
   const txt = el("div", "setup-step-txt");
   const t = el("div", "setup-step-title", r.title);
@@ -12674,7 +13129,10 @@ function dashRow(r, flow, st) {
   txt.appendChild(t);
   if (r.sub) txt.appendChild(el("div", "setup-step-sub", r.sub));
   row.appendChild(txt);
+  const word = dashWord(r);
+  if (word) row.appendChild(el("span", "dash-pill " + dashPillClass(r), word));
   if (r.render) row.appendChild(el("span", "dash-chev" + (open ? " open" : "")));
+  else row.appendChild(el("span", "dash-chev go"));
   row.onclick = () => {
     if (r.run) { r.run(); return; }
     leaveManageCard();
@@ -13248,7 +13706,8 @@ function cardDossiers(card, step, st) {
   }
   card.appendChild(el("p", "setup-cost", step.cost || ""));
   const row = el("div", "setup-row");
-  const db = el("button", "btn primary", "Build first dossiers");
+  const db = el("button", "btn primary",
+    st.crm.profiles ? "Build more dossiers" : "Build first dossiers");
   db.disabled = step.state === "blocked";
   db.onclick = () => setupAct(db,
     () => api("/api/onboard/dossiers", {
@@ -13338,51 +13797,22 @@ function cardBrain(card, step, st) {
 }
 
 function cardMail(card, step, st) {
-  card.appendChild(el("p", "hint",
-    `${st.mail.accounts} mail ${st.mail.accounts === 1 ? "account" : "accounts"} ` +
-    `connected. Fold Gmail/IMAP or Microsoft 365 into the feed, the brief and ` +
-    `receipts — mail is fetched and stored on this machine.`));
-  (step.sources || []).forEach((row) => card.appendChild(srcTile(row)));
-
-  // Connected accounts + their live status (the retired sheet's Mail card).
-  const acctBox = el("div", null); acctBox.id = "mail-accounts";
+  card.appendChild(el("p", "card-lede",
+    "Vira folds email into Incoming, drafts replies in your voice, reads "
+    + "receipts for the subscriptions ledger and, through Microsoft 365, the "
+    + "work calendar. Mail is fetched by this machine and stays on it."));
+  const head = el("div", "card-sec-head");
+  head.appendChild(el("span", "card-sec-title", "Mailboxes"));
+  const m = st.mail || {};
+  if (m.accounts)
+    head.appendChild(el("span", "card-sec-note",
+      m.failing ? `${m.ok} of ${m.accounts} polling` : `${m.accounts} polling`));
+  card.appendChild(head);
+  const acctBox = el("div", "acct-list"); acctBox.id = "mail-accounts";
+  acctBox.appendChild(el("p", "hint", "Reading account health…"));
   card.appendChild(acctBox);
-  renderMailAccounts().catch(() => {});
-
-  // Microsoft 365 — one-time device-code login.
-  card.appendChild(el("div", "setup-sub", "Microsoft 365 / Outlook"));
-  const gbar = el("div", "setup-row");
-  const gmail = el("input"); gmail.id = "graph-email"; gmail.className = "search";
-  gmail.type = "email"; gmail.placeholder = "you@yourtenant.com";
-  gmail.spellcheck = false;
-  const gbtn = el("button", "btn", "Connect M365");
-  gbtn.onclick = () => graphConnect();
-  gbar.appendChild(gmail); gbar.appendChild(gbtn);
-  card.appendChild(gbar);
-  const ghint = el("p", "hint", ""); ghint.id = "graph-hint";
-  card.appendChild(ghint);
-
-  // Gmail / IMAP — address + host to the app, password to the secrets store.
-  card.appendChild(el("div", "setup-sub", "Gmail / IMAP"));
-  const iemail = el("input"); iemail.className = "search"; iemail.type = "email";
-  iemail.placeholder = "you@gmail.com"; iemail.spellcheck = false;
-  const ihost = el("input"); ihost.className = "search"; ihost.type = "text";
-  ihost.placeholder = "imap.gmail.com"; ihost.spellcheck = false;
-  const ipass = el("input"); ipass.className = "search"; ipass.type = "password";
-  ipass.placeholder = "app password"; ipass.autocomplete = "off";
-  const irow = el("div", "setup-row");
-  irow.appendChild(iemail); irow.appendChild(ihost);
-  const irow2 = el("div", "setup-row");
-  const ibtn = el("button", "btn", "Add mailbox");
-  ibtn.onclick = () => imapAdd(ibtn, { email: iemail, host: ihost, password: ipass });
-  irow2.appendChild(ipass); irow2.appendChild(ibtn);
-  card.appendChild(irow);
-  card.appendChild(irow2);
-  const ihint = el("p", "hint",
-    "Gmail needs an app password (myaccount.google.com/apppasswords). The " +
-    "password is stored in your device's secrets store, never in a file.");
-  ihint.id = "imap-hint";
-  card.appendChild(ihint);
+  renderMailAccounts(acctBox).catch(() => {});
+  mailAddForms(card, st);
 }
 
 // ---- manage cards: the config half of the Setup surface ----------------
@@ -13409,6 +13839,20 @@ function manageSubline(id) {
   if (id === "updates") {
     if (!x.update || !x.update.git) return "";
     return x.update.behind > 0 ? `${x.update.behind} available` : "up to date";
+  }
+  return "";
+}
+
+// The state word for a manage row — a fact where there is one, else nothing.
+function managePill(id) {
+  const x = setupExtra || {};
+  if (id === "notifications" && x.notify) return x.notify.enabled ? "on" : "off";
+  if (id === "updates" && x.update && x.update.git)
+    return x.update.behind > 0 ? `${x.update.behind} available` : "up to date";
+  if (id === "channels") {
+    const n = (x.companion && (x.companion.devices || [])
+      .filter((d) => !d.pending).length) || 0;
+    return n ? `${n} paired` : "";
   }
   return "";
 }

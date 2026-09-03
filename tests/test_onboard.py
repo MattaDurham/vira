@@ -544,3 +544,39 @@ class FdaAssistTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MailAttentionTests(unittest.TestCase):
+    """A mailbox that stopped signing in is still an account (the step is
+    done) and still needs the owner (the row carries `attention`)."""
+
+    def test_failing_account_reads_done_with_attention(self):
+        from server import models, onboard
+        st = {
+            "fixture_mode": True,
+            "crm": {"root": "/tmp/crm", "people": 0, "profiles": 0},
+            "feed": {"chat_db": "missing"},
+            "contacts": {"apple_sources": 0},
+            "vault": {"root": "", "connected": False, "notes": 0},
+            "mail": {"accounts": 2, "ok": 1, "failing": 1,
+                     "attention": "me@example.com needs attention"},
+            "dossiers": {"running": False, "done": 0, "total": 0, "current": ""},
+            "sources": _sources_for("mac"),
+        }
+        with mock.patch.object(onboard, "status", return_value=st), \
+                mock.patch.object(models, "discover", return_value=[]), \
+                mock.patch.object(models, "active", return_value=None), \
+                mock.patch.object(onboard, "_cost_line", return_value=""):
+            flow = onboard.steps()
+        mail = next(s for s in flow["steps"] if s["id"] == "mail")
+        self.assertEqual(mail["state"], "done")
+        self.assertEqual(mail["attention"], "me@example.com needs attention")
+        self.assertIn("1 of 2 polling", mail["detail"])
+
+    def test_status_carries_the_mail_summary_shape(self):
+        from server import onboard, mail
+        with mock.patch.object(mail, "summary", return_value={
+                "accounts": 1, "ok": 1, "failing": 0, "attention": ""}):
+            st = onboard.status()
+        self.assertEqual(st["mail"]["accounts"], 1)
+        self.assertEqual(st["mail"]["failing"], 0)
