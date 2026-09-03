@@ -13,7 +13,8 @@
 #   branch.sh list             all branch worktrees, their state, running ports
 #   branch.sh pr <slug>        push the branch + open/update its GitHub PR
 #                              (draft by default; --title T --body-file F --ready)
-#   branch.sh merge <slug>     fast, clean merge into live main (aborts on conflict)
+#   branch.sh merge <slug>     fast, clean merge into live main (aborts on conflict);
+#                              tears the worktree down on success (--keep to hold)
 #   branch.sh discard <slug>   remove worktree + branch (refuses if dirty;
 #                              closes an unmerged PR; never a merged one)
 
@@ -883,6 +884,19 @@ pr_discard_hook() {
 }
 
 cmd_merge() {
+  # Flags are read by NAME, never by position: `merge <slug> --keep` must not
+  # depend on --keep being argument two, and an unrecognised flag EXITS rather
+  # than reading as off (the serve-flags incident, 2026-08-12 — a dropped
+  # --local silently bridged a personal snapshot to the tailnet).
+  local slug=$1; shift
+  local keep=0 a
+  for a in "$@"; do
+    case "$a" in
+      --keep) keep=1;;
+      *) echo "error: unknown flag for merge: $a" >&2; exit 1;;
+    esac
+  done
+  set -- "$slug"
   slug_check "$1"
   local dir branch="claude/$1"; dir=$(wt_dir "$1")
   git -C "$LIVE" show-ref --verify --quiet "refs/heads/$branch" || {
@@ -991,8 +1005,9 @@ cmd_merge() {
     echo "  [ ] this worktree had NO CLAUDE.md — the session never read the"
     echo "      spec. Check its report for proposed spec lines and apply them"
     echo "      to $LIVE/CLAUDE.md by hand; run 'branch.sh adopt' next time."
-  elif [[ -f "$dir/CLAUDE.md" ]] && ! diff -q "$LIVE/CLAUDE.md" "$dir/CLAUDE.md" >/dev/null 2>&1; then
-    echo "  [ ] CLAUDE.md differs (gitignored — git did NOT carry it). Port by hand:"
+  elif wt_spec_unported "$dir"; then
+    echo "  [ ] the worktree's CLAUDE.md carries lines live does not (gitignored —"
+    echo "      git did NOT carry them). Port by hand, then discard:"
     echo "      diff $LIVE/CLAUDE.md $dir/CLAUDE.md"
   fi
   if git -C "$LIVE" diff --name-only ORIG_HEAD..HEAD | grep -q "^server/"; then
@@ -1003,7 +1018,58 @@ cmd_merge() {
   pr_merge_hook "$branch" "$pf_log" "$pf_pass" || true
   rm -f "$pf_log"
   echo "  [ ] push:     git -C $LIVE push$PR_NOTE"
-  echo "  [ ] teardown: scripts/branch.sh discard $1"
+
+  # TEARDOWN IS NOT A CHECKLIST ITEM.
+  #
+  # It was one line 122 of this file, an echo, and nothing ran it. Measured
+  # 2026-09-02: of 30 worktrees on this machine, 26 were finished work whose
+  # teardown never ran and only 4 carried anything unlanded — 89 GB of ~9 GB
+  # data clones, plus 43 stale claude/* branch refs. A merged, clean branch is
+  # SPENT: its commits are in main, and the owner's own rule says the internal
+  # steps (save, commit, merge, push) are what "I did it" means, not decisions
+  # to hand back. So this runs cmd_discard rather than naming it.
+  #
+  # cmd_discard is reused, never reimplemented: it already stops a serving
+  # instance, refuses on dirt, and — the part that matters here — routes the
+  # PR through pr_discard_hook, which keeps the PR open and origin/<branch>
+  # in place while main is unpushed. So the local worktree and branch go now
+  # (the space), and the PR side finishes on the next discard after the push.
+  local hold=""
+  if [[ "$keep" == 1 ]]; then
+    hold="--keep was passed"
+  elif wt_spec_unported "$dir"; then
+    # The port step above diffs against this worktree. Removing it first
+    # would delete the only copy of the session's spec edits.
+    hold="its CLAUDE.md has unported lines — port them first"
+  elif [[ -d "$dir" && -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]]; then
+    hold="the worktree is no longer clean — inspect it first"
+  fi
+  if [[ -n "$hold" ]]; then
+    echo "  [ ] teardown HELD ($hold):"
+    echo "      scripts/branch.sh discard $1"
+    return 0
+  fi
+  echo ""
+  echo "tearing down (merged and clean — the worktree is spent):"
+  cmd_discard "$1" ||
+    echo "NOTE: teardown did not finish — run: scripts/branch.sh discard $1"
+}
+
+# Does the worktree's CLAUDE.md carry anything live's does not?
+#
+# NOT a plain `diff -q`. CLAUDE.md is gitignored and every session writes its
+# spec section straight into the LIVE copy, so live is routinely AHEAD of a
+# worktree snapshot taken at branch time — and treating "differs" as "unported
+# work" fires on almost every merge, which is how a real signal becomes noise
+# nobody reads. Only lines present in the WORKTREE and missing from live are
+# evidence the session edited its own copy and the edit still needs porting.
+wt_spec_unported() {
+  local dir=$1
+  [[ -f "$dir/CLAUDE.md" ]] || return 1
+  # Line-set containment, not a positional diff. `diff | grep "^>"` reports a
+  # CHANGED line as a worktree-only one, so two files differing solely in the
+  # trailing newline read as unported work — caught by its own test.
+  grep -qvxF -f "$LIVE/CLAUDE.md" "$dir/CLAUDE.md" 2>/dev/null
 }
 
 cmd_discard() {
