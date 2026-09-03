@@ -446,8 +446,10 @@ async def run_cliexec(runner):
         from . import runner as _runner_mod   # lazy: runner imports this module
         runner.state["result_text"] = (result_text or "")[:_runner_mod.RESULT_KEEP]
         runner.flush_state()
-        reply = (await runner.await_reply()
-                 if ok and runner.parks_at_turn_end() else None)
+        park = ok and runner.parks_at_turn_end()
+        if park:
+            park = await runner.offer_landing()
+        reply = await runner.await_reply() if park else None
         if reply is None:
             done = True
         else:

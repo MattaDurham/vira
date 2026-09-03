@@ -21,7 +21,9 @@ own joblog record; the stores are cross-process safe (filelock).
 import asyncio
 import json
 import os
+import re
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -92,6 +94,52 @@ OWNER_LABEL = settings.get("owner_name") or "The owner"
 HEARTBEAT = 2.0
 CONTROL_POLL = 0.25
 RESULT_KEEP = 20_000
+
+# ---------- the landing card ----------
+#
+# A coding session that has finished its work on a branch used to sign off
+# with the same prose question every time - "merge it, spin up a test
+# instance, or discard?" - and a question that lives only in a transcript is
+# exactly how a branch drifts into the orphan sweeper (owner, 2026-09-02: the
+# whole point of the decision card is that it cannot be scrolled past). So
+# the HARNESS raises the card, deterministically, the moment an owner-
+# dispatched writer session parks with work on its branch. It never depends
+# on the model remembering to ask, and the model is told NOT to ask.
+#
+# The test instance is not one of the answers any more - it is served BEFORE
+# the card goes up (branch.sh serve --local: a personal snapshot is never
+# auto-bridged to the tailnet), so the card carries a URL to look at rather
+# than an offer to make one. The three verdicts that remain are the owner's:
+LANDING_KIND = "landing"
+LANDING_VERDICTS = ("merge", "keep", "discard")
+LANDING_OPTIONS = [
+    {"label": "Merge it",
+     "description": "Land this branch on main: branch.sh merge (preflight, "
+                    "the suite gate, the required PR), push, then tear the "
+                    "branch and its test instance down."},
+    {"label": "Keep playing",
+     "description": "Leave the branch and its test instance up. Reply below "
+                    "to keep working; the card comes back when the next turn "
+                    "ends."},
+    {"label": "Discard",
+     "description": "Close the session and delete the branch, its worktree "
+                    "and its test instance. The PR, if one was opened, "
+                    "closes unmerged with its diff kept on GitHub."},
+]
+# What a session is steered with when the owner says Merge over an
+# uncommitted tree. The Implement prompt tells sessions NOT to commit, so an
+# uncommitted tree is the normal shape of delivered work - and branch.sh
+# merge refuses a dirty worktree, so the commit has to happen first. The
+# session that wrote the work writes the message; the harness never invents
+# one.
+COMMIT_STEER = (
+    "The owner chose MERGE IT. Commit every change on this branch now with a "
+    "real commit message that describes the work (git add -A && git commit "
+    "in your worktree; ASCII only, no emoji). Do NOT push, do NOT merge, do "
+    "NOT touch main or the live checkout. Then stop - the harness merges "
+    "the moment your turn ends.")
+SERVE_TIMEOUT = 600          # clone + provision + boot can take a minute+
+PR_TIMEOUT = 120
 
 # Sentinel on the steering inbox: the owner ended the reply window rather
 # than answering. Distinct from a message so an empty Finish can't be
@@ -166,6 +214,12 @@ class Runner:
         self.interrupted = False
         self.reply_window = float(self.spec.get("reply_window") or 43200)
         self.awaiting_reply = False      # parked at a turn boundary
+        # The landing verdict, once the owner has given one on the harness's
+        # card: {"verdict": merge|discard}. Recorded here rather than acted
+        # on, because the ACT (branch.sh merge/discard) belongs to the
+        # server after this process has ended - a runner tearing down the
+        # worktree it is running in would be sawing off its own branch.
+        self.landing = None
         # A turn that ended on its own means the work is complete. Ending
         # the reply window after that is the owner saying "I'm done
         # talking" — NOT an abandoned run — so the epilogue (plan publish,
@@ -252,6 +306,11 @@ class Runner:
         if op == "say":
             text = (cmd.get("text") or "").strip()
             if text:
+                # A reply typed under a landing card IS the "keep playing"
+                # answer - the owner is continuing the work, so the card
+                # comes down and returns when the next turn ends.
+                if self.awaiting_reply:
+                    self._drop_landing_card()
                 self.inbox.put_nowait(text)
                 self.append(f"[you] {text}\n")
                 # Say what is actually about to happen. A parked session is
@@ -276,6 +335,8 @@ class Runner:
             fut = self.futures.get(cmd.get("req_id"))
             if fut is not None and not fut.done():
                 fut.set_result(str(cmd.get("answer") or "").strip())
+        elif op == "landing":
+            await self.handle_landing(cmd)
         elif op == "interrupt":
             if self.awaiting_reply:
                 # The turn is already over — Stop here is the Finish button,
@@ -460,6 +521,232 @@ class Runner:
             self.awaiting_reply = False
             self.state["awaiting"] = None
             self.flush_state()
+
+
+    # ----- the landing card: the harness asks merge / keep / discard -----
+
+    def landing_eligible(self):
+        """Whether a parked turn of THIS session gets the harness's landing
+        card. Owner-dispatched (it parks), placed on a branch by branch-first
+        (there is something to land), not a plan run (its deliverable is the
+        published plan), and not a Showroom candidate (the Showroom is that
+        branch's own verdict surface). `landing_card` rides the spec off
+        config `session_landing_card` so the owner can switch it off."""
+        spec = self.spec
+        if not (spec.get("worktree") and spec.get("branch")
+                and spec.get("live_root")):
+            return False
+        if spec.get("landing_card") is False:
+            return False
+        if not self.parks_at_turn_end():
+            return False
+        meta = spec.get("meta") or {}
+        if meta.get("showroom_idea"):
+            return False
+        return True
+
+    def _landing_slug(self):
+        return str(self.spec.get("branch") or "").split("/", 1)[-1]
+
+    def _branch_work(self):
+        """(uncommitted paths, commits ahead of main) for the session's
+        branch - read off git, never off memory, because "is there anything
+        to land" is the question that decides whether a card goes up at
+        all. Either read failing reads as 0, which errs toward NO card: a
+        card over nothing is the noise this must not add."""
+        wt, root, branch = (self.spec.get("worktree"),
+                            self.spec.get("live_root"), self.spec.get("branch"))
+        dirty = ahead = 0
+        try:
+            out = subprocess.run(["git", "-C", str(wt), "status", "--porcelain"],
+                                 capture_output=True, text=True, timeout=30,
+                                 check=False)
+            if out.returncode == 0:
+                dirty = len((out.stdout or "").strip().splitlines())
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            out = subprocess.run(["git", "-C", str(root), "rev-list", "--count",
+                                  f"main..{branch}"],
+                                 capture_output=True, text=True, timeout=30,
+                                 check=False)
+            if out.returncode == 0:
+                ahead = int((out.stdout or "0").strip() or 0)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        return dirty, ahead
+
+    def _branch_sh(self, argv, timeout):
+        """The LIVE tree's branch.sh, run from the live root - the same call
+        orphanwork and the Showroom make. Returns (ok, combined output)."""
+        script = Path(self.spec["live_root"]) / "scripts" / "branch.sh"
+        try:
+            out = subprocess.run([str(script), *argv],
+                                 cwd=self.spec["live_root"],
+                                 capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
+                                 timeout=timeout, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"branch.sh {argv[0]} failed to run: {e}"
+        return out.returncode == 0, ((out.stdout or "")
+                                     + (out.stderr or "")).strip()
+
+    def _serve_instance(self):
+        """Serve the branch as a passive, LOCAL-ONLY test instance and return
+        (url, note). --local is not optional: the snapshot behind a test
+        instance is the owner's personal data, and bridging it to the tailnet
+        needs his explicit approval per instance (the standing rule in
+        branch.sh). A `serve` on a branch already serving prints "already
+        running (pid N, port P)" and exits 0, so a second park reuses the
+        instance instead of minting one per turn."""
+        ok, text = self._branch_sh(["serve", self._landing_slug(), "--local"],
+                                   SERVE_TIMEOUT)
+        m = (re.search(r"localhost:(\d{4})", text)
+             or re.search(r"port (\d{4})", text))
+        if ok and m:
+            return f"http://localhost:{m.group(1)}", ""
+        tail = text.strip().splitlines()
+        return "", (tail[-1] if tail else "no output")
+
+    def _pr_url(self):
+        """The open PR for this branch, if GitHub knows one - asked of gh,
+        never inferred. Empty when there is none or gh cannot answer."""
+        try:
+            out = subprocess.run(
+                ["gh", "pr", "view", self.spec["branch"], "--json", "url,state",
+                 "--jq", '"\\(.state) \\(.url)"'],
+                cwd=self.spec["live_root"], capture_output=True, text=True,
+                timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if out.returncode != 0:
+            return ""
+        parts = (out.stdout or "").split()
+        return parts[1] if len(parts) == 2 and parts[0] == "OPEN" else ""
+
+    def _ensure_pr(self):
+        """The merge protocol REQUIRES an open PR (branch.sh pr_require), so
+        a card offering Merge it over a branch with no PR would offer a
+        button that fails. Open the draft here when the session did not.
+        Returns (url, note); a dead gh is a NOTE on the card, never a reason
+        to withhold the card - the owner can still keep playing or discard,
+        and merge refuses with branch.sh's own message."""
+        url = self._pr_url()
+        if url:
+            return url, ""
+        ok, text = self._branch_sh(["pr", self._landing_slug()], PR_TIMEOUT)
+        m = re.search(r"https://github\.com/\S+/pull/\d+", text)
+        if ok and m:
+            return m.group(0), ""
+        tail = text.strip().splitlines()
+        return "", ("no PR - " + (tail[-1] if tail else "branch.sh pr failed"))
+
+    def _drop_landing_card(self):
+        had = [p for p in self.state["pending"]
+               if p.get("kind") == LANDING_KIND]
+        if had:
+            self.state["pending"] = [p for p in self.state["pending"]
+                                     if p.get("kind") != LANDING_KIND]
+            self.flush_state()
+        return bool(had)
+
+    async def offer_landing(self):
+        """Called at a parking turn boundary, BEFORE await_reply. Returns
+        True to park (with or without a card), False to finish the session
+        now because a verdict is already on file - the commit turn a Merge
+        steered has just ended, and the server is waiting on the ledger to
+        run the merge.
+
+        The card only goes up over WORK: a session that read and reported
+        has nothing to land, and a card offering to merge nothing is what
+        would teach the owner to dismiss these. The serve and the PR run in
+        a thread because a data clone plus boot takes a minute; the card
+        follows them so it carries a URL, not a promise."""
+        if self.landing is not None:
+            self.finished_cleanly = True
+            self.finished_by_owner = True
+            self.append(f"[vira] landing verdict on file: "
+                        f"{self.landing.get('verdict')} - closing the "
+                        "session so Vira can act on it\n")
+            return False
+        if not self.landing_eligible() or self.interrupted:
+            return True
+        dirty, ahead = await asyncio.to_thread(self._branch_work)
+        if not dirty and not ahead:
+            return True
+        branch = self.spec["branch"]
+        self.append(f"[vira] landing: {branch} carries "
+                    f"{dirty} uncommitted path(s), {ahead} commit(s) ahead "
+                    "of main - serving a test instance\u2026\n")
+        test_url, serve_note = "", ""
+        if self.spec.get("auto_serve", True) is not False:
+            test_url, serve_note = await asyncio.to_thread(self._serve_instance)
+        pr_url, pr_note = await asyncio.to_thread(self._ensure_pr)
+        if test_url:
+            self.append(f"[vira] test instance: {test_url}  (passive, "
+                        f"local only)\n")
+        elif serve_note:
+            self.append(f"[vira] test instance could not start: "
+                        f"{serve_note}\n")
+        if pr_url:
+            self.append(f"[vira] pull request: {pr_url}\n")
+        elif pr_note:
+            self.append(f"[vira] {pr_note}\n")
+        req_id = uuid.uuid4().hex[:8]
+        question = f"{branch} is ready - what happens to it?"
+        self.state["pending"].append({
+            "req_id": req_id, "kind": LANDING_KIND, "question": question,
+            "summary": question, "options": list(LANDING_OPTIONS),
+            "allow_text": False, "branch": branch,
+            "worktree": self.spec.get("worktree"),
+            "test_url": test_url, "serve_note": serve_note,
+            "pr_url": pr_url, "pr_note": pr_note,
+            "dirty": dirty, "ahead": ahead, "created": time.time(),
+        })
+        self.flush_state()
+        return True
+
+    async def handle_landing(self, cmd):
+        """The owner's verdict on the landing card (control op `landing`).
+        keep: the card comes down and the session stays parked. discard and
+        merge: the session ends cleanly and finished_by_owner - the ACT is
+        the server's (orphanwork.land_session waits for the ledger row to
+        leave `running`, then runs branch.sh). merge over a DIRTY tree first
+        steers the session to commit its own work; the verdict is held on
+        `self.landing` so the turn that follows finishes instead of raising
+        the card again."""
+        verdict = str(cmd.get("verdict") or "").strip().lower()
+        if verdict not in LANDING_VERDICTS:
+            self.append(f"[vira] landing: unknown verdict {verdict!r} "
+                        "ignored\n")
+            return
+        self._drop_landing_card()
+        if verdict == "keep":
+            self.append("[vira] keeping the branch and its test instance - "
+                        "reply to keep working\n")
+            return
+        self.state["landing"] = verdict
+        if verdict == "discard":
+            self.landing = {"verdict": "discard"}
+            self.finished_by_owner = True
+            self.append("[vira] discard - closing the session; Vira tears "
+                        "the branch down once it ends\n")
+            self.flush_state()
+            self.inbox.put_nowait(_END)
+            return
+        dirty, _ahead = await asyncio.to_thread(self._branch_work)
+        self.landing = {"verdict": "merge"}
+        if dirty and self.awaiting_reply:
+            self.append(f"[vira] merge - {dirty} uncommitted path(s): asking "
+                        "the session to commit its work first\n")
+            self.flush_state()
+            self.inbox.put_nowait(COMMIT_STEER)
+            return
+        self.finished_by_owner = True
+        self.append("[vira] merge - closing the session; Vira merges the "
+                    "branch once it ends\n")
+        self.flush_state()
+        self.inbox.put_nowait(_END)
 
     # ----- the owner channel: questions, not permissions -----
 
@@ -858,8 +1145,10 @@ class Runner:
                     # channel texts it back) got an empty string. The
                     # epilogue's own assignment still wins at finalize.
                     self.state["result_text"] = (result_text or "")[:RESULT_KEEP]
-                    reply = (await self.await_reply()
-                             if self.should_park(ok) else None)
+                    park = self.should_park(ok)
+                    if park:
+                        park = await self.offer_landing()
+                    reply = await self.await_reply() if park else None
                     if reply is None:
                         done = True
                     else:

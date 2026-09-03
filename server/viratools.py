@@ -116,7 +116,18 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             "change: markup without its JavaScript, an engine without the "
             "route that reaches it. If you cannot complete every part, "
             "revert the parts you cannot finish so the tree is left "
-            "consistent, and say so.\n\n")
+            "consistent, and say so.\n\n"
+            # The landing decision is the HARNESS's card, not the session's
+            # closing question: a merge/test/discard question that lives only
+            # in a transcript is how a branch drifts into the orphan sweeper
+            # (owner, 2026-09-02). runner.offer_landing serves the test
+            # instance and raises the card the moment the turn parks.
+            "WHEN YOUR TURN ENDS, VIRA HANDLES THE LANDING. It serves a "
+            "passive test instance of this branch and raises the merge / "
+            "keep playing / discard decision card itself. Do NOT ask "
+            "whether to merge, test or discard, and do not end on that "
+            "question - end with what you built and what to look at on the "
+            "test instance.\n\n")
     ask_para = (
         f"WHEN YOU NEED A DECISION, ASK WITH {tool_prefix}ask_owner. It shows "
         f"{owner} a card with clickable options, in the app and on their "

@@ -175,8 +175,10 @@ def _card_rows(registry, names):
     for p in pending:
         card = p["card"]
         title = names.get(p["job_id"]) or p["job_id"]
-        kind = "a question" if card.get("kind") == "ask" else \
-            "approval: " + (card.get("tool") or "a tool call")
+        kind = ("a question" if card.get("kind") == "ask" else
+                "ready to land: " + (card.get("branch") or "a branch")
+                if card.get("kind") == "landing" else
+                "approval: " + (card.get("tool") or "a tool call"))
         rows.append(_row(
             f"card:{card['req_id']}", "card", "pending", True, title, kind,
             verb="answer", job_id=p["job_id"], req_id=card["req_id"],
