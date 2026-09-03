@@ -72,3 +72,30 @@ class OrbitsIsAViewOfWorld(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrbitsInertia(unittest.TestCase):
+    """A released spin coasts and winds down (2026-09-02). Source contracts:
+    the fling is read off the drag's trailing samples, applied in the frame
+    loop with exponential decay, killed by the next press, and never
+    produced under reduced motion."""
+
+    def setUp(self):
+        self.src = (ROOT / "static" / "orbits.js").read_text(encoding="utf-8")
+
+    def test_release_hands_over_a_velocity(self):
+        self.assertIn("S.spinV = flingVelocity(d.samples)", self.src)
+
+    def test_the_coast_decays_in_the_frame_loop(self):
+        self.assertIn("S.spin += S.spinV * dt", self.src)
+        self.assertIn("S.spinV *= Math.exp(-FLING_DECAY * dt)", self.src)
+
+    def test_a_press_stops_the_record(self):
+        i_down = self.src.index("S.spinV = 0;                            // a hand on the record stops it")
+        i_move = self.src.index('cv.addEventListener("pointermove"')
+        self.assertLess(i_down, i_move)
+
+    def test_reduced_motion_never_flings(self):
+        body = self.src[self.src.index("function flingVelocity"):]
+        body = body[:body.index("\n}\n")]
+        self.assertIn("if (S.reduced", body)

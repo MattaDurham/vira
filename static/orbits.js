@@ -51,6 +51,14 @@ const RINGS = [
 const CARD_MIN = 22, CARD_MAX = 44;   // card width by activity
 const TIE_FLOOR = 0.5;            // chords drawn at rest (the rest light on select)
 const SPIN = 0.012;               // rad/s - the sky's own drift
+// INERTIA - a released spin keeps turning like a record and winds down.
+// FLING_DECAY is the exponential damping rate (velocity halves every ~0.28s);
+// FLING_MIN is where the coast is considered stopped; FLING_MAX caps what a
+// fast flick can hand over, so the longest coast is FLING_MAX / FLING_DECAY =
+// 1.2 rad - a little over a quarter turn, deliberately "a little alive" rather
+// than a wheel. Velocity is read off the last ~80ms of the drag
+// (FLING_WINDOW_MS), so a hand that STOPS before letting go hands over zero.
+const FLING_DECAY = 2.5, FLING_MIN = 0.02, FLING_MAX = 3.0, FLING_WINDOW_MS = 80;
 const WEDGE_GAP = 2.2;            // empty slots between wedges
 const BAND_COLORS = [
   "#a39c8d", "#7a8f9c", "#a9651b", "#7d8a74", "#a0715f",
@@ -109,7 +117,7 @@ function cssVar(name, fallback) {
 const S = {
   stage: null, canvas: null, ctx: null, cardEl: null, tipEl: null, metaEl: null, emptyEl: null,
   graph: null, lens: "", nodes: [], byId: new Map(), edges: [], adj: new Map(), egoW: new Map(),
-  wedges: [], spin: 0, spinning: true, reduced: false,
+  wedges: [], spin: 0, spinV: 0, spinning: true, reduced: false,
   cam: { x: 0, y: 0, k: 1 }, cur: { x: 0, y: 0, k: 1 },
   sel: null, hover: null, nb1: new Set(), matches: null,
   loading: false, loadedGen: null,
@@ -311,6 +319,22 @@ function flyTo(node, k, opts = {}) {
 
 // ---------- pointer ----------
 // the pointer's angle about the sun (world origin) as drawn on screen
+// angular velocity (rad/s) carried out of a drag: the summed turn over the
+// trailing window divided by its span. Zero under reduced motion (a coast is
+// motion the owner asked not to see), zero when the window is too short to
+// say anything, zero when the hand came to rest before releasing.
+function flingVelocity(samples) {
+  if (S.reduced || !samples || samples.length < 2) return 0;
+  const now = performance.now();
+  if (now - samples[samples.length - 1].t > FLING_WINDOW_MS) return 0;   // paused, then let go
+  const span = (samples[samples.length - 1].t - samples[0].t) / 1000;
+  if (span < 0.016) return 0;
+  let sum = 0; for (let i = 1; i < samples.length; i++) sum += samples[i].da;
+  const v = sum / span;
+  if (Math.abs(v) < FLING_MIN) return 0;
+  return Math.max(-FLING_MAX, Math.min(FLING_MAX, v));
+}
+
 function sunAngle(px, py) {
   const r = S.canvas.getBoundingClientRect();
   return Math.atan2((py - r.top) - sy(0), (px - r.left) - sx(0));
@@ -329,7 +353,8 @@ function bindPointer() {
     // a drag is a SPIN about the sun: remember the pointer's angle around
     // the sun's screen position and turn the sky by how much it changes
     S.drag = { x0: e.clientX, y0: e.clientY, moved: false, button: e.button,
-      ang: sunAngle(e.clientX, e.clientY) };
+      ang: sunAngle(e.clientX, e.clientY), samples: [] };
+    S.spinV = 0;                            // a hand on the record stops it
   });
   cv.addEventListener("pointermove", (e) => {
     if (S.pointers.has(e.pointerId)) S.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -351,6 +376,10 @@ function bindPointer() {
         const a = sunAngle(e.clientX, e.clientY);
         let da = a - S.drag.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
         S.spin += da; S.drag.ang = a;          // direct, never eased
+        // keep a short trail of (time, angle delta) for the release velocity
+        const now = performance.now(), sm = S.drag.samples;
+        sm.push({ t: now, da });
+        while (sm.length && now - sm[0].t > FLING_WINDOW_MS) sm.shift();
         S.dirty = true; hideTip();
       }
       return;
@@ -364,7 +393,8 @@ function bindPointer() {
     if (S.pointers.size < 2) S.pinch = null;
     if (!S.drag) return;
     const d = S.drag; S.drag = null;
-    if (d.moved || d.button !== 0) return;
+    if (d.moved) { S.spinV = flingVelocity(d.samples); if (S.spinV) wake(); return; }
+    if (d.button !== 0) return;
     const n = hit(e.clientX, e.clientY);
     if (n) select(n, true); else clearSel();
   };
@@ -795,6 +825,14 @@ function frame(t) {
   let moving = false;
   // the sky turns, unless a hand is on it
   if (S.spinning && !S.drag && !S.hover && !S.pinch) { S.spin += SPIN * dt; moving = true; }
+  // the coast after a flung drag: spin on at the release velocity, winding
+  // down exponentially until it is too slow to see
+  if (S.spinV && !S.drag && !S.pinch) {
+    S.spin += S.spinV * dt;
+    S.spinV *= Math.exp(-FLING_DECAY * dt);
+    if (Math.abs(S.spinV) < FLING_MIN) S.spinV = 0;
+    moving = true;
+  }
   if (S.migration) {
     const p = Math.min(1, (t - S.migration.t0) / S.migration.ms), e = easeInOut(p);
     for (const n of S.nodes) {
@@ -820,7 +858,7 @@ function frame(t) {
 }
 
 window.__orbits = {
-  state: () => ({ cam: { ...S.cam }, cur: { ...S.cur }, spin: S.spin, spinning: S.spinning,
+  state: () => ({ cam: { ...S.cam }, cur: { ...S.cur }, spin: S.spin, spinV: S.spinV, spinning: S.spinning,
     sel: S.sel?.id || null, lens: S.lens, nodes: S.nodes.length,
     wedges: S.wedges.map((w) => ({ band: w.band, label: w.label, n: w.members.length, a0: w.a0, a1: w.a1 })),
     rings: S.nodes.reduce((m, n) => { const r = ringOf(n.days)?.label || "undated"; m[r] = (m[r] || 0) + 1; return m; }, {}) }),
