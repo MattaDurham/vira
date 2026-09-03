@@ -138,6 +138,22 @@ class Inventory(_RepoCase):
         self.assertIn("Merged into main", showroom.fallback_blurb(it))
         self.assertIn("never torn down", showroom.fallback_blurb(it))
 
+    def test_a_fast_forwarded_landing_still_dates_and_classifies(self):
+        wt = self.make_worktree("ff", commits=1)
+        _git("merge", "--ff-only", "-q", "claude/ff", cwd=self.root)   # no merge commit
+        it = self.by_branch()["claude/ff"]
+        self.assertEqual(it["band"], "landed")
+        self.assertTrue(it["merged_at"])
+        self.assertEqual(it["areas"].get("interface"), 1)
+        self.assertEqual(it["module_guess"], "interface")
+
+    def test_a_worktree_mid_rebase_is_found_by_its_path(self):
+        wt = self.make_worktree("rb", commits=1)
+        _git("checkout", "-q", "--detach", cwd=wt)          # what a rebase in progress looks like
+        self.assertEqual(showroom._worktree_of("claude/rb").resolve(), wt.resolve())
+        it = self.by_branch()["claude/rb"]
+        self.assertEqual(Path(it["worktree"]).resolve(), wt.resolve())
+
     def test_a_merged_branch_with_no_worktree_still_lists(self):
         self.make_worktree("ref-only", commits=1)
         self.land("ref-only")
@@ -215,16 +231,23 @@ class Inventory(_RepoCase):
         self.land("l1")
         showroom.refresh()
         out = showroom.compose()
-        self.assertEqual([it["band"] for it in out["items"]], ["unlanded", "landed"])
+        self.assertEqual(sorted(it["band"] for it in out["items"]), ["landed", "unlanded"])
+        # Newest activity first, whatever the band - no sections by type.
+        self.assertEqual([it["last_activity"] for it in out["items"]],
+                         sorted((it["last_activity"] for it in out["items"]), reverse=True))
         self.assertEqual(out["counts"], {"session": 0, "unlanded": 1, "landed": 1})
         self.assertEqual(out["describing"], 1)     # the unlanded one wants a read
-        self.assertEqual(out["items"][0]["blurb_source"], "derived")
+        self.assertTrue(all(it["blurb_source"] == "derived" for it in out["items"]))
 
     def test_a_running_instance_is_reported(self):
         wt = self.make_worktree("served", commits=1)
+        # A fake pid, with liveness pinned: os.kill(pid, 0) is a liveness
+        # probe on POSIX and TerminateProcess on Windows, so a real pid here
+        # would kill the test runner on the Windows job.
         (wt / ".test-instance.json").write_text(
-            json.dumps({"pid": os.getpid(), "port": 8390}), encoding="utf-8")
-        showroom.refresh()
+            json.dumps({"pid": 4242, "port": 8390}), encoding="utf-8")
+        with mock.patch("server.worktree._instance_alive", return_value=True):
+            showroom.refresh()
         out = showroom.compose()
         self.assertEqual(out["items"][0]["instance"], {"port": 8390, "alive": True,
                                                        "snapshot": False})
@@ -260,6 +283,36 @@ class Describing(_RepoCase):
         showroom.refresh()
         by = {it["branch"]: it for it in showroom.compose()["items"]}
         self.assertEqual(by["claude/d1"]["blurb_source"], "derived")
+
+    def test_the_read_carries_a_module_tag_and_the_guess_stands_in(self):
+        self.make_worktree("m1", commits=1)        # touches static/ only
+        showroom.refresh()
+        row = showroom.compose()["items"][0]
+        self.assertEqual(row["module"], "interface")
+        self.assertEqual(showroom.module_guess(["server/orphanwork.py", "server/orphanwork.py",
+                                                "server/main.py", "tests/test_x.py"]), "orphanwork")
+        self.assertEqual(showroom.module_guess(["scripts/branch.sh"]), "branch-tooling")
+        self.assertEqual(showroom.module_guess([]), "other")
+        reply = json.dumps([{"branch": "claude/m1", "module": "Reader Queue",
+                             "blurb": "Sorts the reader."}])
+        with mock.patch("server.suggest.complete", return_value=reply) as m:
+            showroom.describe_missing()
+            self.assertIn("MODULE VOCABULARY", m.call_args[0][0])
+            self.assertIn("interface x1", m.call_args[0][0])
+        out = showroom.compose()
+        self.assertEqual(out["items"][0]["module"], "reader-queue")
+        self.assertEqual(out["modules"], [["reader-queue", 1]] if isinstance(out["modules"][0], list)
+                         else [("reader-queue", 1)])
+
+    def test_an_off_shape_module_falls_back_to_the_guess(self):
+        self.make_worktree("m2", commits=1)
+        showroom.refresh()
+        reply = json.dumps([{"branch": "claude/m2", "module": "!!!", "blurb": "Does a thing."}])
+        with mock.patch("server.suggest.complete", return_value=reply):
+            showroom.describe_missing()
+        row = showroom.compose()["items"][0]
+        self.assertEqual(row["blurb"], "Does a thing.")
+        self.assertEqual(row["module"], "interface")
 
     def test_landed_rows_never_ask_for_a_read(self):
         self.make_worktree("l", commits=1)
@@ -309,13 +362,35 @@ class Actions(_RepoCase):
             if call[0][0][0] == "serve":
                 self.assertIn("--local", call[0][0])
 
-    def test_serve_refuses_a_branch_with_no_worktree(self):
+    def test_serve_makes_a_worktree_for_a_bare_ref(self):
+        # A branch with only a local ref is still work someone left; the
+        # card's Launch must be able to look at it, so the server makes
+        # the worktree (git worktree add + branch.sh adopt) before serving.
         self.make_worktree("gone", commits=1)
         _git("worktree", "remove", "--force", str(self.root / ".worktrees" / "gone"),
              cwd=self.root)
         showroom.refresh()
-        with self.assertRaises(ValueError):
+        self.assertEqual(showroom._worktree_of("claude/gone"), None)
+        with mock.patch("threading.Thread", side_effect=lambda **kw: kw["target"]() or mock.Mock()):
             showroom.serve("claude/gone")
+        wt = self.root / ".worktrees" / "gone"
+        self.assertTrue((wt / "static" / "file0.js").exists())
+        self.branch_sh.assert_any_call(["adopt", "gone"], showroom.QUICK_TIMEOUT)
+        self.branch_sh.assert_any_call(["serve", "gone", "--local"], showroom.SERVE_TIMEOUT)
+
+    def test_serve_needs_no_card_and_names_a_missing_branch(self):
+        # No sweep has run, so the store is empty - a launch still works
+        # off git, and a branch git does not know fails by name.
+        self.make_worktree("fresh", commits=1)
+        with mock.patch("threading.Thread", side_effect=lambda **kw: kw["target"]() or mock.Mock()):
+            self.assertEqual(showroom.serve("claude/fresh"), {"started": True})
+            showroom.serve("claude/never-existed")
+        with showroom._serves_lock:
+            self.assertEqual(showroom._serves["claude/fresh"]["status"], "up")
+            self.assertEqual(showroom._serves["claude/never-existed"]["status"], "failed")
+            self.assertIn("not a local branch", showroom._serves["claude/never-existed"]["text"])
+        with self.assertRaises(ValueError):
+            showroom.serve("main")
 
     def test_a_failed_serve_is_named_never_a_port(self):
         self.make_worktree("s", commits=1)
@@ -359,9 +434,9 @@ class Actions(_RepoCase):
             self.assertIn("passive", str(cm.exception))
         self.assertEqual(self.branch_sh.call_count, 0)
 
-    def test_an_unknown_branch_is_a_key_error(self):
+    def test_an_unknown_branch_is_a_key_error_for_cleanup(self):
         with self.assertRaises(KeyError):
-            showroom.serve("claude/nowhere")
+            showroom.cleanup("claude/nowhere")
 
 
 class Context(_RepoCase):
@@ -398,7 +473,8 @@ class RouteLayer(_RepoCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["counts"]["unlanded"], 1)
         r = self.client.get("/api/showroom")
-        self.assertEqual({"items", "counts", "running", "describing", "last_sweep", "passive"},
+        self.assertEqual({"items", "counts", "running", "describing", "last_sweep", "passive",
+                          "modules"},
                          set(r.json()))
 
     def test_context_is_read_only_and_answers_on_passive(self):
@@ -413,9 +489,11 @@ class RouteLayer(_RepoCase):
     def test_refusals_map_to_403_404_409(self):
         self.make_worktree("u", commits=1)
         showroom.refresh()
-        r = self.client.post("/api/showroom/serve", json={"branch": "claude/none"})
+        r = self.client.post("/api/showroom/cleanup", json={"branch": "claude/none"})
         self.assertEqual(r.status_code, 404)
         r = self.client.post("/api/showroom/cleanup", json={"branch": "claude/u"})
+        self.assertEqual(r.status_code, 409)
+        r = self.client.post("/api/showroom/serve", json={"branch": "main"})
         self.assertEqual(r.status_code, 409)
         os.environ["VIRA_PASSIVE"] = "1"
         for path in ("serve", "stop", "cleanup"):
@@ -434,15 +512,36 @@ class Surface(unittest.TestCase):
         import re
         return re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S)
 
-    def test_launch_opens_the_tab_inside_the_click_and_the_page_exists(self):
+    def test_launch_opens_the_tab_and_the_page_starts_the_serve(self):
         js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))
         fn = js[js.index("function shrLaunch("):js.index("async function loadShowroomQuiet")]
-        self.assertLess(fn.index("window.open("), fn.index("post(\"/api/showroom/serve\""))
-        self.assertIn("showroom-launch.html", fn)
+        self.assertIn("window.open(", fn)
+        self.assertIn("shrLaunchOrigin()", fn)
+        self.assertNotIn("/api/showroom/serve", fn)     # the PAGE starts it, on its own origin
         page = (self.ROOT / "static" / "showroom-launch.html").read_text(encoding="utf-8")
         self.assertIn("color-scheme", page)
-        self.assertIn("/api/showroom", page)
+        self.assertIn('fetch("/api/showroom/serve"', page)
         self.assertIn("location.replace(\"http://localhost:\"", page)
+
+    def test_every_card_carries_launch_and_the_card_opens_a_focus_panel(self):
+        js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))
+        foot = js[js.index("function shrFoot("):js.index("function shrLaunch(")]
+        self.assertIn('"Launch the test"', foot)
+        self.assertNotIn("d.passive && it.worktree", foot)
+        card = js[js.index("function shrCard("):js.index("function shrFoot(")]
+        self.assertIn("openShowroomCard(it)", card)
+        self.assertNotIn("shr-detail", card)
+        self.assertIn("enterFocus(panel", js[js.index("async function openShowroomCard"):])
+        self.assertIn('"#shr-panel"', js)
+        html = (self.ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="shr-panel"', html)
+
+    def test_no_band_tabs_only_the_content_grouping(self):
+        js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))
+        block = js[js.index("let shrData = null;"):js.index("function renderBrief(b)")]
+        self.assertNotIn("SHR_FILTERS", block)
+        self.assertIn('"Grouped by module"', block)
+        self.assertIn('"module:"', block)
 
     def test_verdicts_go_through_the_sweepers_routes(self):
         js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))

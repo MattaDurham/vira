@@ -59,6 +59,17 @@
   if (!branch) { status.textContent = "Open this page from a Showroom card."; bar.hidden = true; return; }
   var started = Date.now();
   var LIMIT_MS = 12 * 60 * 1000;
+  // The page starts the serve ITSELF (same origin as the server that can
+  // run branch.sh), so a card on a passive test instance can point at the
+  // live server's copy of this page and still launch. Idempotent: an
+  // instance already up is reported up, one already starting says so.
+  fetch("/api/showroom/serve", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ branch: branch }) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (!x.ok) fail("Could not start the instance: " + (x.j && x.j.detail ? x.j.detail : "refused"));
+    })
+    .catch(function () { /* the poll reports what it sees */ });
   function fail(text) {
     status.textContent = text;
     status.className = "status bad";
@@ -67,8 +78,7 @@
   function tick() {
     fetch("/api/showroom", { cache: "no-store" }).then(function (r) { return r.json(); })
       .then(function (d) {
-        var it = (d.items || []).find(function (x) { return x.branch === branch; });
-        if (!it) { fail("The Showroom has no card for " + branch + " — refresh it and launch again."); return; }
+        var it = (d.items || []).find(function (x) { return x.branch === branch; }) || {};
         var inst = it.instance || {};
         var sv = it.serving || {};
         if (inst.alive && inst.port) {

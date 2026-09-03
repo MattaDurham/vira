@@ -946,6 +946,20 @@
 <!-- MODULE STORY PANEL (right-click a module > "What is this?" — the build
      story: what the module is, plus every film, plan, dossier and retro
      the library holds about how it was built) -->
+<!-- SHOWROOM CARD (server/showroom.py) - one draft branch's full read as a
+     focus panel: the Runs-list context, the PR text, the merge, the
+     session's last words - opened by clicking its card in the Showroom.
+     A focus panel, deliberately: expanding a card in place pushed the
+     whole gallery out of shape (owner, 2026-09-03). -->
+<div id="shr-panel" class="panel note-panel shr-panel">
+  <div class="panel-head">
+    <button class="icon-btn" id="shr-back">back</button>
+    <div class="panel-title" id="shr-ptitle">Branch</div>
+    <div class="shr-pacts" id="shr-pacts"></div>
+  </div>
+  <div class="panel-body note-body shr-pbody" id="shr-pbody"></div>
+</div>
+
 <div id="story-panel" class="panel note-panel story-panel">
   <div class="panel-head">
     <button class="icon-btn" id="story-back">back</button>

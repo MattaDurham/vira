@@ -11206,24 +11206,31 @@ $("#review-refresh")?.addEventListener("click",
 // ==================== The Showroom - every draft branch as a card ====================
 // The viewer for what every other session left: each claude/* branch on
 // disk as a card - a title, a Vira-written blurb, what it touches, its PR
-// and its session - banded as a live session / unlanded work / landed and
-// never cleaned up. Launch opens a fresh tab that becomes the branch's own
-// passive test instance; the verdict buttons call the orphan-work sweeper's
-// routes (never a second implementation of landing); Clean up tears a
-// landed worktree down. It builds nothing (owner, 2026-09-03: take two).
+// and its session - newest activity first, with grouping by CONTENT (the
+// module a branch is about) rather than sections by type (owner,
+// 2026-09-03). Every card launches its own passive test instance in a
+// fresh tab; clicking a card opens its full read as a focus panel; the
+// verdict buttons call the orphan-work sweeper's routes (never a second
+// implementation of landing); Clean up tears a landed worktree down. It
+// builds nothing.
 let shrData = null;
 let shrPoll = null;
-let shrFilter = lsGet("vira-shr-filter", "all");
+let shrView = lsGet("vira-shr-view", "all");     // all | grouped | module:<tag>
 let shrQ = "";
 let shrHold = false;                 // an armed confirm is on the surface
-const shrOpen = new Set();           // branches whose detail is expanded
-const SHR_FILTERS = [
-  ["all", "All"], ["unlanded", "Unlanded"], ["session", "In session"],
-  ["landed", "Landed"], ["running", "Running"],
-];
 const SHR_BAND_LABEL = {
   session: "session live", unlanded: "unlanded", landed: "landed - not cleaned up",
 };
+// Launch runs on the server that CAN run branch.sh. A passive test
+// instance points its cards at the live server's copy of the launch
+// page, which starts the serve on its own origin.
+const SHR_LIVE_PORT = 8377;
+
+function shrLaunchOrigin() {
+  return (shrData && shrData.passive)
+    ? `${location.protocol}//${location.hostname}:${SHR_LIVE_PORT}`
+    : location.origin;
+}
 
 async function loadShowroom() {
   const grid = $("#shr-grid");
@@ -11262,13 +11269,10 @@ function shrMaybePoll() {
 }
 
 function shrVisible(it) {
-  const inst = it.instance || {};
-  const running = inst.alive || (it.serving && it.serving.status === "starting");
-  if (shrFilter === "running" && !running) return false;
-  if (["unlanded", "session", "landed"].includes(shrFilter) && it.band !== shrFilter) return false;
+  if (shrView.startsWith("module:") && it.module !== shrView.slice(7)) return false;
   const q = searchFold(shrQ);
   if (!q) return true;
-  const hay = searchFold([it.title, it.blurb, it.branch,
+  const hay = searchFold([it.title, it.blurb, it.branch, it.module,
     (it.commits || []).join(" "), (it.pr || {}).title || ""].join(" "));
   return q.split(" ").every((t) => !t || hay.includes(t));
 }
@@ -11282,37 +11286,52 @@ function renderShowroom() {
   const st = $("#shr-status");
   if (st) {
     const c = d.counts || {};
-    const parts = [];
+    const parts = [`${(d.items || []).length} draft branch${(d.items || []).length === 1 ? "" : "es"}`];
     if (c.unlanded) parts.push(`${c.unlanded} unlanded`);
     if (c.session) parts.push(`${c.session} in session`);
     if (c.landed) parts.push(`${c.landed} landed but never cleaned up`);
     if (d.running) parts.push(`${d.running} test instance${d.running === 1 ? "" : "s"} running`);
     if (d.describing) parts.push(`Vira is reading ${d.describing}…`);
-    st.textContent = parts.length ? parts.join(" - ")
+    st.textContent = (d.items || []).length ? parts.join(" - ")
       : "No draft branches on disk - every session's work has landed and been torn down.";
   }
   const bar = $("#shr-bar");
   if (bar) {
     bar.innerHTML = "";
-    const seg = el("div", "seg-tabs shr-seg");
-    SHR_FILTERS.forEach(([id, label]) => {
-      const b = el("button", "seg-btn" + (shrFilter === id ? " on" : ""), label);
-      const n = id === "all" ? (d.items || []).length
-        : id === "running" ? d.running : (d.counts || {})[id];
-      if (n) b.textContent = `${label} (${n})`;
-      b.addEventListener("click", () => {
-        shrFilter = id; lsSet("vira-shr-filter", id); renderShowroom();
+    // ONE control: everything, grouped by module, or one module. A tab
+    // row by type was the wrong axis - the useful question is "which
+    // branches are about the same thing".
+    const sel = el("select", "shr-select");
+    const opt = (v, label) => {
+      const o = el("option", null, label); o.value = v;
+      if (v === shrView) o.selected = true;
+      sel.appendChild(o);
+    };
+    opt("all", "Everything, newest first");
+    opt("grouped", "Grouped by module");
+    const mods = d.modules || [];
+    if (mods.length) {
+      const og = document.createElement("optgroup");
+      og.label = "Only one module";
+      mods.forEach(([m, n]) => {
+        const o = el("option", null, `${m} (${n})`); o.value = "module:" + m;
+        if (o.value === shrView) o.selected = true;
+        og.appendChild(o);
       });
-      seg.appendChild(b);
+      sel.appendChild(og);
+    }
+    if (!Array.from(sel.options).some((o) => o.value === shrView)) shrView = "all";
+    sel.addEventListener("change", () => {
+      shrView = sel.value; lsSet("vira-shr-view", shrView); renderShowroomGrid();
     });
-    bar.appendChild(seg);
+    bar.appendChild(sel);
     const q = el("input", "shr-q");
     q.type = "search"; q.placeholder = "Filter branches…"; q.value = shrQ;
     q.addEventListener("input", () => { shrQ = q.value || ""; renderShowroomGrid(); });
     bar.appendChild(q);
     if (d.passive) {
       bar.appendChild(el("span", "hint",
-        "passive test instance - launching, stopping and cleaning up only run on the live Vira"));
+        "passive test instance - Launch runs through the live Vira; stop and clean up only there"));
     }
   }
   renderShowroomGrid();
@@ -11326,18 +11345,25 @@ function renderShowroomGrid() {
   const items = (d.items || []).filter(shrVisible);
   if (!items.length) {
     grid.appendChild(el("div", "brief-empty",
-      (d.items || []).length ? "Nothing matches that filter."
-        : "No draft branches on disk."));
+      (d.items || []).length ? "Nothing matches that." : "No draft branches on disk."));
     return;
   }
-  let band = "";
-  items.forEach((it) => {
-    if (shrFilter === "all" && it.band !== band) {
-      band = it.band;
-      grid.appendChild(el("div", "shr-band", SHR_BAND_LABEL[band] || band));
-    }
-    grid.appendChild(shrCard(it, d));
-  });
+  if (shrView === "grouped") {
+    const order = (d.modules || []).map(([m]) => m);
+    const by = new Map();
+    items.forEach((it) => {
+      if (!by.has(it.module)) by.set(it.module, []);
+      by.get(it.module).push(it);
+    });
+    order.filter((m) => by.has(m)).forEach((m) => {
+      const h = el("div", "shr-group", m);
+      h.appendChild(el("small", null, `${by.get(m).length}`));
+      grid.appendChild(h);
+      by.get(m).forEach((it) => grid.appendChild(shrCard(it, d)));
+    });
+    return;
+  }
+  items.forEach((it) => grid.appendChild(shrCard(it, d)));
 }
 
 // The tile is DERIVED from what the branch touches - the area bars say
@@ -11388,6 +11414,23 @@ function shrAgo(days) {
   return `${Math.round(days)}d ago`;
 }
 
+function shrMeta(it) {
+  const meta = el("div", "shr-meta");
+  const chip = (text, cls) => meta.appendChild(el("span", "shr-chip " + (cls || ""), text));
+  chip(SHR_BAND_LABEL[it.band] || it.band, "b-" + it.band);
+  if (it.module) chip(it.module, "mod");
+  if (it.ahead) chip(`${it.ahead} commit${it.ahead === 1 ? "" : "s"} ahead`);
+  if (it.dirty) chip(`${it.dirty} uncommitted`, "warn");
+  if (it.behind) chip(`${it.behind} behind main`, "dim");
+  if (it.pr && it.pr.number) {
+    const a = el("a", "shr-chip pr", `PR #${it.pr.number} - ${it.pr.draft ? "draft" : (it.pr.state || "").toLowerCase()}`);
+    a.href = it.pr.url; a.target = "_blank"; a.rel = "noopener";
+    meta.appendChild(a);
+  }
+  chip(shrAgo(it.age_days), "dim");
+  return meta;
+}
+
 function shrCard(it, d) {
   const card = el("div", "shr-card band-" + it.band);
   card.dataset.branch = it.branch;
@@ -11398,27 +11441,12 @@ function shrCard(it, d) {
   const inst = it.instance || {};
   if (inst.alive && inst.port) head.appendChild(el("span", "shr-live", `live :${inst.port}`));
   body.appendChild(head);
-
-  const meta = el("div", "shr-meta");
-  const chip = (text, cls) => meta.appendChild(el("span", "shr-chip " + (cls || ""), text));
-  chip(SHR_BAND_LABEL[it.band] || it.band, "b-" + it.band);
-  if (it.ahead) chip(`${it.ahead} commit${it.ahead === 1 ? "" : "s"} ahead`);
-  if (it.dirty) chip(`${it.dirty} uncommitted`, "warn");
-  if (it.behind) chip(`${it.behind} behind main`, "dim");
-  if (it.pr && it.pr.number) {
-    const a = el("a", "shr-chip pr", `PR #${it.pr.number} - ${it.pr.draft ? "draft" : (it.pr.state || "").toLowerCase()}`);
-    a.href = it.pr.url; a.target = "_blank"; a.rel = "noopener";
-    meta.appendChild(a);
-  }
-  chip(shrAgo(it.age_days), "dim");
-  body.appendChild(meta);
+  body.appendChild(shrMeta(it));
   body.appendChild(el("div", "shr-branch", it.branch));
-
   const blurb = el("div", "shr-blurb" + (it.blurb_source === "vira" ? " vira" : ""), it.blurb || "");
   blurb.title = it.blurb_source === "vira" ? "Written by Vira from the branch's evidence"
     : "Derived from the sweep - Vira's read is pending";
   body.appendChild(blurb);
-
   if (it.orphan_read && it.orphan_read.verdict) {
     const r = el("div", "orphan-read " + it.orphan_read.verdict);
     r.appendChild(el("span", "orphan-read-v", "Vira: " + it.orphan_read.verdict));
@@ -11441,21 +11469,11 @@ function shrCard(it, d) {
     body.appendChild(el("div", "run-ev orphan-outcome",
       `${it.action.name} ${it.action.status === "ok" ? "done" : "failed"} - ${last.slice(0, 180)}`));
   }
-
   const foot = el("div", "shr-foot");
   body.appendChild(foot);
   shrFoot(foot, it, d);
   card.appendChild(body);
-
-  if (shrOpen.has(it.branch)) {
-    const det = el("div", "shr-detail", "Reading…");
-    card.appendChild(det);
-    shrFillDetail(det, it);
-  }
-  cardAction(card, () => {
-    if (shrOpen.has(it.branch)) shrOpen.delete(it.branch); else shrOpen.add(it.branch);
-    renderShowroomGrid();
-  }, { hint: "Expand for the full read" });
+  cardAction(card, () => openShowroomCard(it), { hint: "Open the full read" });
   return card;
 }
 
@@ -11475,22 +11493,20 @@ function shrFoot(foot, it, d) {
     foot.appendChild(el("span", "hint", `${it.action.name}… ${(it.action.output || "").slice(0, 100)}`));
     return;
   }
-  // Launch / Open / Stop - the test-drive verbs, on every band.
+  // THE TEST-DRIVE VERB IS ON EVERY CARD. A running instance opens; a
+  // starting one says so; everything else launches - a bare branch ref
+  // included, since the server makes it a worktree first.
   if (inst.alive && inst.port) {
     const a = el("a", "fchip sm primary", `Open the test :${inst.port}`);
-    a.href = `http://localhost:${inst.port}/`; a.target = "_blank"; a.rel = "noopener";
+    a.href = `http://${location.hostname}:${inst.port}/`; a.target = "_blank"; a.rel = "noopener";
     foot.appendChild(a);
     if (!d.passive) btn("Stop", () => shrAct("/api/showroom/stop", it, "Instance stopped"));
   } else if (sv.status === "starting") {
     foot.appendChild(el("span", "shr-starting", "starting the test instance…"));
-  } else if (!d.passive && it.worktree) {
+  } else {
     btn("Launch the test", () => shrLaunch(it), "primary",
       "Serve this branch as a passive local instance and open it in a new tab");
-  } else if (!it.worktree) {
-    foot.appendChild(el("span", "hint", "no worktree - branch ref only"));
   }
-  // The verdicts. Unlanded rows use the sweeper's own routes and confirm
-  // copy; a landed row's only verb is Clean up; a session's are its own.
   if (it.band === "unlanded" && it.orphan_key) {
     const rec = it.orphan_read && it.orphan_read.verdict;
     btn("Land", () => shrArm(foot, it, "land"), rec === "land" ? "rec" : "",
@@ -11511,18 +11527,14 @@ function shrFoot(foot, it, d) {
 }
 
 // Launch opens the tab INSIDE the click (a tab opened after an await is
-// popup-blocked), then starts the serve; the launch page polls and becomes
-// the instance when it answers.
+// popup-blocked). The launch page starts the serve on ITS origin - the
+// live server when this is a passive instance - and becomes the instance
+// when it answers.
 function shrLaunch(it) {
-  const url = "/showroom-launch.html?branch=" + encodeURIComponent(it.branch);
-  const tab = window.open(url, "_blank", "noopener");
-  post("/api/showroom/serve", { branch: it.branch })
-    .then(() => { toast("Launching " + it.branch.replace(/^claude\//, "") + "…"); })
-    .catch((e) => {
-      toast(errText(e));
-      if (tab && !tab.closed) { try { tab.close(); } catch (e2) { /* noopener */ } }
-    })
-    .finally(() => loadShowroomQuiet());
+  const url = shrLaunchOrigin() + "/showroom-launch.html?branch=" + encodeURIComponent(it.branch);
+  window.open(url, "_blank", "noopener");
+  toast("Launching " + it.branch.replace(/^claude\//, "") + "…");
+  setTimeout(loadShowroomQuiet, 2500);
 }
 
 async function loadShowroomQuiet() {
@@ -11591,6 +11603,36 @@ function shrArm(foot, it, name) {
   shrHold = true;
 }
 
+// ---- the card's full read: a FOCUS PANEL, never an in-place expansion ----
+// Expanding a card inside the grid pushed the whole gallery out of shape
+// (owner, 2026-09-03); a focus panel is how every other "open this thing"
+// in Vira works, and Escape / the backdrop / back all close it.
+function closeShowroomCard() { exitFocus($("#shr-panel")); }
+
+async function openShowroomCard(it) {
+  const panel = $("#shr-panel");
+  if (!panel) return;
+  if (!panel._bound) {
+    panel._bound = true;
+    $("#shr-back").addEventListener("click", closeShowroomCard);
+  }
+  panel.classList.add("open");
+  enterFocus(panel, () => { panel.classList.remove("open"); });
+  panel.dataset.branch = it.branch;
+  $("#shr-ptitle").textContent = it.title || it.branch;
+  const acts = $("#shr-pacts");
+  acts.innerHTML = "";
+  shrFoot(acts, it, shrData || {});
+  const body = $("#shr-pbody");
+  body.innerHTML = "";
+  body.appendChild(shrMeta(it));
+  body.appendChild(el("div", "shr-branch", it.branch + (it.worktree ? "  ·  " + it.worktree : "")));
+  body.appendChild(el("div", "shr-pblurb", it.blurb || ""));
+  const det = el("div", "shr-detail", "Reading the branch…");
+  body.appendChild(det);
+  await shrFillDetail(det, it);
+}
+
 async function shrFillDetail(det, it) {
   let c;
   try {
@@ -11607,7 +11649,6 @@ async function shrFillDetail(det, it) {
     det.appendChild(s);
   };
   const facts = [];
-  if (it.worktree) facts.push("worktree " + it.worktree);
   if (c.disk_mb != null) facts.push(`${c.disk_mb >= 1024 ? (c.disk_mb / 1024).toFixed(1) + " GB" : c.disk_mb + " MB"} on disk`);
   if (it.tip) facts.push("tip " + it.tip);
   if (it.merged_at) facts.push("merged " + it.merged_at.slice(0, 10));
@@ -28606,7 +28647,7 @@ function initDesktop() {
   // the person and job panels behave like windows too:
   // drag + focus-raise + edge resize + content zoom
   ["#person-panel", "#group-panel", "#email-panel", "#job-panel",
-   "#jobdesc-panel", "#story-panel", "#doc-panel"].forEach((sel) => {
+   "#jobdesc-panel", "#story-panel", "#shr-panel", "#doc-panel"].forEach((sel) => {
     const panel = document.querySelector(sel);
     const head = panel.querySelector(".panel-head");
     makeDraggable(panel, head);

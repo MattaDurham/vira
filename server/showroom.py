@@ -213,12 +213,18 @@ def _local_branches():
 
 
 def _merge_commit(branch):
-    """(sha, epoch) of the --no-ff merge that landed `branch` on main, or
-    (\"\", None). branch.sh merges are always --no-ff with git's default
-    subject, so the subject is the join."""
+    """(sha, epoch) of the commit that landed `branch` on main: the --no-ff
+    merge branch.sh writes (its default subject is the join), else - for a
+    branch that landed by fast-forward or squash and so has no merge
+    commit - the branch's own tip, which is on main by definition of the
+    landed band. Its date is when the work last moved; its files are the
+    last commit's, an honest floor rather than nothing."""
     out = gitutil.git(ROOT, "log", "--merges", "-1", "--format=%H %ct",
                       f"--grep=Merge branch '{branch}'", "main", timeout=20)
     parts = (out.stdout or "").split() if out.returncode == 0 else []
+    if len(parts) != 2:
+        out = gitutil.git(ROOT, "log", "-1", "--format=%H %ct", branch, timeout=20)
+        parts = (out.stdout or "").split() if out.returncode == 0 else []
     if len(parts) != 2:
         return "", None
     try:
@@ -327,6 +333,7 @@ def _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
                    f"{(pr or {}).get('state', '')}:{band}")
     item["asked"] = _objective((rows_by_branch or {}).get(branch) or [])
     item["title"] = title_for(item)
+    item["module_guess"] = module_guess(paths)
     # Thumbnail: a raster the branch itself carries (a screenshot it made),
     # served through the sweeper's guarded visual route - discovery, never
     # generation. Only an unlanded row has the key that route needs.
@@ -364,6 +371,28 @@ def _objective(rows):
     if source is None:
         return ""
     return (joblog.command(source) or "").strip()
+
+
+def module_guess(paths):
+    """The module a branch is ABOUT, read off what it touches, with no
+    model: the server module it changes most (`server/x.py` -> x), else
+    the surface when it only touches static/, else the first path's top
+    directory. The describe pass may replace it with a vocabulary tag;
+    this is what a landed row and an undescribed card group under."""
+    counts = {}
+    for p in paths or []:
+        m = re.match(r"^server/([a-z0-9_]+)\.py$", p)
+        if m and m.group(1) not in ("main", "settings", "__init__"):
+            counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    if counts:
+        return max(sorted(counts), key=lambda k: counts[k]).replace("_", "-")
+    if any(p.startswith("static/") for p in paths or []):
+        return "interface"
+    if any(p.startswith("scripts/") for p in paths or []):
+        return "branch-tooling"
+    if any(p.startswith("tests/") for p in paths or []):
+        return "tests"
+    return "other"
 
 
 def title_for(item):
@@ -452,6 +481,8 @@ def sweep():
         wt, branch = ent["path"], ent["branch"]
         if wt == ROOT or not branch or not branch.startswith("claude/"):
             continue
+        if not wt.is_dir():
+            wt = None                  # a registration whose directory is gone
         seen.add(branch)
         try:
             it = _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
@@ -465,8 +496,10 @@ def sweep():
             continue
         seen.add(branch)
         try:
-            it = _make_item(branch, None, ledger_by_branch, orphan_by_branch, prs,
-                            rows_by_branch)
+            # A bare ref may still have a worktree git reports as detached
+            # (mid-rebase) - _worktree_of's second rung finds it.
+            it = _make_item(branch, _worktree_of(branch), ledger_by_branch,
+                            orphan_by_branch, prs, rows_by_branch)
         except Exception:  # noqa: BLE001
             it = None
         if it:
@@ -515,16 +548,68 @@ def _require(branch):
     return it
 
 
+def _worktree_of(branch):
+    """The worktree holding `branch`, asked of git - never of the store, so
+    a launch works on a branch the last sweep has not seen. A worktree
+    MID-REBASE reports a detached HEAD and no branch, while git still
+    reserves the branch for it ("already used by worktree at ..."), so the
+    canonical .worktrees/<slug> path is the second rung: a directory there
+    that is a linked worktree holds this branch's work whatever HEAD says.
+    Never a registration whose directory is gone (a prunable entry)."""
+    for ent in orphanwork._porcelain_worktrees():
+        if ent["branch"] == branch and ent["path"] != ROOT and ent["path"].is_dir():
+            return ent["path"]
+    canon = _primary() / ".worktrees" / _slug(branch)
+    if canon.is_dir() and (canon / ".git").is_file():
+        return canon
+    return None
+
+
+def _primary():
+    """The primary checkout - where .worktrees/ lives. ROOT is this
+    module's own tree, which on a branch test instance is itself a linked
+    worktree, and a canonical path derived from it would nest one worktree
+    inside another (found by serving from a branch instance)."""
+    return worktree.primary_root(ROOT) or ROOT
+
+
+def _ensure_worktree(branch):
+    """A bare local ref gets a worktree so it can serve: `git worktree add`
+    at the canonical .worktrees/<slug> path, then `branch.sh adopt` for
+    the venv symlink and the CLAUDE.md copy. Raises ValueError with git's
+    own words when it cannot."""
+    wt = _worktree_of(branch)
+    if wt:
+        return wt
+    out = gitutil.git(ROOT, "rev-parse", "--verify", "--quiet",
+                      f"refs/heads/{branch}", timeout=20)
+    if out.returncode != 0:
+        raise ValueError(f"{branch} is not a local branch")
+    dest = _primary() / ".worktrees" / _slug(branch)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    gitutil.git(ROOT, "worktree", "prune", timeout=30)   # dead registrations only
+    add = gitutil.git(ROOT, "worktree", "add", str(dest), branch, timeout=60)
+    if add.returncode != 0:
+        err = (add.stderr or add.stdout or "").strip()
+        m = re.search(r"already used by worktree at '([^']+)'", err)
+        if m and Path(m.group(1)).is_dir():
+            return Path(m.group(1))       # reserved by a mid-rebase worktree
+        raise ValueError("could not create a worktree: " + err[-300:])
+    _branch_sh(["adopt", _slug(branch)], QUICK_TIMEOUT)
+    return dest
+
+
 def serve(branch):
     """Start the branch's test instance (branch.sh serve <slug> --local),
-    asynchronously; the outcome lands in `serving` on compose(). A branch
-    with no worktree cannot serve - branch.sh serve needs one - and says
-    so rather than minting one, which is `branch.sh start`'s job."""
+    asynchronously; the outcome lands in `serving` on compose(). Needs no
+    card in the store: the worktree is asked of git, and a branch with
+    only a local ref gets one made (the whole point of a card is that the
+    work can be looked at, whatever state some other session left it in).
+    An instance already up is reported as up - branch.sh prints "already
+    running (pid N, port P)" and exits 0."""
     _refuse_if_passive("launching a test instance")
-    it = _require(branch)
-    if not it.get("worktree"):
-        raise ValueError(f"{branch} has no worktree on disk - recreate one "
-                         f"with scripts/branch.sh start {_slug(branch)} first")
+    if not (branch or "").startswith("claude/"):
+        raise ValueError(f"not a draft branch: {branch or 'unset'}")
     with _serves_lock:
         cur = _serves.get(branch)
         if cur and cur.get("status") == "starting":
@@ -534,8 +619,11 @@ def serve(branch):
 
     def run():
         try:
+            _ensure_worktree(branch)
             ok, text = _branch_sh(["serve", _slug(branch), "--local"],
                                   SERVE_TIMEOUT)
+        except ValueError as e:
+            ok, text = False, str(e)
         except (OSError, subprocess.SubprocessError) as e:
             ok, text = False, f"serve failed to run: {e}"
         port = None
@@ -558,7 +646,8 @@ def serve(branch):
 
 def stop(branch):
     _refuse_if_passive("stopping a test instance")
-    _require(branch)
+    if not (branch or "").startswith("claude/"):
+        raise ValueError(f"not a draft branch: {branch or 'unset'}")
     ok, text = _branch_sh(["stop", _slug(branch)], QUICK_TIMEOUT)
     with _serves_lock:
         _serves.pop(branch, None)
@@ -606,12 +695,47 @@ from the evidence given; never invent features the evidence does not name. \
 Prefer the pull request text and the commit subjects over the session prompt \
 when they disagree, since they describe what was actually done.
 
-Reply with STRICT JSON only: a list of objects {{"branch": "...", "blurb": "..."}} \
-covering every branch below.
+Also name the MODULE each branch is about: the one surface or engine of Vira \
+it changes. Reuse a tag from the vocabulary below whenever one fits - the \
+point is that five branches about one module group under ONE word - and coin \
+a short lowercase hyphenated tag only when nothing fits.
+
+MODULE VOCABULARY (tag x count): {vocab}
+
+Reply with STRICT JSON only: a list of objects \
+{{"branch": "...", "module": "...", "blurb": "..."}} covering every branch below.
 
 BRANCHES:
 {items}
 """
+
+TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")   # ideatags' own tag shape
+
+
+def _module_vocab(s):
+    """The module words already in use - the Queue's converged module axis
+    (ideatags.vocabulary) plus every module this store has read or
+    guessed - so the describe pass reuses a word rather than minting a
+    fifth spelling of one subject (the ideatags rule)."""
+    counts = {}
+    try:
+        from . import ideatags
+        for tag, n in (ideatags.vocabulary().get("module") or [])[:40]:
+            counts[tag] = counts.get(tag, 0) + n
+    except Exception:  # noqa: BLE001 - the Queue's vocabulary is a bonus
+        pass
+    for r in (s.get("reads") or {}).values():
+        if r.get("module"):
+            counts[r["module"]] = counts.get(r["module"], 0) + 1
+    for it in s.get("items") or []:
+        g = it.get("module_guess")
+        if g and g != "other":
+            counts[g] = counts.get(g, 0) + 1
+    if not counts:
+        return "(none yet)"
+    return ", ".join(f"{t} x{n}" for t, n in
+                     sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
 
 _describe_lock = threading.Lock()
 _describe_running = False
@@ -673,7 +797,8 @@ def describe_missing():
         it["pr_body"] = (prs.get(it.get("branch")) or {}).get("body", "")
     from . import suggest
     prompt = DESCRIBE_PROMPT.format(
-        cap=BLURB_MAX, items="\n".join(_evidence(it) for it in todo))
+        cap=BLURB_MAX, vocab=_module_vocab(s),
+        items="\n".join(_evidence(it) for it in todo))
     try:
         raw = suggest.complete(prompt)
         m = re.search(r"\[.*\]", raw or "", re.S)
@@ -690,7 +815,10 @@ def describe_missing():
         blurb = " ".join(str(r.get("blurb") or "").split())[:BLURB_MAX]
         it = by_branch.get(b)
         if it and blurb:
-            accepted[it["key"]] = {"blurb": blurb, "when": now}
+            module = str(r.get("module") or "").strip().lower().replace(" ", "-")
+            accepted[it["key"]] = {
+                "blurb": blurb, "when": now,
+                "module": module if TAG_RE.match(module) else ""}
     if not accepted:
         return 0
 
@@ -749,20 +877,22 @@ def compose():
         r = reads.get(row.get("key") or "")
         row["blurb"] = (r or {}).get("blurb") or fallback_blurb(row)
         row["blurb_source"] = "vira" if r else "derived"
+        row["module"] = (r or {}).get("module") or row.get("module_guess") or "other"
         row["serving"] = serves.get(row["branch"])
         a = actions.get(row["branch"])
         if a:
             row["action"] = {"name": a.get("name"), "status": a.get("status"),
                              "output": (a.get("output") or "")[-600:]}
         items.append(row)
-    # Newest activity first inside a band; bands in BANDS order.
-    rank = {b: i for i, b in enumerate(BANDS)}
-    items.sort(key=lambda r: (rank.get(r.get("band"), 9),
-                              -(r.get("last_activity") or 0.0)))
+    # Newest activity first, whatever the band (owner, 2026-09-03: no
+    # sections by type - everything, with grouping by CONTENT on demand).
+    items.sort(key=lambda r: -(r.get("last_activity") or 0.0))
     counts = {b: 0 for b in BANDS}
+    modules = {}
     running = 0
     for r in items:
         counts[r.get("band")] = counts.get(r.get("band"), 0) + 1
+        modules[r["module"]] = modules.get(r["module"], 0) + 1
         inst = r.get("instance") or {}
         if inst.get("alive") or (r.get("serving") or {}).get("status") == "starting":
             running += 1
@@ -770,6 +900,7 @@ def compose():
     # promise one: "Vira is reading 10" on a clone would be a count that
     # only ever grows.
     return {"items": items, "counts": counts, "running": running,
+            "modules": sorted(modules.items(), key=lambda kv: (-kv[1], kv[0])),
             "describing": 0 if _passive() else len(pending_reads(s)),
             "last_sweep": s.get("last_sweep"), "passive": _passive()}
 
