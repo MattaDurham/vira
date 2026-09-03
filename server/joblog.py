@@ -87,8 +87,11 @@ def _read():
     """Fresh read every time — runners and the server share this store, so
     a process-lifetime cache would clobber the other side's writes."""
     try:
-        s = json.loads(STORE.read_text())
-    except (OSError, json.JSONDecodeError):
+        s = json.loads(STORE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        # UnicodeDecodeError named because the read is pinned: a store an
+        # older, unpinned build wrote as cp1252 must degrade the way an
+        # unreadable one does, never raise into every caller.
         s = {"jobs": []}
     if not isinstance(s, dict) or "jobs" not in s:
         s = {"jobs": []}
@@ -98,7 +101,11 @@ def _read():
 def _write(s):
     STORE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STORE.with_name(STORE.name + ".tmp")
-    tmp.write_text(json.dumps(s, indent=1, ensure_ascii=False))
+    # Pinned on both ends (the Windows CI lesson): the composed title
+    # carries a non-ASCII separator, and an unpinned write lands as cp1252
+    # on Windows while every utf-8 reader of the row then fails on it.
+    tmp.write_text(json.dumps(s, indent=1, ensure_ascii=False),
+                   encoding="utf-8")
     tmp.replace(STORE)
 
 
