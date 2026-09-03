@@ -212,25 +212,102 @@ def _local_branches():
     return [l.strip() for l in (out.stdout or "").splitlines() if l.strip()]
 
 
-def _merge_commit(branch):
+def _ref_facts():
+    """{branch: (tip sha, commit epoch)} for every claude/* ref in ONE git
+    call. The first live sweep spent ~260 subprocess spawns - two of them
+    per branch just for the tip and its date - and a spawn out of the
+    multi-gigabyte server process costs ~10x what it costs a bare python
+    (measured 2026-09-03: 71s over HTTP against 8s in-process for the
+    same sweep). Batch what git can batch."""
+    out = gitutil.git(ROOT, "for-each-ref", "refs/heads/claude/",
+                      "--format=%(refname:short)%09%(objectname)%09%(committerdate:unix)",
+                      timeout=30)
+    facts = {}
+    if out.returncode != 0:
+        return facts
+    for line in (out.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        try:
+            facts[parts[0]] = (parts[1], float(parts[2]))
+        except ValueError:
+            continue
+    return facts
+
+
+def _merged_set():
+    """The claude/* branches whose tip is reachable from main - one call.
+    A branch here has ahead == 0 by definition, so its ahead/behind read
+    is skipped; only unmerged branches pay for rev-list."""
+    out = gitutil.git(ROOT, "branch", "--merged", "main", "--list", "claude/*",
+                      "--format=%(refname:short)", timeout=30)
+    if out.returncode != 0:
+        return set()
+    return {l.strip() for l in (out.stdout or "").splitlines() if l.strip()}
+
+
+def _merge_index():
+    """{branch: (merge sha, epoch)} for every --no-ff merge on main's first
+    parent, from ONE log walk. branch.sh merges carry git's default
+    subject, so the subject is the join."""
+    out = gitutil.git(ROOT, "log", "--merges", "--first-parent",
+                      "--format=%H%x09%ct%x09%s", "main", timeout=30)
+    idx = {}
+    if out.returncode != 0:
+        return idx
+    for line in (out.stdout or "").splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        m = re.match(r"Merge branch '([^']+)'", parts[2])
+        if not m or m.group(1) in idx:
+            continue                  # newest first: the first hit is the landing
+        try:
+            idx[m.group(1)] = (parts[0], float(parts[1]))
+        except ValueError:
+            continue
+    return idx
+
+
+def _merge_commit(branch, facts=None, merges=None):
     """(sha, epoch) of the commit that landed `branch` on main: the --no-ff
-    merge branch.sh writes (its default subject is the join), else - for a
-    branch that landed by fast-forward or squash and so has no merge
-    commit - the branch's own tip, which is on main by definition of the
-    landed band. Its date is when the work last moved; its files are the
-    last commit's, an honest floor rather than nothing."""
-    out = gitutil.git(ROOT, "log", "--merges", "-1", "--format=%H %ct",
-                      f"--grep=Merge branch '{branch}'", "main", timeout=20)
-    parts = (out.stdout or "").split() if out.returncode == 0 else []
-    if len(parts) != 2:
-        out = gitutil.git(ROOT, "log", "-1", "--format=%H %ct", branch, timeout=20)
-        parts = (out.stdout or "").split() if out.returncode == 0 else []
-    if len(parts) != 2:
-        return "", None
-    try:
-        return parts[0], float(parts[1])
-    except ValueError:
-        return "", None
+    merge branch.sh writes, else - for a branch that landed by fast-forward
+    or squash and so has no merge commit - the branch's own tip, which is
+    on main by definition of the landed band. Its date is when the work
+    last moved; its files are the last commit's, an honest floor rather
+    than nothing. `facts`/`merges` are the batched reads; a caller
+    without them pays the per-branch calls."""
+    if merges is None:
+        merges = _merge_index()
+    if branch in merges:
+        return merges[branch]
+    if facts is None:
+        facts = _ref_facts()
+    if branch in facts:
+        return facts[branch]
+    return "", None
+
+
+def _merge_paths_many(shas):
+    """{sha: [paths]} for many merge commits in ONE git show: each commit's
+    block opens with a NUL-marked header line, then its --name-only paths
+    against the first parent."""
+    shas = [x for x in dict.fromkeys(shas) if x]
+    if not shas:
+        return {}
+    out = gitutil.git(ROOT, "show", "--format=%x00%H", "--name-only",
+                      "--first-parent", *shas, timeout=60)
+    if out.returncode != 0:
+        return {}
+    paths, cur = {}, None
+    for line in (out.stdout or "").splitlines():
+        if line.startswith("\x00"):
+            cur = line[1:].strip()
+            paths[cur] = []
+        elif cur and line.strip():
+            paths[cur].append(line.strip())
+    return paths
 
 
 def _merge_paths(sha):
@@ -278,17 +355,30 @@ def _job_running(job):
 
 
 def _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
-               rows_by_branch=None):
-    """One card's facts, or None when git cannot read the branch."""
-    ahead, behind = orphanwork._ahead_behind(branch)
-    if ahead is None:
-        return None
+               rows_by_branch=None, batch=None):
+    """One card's facts, or None when git cannot read the branch. `batch`
+    carries the sweep-wide reads (ref facts, the merged set, the merge
+    index); a landed row's paths are left for the sweep to fill from one
+    batched `git show` (`_merge_sha` on the item)."""
+    batch = batch or {}
+    facts = batch.get("facts")
+    merged = batch.get("merged")
+    if merged is not None and branch in merged:
+        ahead, behind = 0, None       # reachable from main: nothing ahead
+    else:
+        ahead, behind = orphanwork._ahead_behind(branch)
+        if ahead is None:
+            return None
     dirty_lines = orphanwork._dirty_lines(wt) if wt else None
     dirty = len(dirty_lines) if dirty_lines is not None else 0
-    tip = orphanwork._tip_sha(wt or ROOT, branch)
+    if facts is not None and branch in facts:
+        tip, ts = facts[branch]
+    else:
+        tip = orphanwork._tip_sha(wt or ROOT, branch)
+        ts = orphanwork._commit_time(branch)
+    ts = ts or time.time()
     job = orphanwork._job_for_branch(branch, ledger_by_branch)
     pr = prs.get(branch)
-    ts = orphanwork._commit_time(branch) or time.time()
     if dirty and wt and dirty_lines:
         m = orphanwork._dirty_mtime(wt, dirty_lines)
         if m:
@@ -300,11 +390,11 @@ def _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
         band = "unlanded"
     else:
         band = "landed"
-        merged_sha, merged_at = _merge_commit(branch)
-    # What the branch touches - the branch diff for live work, the merge
-    # commit for landed work. One git call either way.
+        merged_sha, merged_at = _merge_commit(branch, facts, batch.get("merges"))
+    # What the branch touches - the branch diff for live work; a landed
+    # row's merge paths come from the sweep's one batched show.
     if band == "landed":
-        paths = _merge_paths(merged_sha)
+        paths = []                    # filled by the sweep's batched show
     else:
         paths = orphanwork._branch_paths(
             {"worktree": wt or "", "branch": branch, "ahead": ahead})
@@ -320,7 +410,7 @@ def _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
         "job": job,
         "pr": ({k: v for k, v in pr.items() if k != "body"} if pr else None),
         "instance": _instance(wt),
-        "merged_sha": merged_sha[:12],
+        "merged_sha": merged_sha[:12], "_merge_sha": merged_sha,
         "merged_at": (datetime.fromtimestamp(merged_at, tz=timezone.utc)
                       .isoformat(timespec="seconds") if merged_at else ""),
         "orphan_key": orphan.get("key") or "",
@@ -455,14 +545,38 @@ def fallback_blurb(item):
 
 # ---------------------------------------------------------------- sweep
 
+ORPHAN_FRESH_S = 300        # re-run the orphan sweeper only past this age
+
+
+def _orphan_fresh():
+    try:
+        last = orphanwork.compose().get("last_sweep")
+        dt = orphanwork._parse_iso(last) if last else None
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(dt) and (datetime.now(timezone.utc) - dt).total_seconds() < ORPHAN_FRESH_S
+
+
 def sweep():
     """Every claude/* branch git knows, as card facts. Runs the orphan
-    sweeper first so the join carries fresh verdicts; read-only git the
-    whole way, one branch degrading away rather than the sweep dying."""
+    sweeper first - when its store is older than ORPHAN_FRESH_S - so the
+    join carries fresh verdicts without paying its ~110 git spawns on
+    every open; read-only git the whole way, one branch degrading away
+    rather than the sweep dying."""
+    global _wt_cache
+    if not _orphan_fresh():
+        try:
+            orphanwork.refresh()
+        except Exception:  # noqa: BLE001 - the join degrades, the cards still render
+            pass
+    _wt_cache = orphanwork._porcelain_worktrees()
     try:
-        orphanwork.refresh()
-    except Exception:  # noqa: BLE001 - the join degrades, the cards still render
-        pass
+        return _sweep_items()
+    finally:
+        _wt_cache = None
+
+
+def _sweep_items():
     try:
         orphan_by_branch = {it.get("branch"): it
                             for it in orphanwork.compose().get("items", [])
@@ -476,8 +590,11 @@ def sweep():
             ledger_by_branch[b] = r
             rows_by_branch.setdefault(b, []).append(r)
     prs = _prs()
+    # Three sweep-wide reads replace ~4 git spawns per branch.
+    batch = {"facts": _ref_facts(), "merged": _merged_set(),
+             "merges": _merge_index()}
     items, seen = [], set()
-    for ent in orphanwork._porcelain_worktrees():
+    for ent in _worktrees():
         wt, branch = ent["path"], ent["branch"]
         if wt == ROOT or not branch or not branch.startswith("claude/"):
             continue
@@ -486,7 +603,7 @@ def sweep():
         seen.add(branch)
         try:
             it = _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
-                            rows_by_branch)
+                            rows_by_branch, batch)
         except Exception:  # noqa: BLE001 - one bad worktree never kills the sweep
             it = None
         if it:
@@ -499,11 +616,21 @@ def sweep():
             # A bare ref may still have a worktree git reports as detached
             # (mid-rebase) - _worktree_of's second rung finds it.
             it = _make_item(branch, _worktree_of(branch), ledger_by_branch,
-                            orphan_by_branch, prs, rows_by_branch)
+                            orphan_by_branch, prs, rows_by_branch, batch)
         except Exception:  # noqa: BLE001
             it = None
         if it:
             items.append(it)
+    # Every landed row's files, from ONE git show.
+    paths_by_sha = _merge_paths_many(
+        [it["_merge_sha"] for it in items if it.get("band") == "landed"])
+    for it in items:
+        sha = it.pop("_merge_sha", "")
+        if it.get("band") == "landed" and sha in paths_by_sha:
+            paths = paths_by_sha[sha]
+            it["areas"] = areas_of(paths)
+            it["paths_n"] = len(paths)
+            it["module_guess"] = module_guess(paths)
     return items
 
 
@@ -557,6 +684,13 @@ def _require(branch):
     return it
 
 
+_wt_cache = None            # the sweep's one worktree listing; None outside a sweep
+
+
+def _worktrees():
+    return _wt_cache if _wt_cache is not None else orphanwork._porcelain_worktrees()
+
+
 def _worktree_of(branch):
     """The worktree holding `branch`, asked of git - never of the store, so
     a launch works on a branch the last sweep has not seen. A worktree
@@ -565,7 +699,7 @@ def _worktree_of(branch):
     canonical .worktrees/<slug> path is the second rung: a directory there
     that is a linked worktree holds this branch's work whatever HEAD says.
     Never a registration whose directory is gone (a prunable entry)."""
-    for ent in orphanwork._porcelain_worktrees():
+    for ent in _worktrees():
         if ent["branch"] == branch and ent["path"] != ROOT and ent["path"].is_dir():
             return ent["path"]
     canon = _primary() / ".worktrees" / _slug(branch)

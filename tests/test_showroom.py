@@ -225,6 +225,48 @@ class Inventory(_RepoCase):
         it = self.by_branch()["claude/you-are-vira-s-coding-agent-work-92f2d9"]
         self.assertEqual(it["title"], "The system map can no longer ship a link to nowhere")
 
+    def test_a_landed_row_costs_one_git_status_not_a_spawn_per_fact(self):
+        # The live sweep's cost is subprocess SPAWNS (a spawn out of the
+        # multi-gigabyte server process is ~10x a bare python's), so the
+        # per-branch reads that git can answer for every branch at once
+        # - tip, date, merged-ness, the merge commit, its paths - must be
+        # batched. A landed worktree may cost its own `git status` and
+        # nothing else per row.
+        for i in range(6):
+            self.make_worktree(f"land{i}", commits=1)
+            self.land(f"land{i}")
+        calls = []
+        real = showroom.gitutil.git
+
+        def counting(cwd, *args, **kw):
+            calls.append(args[0] if args else "")
+            return real(cwd, *args, **kw)
+        with mock.patch.object(showroom.gitutil, "git", counting), \
+                mock.patch.object(orphanwork.gitutil, "git", counting):
+            items = showroom.sweep()
+        self.assertEqual(sum(1 for it in items if it["band"] == "landed"), 6)
+        # The sweeper's own pass costs a status + rev-list per worktree; the
+        # Showroom adds ONE status per worktree and nothing else per row -
+        # never a log/show/rev-parse/for-each-ref per landed branch.
+        self.assertLessEqual(calls.count("status"), 12, calls)
+        self.assertLessEqual(calls.count("show"), 1, calls)
+        self.assertLessEqual(calls.count("rev-parse"), 1, calls)
+        self.assertLessEqual(calls.count("log"), 2, calls)
+        self.assertLessEqual(calls.count("for-each-ref"), 1, calls)
+        self.assertLessEqual(calls.count("worktree"), 2, calls)
+        self.assertTrue(all(it["areas"].get("interface") == 1 for it in items))
+
+    def test_the_sweeper_is_not_rerun_inside_its_freshness_window(self):
+        self.make_worktree("w", commits=1)
+        showroom.sweep()                               # sweeper ran (store was empty)
+        with mock.patch.object(orphanwork, "refresh") as r:
+            showroom.sweep()
+            r.assert_not_called()
+        with mock.patch.object(showroom, "ORPHAN_FRESH_S", 0), \
+                mock.patch.object(orphanwork, "refresh") as r:
+            showroom.sweep()
+            r.assert_called_once()
+
     def test_humanize_drops_a_dispatch_hash(self):
         self.assertEqual(showroom.humanize("you-are-vira-s-coding-agent-work-92f2d9"),
                          "You are vira s coding agent work")
