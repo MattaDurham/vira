@@ -1047,6 +1047,83 @@ def _merge_sync(slug):
 
 
 LAND_MODES = ("diagnose", "finish")
+SESSION_END_POLL_S = 3       # how often land_session re-reads the ledger for the session's end
+
+
+def land_session(jid, branch, verdict):
+    """Act on a landing-card verdict (session.answer): wait for the SESSION
+    to end, then merge or discard its branch. The wait is the whole point -
+    the runner is still alive in that worktree when the verdict lands (it
+    ends itself on the control line), and branch.sh merge/discard both tear
+    the worktree down. Bookkeeping rides `_actions` so the Runs list shows
+    "land: merging..." the same way a Land click does. Returns True when a
+    thread started; raises ValueError on the refusals a click would hit."""
+    branch = branch or ""
+    if not branch.startswith("claude/"):
+        raise ValueError(f"not a session branch ({branch or 'unset'})")
+    if verdict not in ("merge", "discard"):
+        raise ValueError(f"nothing to do for verdict {verdict!r}")
+    slug = branch.split("/", 1)[1]
+    with _actions_lock:
+        a = _actions.get(branch)
+        if a and a.get("status") == "running":
+            raise ValueError(
+                f"an action ({a.get('name')}) is already running for {branch}")
+    name = "land" if verdict == "merge" else "discard"
+    _set_action(branch, name, "running",
+                f"waiting for session {jid} to end, then {name}")
+
+    def run():
+        try:
+            ok, text = _session_end_then(jid, slug, branch, verdict)
+        except Exception as e:  # noqa: BLE001 - the outcome must always land
+            ok, text = False, f"{name} failed: {e}"
+        try:
+            refresh()
+        except Exception:  # noqa: BLE001 - a re-sweep must never eat the outcome
+            pass
+        _set_action(branch, name, "ok" if ok else "failed", (text or "")[-4000:])
+
+    threading.Thread(target=run, daemon=True,
+                     name=f"vira-landing-{name}-{slug}"[:60]).start()
+    return True
+
+
+def _session_end_then(jid, slug, branch, verdict):
+    """The blocking tail of land_session. Merge re-checks the tree the way
+    _land_tail does - a session asked to commit may have refused, and a
+    dirty tree must read as "nothing merged", never as a silent skip."""
+    deadline = time.time() + LAND_WAIT_S
+    row = _job_row(jid)
+    while time.time() < deadline:
+        row = _job_row(jid)
+        if row and row.get("status") != "running":
+            break
+        time.sleep(SESSION_END_POLL_S)
+    else:
+        return False, (f"session {jid} still running after "
+                       f"{LAND_WAIT_S // 3600}h - nothing was done")
+    if verdict == "discard":
+        try:
+            out = subprocess.run(
+                [str(ROOT / "scripts" / "branch.sh"), "discard", slug],
+                cwd=str(ROOT), capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=ACTION_TIMEOUT, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"discard failed to run: {e}"
+        text = ((out.stdout or "") + (out.stderr or "")).strip()
+        return out.returncode == 0, text
+    wt = (row or {}).get("worktree") or (row or {}).get("cwd") or ""
+    dirty = _dirty_lines(Path(wt)) if wt and Path(wt).is_dir() else None
+    if dirty:
+        return False, ("the session ended with uncommitted changes - nothing "
+                       "was merged; it may have refused to commit (read its "
+                       "last words), or commit by hand and Land it from Runs")
+    ahead, _behind = _ahead_behind(branch)
+    if not ahead:
+        return False, "no commits ahead of main - nothing to merge"
+    return _merge_sync(slug)
 
 
 def norm_land_mode(mode):

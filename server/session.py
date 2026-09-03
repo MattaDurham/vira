@@ -100,6 +100,14 @@ SESSION_DEFAULTS = {
     # the runner, and that is still worth having. 64 MiB clears every file
     # in this repo by ~60x while staying a real limit.
     "session_max_buffer_mb": 64,
+    # When an owner-dispatched writer session parks with work on its branch,
+    # the HARNESS raises the merge / keep playing / discard card (never the
+    # model - a question that lives only in a transcript is how a branch
+    # drifts into the orphan sweeper) and serves a passive local-only test
+    # instance of the branch first, so the card carries a URL to look at
+    # rather than an offer to make one. See runner.offer_landing.
+    "session_landing_card": True,
+    "session_auto_serve": True,
 }
 
 # The permission ladder, safest first. A session's mode is ONE of these —
@@ -228,6 +236,25 @@ def resolve_model(m):
 def _scfg(key):
     v = config().get(key)
     return v if v not in (None, "") else SESSION_DEFAULTS[key]
+
+
+LANDING_KIND = "landing"
+
+
+def landing_verdict(text):
+    """Read merge / keep / discard off what the card's answer route carries.
+    The card posts an option LABEL ("Merge it", "Keep playing", "Discard")
+    or a number typed on a phone; anything unrecognised reads as KEEP - the
+    verdict that changes nothing, because a mis-parsed answer must never
+    merge or delete a branch."""
+    t = str(text or "").strip().lower()
+    if not t:
+        return "keep"
+    if t in ("1", "merge", "merge it", "land", "land it") or t.startswith("merge"):
+        return "merge"
+    if t in ("3", "discard", "drop", "drop it") or t.startswith("discard"):
+        return "discard"
+    return "keep"
 
 
 # ---------- shared job helpers (runner.py imports these) ----------
@@ -695,7 +722,10 @@ class Sessions:
                 # exclusion), so the runner reads it with no plumbing here.
                 "resume_session": (resume_session or "").strip(),
                 "resumed_from": (resumed_from or "").strip(),
-                "ask_timeout": float(_scfg("session_ask_timeout"))}
+                "ask_timeout": float(_scfg("session_ask_timeout")),
+                # the landing card and its test instance (runner.offer_landing)
+                "landing_card": bool(_scfg("session_landing_card")),
+                "auto_serve": bool(_scfg("session_auto_serve"))}
         with self.lock:
             if live:
                 running = sum(
@@ -1029,17 +1059,38 @@ class Sessions:
         """Answer a pending decision card. Same shape as permission() — the
         card the session is blocked on is addressed by req_id, and an answer
         for a card that is no longer pending is a 404 rather than a silent
-        no-op, so a double-tap on a phone cannot look like it worked."""
+        no-op, so a double-tap on a phone cannot look like it worked.
+
+        A LANDING card (the harness's merge / keep / discard, see
+        runner.offer_landing) is answered by the OWNER's verdict rather than
+        handed to the model: the control line tells the runner to keep
+        parking or to end, and for merge/discard the act itself -
+        branch.sh against the real repo - is started HERE, in the server,
+        and waits for the session to end first. A runner tearing down the
+        worktree it runs in would be sawing off its own branch. Returns the
+        verdict for a landing card, None for an ask."""
         h = self._require_live(jid)
         st = h.read_state() or {}
-        if not any(p.get("req_id") == req_id and p.get("kind") == "ask"
-                   for p in st.get("pending") or []):
+        card = next((p for p in st.get("pending") or []
+                     if p.get("req_id") == req_id
+                     and p.get("kind") in ("ask", LANDING_KIND)), None)
+        if card is None:
             raise KeyError(req_id)
         answer = str(text or "").strip()
         if not answer:
             raise ValueError("an answer is required")
+        if card.get("kind") != LANDING_KIND:
+            jobfiles.append_control(h.dir, {
+                "op": "answer", "req_id": req_id, "answer": answer})
+            return None
+        verdict = landing_verdict(answer)
         jobfiles.append_control(h.dir, {
-            "op": "answer", "req_id": req_id, "answer": answer})
+            "op": "landing", "req_id": req_id, "verdict": verdict})
+        if verdict in ("merge", "discard"):
+            from . import orphanwork
+            orphanwork.land_session(jid, h.spec.get("branch") or card.get("branch"),
+                                    verdict)
+        return verdict
 
     def interrupt(self, jid):
         """End the current turn. Queued steering still delivers afterwards;

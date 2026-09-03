@@ -219,6 +219,11 @@ class _FakeRunner:
 
     END = object()
 
+    async def offer_landing(self):
+        # the harness's landing card (runner.offer_landing); this slice has
+        # no branch, so it always parks - test_landing_card owns the card
+        return True
+
     def __init__(self, spec, replies=None):
         self.spec = spec
         self.state = {"session_id": "", "pending": []}
@@ -227,6 +232,7 @@ class _FakeRunner:
         self.exec_proc = None
         self.closing = False
         self.interrupted = False
+        self.landing = None
         self.finished_cleanly = False
         self._replies = list(replies or [])
 

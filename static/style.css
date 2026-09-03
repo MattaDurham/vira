@@ -1584,6 +1584,16 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
 /* A decision card is a NUMBERED PICKER, not a row of buttons. The question
    heads it, each option is a full row carrying the sentence that makes it
    answerable, and the number on the right is the keystroke that picks it. */
+/* The harness's landing card (runner.offer_landing): a head naming the
+   branch, what it holds, and the served test instance + PR, over the
+   ordinary ask picker. Tokens only, so it wears whichever skin is on. */
+.landing-head { padding: 8px 10px 6px; border-bottom: 1px solid var(--line-warm); }
+.landing-branch { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.landing-bits { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.landing-links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
+.landing-link { font-size: 12px; color: var(--steel); text-decoration: underline; }
+.landing-note { font-size: 11px; color: var(--oxidized); }
+
 .ask-card { padding: 0; overflow: hidden; }
 .ask-head { color: var(--term-fg); font-size: 13.5px; line-height: 1.5;
   font-weight: 500; white-space: pre-wrap; word-break: break-word;

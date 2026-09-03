@@ -8804,6 +8804,55 @@ function permissionCard(sid, p) {
 // makes the choice answerable, especially on a phone where the transcript
 // above has already scrolled away. Numbers matter because the fastest answer
 // is one keystroke, and because they give the options stable names.
+// A card the owner answers by PICKING (an agent's question, or the harness's
+// landing card) rather than by approving a tool call. Every surface that
+// renders pending cards forks on this ONE predicate, so a new picker kind
+// cannot ship rendered as a permission card on one surface and a picker on
+// another.
+const isChoiceCard = (p) => p.kind === "ask" || p.kind === "landing";
+const choiceCard = (sid, p) => p.kind === "landing" ? landingCard(sid, p)
+                                                    : askCard(sid, p);
+const choiceKicker = (p) =>
+  p.kind === "landing" ? "Ready to land"
+  : p.kind === "ask" ? "Vira is asking" : "Vira needs approval";
+
+// The harness's merge / keep playing / discard card (runner.offer_landing):
+// the ask card's numbered picker under a head that carries what the owner
+// needs before deciding - the branch, what it holds, the test instance that
+// was served for it, and the PR. The links are the point: the card exists
+// so "spin up a test instance" stops being an answer and becomes something
+// already on screen.
+function landingCard(sid, p) {
+  const wrap = el("div", "landing-card");
+  const head = el("div", "landing-head");
+  head.appendChild(el("div", "landing-branch", p.branch || "this branch"));
+  const bits = [];
+  if (p.ahead) bits.push(`${p.ahead} commit${p.ahead === 1 ? "" : "s"} ahead of main`);
+  if (p.dirty) bits.push(`${p.dirty} uncommitted path${p.dirty === 1 ? "" : "s"}`);
+  if (bits.length) head.appendChild(el("div", "landing-bits", bits.join(" - ")));
+  const links = el("div", "landing-links");
+  if (p.test_url) {
+    const a = el("a", "landing-link", "Open the test instance");
+    a.href = p.test_url; a.target = "_blank"; a.rel = "noopener";
+    a.title = p.test_url + " (passive, local only)";
+    links.appendChild(a);
+  } else if (p.serve_note) {
+    links.appendChild(el("span", "landing-note",
+      "test instance did not start: " + p.serve_note));
+  }
+  if (p.pr_url) {
+    const a = el("a", "landing-link", "Pull request");
+    a.href = p.pr_url; a.target = "_blank"; a.rel = "noopener";
+    links.appendChild(a);
+  } else if (p.pr_note) {
+    links.appendChild(el("span", "landing-note", p.pr_note));
+  }
+  if (links.childNodes.length) head.appendChild(links);
+  wrap.appendChild(head);
+  wrap.appendChild(askCard(sid, p));
+  return wrap;
+}
+
 function askCard(sid, p) {
   const card = el("div", "perm-card ask-card");
   card.appendChild(el("div", "ask-head", p.question || p.summary || ""));
@@ -8913,7 +8962,9 @@ function askCard(sid, p) {
     if (picked === "other") send(other.value.trim());
     else if (picked !== null) send(opts[picked].label);
   });
-  actions.appendChild(skip);
+  // A landing card has no Skip: "Keep playing" IS the do-nothing answer, and
+  // a Skip sentence sent to the verdict route would only read as keep anyway.
+  if (p.kind !== "landing") actions.appendChild(skip);
   actions.appendChild(submit);
   card.appendChild(actions);
 
@@ -9074,8 +9125,8 @@ function createJobTerm(jid, refs) {
       this.refs.pending.innerHTML = "";
       items.forEach((p) =>
         this.refs.pending.appendChild(
-          p.kind === "ask" ? askCard(this.jid, p)
-                           : permissionCard(this.jid, p)));
+          isChoiceCard(p) ? choiceCard(this.jid, p)
+                          : permissionCard(this.jid, p)));
     },
     composeState(j) {
       const live = !!j.live && j.status === "running";
@@ -9494,7 +9545,8 @@ const alertVisible = () => alertRows.filter(
   (r) => !alertMin.has(r.card.req_id) && !activeTerms[r.job_id]);
 
 const alertKind = (c) =>
-  c.kind === "ask" ? "a question" : "approval: " + (c.tool || "a tool call");
+  c.kind === "landing" ? "ready to land: " + (c.branch || "a branch")
+  : c.kind === "ask" ? "a question" : "approval: " + (c.tool || "a tool call");
 
 // One fetch drives every attention surface — the window, the badge, the
 // drawer section, and the mobile card cascade all read /api/attention, so
@@ -9552,11 +9604,10 @@ function alertRaiseAll() {
 
 function alertCard(row) {
   const { card: p, job_id: jid } = row;
-  const box = el("div", "alert-card" + (p.kind === "ask" ? " ask" : ""));
+  const box = el("div", "alert-card" + (isChoiceCard(p) ? " ask" : ""));
   const head = el("div", "alert-head");
   const main = el("div", "alert-head-main");
-  main.appendChild(el("div", "alert-kicker",
-    (p.kind === "ask" ? "Vira is asking" : "Vira needs approval")));
+  main.appendChild(el("div", "alert-kicker", choiceKicker(p)));
   main.appendChild(el("div", "alert-title", row.title || jid));
   head.appendChild(main);
   const open = el("button", "alert-act", "open");
@@ -9568,7 +9619,7 @@ function alertCard(row) {
   min.addEventListener("click", () => alertPark(p.req_id));
   head.appendChild(min);
   box.appendChild(head);
-  box.appendChild(p.kind === "ask" ? askCard(jid, p) : permissionCard(jid, p));
+  box.appendChild(isChoiceCard(p) ? choiceCard(jid, p) : permissionCard(jid, p));
   return box;
 }
 
@@ -9687,11 +9738,10 @@ function attnMaybeOpen() {
 // sits in the list until it is answered.
 function attnCardBlock(row) {
   const { card: p, job_id: jid } = row;
-  const box = el("div", "alert-card attn-card" + (p.kind === "ask" ? " ask" : ""));
+  const box = el("div", "alert-card attn-card" + (isChoiceCard(p) ? " ask" : ""));
   const head = el("div", "alert-head");
   const main = el("div", "alert-head-main");
-  main.appendChild(el("div", "alert-kicker",
-    (p.kind === "ask" ? "Vira is asking" : "Vira needs approval")));
+  main.appendChild(el("div", "alert-kicker", choiceKicker(p)));
   main.appendChild(el("div", "alert-title", row.title || jid));
   head.appendChild(main);
   const open = el("button", "alert-act", "open");
@@ -9699,7 +9749,7 @@ function attnCardBlock(row) {
   open.addEventListener("click", () => openSession(jid));
   head.appendChild(open);
   box.appendChild(head);
-  box.appendChild(p.kind === "ask" ? askCard(jid, p) : permissionCard(jid, p));
+  box.appendChild(isChoiceCard(p) ? choiceCard(jid, p) : permissionCard(jid, p));
   return box;
 }
 
