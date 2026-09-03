@@ -6643,7 +6643,7 @@ $("#idea-run-go").addEventListener("click", async () => {
   ideaRunSheet.close();
   const jid = await launchJob(prompt, cwd,
     { permission_mode, model, provider, publish_plan, read_only, idea_id: it.id,
-      mode: runMode });
+      mode: runMode, subject: it.text, about: ideaAbout(it, mode, extra, fold) });
   // stamp the idea so the dispatch is visible next time it's opened
   const day = new Date().toISOString().slice(0, 10);
   const job = " (job " + String(jid || "?").slice(0, 8) + ")";
@@ -6681,6 +6681,23 @@ async function loadActions() {
   });
 }
 
+// The long form a queued idea's session carries: the idea itself, the
+// owner's note and extra instructions, and whatever was folded in - what
+// this is, the goal, what is being built - read back from the run card and
+// the terminal without opening the prompt.
+function ideaAbout(it, mode, extra, fold) {
+  const lines = [
+    (mode === "plan" ? "Plan for the idea: " : "Implement the idea: ")
+      + (it.text || "").trim(),
+  ];
+  if (it.note) lines.push("Note on the idea: " + it.note.trim());
+  if (extra && extra.trim()) lines.push("Extra instructions: " + extra.trim());
+  if (fold && fold.length)
+    lines.push("Folded in: " + fold.map((r) => r.text).join(" | "));
+  if (it.project && it.project !== "Vira") lines.push("Project: " + it.project);
+  return lines.join("\n");
+}
+
 async function launchJob(promptText, cwd, opts = {}) {
   const { job_id } = await post("/api/actions/run", {
     prompt: promptText,
@@ -6692,6 +6709,12 @@ async function launchJob(promptText, cwd, opts = {}) {
     read_only: opts.read_only || false,
     idea_id: opts.idea_id || null,
     mode: opts.mode || null,
+    // The three-part name's inputs (server/joblog.py): the surface that
+    // composed the prompt says what the work is about; the prompt's first
+    // line is a preamble and names nothing.
+    subject: opts.subject || null,
+    about: opts.about || null,
+    kind_label: opts.kind_label || null,
   });
   openSession(job_id);
   refreshJobs();
@@ -6764,7 +6787,10 @@ $("#run-go").addEventListener("click", () => {
   const cwd = $("#run-cwd").value.trim();
   runSheet.close();
   launchJob((runAction.invoke + " " + parts.join(" ")).trim(),
-    cwd && cwd !== "~" ? cwd : null);
+    cwd && cwd !== "~" ? cwd : null,
+    { subject: (runAction.invoke + " " + parts.join(" ")).trim(),
+      kind_label: "Skill run",
+      about: (runAction.description || "").trim() });
 });
 $("#run-args").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#run-go").click(); });
 
@@ -7459,6 +7485,60 @@ async function revealBoardsHealth() {
 // itself (jobHistRow — judge chip/button, transcript copy, click-to-
 // reopen), because those affordances are the point of a ledger row and a
 // second implementation of them would be two chances to drift.
+// The PR a session's branch became - the first part of its name, and the
+// one link every row should carry (owner, 2026-09-03: "everything is going
+// to start with a draft"). Off-origin, so target=_blank is safe in
+// standalone mode.
+function prChip(pr) {
+  if (!pr || !pr.number) return null;
+  const a = document.createElement("a");
+  a.className = "run-pr" + (pr.state === "MERGED" ? " merged"
+    : pr.state === "CLOSED" ? " closed" : pr.draft ? " draft" : "");
+  a.href = pr.url || "#";
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.textContent = "PR #" + pr.number;
+  a.title = [pr.title, pr.draft ? "draft" : "", (pr.state || "").toLowerCase()]
+    .filter(Boolean).join(" · ") || "Open the pull request";
+  a.addEventListener("click", (e) => e.stopPropagation());
+  return a;
+}
+
+// "What this is": the long-form explanation the dispatch site wrote, and
+// - for a finished session - its own closing text, which is what it
+// ACTUALLY did. Collapsed under the row; a click inside never opens the
+// session (summary is in CARD_CONTROL_SEL, and the rows stop propagation).
+function aboutBlock(j) {
+  const about = (j.about || "").trim();
+  const outcome = (j.outcome || "").trim();
+  if (!about && !outcome && !j.branch) return null;
+  const box = document.createElement("details");
+  box.className = "run-about";
+  const sum = el("summary", "");
+  sum.appendChild(el("span", "run-about-k", j.kind_label || "Session"));
+  sum.appendChild(el("span", "run-about-s",
+    about ? about.split("\n")[0].slice(0, 140)
+      : outcome ? "what it did" : "details"));
+  box.appendChild(sum);
+  const body = el("div", "run-about-body");
+  if (about) body.appendChild(el("div", "run-about-text", about));
+  if (outcome) {
+    body.appendChild(el("div", "run-about-h",
+      j.status === "done" ? "How it ended" : "Last words"));
+    body.appendChild(el("div", "run-about-text run-about-outcome", outcome));
+  }
+  // The PR chip already sits on the title row of every surface that
+  // renders this block; the foot names the branch only.
+  if (j.branch) {
+    const meta = el("div", "run-about-meta");
+    meta.appendChild(el("span", "run-about-branch", j.branch));
+    body.appendChild(meta);
+  }
+  box.appendChild(body);
+  box.addEventListener("click", (e) => e.stopPropagation());
+  return box;
+}
+
 function runCard(it, opts = {}) {
   if (it.kind === "history") {
     const row = jobHistRow(it.src);
@@ -7477,6 +7557,8 @@ function runCard(it, opts = {}) {
   const main = el("div", "run-main");
   const titleRow = el("div", "run-titlerow");
   titleRow.appendChild(el("div", "run-title", it.title || "(untitled)"));
+  const pr = prChip(it.src && it.src.pr);
+  if (pr) titleRow.appendChild(pr);
   titleRow.appendChild(el("span", "run-kind", RUN_KINDS[it.kind]?.toLowerCase()
     || it.kind));
   main.appendChild(titleRow);
@@ -7489,7 +7571,11 @@ function runCard(it, opts = {}) {
   if (it.kind === "flow") flowBody(card, it.src);
   else if (it.kind === "unlanded") orphanBody(card, it.src, opts);
   else if (it.kind === "shipped") shippedBody(card, it);
-  else cardAction(card, () => openSession(it.src.id));
+  else {
+    const ab = aboutBlock(it.src);
+    if (ab) card.appendChild(ab);
+    cardAction(card, () => openSession(it.src.id));
+  }
   return card;
 }
 
@@ -8745,8 +8831,22 @@ function renderFirstCmd(host, j) {
   const text = j.command || (j.prompt || "").replace(/\s+/g, " ").slice(0, 200);
   host.innerHTML = "";
   if (!text) return;
-  host.appendChild(el("span", "cc-fc-chev", ">"));
-  host.appendChild(el("span", "cc-fc-text", text));
+  const line = el("div", "cc-fc-line");
+  line.appendChild(el("span", "cc-fc-chev", ">"));
+  line.appendChild(el("span", "cc-fc-text", text));
+  const pr = prChip(j.pr);
+  if (pr) line.appendChild(pr);
+  host.appendChild(line);
+  // What this is - the long form the dispatch wrote - folded under the
+  // command, so the session's purpose is one click away in its own window.
+  const about = (j.about || "").trim();
+  if (about) {
+    const box = document.createElement("details");
+    box.className = "cc-fc-about";
+    box.appendChild(el("summary", "", "what this is"));
+    box.appendChild(el("div", "cc-fc-about-text", about));
+    host.appendChild(box);
+  }
 }
 
 // One inline Approve/Deny card per pending permission request. Buttons post
@@ -9911,14 +10011,20 @@ function jobHistRow(r) {
   row.appendChild(el("span", "job-dot "
     + (r.status === "orphaned" ? "error" : r.status)));
   const main = el("div", "link-main");
-  main.appendChild(el("div", "link-title",
+  const tr = el("div", "run-titlerow");
+  tr.appendChild(el("div", "link-title",
     (r.title || r.prompt || "").replace(/\s+/g, " ").slice(0, 90)));
+  const prc = prChip(r.pr);
+  if (prc) tr.appendChild(prc);
+  main.appendChild(tr);
   const bits = [r.status,
     (r.started || "").replace("T", " ").slice(0, 16)];
   if (r.model) bits.push(ccModelLabel(r.model) || r.model);
   if (r.mode) bits.push(r.publish_plan ? "plan" : r.mode);
   if (r.session_id) bits.push("session " + r.session_id.slice(0, 8));
   main.appendChild(el("div", "link-sub", bits.join(" · ")));
+  const ab = aboutBlock(r);
+  if (ab) main.appendChild(ab);
   row.appendChild(main);
   if (r.judge && r.judge.grade) {
     const g = el("span", "cir-grade "
@@ -9957,7 +10063,10 @@ function jobHistRow(r) {
     });
     row.appendChild(cp);
   }
-  row.addEventListener("click", () => openSession(r.id));
+  row.addEventListener("click", (e) => {
+    if (e.target.closest("details, a")) return;   // the about block, the PR
+    openSession(r.id);
+  });
   return row;
 }
 

@@ -302,7 +302,12 @@ def launch_judge(jid, model=None):
     judge_jid = session.sessions.launch(
         prompt, cwd=rec.get("cwd"), model=model or judge_model(),
         mode="manual", read_only=True,
-        meta={"judge_of": jid})
+        meta={"judge_of": jid},
+        subject=joblog.subject(rec) or joblog.name(rec),
+        about=(f"Grade the finished session '{joblog.name(rec)}' "
+               f"({jid}) with fresh eyes: read its output and the git "
+               "diff it produced, and return a verdict (grade, findings, "
+               "ship / fix / redo) onto its ledger row."))
     threading.Thread(target=_watch_judge, args=(jid, judge_jid),
                      daemon=True, name=f"vira-judge-{judge_jid}").start()
     return judge_jid

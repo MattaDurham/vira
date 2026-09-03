@@ -285,6 +285,19 @@ def delete_routine(rid):
         _save(s)
 
 
+def _about(r):
+    """The standing loop's own description, for the session's long form:
+    its cadence and what it is for, read off the routine record."""
+    cad = (f"every {r['every_hours']}h" if r.get("every_hours")
+           else f"daily at {r['daily_at']}" if r.get("daily_at") else "")
+    desc = " ".join((r.get("description") or "").split())
+    head = " ".join((r.get("prompt") or "").split())[:400]
+    return "\n".join(x for x in (
+        f"Standing loop '{r.get('name') or r['id']}' ({r.get('kind')}"
+        + (f", {cad}" if cad else "") + ").",
+        desc, "" if desc else head) if x)
+
+
 def _stamp(rid, **fields):
     with _lock, locked(STORE):
         s = _load()
@@ -491,7 +504,9 @@ def dispatch(r):
                                   # config default, same as every dispatch
                                   mode=session.norm_mode(r.get("mode")),
                                   meta={"routine_id": r["id"],
-                                        "kind": r["kind"]})
+                                        "kind": r["kind"]},
+                                  subject=r.get("name") or r["id"],
+                                  about=_about(r))
     _stamp(r["id"], last_run=_now_iso(), last_job=jid,
            last_run_id=None, last_status="running")
     return {"job_id": jid}

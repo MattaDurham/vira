@@ -833,7 +833,12 @@ def _stage_one(entry, u):
         jid = session.sessions.launch(
             instruction_prompt(entry, u), cwd=str(REPO),
             idea_id=item["id"],
-            meta={"journal_note": entry.get("id"), "kind": "journal"})
+            meta={"journal_note": entry.get("id"), "kind": "journal"},
+            subject=text,
+            about=("An instruction staged from a journal note "
+                   f"({u.get('area') or 'other'} area).\n"
+                   f"What the owner said: {entry.get('text', '').strip()}\n"
+                   f"The instruction: {text}"))
         u["job_id"] = jid
         ideas.stamp_note(item["id"], f"{note} — dispatched (job {jid[:8]})")
     except Exception as e:  # noqa: BLE001 — the idea is already on the Queue

@@ -418,10 +418,16 @@ def _dispatch(text):
         if refs:
             ctx = ("It most likely answers the last thing you texted him:\n"
                    f"    {refs[0]['text']}\n\n")
+        t = " ".join((text or "").split())
         jid = session.sessions.launch(
             PROMPT.format(text=text, context=ctx),
             cwd=str(settings.ROOT),
-            meta={"channel": "imessage", "kind": "text-reply"})
+            meta={"channel": "imessage", "kind": "text-reply"},
+            subject=t[:140],
+            about=("The owner texted this to Vira from his phone: "
+                   f"{t[:600]}\n" + (f"It most likely answers: "
+                   f"{' '.join(refs[0]['text'].split())[:300]}" if refs
+                   else "")))
     except Exception as e:  # noqa: BLE001
         notify.channel_send(f"couldn't start on that — {e}", kind="reply")
         return {"route": "dispatch", "ok": False, "detail": str(e)[:300]}

@@ -542,7 +542,13 @@ class SessionSlugTest(ApplicationsBase):
         record = {"prompt": applications.apply_prompt(roles[0])}
         slug = applications.session_slug(roles[0])
         self.assertEqual(joblog.command(record), slug)
-        self.assertEqual(joblog.default_title(record), slug)
+        # The slug is the SUBJECT of the three-part name (2026-09-03); the
+        # kind follows it. A real Apply dispatch states both outright
+        # (subject=company — title, kind_label="Write application"), so
+        # this pins only the prompt-derived path the copy-out relies on.
+        self.assertEqual(joblog.subject(record), slug)
+        self.assertEqual(joblog.default_title(record),
+                         slug + joblog.SEP + "Session")
 
     def test_a_long_title_is_trimmed_so_company_and_date_survive(self):
         # 826 of 3,197 live roles exceed TITLE_CAP; the cut must come out of
@@ -557,8 +563,13 @@ class SessionSlugTest(ApplicationsBase):
         self.assertTrue(slug.endswith("-2026-08-12"), slug)
         # and the trim is on a hyphen boundary, not mid-word
         self.assertNotIn("--", slug)
-        # the name survives whole — no ellipsis, which is the whole point
-        self.assertEqual(joblog.default_title({"prompt": slug}), slug)
+        # the slug survives whole as the SUBJECT — no ellipsis, which is
+        # the whole point. The display name composes `· <kind>` after it
+        # (2026-09-03) and may trim the subject to fit; the slug's job is
+        # the first line a copy-out harness names a session by, which is
+        # the command, and that is asserted whole.
+        self.assertEqual(joblog.command({"prompt": slug}), slug)
+        self.assertEqual(joblog.subject({"prompt": slug}), slug)
 
     def test_an_absurd_company_still_leaves_a_usable_label(self):
         role = {"company": "A" * 200, "title": "Engineer"}
@@ -702,7 +713,10 @@ class ApplyRouteTest(ApplicationsBase):
 
         def fake_launch(prompt, cwd, permission_mode=None, model=None,
                         publish_plan=False, idea_id=None, mode=None,
-                        provider=None):
+                        provider=None, **name_inputs):
+            # subject / about / kind_label ride every dispatch since
+            # 2026-09-03 (the three-part session name); this stub reads
+            # what the test asserts and lets the rest through.
             calls.update(prompt=prompt, cwd=cwd, model=model, mode=mode,
                          permission_mode=permission_mode, provider=provider)
             return "job-123"

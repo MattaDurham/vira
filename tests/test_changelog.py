@@ -111,7 +111,8 @@ class ChangelogScopeTests(unittest.TestCase):
              _job("j2", str(Path.home()), idea_id="missing")])
         texts = " ".join(self._texts(groups))
         # idea-linked jobs are named for the idea, not the prompt head
-        self.assertIn("Implement — vira idea", texts)
+        # (subject · kind since 2026-09-03)
+        self.assertIn("vira idea · Implement", texts)
         self.assertNotIn("do j2", texts)
 
     def test_job_labels_prefer_meaning_over_prompt_head(self):
@@ -122,9 +123,9 @@ class ChangelogScopeTests(unittest.TestCase):
                          "What is the demo contact waiting on?\n" + '"""\n')
         groups = self._groups([], [routine, ask])
         texts = " ".join(self._texts(groups))
-        self.assertIn("System map — refresh the registry from the change log",
+        self.assertIn("refresh the registry from the change log · System map",
                       texts)
-        self.assertIn("Ask Vira — What is the demo contact waiting on?", texts)
+        self.assertIn("What is the demo contact waiting on? · Ask", texts)
 
     def test_edited_title_wins_in_the_log(self):
         job = _job("j1", str(changelog.REPO))

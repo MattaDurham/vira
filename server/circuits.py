@@ -1118,12 +1118,18 @@ class Driver(threading.Thread):
             model = st_def.get("model") or None
             mode = norm_stage_mode(st_def.get("mode"))
             read_only = bool(st_def.get("read_only"))
+        cname = run.get("circuit_name") or run.get("circuit_id") or "flow"
+        step = st_def.get("name") or sid
+        inp = " ".join((run.get("input") or "").split())
         return session.sessions.launch(
             prompt, cwd=st_def.get("cwd") or run.get("cwd"),
             model=model or None, mode=mode, read_only=read_only,
             publish_plan=writes_a_plan(st_def, run),
             meta={"circuit_run": run["id"], "stage": sid,
-                  "circuit": run["circuit_id"]})
+                  "circuit": run["circuit_id"]},
+            subject=f"{cname}: {step}",
+            about=(f"Step '{step}' of the flow '{cname}' (run {run['id']}).\n"
+                   + (f"Flow input: {inp[:600]}" if inp else "")))
 
     def _run_local_stage(self, run, st_def):
         """Advance a non-model graph part without launching a session."""

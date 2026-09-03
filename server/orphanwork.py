@@ -56,7 +56,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import gitutil, jsonstore, joblog, sessiondiag, worktree
+from . import gitutil, joblog, jsonstore, prindex, sessiondiag, worktree
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "orphan-work.json"
@@ -168,6 +168,12 @@ def _job_for_branch(branch, ledger_by_branch):
     if not row:
         return None
     return {"id": row.get("id"), "title": joblog.name(row),
+            # what the work is ABOUT, as the dispatch that started it said
+            # (or as the ledger derives it) - the subject a landing
+            # session inherits, so it is named for the work and not for
+            # the fact of landing
+            "subject": joblog.subject(row),
+            "about": joblog.about(row),
             "status": row.get("status"), "finished": row.get("finished"),
             # what was actually ASKED — the evidence a decision needs; the
             # machine preamble is squeezed so the task line survives the cap
@@ -277,6 +283,9 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch):
         # time and nothing put it on the row.
         "failure": _failure_summary(branch),
         "job": job,
+        # The branch's pull request, off the index (server/prindex.py) -
+        # the number leads the session name and the row links to it
+        "pr": prindex.lookup(branch),
         "last_activity": ts,
         "last_activity_iso": datetime.fromtimestamp(
             ts, tz=timezone.utc).isoformat(timespec="seconds"),
@@ -290,6 +299,9 @@ def sweep():
     whole way; a failed sub-command degrades that one item away rather
     than raising the sweep out."""
     from . import update
+    # One gh call for every branch's PR, on a thread, only when the index
+    # has aged out - the rows read the index, never gh.
+    prindex.refresh_async(ROOT)
     ledger_by_branch = {}
     for r in joblog.list_records():         # ascending -> last write wins == newest
         b = r.get("branch")
@@ -833,6 +845,49 @@ def context(item):
     return out
 
 
+def branch_subject(item):
+    """What the work on this branch is ABOUT - the dispatch site's own
+    statement first, then the PR's title, then the branch slug humanized.
+    A landing session is named for the work, never for the act of
+    landing (that is its kind)."""
+    job = item.get("job") or {}
+    if job.get("subject"):
+        return job["subject"]
+    pr = item.get("pr") or {}
+    if pr.get("title"):
+        return " ".join(pr["title"].split())
+    return joblog._humanize_branch(item.get("branch") or "")
+
+
+def branch_about(item, act):
+    """The long form for a Land / Resume session: what is on the branch,
+    what was asked, and what this run does with it."""
+    job = item.get("job") or {}
+    br = item.get("branch") or ""
+    bits = [f"{act} the branch {br}."]
+    state = []
+    if item.get("ahead"):
+        state.append(f"{item['ahead']} commit{'s' if item['ahead'] != 1 else ''} "
+                     "not on main")
+    if item.get("dirty"):
+        state.append(f"{item['dirty']} uncommitted file"
+                     f"{'s' if item['dirty'] != 1 else ''}")
+    if state:
+        bits.append("On the branch: " + ", ".join(state) + ".")
+    if job.get("about"):
+        bits.append("What was being built: " + job["about"])
+    elif job.get("prompt_head"):
+        bits.append("Originally asked: " + job["prompt_head"])
+    if item.get("commits"):
+        bits.append("Commits: " + " | ".join(item["commits"][:6]))
+    if item.get("failure"):
+        f = item["failure"]
+        if isinstance(f, dict) and (f.get("headline") or f.get("why")):
+            bits.append("Why it stopped: " + " ".join(
+                (f.get("headline") or f.get("why") or "").split()))
+    return "\n".join(bits)
+
+
 def resume(item):
     """Dispatch a session to resume stalled work in ITEM's worktree.
     Synchronous — the launch call itself is cheap, the session runs
@@ -850,7 +905,10 @@ def resume(item):
     from . import session
     prompt = resume_prompt(item)
     return session.sessions.launch(
-        prompt, cwd=wt, meta={"kind": "orphan-resume", "branch": item.get("branch")})
+        prompt, cwd=wt, meta={"kind": "orphan-resume", "branch": item.get("branch")},
+        subject=branch_subject(item),
+        about=branch_about(item, "Resume the work on"),
+        pr=item.get("pr") or None)
 
 
 def _refuse_if_busy(branch):
@@ -1145,10 +1203,15 @@ def _launch_land_session(item, mode="diagnose"):
     prompt = (land_diagnose_prompt(item) if mode == "diagnose"
               else land_prompt(item))
     from . import session
+    act = ("Diagnose why the earlier session stopped, then finish and land"
+           if mode == "diagnose" else "Finish and land")
     return session.sessions.launch(
         prompt, cwd=wt,
         meta={"kind": "orphan-land", "machine": True,
-              "land_mode": mode, "branch": item.get("branch")})
+              "land_mode": mode, "branch": item.get("branch")},
+        subject=branch_subject(item),
+        about=branch_about(item, act),
+        pr=item.get("pr") or None)
 
 
 def _land_tail(item, slug, branch, jid):

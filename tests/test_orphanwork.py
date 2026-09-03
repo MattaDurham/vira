@@ -88,6 +88,16 @@ class _RepoCase(unittest.TestCase):
         ka = mock.patch.object(orphanwork, "_kick_assess", lambda: None)
         ka.start()
         self.addCleanup(ka.stop)
+        # sweep() asks the PR index to refresh (a gh call, on a thread) and
+        # every row reads it; the fixture must neither shell to gh nor
+        # read the checkout's own data/pr-index.json.
+        from server import prindex
+        for target, value in (("STORE", self.root / "data" / "pr-index.json"),
+                              ("refresh_async", lambda *a, **k: False)):
+            pp = mock.patch.object(prindex, target, value)
+            pp.start()
+            self.addCleanup(pp.stop)
+        prindex._cache["mtime"] = None
 
     def make_worktree(self, slug, branch=None, dirty=False, commits=0):
         """A linked worktree on claude/<slug> (or `branch`), off main, with
