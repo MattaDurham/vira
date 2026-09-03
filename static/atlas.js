@@ -70,6 +70,7 @@
             playing: false, speed: 1, raf: 0, lastFrame: 0 },
     fixedLayout: false,      // server-supplied semantic coordinates
     display: { scale: 1, nodeSize: 1, nodeOpacity: 1, linkThickness: 1,
+               linkOpacity: 1, whiteLinks: false,
                autoRotate: true, curvedLinks: true, linkCurve: .10,
                sphericalNodes: true },
     colorOverrides: {},
@@ -83,6 +84,7 @@
   const CONTROL_DEFAULTS = {
     filterSearch: true, hideOrphans: false, starredOnly: false,
     display: { scale: 1, nodeSize: 1, nodeOpacity: 1, linkThickness: 1,
+               linkOpacity: 1, whiteLinks: false,
                autoRotate: true, curvedLinks: true, linkCurve: .10,
                sphericalNodes: true },
     physics: { enabled: true, center: 0.08, repel: 0.30, link: 0.25,
@@ -110,6 +112,8 @@
     S.display.nodeOpacity = clamp(saved.display?.nodeOpacity, .1, 1, 1);
     S.display.linkThickness = clamp(
       saved.display?.linkThickness, .25, 2.5, 1);
+    S.display.linkOpacity = clamp(saved.display?.linkOpacity, 0, 3, 1);
+    S.display.whiteLinks = saved.display?.whiteLinks === true;
     S.display.autoRotate = saved.display?.autoRotate !== false;
     S.display.curvedLinks = saved.display?.curvedLinks !== false;
     S.display.linkCurve = clamp(saved.display?.linkCurve, 0, .3, .10);
@@ -897,8 +901,8 @@
       for (const e of S.egoEdges) {
         const hot = hasSel ? S.sel.has(e.bn)
                            : focus && (e.bn === focus || S.ego === focus);
-        ctx.strokeStyle = hot ? "rgba(138,132,120,.4)"
-                              : `rgba(138,132,120,${hasSel ? 0.02 : 0.05})`;
+        ctx.strokeStyle = flatEdgeStroke(S.ego, e.bn, [138, 132, 120],
+          hot ? 0.4 : (hasSel ? 0.02 : 0.05), hot ? 0.4 : 0);
         ctx.lineWidth = (hot ? 1.4 : 1) * S.display.linkThickness;
         ctx.beginPath();
         traceFlatEdge(e, S.ego, e.bn);
@@ -906,43 +910,46 @@
       }
     }
 
-    // contact-to-contact edges
+    // contact-to-contact edges. Each branch names a grey, an alpha, a
+    // width and a LIFT - the same six-part style the 3D renderer paints,
+    // so the two surfaces blend, whiten and dim ties the same way.
     for (const e of S.edges) {
       if (!isEdgeShown(e)) continue;
       const hot = focus && (e.an === focus || e.bn === focus);
       const w = Math.min(1.5, e.weight) / 1.5;
+      let rgb, alpha, lift = 0;
       if (hasSel && S.selEdges.has(e)) {
         // the featured links — ties among the selected
-        ctx.strokeStyle = "rgba(222,214,197,.95)";
+        rgb = [222, 214, 197]; alpha = 0.95; lift = 0.6;
         ctx.lineWidth = (1.6 + 2.2 * w) * S.display.linkThickness;
       } else if (hasSel && S.selPathEdges.has(e)) {
         // bridge chains connecting selections that share no direct tie
-        ctx.strokeStyle = "rgba(163,156,141,.75)";
+        rgb = [163, 156, 141]; alpha = 0.75; lift = 0.45;
         ctx.lineWidth = (1.3 + 1.2 * w) * S.display.linkThickness;
       } else if (hasSel && (S.sel.has(e.an) || S.sel.has(e.bn))) {
         // spokes from a selected node out to its world — prominent for a
         // single selection, quieter once the story is between selections
         const spoke = S.sel.size === 1 ? 0.45 : 0.16;
-        ctx.strokeStyle = `rgba(207,203,194,${spoke * (0.5 + 0.5 * w)})`;
+        rgb = [207, 203, 194]; alpha = spoke * (0.5 + 0.5 * w); lift = 0.3;
         ctx.lineWidth = (0.8 + 1.4 * w) * S.display.linkThickness;
       } else if (hasSel) {
         // the hint of what's left
-        ctx.strokeStyle = `rgba(143,141,133,${0.015 + 0.03 * w})`;
+        rgb = [143, 141, 133]; alpha = 0.015 + 0.03 * w;
         ctx.lineWidth = (0.6 + w) * S.display.linkThickness;
       } else if (hot) {
-        ctx.strokeStyle = e.shared_interest
-          ? "rgba(138,132,120,.85)" : "rgba(207,203,194,.55)";
+        rgb = e.shared_interest ? [138, 132, 120] : [207, 203, 194];
+        alpha = e.shared_interest ? 0.85 : 0.55; lift = 0.45;
         ctx.lineWidth = (1 + 2 * w) * S.display.linkThickness;
       } else {
-        let alpha = 0.05 + 0.3 * w * w;
+        alpha = 0.05 + 0.3 * w * w;
         // isolating strips the noise — let the remaining ties read clearly
         if (S.shown) alpha = Math.min(0.8, alpha * 3 + 0.12);
         if (matchDim(e.an) || matchDim(e.bn)) alpha *= 0.2;
-        ctx.strokeStyle = e.shared_interest
-          ? `rgba(138,132,120,${alpha + 0.08})`
-          : `rgba(143,141,133,${alpha})`;
+        if (e.shared_interest) { rgb = [138, 132, 120]; alpha += 0.08; }
+        else rgb = [143, 141, 133];
         ctx.lineWidth = (0.6 + 1.8 * w) * S.display.linkThickness;
       }
+      ctx.strokeStyle = flatEdgeStroke(e.an, e.bn, rgb, alpha, lift);
       ctx.beginPath();
       traceFlatEdge(e, e.an, e.bn);
       ctx.stroke();
@@ -954,6 +961,34 @@
       drawNode(p, focus);
     }
     if (!S.hideEgo && !S.shown) drawNode(S.ego, focus);
+  }
+
+  // A tie blends from A's colour to B's (white when the toggle is on), and
+  // its alpha rides the link-opacity slider. `lift` pulls a featured tie
+  // part-way toward the branch's own grey so it still reads hot.
+  function flatEdgeStroke(A, B, grey, alpha, lift) {
+    const a = Math.min(1, alpha * (S.display.linkOpacity ?? 1));
+    if (S.display.whiteLinks) return `rgba(255,255,255,${a})`;
+    const tint = (p) => hexRgb(p.ego ? "#a39c8d"
+      : (p.band && S.colors.get(p.band)) || "#6a6a64");
+    const mix = (c) => c.map((v, i) => v + (grey[i] - v) * lift);
+    const ca = mix(tint(A)), cb = mix(tint(B));
+    const g = ctx.createLinearGradient(w2sX(A.x), w2sY(A.y),
+                                       w2sX(B.x), w2sY(B.y));
+    g.addColorStop(0, `rgba(${ca.map(Math.round).join(",")},${a})`);
+    g.addColorStop(1, `rgba(${cb.map(Math.round).join(",")},${a})`);
+    return g;
+  }
+  const hexCache = new Map();
+  function hexRgb(hex) {
+    let c = hexCache.get(hex);
+    if (!c) {
+      const n = parseInt(hex.slice(1, 7), 16);
+      c = Number.isFinite(n) ? [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+                             : [106, 106, 100];
+      hexCache.set(hex, c);
+    }
+    return c;
   }
 
   function traceFlatEdge(edge, A, B) {
@@ -1866,6 +1901,7 @@
     head.appendChild(av);
     const mid = el("div", "atlas-card-name");
     const nm = el("div", "click", d.node.name);
+    nm.title = openLabel(d.node) + " in a window";
     nm.addEventListener("click", () => openWorldNode(d.node));
     mid.appendChild(nm);
     const sub = [kindLabel(d.node.kind), d.node.title, d.node.company,
@@ -1896,8 +1932,18 @@
     card.appendChild(head);
 
     const chips = el("div", "atlas-card-chips");
+    // Opening the full document is a SIDEBAR act (owner's call): the
+    // canvas only selects, so the card carries an explicit Open button
+    // beside the clickable name rather than relying on either alone.
+    const openBtn = el("button", "fchip sm atlas-open", openLabel(d.node));
+    openBtn.type = "button";
+    openBtn.title = "Open the full " + (d.node.kind === "person"
+      && d.node.open_kind === "person" ? "profile" : "document")
+      + " in a window";
+    openBtn.addEventListener("click", () => openWorldNode(d.node));
+    chips.appendChild(openBtn);
     const noteRef = d.node.ref || d.node.note_ref;
-    if (noteRef) {
+    if (noteRef && d.node.open_kind === "person") {
       const wk = el("span", "atlas-deg click", "open source note");
       wk.addEventListener("click", () => openNote(noteRef, d.node.name));
       chips.appendChild(wk);
@@ -2220,6 +2266,13 @@
     return row ? `receipt: ${row.label || row.ref || row.kind}` : "";
   }
 
+  function openLabel(node) {
+    if (node.open_kind === "person" || (node.kind === "person" && !node.ref))
+      return "Open profile";
+    if (node.ref || node.note_ref) return "Open note";
+    return "Open";
+  }
+
   function openWorldNode(node) {
     if (node.open_kind === "person" || (node.kind === "person" && !node.ref))
       openPerson(node.id);
@@ -2329,6 +2382,8 @@
 
   // ---------- input (the flat fallback's own gestures) ----------
 
+  // A PRESS IS ALWAYS THE CAMERA'S here too (owner's call, 2026-09-02):
+  // no node drag, no single-click select. Double-click selects.
   let panning = null;
   S.dragNode = null;
 
@@ -2338,25 +2393,12 @@
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
     const p = nodeAt(sx, sy);
     canvas.setPointerCapture(e.pointerId);
-    if (p && !p.ego) {
-      S.dragNode = p;
-      p.pin = true;
-      S.dragMoved = false;
-    } else {
-      panning = { sx, sy, cx: S.cam.x, cy: S.cam.y, hitEgo: !!p };
-    }
+    panning = { sx, sy, cx: S.cam.x, cy: S.cam.y, hitNode: !!p };
   });
 
   canvas.addEventListener("pointermove", (e) => {
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
-    if (S.dragNode) {
-      S.dragNode.x = s2wX(sx);
-      S.dragNode.y = s2wY(sy);
-      S.dragMoved = true;
-      wake(0.25);
-      return;
-    }
     if (panning) {
       S.cam.x = panning.cx - (sx - panning.sx) / S.cam.k;
       S.cam.y = panning.cy - (sy - panning.sy) / S.cam.k;
@@ -2378,34 +2420,21 @@
     if (e.button !== 0) return;
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
-    if (S.dragNode) {
-      const p = S.dragNode;
-      p.pin = false;
-      S.dragNode = null;
-      if (!S.dragMoved) {
-        hitSelect(p);
-      } else {
-        wake(0.3);
-      }
-      return;
-    }
     if (panning) {
       const moved = Math.hypot(sx - panning.sx, sy - panning.sy) > 4;
-      const hitEgo = panning.hitEgo;
+      const hitNode = panning.hitNode;
       panning = null;
-      if (!moved && !hitEgo) hitEmpty();
+      if (!moved && !hitNode) hitEmpty();
     }
   });
-  canvas.addEventListener("pointercancel", () => {
-    if (S.dragNode) { S.dragNode.pin = false; S.dragNode = null; }
-    panning = null;
-  });
+  canvas.addEventListener("pointercancel", () => { panning = null; });
 
   canvas.addEventListener("dblclick", (e) => {
+    e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const p = nodeAt(e.clientX - rect.left, e.clientY - rect.top);
     if (!p || p.ego) return;
-    hitOpen(p);
+    hitSelect(p);
   });
 
   canvas.addEventListener("wheel", (e) => {
@@ -2446,6 +2475,7 @@
       "#atlas-auto-rotate": S.display.autoRotate,
       "#atlas-curved-links": S.display.curvedLinks,
       "#atlas-spherical-nodes": S.display.sphericalNodes,
+      "#atlas-white-links": S.display.whiteLinks,
     };
     for (const [id, value] of Object.entries(values))
       if ($(id)) $(id).checked = value;
@@ -2454,6 +2484,7 @@
       "#atlas-node-size": S.display.nodeSize * 100,
       "#atlas-node-opacity": S.display.nodeOpacity * 100,
       "#atlas-link-thickness": S.display.linkThickness * 100,
+      "#atlas-link-opacity": S.display.linkOpacity * 100,
       "#atlas-link-curve": S.display.linkCurve * 100,
       "#atlas-center": S.physics.center * 100,
       "#atlas-repel": S.physics.repel * 100,
@@ -2467,6 +2498,7 @@
     setOutput("#atlas-node-size-out", S.display.nodeSize);
     setOutput("#atlas-node-opacity-out", S.display.nodeOpacity);
     setOutput("#atlas-link-thickness-out", S.display.linkThickness);
+    setOutput("#atlas-link-opacity-out", S.display.linkOpacity);
     setOutput("#atlas-link-curve-out", S.display.linkCurve);
     setOutput("#atlas-center-out", S.physics.center);
     setOutput("#atlas-repel-out", S.physics.repel);
@@ -2506,7 +2538,7 @@
     }
     if (!info || !info.count) {
       target.textContent = S.nodes.length > 4000
-        ? "Full-vault mode: select or drag a node to engage local physics."
+        ? "Full-vault mode: select a node to engage local physics."
         : "Global physics ready.";
       return;
     }
@@ -2583,6 +2615,19 @@
                    true);
   bindPercentRange("#atlas-link-thickness", S.display, "linkThickness",
                    .25, 2.5, true);
+  // Link opacity is a plain repaint - no geometry moves, so it must not
+  // route through applyGeometry the way the thickness slider does.
+  $("#atlas-link-opacity")?.addEventListener("input", (e) => {
+    S.display.linkOpacity = clamp(Number(e.target.value) / 100, 0, 3, 1);
+    setOutput("#atlas-link-opacity-out", S.display.linkOpacity);
+    saveControls();
+    draw();
+  });
+  $("#atlas-white-links")?.addEventListener("change", (e) => {
+    S.display.whiteLinks = e.target.checked;
+    saveControls();
+    draw();
+  });
   $("#atlas-link-curve")?.addEventListener("input", (e) => {
     S.display.linkCurve = clamp(Number(e.target.value) / 100, 0, .3, .10);
     setOutput("#atlas-link-curve-out", S.display.linkCurve);

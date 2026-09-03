@@ -47,7 +47,7 @@ class WorldGraphUiTests(unittest.TestCase):
         self.assertIn('function matchesSearch(node)', self.atlas)
         self.assertIn('function renderSearchResults()', self.atlas)
 
-    def test_geometry_physics_and_node_dragging_are_wired(self):
+    def test_geometry_and_physics_are_wired_and_node_dragging_is_gone(self):
         for needle in ('id="atlas-geometry"', 'id="atlas-center"',
                        'id="atlas-repel"', 'id="atlas-link-force"',
                        'id="atlas-link-distance"',
@@ -57,8 +57,11 @@ class WorldGraphUiTests(unittest.TestCase):
         self.assertIn('const PHYSICS_LOCAL_LIMIT = 1400', self.renderer)
         self.assertIn('1,400-node performance ceiling', self.atlas)
         self.assertIn('function refreshPhysics(', self.renderer)
-        self.assertIn('function pointOnDragPlane(', self.renderer)
-        self.assertIn('S.dragNode = p', self.renderer)
+        # a press is always the camera's (owner's call, 2026-09-02): no
+        # node drag in either renderer
+        self.assertNotIn('function pointOnDragPlane(', self.renderer)
+        self.assertNotIn('S.dragNode = p', self.renderer)
+        self.assertNotIn('S.dragNode = p', self.atlas)
         self.assertIn('semantic-home force', self.renderer)
 
     def test_rotation_colors_arcs_and_every_slider_reach_the_renderer(self):
