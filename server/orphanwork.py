@@ -163,17 +163,19 @@ def _dirty_mtime(wt, lines):
     return best
 
 
-def _job_for_branch(branch, ledger_by_branch):
+def _job_for_branch(branch, ledger_by_branch, by_branch=None):
     row = ledger_by_branch.get(branch)
     if not row:
         return None
-    return {"id": row.get("id"), "title": joblog.name(row),
+    return {"id": row.get("id"), "title": joblog.name(row, None, by_branch),
             # what the work is ABOUT, as the dispatch that started it said
             # (or as the ledger derives it) - the subject a landing
             # session inherits, so it is named for the work and not for
-            # the fact of landing
-            "subject": joblog.subject(row),
-            "about": joblog.about(row),
+            # the fact of landing. The newest row on a branch is usually
+            # a Land session; joblog reaches the ORIGINATING job through
+            # by_branch so this reads the work, not the act.
+            "subject": joblog.subject(row, None, by_branch),
+            "about": joblog.about(row, by_branch),
             "status": row.get("status"), "finished": row.get("finished"),
             # what was actually ASKED — the evidence a decision needs; the
             # machine preamble is squeezed so the task line survives the cap
@@ -239,7 +241,7 @@ def _failure_summary(branch):
     }
 
 
-def _make_item(branch, wt, dirty_lines, ledger_by_branch):
+def _make_item(branch, wt, dirty_lines, ledger_by_branch, by_branch=None):
     """One inventory row, or None when there is nothing unlanded (clean
     working tree AND fully merged into main — worktree.tidy() owns
     removing that case, the sweeper never does)."""
@@ -255,7 +257,7 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch):
         m = _dirty_mtime(wt, dirty_lines)
         if m:
             ts = max(ts, m)
-    job = _job_for_branch(branch, ledger_by_branch)
+    job = _job_for_branch(branch, ledger_by_branch, by_branch)
     if job and job.get("status") == "running":
         # A live session owns this tree: its dirt is work IN PROGRESS, not
         # orphan work, and a row here would carry a Resume button that
@@ -266,7 +268,7 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch):
         # keeps status "running" on purpose and is equally excluded — it
         # is the owner's to answer, and the decision layer surfaces it.
         return None
-    return {
+    item = {
         "key": f"{branch}:{(tip or '')[:12]}:{dirty}",
         "branch": branch,
         "worktree": str(wt) if wt else "",
@@ -291,6 +293,12 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch):
             ts, tz=timezone.utc).isoformat(timespec="seconds"),
         "age_days": round((time.time() - ts) / 86400, 1),
     }
+    # What the work IS, named on the row so the card never has to fall
+    # back to a slug (owner, 2026-09-03: a card reading
+    # `you-are-vira-s-coding-agent-work-a80ec5` says nothing).
+    item["subject"] = branch_subject(item)
+    item["about"] = branch_about(item, "Land or resume")
+    return item
 
 
 def sweep():
@@ -303,10 +311,12 @@ def sweep():
     # has aged out - the rows read the index, never gh.
     prindex.refresh_async(ROOT)
     ledger_by_branch = {}
-    for r in joblog.list_records():         # ascending -> last write wins == newest
+    records = joblog.list_records()
+    for r in records:                       # ascending -> last write wins == newest
         b = r.get("branch")
         if b:
             ledger_by_branch[b] = r
+    by_branch = joblog.by_branch_index(records)
 
     items, seen = [], set()
     for wt_entry in _porcelain_worktrees():
@@ -315,7 +325,7 @@ def sweep():
             continue                        # the primary checkout itself
         if not branch:
             continue                        # detached HEAD — nothing to act on
-        it = _make_item(branch, wt, _dirty_lines(wt), ledger_by_branch)
+        it = _make_item(branch, wt, _dirty_lines(wt), ledger_by_branch, by_branch)
         if it:
             items.append(it)
         seen.add(branch)
@@ -327,7 +337,7 @@ def sweep():
             branch = branch.strip()
             if not branch or branch in seen:
                 continue
-            it = _make_item(branch, None, None, ledger_by_branch)
+            it = _make_item(branch, None, None, ledger_by_branch, by_branch)
             if it:
                 items.append(it)
 
@@ -845,18 +855,57 @@ def context(item):
     return out
 
 
+# A subject the ledger derived from the Land prompt itself is the act,
+# not the work; it must not outrank the branch's own commits.
+_ACT_SUBJECTS = re.compile(
+    r"^(finishing|resuming|diagnosing) stalled work", re.I)
+
+
 def branch_subject(item):
-    """What the work on this branch is ABOUT - the dispatch site's own
-    statement first, then the PR's title, then the branch slug humanized.
-    A landing session is named for the work, never for the act of
-    landing (that is its kind)."""
+    """What the work on this branch is ABOUT, best source first: the
+    originating dispatch's own statement (or its idea / question), the
+    PR's title, the first unmerged COMMIT subject (the one thing a
+    finished-but-unlanded branch always carries, and on a branch whose
+    dispatch has aged out of the ledger the only description left), and
+    only then the branch slug humanized - never a slug minted from a
+    prompt preamble. A landing session is named for the work, never for
+    the act of landing (that is its kind)."""
     job = item.get("job") or {}
-    if job.get("subject"):
-        return job["subject"]
+    subj = " ".join((job.get("subject") or "").split())
+    slug_words = joblog._humanize_branch(item.get("branch") or "")
+    preamble = bool(joblog._PREAMBLE_SLUG.match(subj.lower().replace(" ", "-")))
+    commits = [" ".join(str(c).split()) for c in (item.get("commits") or [])]
+    commits = [c for c in commits if c]
+    # A one-word subject (a circuit STAGE name - "build") says less than
+    # the commit the stage wrote; the commit wins where one exists.
+    thin = len(subj.split()) < 2 and bool(commits)
+    if subj and not _ACT_SUBJECTS.match(subj) and not preamble \
+            and not thin and subj != slug_words:
+        return subj
     pr = item.get("pr") or {}
     if pr.get("title"):
         return " ".join(pr["title"].split())
-    return joblog._humanize_branch(item.get("branch") or "")
+    for c in commits:
+        return c
+    if slug_words:
+        return slug_words
+    return (item.get("branch") or "").split("/", 1)[-1]
+
+
+def subject_hint(branch):
+    """The branch's subject as the last sweep named it, for the read layer
+    to overlay on a ledger row whose own prompt names only the act (a Land
+    on a branch whose originating job is gone). Reads the cached store -
+    never git - so a name lookup stays a dict read."""
+    if not branch:
+        return ""
+    try:
+        for it in _read().get("items") or []:
+            if it.get("branch") == branch:
+                return it.get("subject") or ""
+    except Exception:  # noqa: BLE001 — naming must never raise
+        pass
+    return ""
 
 
 def branch_about(item, act):

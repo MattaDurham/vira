@@ -7020,9 +7020,13 @@ function runItems() {
       kind: "unlanded", key: "orphan:" + o.key, src: o,
       ts: runTs(o.last_activity) || runTs(o.last_activity_iso),
       tsWord: "last touched",
-      title: (o.branch || "").replace(/^claude\//, ""),
+      // The subject the sweep named the branch by (its originating job,
+      // its PR, or its first commit) - the slug only when nothing names
+      // it, and the slug rides the sub-line either way.
+      title: o.subject || (o.branch || "").replace(/^claude\//, ""),
       state: busy ? "running" : "unlanded",
-      stateLabel: orphanBits(o),
+      stateLabel: [o.subject ? (o.branch || "").replace(/^claude\//, "") : "",
+                   orphanBits(o)].filter(Boolean).join(" · "),
       sig: [o.key, busy, (o.action || {}).status, (o.read || {}).verdict].join("|"),
       hay: searchFold([o.branch, (o.job || {}).title, (o.job || {}).prompt_head,
                        (o.commits || []).join(" "), (o.files || []).join(" "),

@@ -3058,6 +3058,10 @@ def _ensure_names(rows, records=None):
     recs = records
     if recs is None:
         recs = {r["id"]: r for r in joblog.list_records()}
+    # branch -> rows oldest first, built ONCE: a Land / Resume row is
+    # named for the job that started the work on its branch, and a
+    # per-row ledger read would be N reads of a large file.
+    by_branch = joblog.by_branch_index(recs.values())
     idea_map = None
     for row in rows:
         rec = recs.get(row.get("id")) or row
@@ -3066,7 +3070,18 @@ def _ensure_names(rows, records=None):
             if idea_map is None:
                 idea_map = {x["id"]: x["text"] for x in ideas.list_items()}
             it = idea_map.get(rec["idea_id"])
-        d = joblog.describe(rec, it)
+        d = joblog.describe(rec, it, by_branch)
+        # A continuation row whose branch has no originating job left in
+        # the ledger reads the sweep's own name for the branch (its commit
+        # subject) rather than the Land prompt's preamble.
+        if (joblog.is_continuation(rec) and not rec.get("subject")
+                and not rec.get("title_edited")):
+            hint = orphanwork.subject_hint(
+                rec.get("branch") or (rec.get("meta") or {}).get("branch"))
+            if hint and hint != d["subject"]:
+                d["subject"] = hint
+                d["title"] = joblog.compose_name(
+                    d["pr"], hint, d["kind_label"])
         row["title"] = d["title"]
         row["command"] = rec.get("command") or joblog.command(rec, it)
         # The name's parts and the long form, for the surfaces that show

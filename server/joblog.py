@@ -299,11 +299,73 @@ _VERB_PREFIX = re.compile(
     r"\s+[—-]\s+", re.I)
 
 
+# A branch minted from a prompt's PREAMBLE (the 2026-07-29 incident:
+# `claude/you-are-vira-s-coding-agent-work-<id>`) names nothing, and
+# humanizing it hands the row an equally empty "you are vira s coding
+# agent work". Such a slug is refused rather than dressed up.
+_PREAMBLE_SLUG = re.compile(r"^(you-are-|you-re-|finishing-|resuming-)")
+
+
 def _humanize_branch(branch):
     b = (branch or "").split("/", 1)[-1]
+    if _PREAMBLE_SLUG.match(b):
+        return ""
     # the `-<jobid>` suffix session.launch appends never names anything
     b = re.sub(r"-[0-9a-f]{6}$", "", b)
     return _collapse(b.replace("-", " ").replace("_", " "))
+
+
+_ORIGINAL_ASK = re.compile(r"Original ask:\s*(.+)")
+
+_CONTINUATION_KINDS = ("orphan-land", "orphan-resume", "resume")
+
+
+def is_continuation(record):
+    """A Land / Resume / resumed row continues work another session
+    started; its own prompt names the act, never the work."""
+    meta = record.get("meta") or {}
+    return meta.get("kind") in _CONTINUATION_KINDS
+
+
+def _origin_subject(record, by_branch=None, idea_text=None):
+    """The subject of the job that STARTED the work this record continues:
+    the row it resumed (`meta.resumed_from`), else the oldest ledger row
+    on its branch that is not itself a continuation and has a subject of
+    its own. `by_branch` is a LedgerIndex (the read layer builds it once);
+    without it the ledger is read here, once per call."""
+    meta = record.get("meta") or {}
+    src = meta.get("resumed_from") or ""
+    if src:
+        origin = None
+        if by_branch is not None:
+            origin = getattr(by_branch, "by_id", {}).get(src)
+        else:
+            try:
+                origin = get_record(src)
+            except Exception:  # noqa: BLE001
+                origin = None
+        if origin and origin.get("id") != record.get("id"):
+            s = subject(origin, None, by_branch)
+            if s:
+                return s
+    branch = record.get("branch") or meta.get("branch")
+    if not branch:
+        return ""
+    rows = None
+    if by_branch is not None:
+        rows = by_branch.get(branch) or []
+    else:
+        try:
+            rows = [r for r in list_records() if r.get("branch") == branch]
+        except Exception:  # noqa: BLE001 — naming must never raise
+            rows = []
+    for r in rows:
+        if r.get("id") == record.get("id") or is_continuation(r):
+            continue
+        s = subject(r, None, by_branch)
+        if s and not _PREAMBLE_SLUG.match(s.replace(" ", "-").lower()):
+            return s
+    return ""
 
 
 def _pr_of(record):
@@ -322,26 +384,40 @@ def _pr_of(record):
         return None
 
 
-def subject(record, idea_text=None):
+def subject(record, idea_text=None, by_branch=None):
     """What the work is ABOUT. The dispatch site's explicit statement
-    wins; then the PR's own title (the session's statement of its
-    subject, once it opened its draft); then the idea / question the
-    command already quotes; then a humanized branch slug - which is what
-    turns a legacy Land row from the prompt's preamble into the branch it
-    was landing."""
+    wins; then - for a row that CONTINUES work (Land / Resume) - the
+    subject of the job that started it on the same branch; then the PR's
+    own title (the session's statement of its subject, once it opened its
+    draft); then the idea / question the command already quotes; then a
+    humanized branch slug. A slug minted from a prompt preamble is refused
+    (`_PREAMBLE_SLUG`), so a legacy Land row on such a branch reads the
+    preamble honestly rather than a dressed-up version of it - the read
+    layer then overlays the branch's own commit subject (`subject_hint`)."""
     explicit = _collapse(record.get("subject") or "")
     if explicit:
         return explicit
+    cont = is_continuation(record)
+    if cont:
+        origin = _origin_subject(record, by_branch, idea_text)
+        if origin:
+            return origin
     pr = _pr_of(record)
     if pr and pr.get("title"):
         return _collapse(pr["title"])
     cmd = command(record, idea_text)
     meta = record.get("meta") or {}
     branch = record.get("branch") or meta.get("branch")
+    # A legacy flow-stage prompt names its stage ("build") and carries the
+    # flow's own input under "Original ask:" - the input is the subject.
+    if meta.get("stage") or meta.get("circuit_run"):
+        m = _ORIGINAL_ASK.search(record.get("prompt", ""))
+        if m and _collapse(m.group(1)):
+            return _short(_collapse(m.group(1)), 140)
     # A machine-composed prompt's role ("Finishing stalled work in a
     # branch-first repository so it can LAND") describes the KIND, not
     # the subject; the branch does better.
-    if meta.get("kind") in ("orphan-land", "orphan-resume") and branch:
+    if cont and branch and _humanize_branch(branch):
         return _humanize_branch(branch)
     stripped = _VERB_PREFIX.sub("", cmd)
     if stripped and stripped != "(untitled job)":
@@ -369,11 +445,11 @@ def compose_name(pr, subj, kind, cap=TITLE_CAP):
     return SEP.join(parts) if parts else "(untitled job)"
 
 
-def default_title(record, idea_text=None):
+def default_title(record, idea_text=None, by_branch=None):
     """The session name a job is auto-given (before any edit): the
     three-part composition when the record has a subject to compose
     from, else the squeezed command as before."""
-    subj = subject(record, idea_text)
+    subj = subject(record, idea_text, by_branch)
     if not subj:
         return _short(command(record, idea_text), TITLE_CAP)
     return compose_name(_pr_of(record), subj, kind_label(record))
@@ -383,7 +459,7 @@ def _legacy_default(record, idea_text=None):
     return _short(command(record, idea_text), TITLE_CAP)
 
 
-def name(record, idea_text=None):
+def name(record, idea_text=None, by_branch=None):
     """The effective display name: an owner edit wins, else the default.
 
     record_launch has always STORED the derived default in `title`, so a
@@ -402,25 +478,64 @@ def name(record, idea_text=None):
             # text (from the quoted block), so a legacy row is compared
             # against both readings before it counts as a hand-rename.
             return stored
-    return default_title(record, idea_text)
+    return default_title(record, idea_text, by_branch)
 
 
-def about(record):
-    """The long-form explanation the dispatch site supplied, or ''."""
-    return (record.get("about") or "").strip()
+def about(record, by_branch=None):
+    """The long-form explanation the dispatch site supplied. A row
+    written before `about` existed falls back to what it was ASKED - the
+    quoted block of its own prompt (the idea, the question), or for a
+    continuation row the originating job's ask on the same branch."""
+    own = (record.get("about") or "").strip()
+    if own:
+        return own
+    quoted = _quoted(record.get("prompt", ""))
+    if quoted and not is_continuation(record):
+        return quoted[:ABOUT_CAP]
+    if is_continuation(record) and by_branch is not None:
+        branch = record.get("branch") or (record.get("meta") or {}).get("branch")
+        for r in by_branch.get(branch or "") or []:
+            if r.get("id") == record.get("id") or is_continuation(r):
+                continue
+            got = about(r, None)
+            if got:
+                return got
+    return ""
 
 
-def describe(record, idea_text=None):
+class LedgerIndex(dict):
+    """branch -> its ledger rows OLDEST first (the dict), plus `by_id` -
+    for the read layer to build once and hand to every name() /
+    describe() call (the ledger is a fresh read per call, so per-row
+    lookups would re-read it N times)."""
+
+    def __init__(self):
+        super().__init__()
+        self.by_id = {}
+
+
+def by_branch_index(records):
+    out = LedgerIndex()
+    for r in records:
+        if r.get("id"):
+            out.by_id[r["id"]] = r
+        b = r.get("branch") or (r.get("meta") or {}).get("branch")
+        if b:
+            out.setdefault(b, []).append(r)
+    return out
+
+
+def describe(record, idea_text=None, by_branch=None):
     """Every naming field a surface renders, derived once: the name, the
     kind, the subject, the PR, the long form, and the outcome (the
     session's own closing text, when it has one - what it ACTUALLY did,
     for rows dispatched before `about` existed)."""
     return {
-        "title": name(record, idea_text),
+        "title": name(record, idea_text, by_branch),
         "kind_label": kind_label(record),
-        "subject": subject(record, idea_text),
+        "subject": subject(record, idea_text, by_branch),
         "pr": _pr_of(record),
-        "about": about(record),
+        "about": about(record, by_branch),
         "outcome": (record.get("result") or "").strip()[:600],
     }
 
