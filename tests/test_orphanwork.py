@@ -610,6 +610,42 @@ class ActionRunner(_BranchShCase):
         self.assertIn("branch.sh merge some-slug", a["output"])
         self.assertIn("push:", a["output"])
 
+    # ---- teardown is part of landing (2026-09-02) ----
+
+    def test_a_pushed_merge_tears_the_branch_down(self):
+        started, _ = orphanwork.merge("spent")
+        self.assertTrue(started)
+        a = self._wait("claude/spent")
+        self.assertEqual(a["status"], "ok")
+        out = a["output"]
+        self.assertIn("branch.sh discard spent", out)
+        # the push is the GATE: discard runs after it, never before
+        self.assertLess(out.index("push:"), out.index("branch.sh discard spent"))
+        self.assertIn("teardown:", out)
+
+    def test_a_failed_push_leaves_the_branch_for_the_sweeper(self):
+        _git("remote", "set-url", "origin",
+             str(Path(self.tmp.name) / "no-such-remote.git"), cwd=self.root)
+        started, _ = orphanwork.merge("stuck")
+        self.assertTrue(started)
+        a = self._wait("claude/stuck")
+        self.assertIn("push FAILED", a["output"])
+        self.assertNotIn("branch.sh discard", a["output"])
+
+    def test_a_held_teardown_is_a_note_not_a_failed_landing(self):
+        sh = self.root / "scripts" / "branch.sh"
+        sh.write_text('#!/bin/sh\ncase "$1" in\n  discard) echo "error: dirty" >&2; exit 1;;\n'
+                      '  *) echo "branch.sh $*";;\nesac\nexit 0\n',
+                      encoding="utf-8")
+        sh.chmod(0o755)
+        started, _ = orphanwork.merge("held")
+        self.assertTrue(started)
+        a = self._wait("claude/held")
+        self.assertEqual(a["status"], "ok")      # the work DID land
+        self.assertIn("teardown HELD", a["output"])
+        self.assertIn("scripts/branch.sh discard held", a["output"])
+        self.assertIn("error: dirty", a["output"])
+
     def test_discard_passes_the_force_flag(self):
         started, _ = orphanwork.discard("y", force=True)
         self.assertTrue(started)
@@ -674,6 +710,8 @@ class Landing(_BranchShCase):
         self.assertEqual(a["status"], "ok")
         self.assertIn("branch.sh merge clean1", a["output"])
         self.assertIn("push:", a["output"])
+        # a landed row is TORN DOWN, not left for someone to discard
+        self.assertIn("branch.sh discard clean1", a["output"])
 
     def test_a_dirty_row_dispatches_a_finishing_session_then_merges(self):
         # mode="finish" is explicit since 2026-08-28: Land's DEFAULT is now
