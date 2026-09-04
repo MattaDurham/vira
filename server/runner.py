@@ -725,6 +725,7 @@ class Runner:
             "pr_url": pr_url, "pr_note": pr_note,
             "dirty": dirty, "ahead": ahead, "created": time.time(),
         })
+        self.record_card(req_id, LANDING_KIND, question)
         self.flush_state()
         return True
 
@@ -814,6 +815,7 @@ class Runner:
             "options": opts, "allow_text": bool(allow_text),
             "summary": q, "created": time.time(),
         })
+        self.record_card(req_id, "ask", q)
         self.state["awaiting"] = "ask"
         self.append(f"[vira] question for you — {q}\n")
         for i, o in enumerate(opts, 1):
@@ -833,6 +835,7 @@ class Runner:
             self.state["awaiting"] = ("permission" if self.state["pending"]
                                       else None)
             self.flush_state()
+        self.resolve_card(req_id, "timeout" if answer is None else "answered")
         if answer is None:
             self.append("[vira] no answer within the window — the session "
                         "should stop and report the question\n")
@@ -911,6 +914,7 @@ class Runner:
             "preview": _tool_preview(tool_name, tool_input),
             "created": time.time(),
         })
+        self.record_card(req_id, "permission", summary)
         self.state["awaiting"] = "permission"
         self.append(f"[vira] permission needed — {summary}\n")
         self.flush_state()
@@ -928,6 +932,7 @@ class Runner:
             self.state["awaiting"] = ("permission" if self.state["pending"]
                                       else None)
             self.flush_state()
+        self.resolve_card(req_id, ("allow-" + str(scope)) if allow else "deny")
         if allow:
             if scope == "session":
                 self.session_allow.add(tool_name)
@@ -953,6 +958,26 @@ class Runner:
     # state.json without limit - the newest calls are the ones any reader
     # wants, since a chat reads the CURRENT turn's.
     TOOLS_KEEP = 120
+
+    # Every card this session raised, kept after it resolves. `pending` is
+    # the LIVE list and empties the moment a card is answered, so nothing on
+    # disk could later say "this session asked the owner something" - which
+    # is exactly the fact a parity check (circuits' `card_raised` gate) and a
+    # dead-session read need. Bounded like `tools`.
+    CARDS_KEEP = 60
+
+    def record_card(self, req_id, kind, summary):
+        rows = list(self.state.get("cards") or [])
+        rows.append({"req_id": req_id, "kind": kind,
+                     "summary": str(summary or "")[:200],
+                     "t": time.time(), "decision": None})
+        self.state["cards"] = rows[-self.CARDS_KEEP:]
+
+    def resolve_card(self, req_id, decision):
+        for row in reversed(self.state.get("cards") or []):
+            if row.get("req_id") == req_id:
+                row["decision"] = str(decision or "")[:80]
+                break
 
     def record_tool(self, name, inp):
         inp = inp or {}
@@ -1202,6 +1227,12 @@ class Runner:
         # on finished work, so the plan still publishes and the idea still
         # closes out. Only a stop that cut a turn short counts as aborted.
         aborted = (self.interrupted or self.closing) and not self.finished_cleanly
+        # Recorded as DATA, not only as the transcript line below: an
+        # interrupted turn ends with status "done" (a stop is not a failure),
+        # so without this nothing on disk distinguishes a turn the owner or a
+        # stage timeout cut short from one that finished on its own.
+        self.state["interrupted"] = bool(self.interrupted)
+        self.state["aborted"] = bool(aborted)
         if aborted:
             self.append("[vira] session interrupted\n")
         # Plan sessions produce markdown read-only; the runner finalizes it

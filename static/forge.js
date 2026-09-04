@@ -983,6 +983,9 @@
     body.appendChild(make("p", "", node.description || meta.name));
     const tags = make("div", "forge-node-meta");
     if (node.model) tags.appendChild(make("span", "", node.model));
+    if (node.provider) tags.appendChild(make("span", "", PROVIDER_LABEL[node.provider] || node.provider));
+    if (node.timeout_s) tags.appendChild(make("span", "", `${node.timeout_s}s budget`));
+    if (node.continues) tags.appendChild(make("span", "", `continues ${node.continues}`));
     if (node.mode) tags.appendChild(make("span", "", node.mode));
     if (node.read_only) tags.appendChild(make("span", "", "read only"));
     if (node.locked) tags.appendChild(make("span", "", "source locked"));
@@ -1049,9 +1052,11 @@
       const config = make("div", "forge-node-detail-row");
       config.append(
         field("Model", inputControl(node.model || "", (value) => { node.model = value; setDirty(); })),
+        field("Provider", providerSelect(node.provider || "", (value) => { node.provider = value; setDirty(); })),
         field("Permission", modeSelect(node))
       );
       detail.appendChild(config);
+      if (node.type === "agent") detail.appendChild(agentKnobs(node));
     }
     if (node.type === "trigger") detail.appendChild(scheduleControls(node));
     if (node.type === "judge") detail.appendChild(judgeControls(node));
@@ -1333,20 +1338,95 @@
     return row;
   }
 
+  // The providers a part or a run can be pinned to. Mirrors
+  // server/models.py PROVIDERS; "" is the owner's go-to.
+  const PROVIDERS = [["", "Vira default"], ["anthropic", "Claude"],
+    ["openai", "Codex"], ["google", "Gemini"], ["xai", "Grok"]];
+  const PROVIDER_LABEL = Object.fromEntries(PROVIDERS);
+
+  function providerSelect(value, onChange) {
+    const sel = make("select");
+    PROVIDERS.forEach(([id, label]) => {
+      const option = make("option", "", label); option.value = id; sel.appendChild(option);
+    });
+    sel.value = value || "";
+    sel.addEventListener("change", () => onChange(sel.value));
+    return sel;
+  }
+
+  // Two families of gate, and the split is what the labels say: the first
+  // reads what the upstream part WROTE, the second reads how it RAN - its
+  // ledger row, the tools it called, the cards it raised, its transcript.
+  // Mirrors server/circuits.py LOGIC_OPS; the server refuses an unknown one.
+  const LOGIC_OPS = [
+    ["Output", [["always", "Always pass"], ["has_output", "Has output"],
+      ["contains", "Output contains"], ["not_contains", "Output does not contain"],
+      ["equals", "Output equals"]]],
+    ["Record", [["provider_is", "Ran on provider (blank = the run's)"],
+      ["transport_matches_provider", "Ran on its provider's own lane"],
+      ["transport_is", "Transport is"], ["model_used_contains", "Model used contains"],
+      ["outcome_is", "Ended with status"], ["tool_called", "Called Vira tool"],
+      ["tool_not_called", "Did not call Vira tool"],
+      ["card_raised", "Raised a card (ask / permission / landing)"],
+      ["log_contains", "Transcript contains"], ["log_not_contains", "Transcript does not contain"],
+      ["placed_in_worktree", "Was placed in a worktree"], ["not_in_worktree", "Ran with no worktree"],
+      ["read_only_honored", "Read-only held"], ["guard_held", "Branch-first guard held"],
+      ["interrupt_honored", "Timeout interrupted it"]]],
+  ];
+
   function logicControls(node) {
     const logic = node.logic || (node.logic = { operation: "always", value: "" });
     const row = make("div", "forge-node-detail-row");
     const operation = make("select");
-    [["always", "Always pass"], ["has_output", "Has output"], ["contains", "Output contains"],
-      ["not_contains", "Output does not contain"], ["equals", "Output equals"]]
-      .forEach(([value, label]) => {
-        const option = make("option", "", label); option.value = value; operation.appendChild(option);
+    LOGIC_OPS.forEach(([groupLabel, ops]) => {
+      const group = make("optgroup"); group.label = groupLabel;
+      ops.forEach(([value, label]) => {
+        const option = make("option", "", label); option.value = value; group.appendChild(option);
       });
+      operation.appendChild(group);
+    });
     operation.value = logic.operation || "always";
     operation.addEventListener("change", () => { logic.operation = operation.value; setDirty(); });
     const value = inputControl(logic.value || "", (next) => { logic.value = next; setDirty(); });
     row.append(field("Gate", operation), field("Match value", value));
+    // A record gate inspects ONE upstream part - the first it is wired from
+    // unless named here. The server reads logic.subject the same way.
+    const subject = inputControl(logic.subject || "", (next) => {
+      if (next.trim()) logic.subject = next.trim(); else delete logic.subject;
+      setDirty();
+    });
+    row.append(field("Inspect part (blank = first upstream)", subject));
     return row;
+  }
+
+  function agentKnobs(node) {
+    const wrap = make("div", "forge-node-detail-row");
+    const timeout = inputControl(String(node.timeout_s || ""), (next) => {
+      const n = parseInt(next, 10);
+      node.timeout_s = Number.isFinite(n) && n > 0 ? n : 0; setDirty();
+    });
+    const onTimeout = make("select");
+    [["error", "Timeout fails the part"], ["continue", "Timeout ends it; output stands"]]
+      .forEach(([value, label]) => {
+        const option = make("option", "", label); option.value = value; onTimeout.appendChild(option);
+      });
+    onTimeout.value = node.on_timeout || "error";
+    onTimeout.addEventListener("change", () => { node.on_timeout = onTimeout.value; setDirty(); });
+    // Continue another agent part's conversation instead of starting fresh:
+    // this part becomes that session's next turn. It must be wired FROM the
+    // part it continues; the server refuses anything else.
+    const others = (state.current?.nodes || []).filter((other) =>
+      other.id !== node.id && other.type === "agent");
+    const cont = make("select");
+    const none = make("option", "", "Start a fresh session"); none.value = ""; cont.appendChild(none);
+    others.forEach((other) => {
+      const option = make("option", "", other.name || other.id); option.value = other.id; cont.appendChild(option);
+    });
+    cont.value = node.continues || "";
+    cont.addEventListener("change", () => { node.continues = cont.value; setDirty(); });
+    wrap.append(field("Timeout (seconds)", timeout), field("On timeout", onTimeout),
+      field("Continues conversation of", cont));
+    return wrap;
   }
 
   function outputControls(node) {
@@ -2182,6 +2262,7 @@
         ? state.idea.idea_id : null;
       const result = await send(`/api/flows/${encodeURIComponent(state.current.id)}/run`, "POST", {
         input: composed, notify: false, output: q("#forge-run-output").value,
+        provider: q("#forge-run-provider")?.value || null,
         idea_id: linked,
       });
       const runId = result.id || result.run_id || result.job_id;
