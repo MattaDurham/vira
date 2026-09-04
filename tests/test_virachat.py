@@ -293,9 +293,14 @@ class TheRunnerRecordsWhatATurnLookedAt(unittest.TestCase):
 class TheSurfaceSpeaksToTheNewEngine(unittest.TestCase):
     SRC = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(encoding="utf-8")
 
-    def test_the_buttons_read_ask_and_chat(self):
-        self.assertIn('el("button", "btn primary", "Ask")', self.SRC)
-        self.assertIn('el("button", "btn", "Chat")', self.SRC)
+    def test_the_buttons_read_search_and_chat(self):
+        # The commit button is SEARCH: this pane is the search, and Chat is
+        # the conversation. "Ask" implied a conversation the pane never had.
+        i = self.SRC.index("function initFindView(")
+        bar = self.SRC[i:self.SRC.index("\n}\n", i)]
+        self.assertIn('el("button", "btn primary", "Search")', bar)
+        self.assertIn('el("button", "btn", "Chat")', bar)
+        self.assertNotIn('"Ask"', bar)
         self.assertNotIn("Chat with my vault", self.SRC)
 
     def test_the_chat_surface_never_calls_the_vault_only_engine(self):

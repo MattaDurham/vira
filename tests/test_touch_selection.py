@@ -16,7 +16,10 @@ class TouchSelectionContract(unittest.TestCase):
         self.assertIn("showTouchSelectionMenu", APP)
 
     def test_primary_actions_match_find_and_definition_surfaces(self):
-        for label in ('label: "Define', 'label: "Chat"', 'label: "Ask"',
+        # "Answer" is the model-narrated Find path; "Search" is the plain
+        # lookup. Neither reads as "Ask" now that Find's own commit button
+        # says Search and Chat is the conversation.
+        for label in ('label: "Define', 'label: "Chat"', 'label: "Answer"',
                       'label: "Search"'):
             self.assertIn(label, APP)
         self.assertIn("openDefine(term)", APP)
