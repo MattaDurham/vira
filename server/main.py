@@ -3449,6 +3449,9 @@ class FlowRunReq(BaseModel):
     cwd: str | None = None
     notify: bool = False
     output: str | None = ""
+    # "This run on Codex": every agent part that names no provider of its own
+    # runs on this one. Judges are exempt (circuits.start_run says why).
+    provider: str | None = None
     # Set when the Flow was loaded from a Queue idea, so the run closes that
     # idea out the way a Plan/Implement dispatch does.
     idea_id: str | None = None
@@ -3459,6 +3462,7 @@ def api_flow_run(flow_id: str, req: FlowRunReq):
     try:
         return flows.run_flow(flow_id, req.input, cwd=req.cwd,
                               notify=req.notify, output=req.output or "",
+                              provider=req.provider,
                               idea_id=req.idea_id)
     except KeyError:
         raise HTTPException(404, "unknown flow")
@@ -3672,13 +3676,15 @@ class CircuitRunReq(BaseModel):
     cwd: str | None = None
     notify: bool = False
     stages: dict[str, dict] | None = None      # per-run stage tray edits
+    provider: str | None = None                # run-level provider (FlowRunReq)
 
 
 @app.post("/api/circuits/{cid}/run")
 def api_circuits_run(cid: str, req: CircuitRunReq):
     try:
         return circuits.start_run(cid, req.input, cwd=req.cwd,
-                                  notify=req.notify, overrides=req.stages)
+                                  notify=req.notify, overrides=req.stages,
+                                  provider=req.provider)
     except KeyError:
         raise HTTPException(404, "unknown circuit")
     except ValueError as e:

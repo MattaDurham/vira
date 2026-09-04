@@ -17123,6 +17123,22 @@ function stageTray(s, ctx) {
   mf.appendChild(msel);
   wrap.appendChild(mf);
 
+  // Which engine this step runs on, independent of the model id: a model
+  // names its provider where the catalog knows it, and this is the explicit
+  // pin for the case it does not (circuits.apply_overrides takes it).
+  const pf = el("label", "field", "Provider");
+  const psel = el("select");
+  [["", "Vira default"], ["anthropic", "Claude"], ["openai", "Codex"],
+    ["google", "Gemini"], ["xai", "Grok"]].forEach(([v, t]) => {
+    const o = el("option", null, t);
+    o.value = v;
+    psel.appendChild(o);
+  });
+  psel.value = ctx.val(s, "provider") || "";
+  psel.addEventListener("change", () => ctx.set(s.id, "provider", psel.value));
+  pf.appendChild(psel);
+  wrap.appendChild(pf);
+
   const xf = el("label", "field", "Instructions for this step");
   const xa = el("textarea");
   xa.rows = 3;

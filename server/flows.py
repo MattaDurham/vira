@@ -110,6 +110,7 @@ def _node(stage, placed):
         "width": int(placed.get("width") or 244),
         "height": int(placed.get("height") or 148),
         "model": stage.get("model") or "",
+        "provider": stage.get("provider") or "",
         "mode": mode,
         "read_only": bool(stage.get("read_only")) or node_type == "judge",
         "prompt": stage.get("prompt") or "",
@@ -121,6 +122,12 @@ def _node(stage, placed):
         "forge": dict(stage.get("forge") or {}),
         "source": "circuit-stage",
     }
+    if node_type == "agent":
+        # The budget and continuation knobs belong to agent parts alone; a
+        # gate or a judge carrying "on_timeout: error" would be noise.
+        data["timeout_s"] = int(stage.get("timeout_s") or 0)
+        data["on_timeout"] = stage.get("on_timeout") or "error"
+        data["continues"] = stage.get("continues") or ""
     if placed.get("spatial_layer") in {0, 1, 2, 3}:
         data["spatial_layer"] = int(placed["spatial_layer"])
     return data
@@ -402,6 +409,21 @@ def _compile(payload):
             "mode": mode,
             "needs": needs[sid],
         }
+        # The provider / timeout / continuation knobs ride the node as data;
+        # circuits.validate_stages is the one place that judges them.
+        if node.get("provider"):
+            stage["provider"] = str(node.get("provider")).strip()[:20]
+        if mode not in {"judge", "logic", "approval", "output", "native"}:
+            try:
+                timeout_s = int(node.get("timeout_s") or 0)
+            except (TypeError, ValueError):
+                raise ValueError(f"part {sid}: timeout must be whole seconds")
+            if timeout_s:
+                stage["timeout_s"] = timeout_s
+                stage["on_timeout"] = str(node.get("on_timeout")
+                                          or "error").strip()[:20]
+            if node.get("continues"):
+                stage["continues"] = str(node.get("continues")).strip()[:80]
         if mode == "judge":
             judge = dict(node.get("judge") or {})
             judge.setdefault("of", needs[sid])
@@ -410,6 +432,10 @@ def _compile(payload):
             logic = dict(node.get("logic") or {})
             logic["operation"] = str(logic.get("operation") or "always")[:40]
             logic["value"] = str(logic.get("value") or "")[:2000]
+            if logic.get("subject"):
+                logic["subject"] = str(logic["subject"]).strip()[:80]
+            else:
+                logic.pop("subject", None)
             stage["logic"] = logic
         elif mode == "approval":
             approval = dict(node.get("approval") or {})
@@ -609,7 +635,7 @@ def save_flow(payload, save_as=False):
 
 
 def run_flow(flow_id, input_text, cwd=None, notify=False, output="",
-             idea_id=None):
+             idea_id=None, provider=None):
     if flow_id.startswith("routine:"):
         row = routines.get_routine(flow_id.split(":", 1)[1])
         if not row:
@@ -617,7 +643,8 @@ def run_flow(flow_id, input_text, cwd=None, notify=False, output="",
         return routines.dispatch(row)
     return circuits.start_run(flow_id, input_text, cwd=cwd, notify=notify,
                               source="forge", idea_id=idea_id,
-                              flow_options={"output": output})
+                              flow_options={"output": output},
+                              provider=provider)
 
 
 DEFAULT_IDEA_TEMPLATE = "plan-build-judge"

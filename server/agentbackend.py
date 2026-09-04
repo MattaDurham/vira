@@ -146,6 +146,20 @@ def capabilities(pid):
     return dict(CAPABILITIES.get(pid, {}))
 
 
+# The transport each adapter STAMPS on the ledger row (joblog.record_session
+# `transport`). A parity check reads this to ask "did the session run on the
+# lane its provider is supposed to run on", so the strings here must be the
+# ones the adapters actually write - tests/test_parity_flows.py pins each
+# against the adapter's source, because a table that drifts from the writers
+# would grade every session as off-lane while nothing was wrong.
+EXPECTED_TRANSPORT = {
+    "anthropic": "claude-sdk",
+    "openai": "codex-app-server",
+    "google": "google-function-api",
+    "xai": "xai-function-api",
+}
+
+
 def provider_of_model(model):
     """Which provider a model id/alias belongs to. '' means unknown —
     the caller falls back to the configured session default."""
