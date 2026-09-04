@@ -471,6 +471,24 @@ class ResumeTests(unittest.TestCase):
         self.assertNotIn("machine", meta)
         self.assertEqual(meta["resumed_from"], h.id)
 
+    def test_a_resumed_chat_stays_a_chat(self):
+        # A chat is a conversation, never work; the resume mints a new
+        # record and the chat identity has to survive it or the second
+        # turn of every chat reads as work waiting on the owner.
+        reg = self._reg(self._row(meta={"kind": "chat"}))
+        h = make_detached(reg, self.tmp.name, status="error")
+        with self.launch_patch, self.ledger_patch:
+            reg.say(h.id, "and another question")
+        meta = self.calls[0]["meta"]
+        self.assertEqual(meta["kind"], "resume")
+        self.assertTrue(session.is_chat(meta))
+        # and a resume of a resume keeps it
+        reg2 = self._reg(self._row(meta=meta))
+        h2 = make_detached(reg2, self.tmp.name, status="error")
+        with self.launch_patch, self.ledger_patch:
+            reg2.say(h2.id, "third turn")
+        self.assertTrue(session.is_chat(self.calls[-1]["meta"]))
+
     def test_a_live_session_is_steered_not_resumed(self):
         reg = self._reg(self._row())
         h = make_detached(reg, self.tmp.name, status="running")
