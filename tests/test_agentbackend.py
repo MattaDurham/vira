@@ -173,6 +173,32 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(agentbackend.sandbox_for(
             {"mode": "acceptedits"}), "workspace-write")
 
+    def test_a_placed_bypass_session_never_gets_full_disk_access(self):
+        # The parity harness's guard probe (2026-09-04, run_ed6768ed60)
+        # wrote into the LIVE README through Codex's own file tool with no
+        # denial: under danger-full-access Codex never asks, and Vira's
+        # gate only sees what Codex asks about. A PLACED session - one
+        # branch-first gave a worktree AND a live root - runs
+        # workspace-write so an out-of-tree write becomes an escalation
+        # request that reaches runner.gate and the branch-first denial.
+        placed = {"mode": "bypassPermissions",
+                  "worktree": "/repo/.worktrees/x", "live_root": "/repo"}
+        self.assertTrue(agentbackend.placed(placed))
+        self.assertEqual(agentbackend.sandbox_for(placed), "workspace-write")
+        # Half a placement is no placement: the guard needs both halves.
+        self.assertFalse(agentbackend.placed(
+            {"mode": "bypassPermissions", "worktree": "/repo/.worktrees/x"}))
+        self.assertEqual(agentbackend.sandbox_for(
+            {"mode": "bypassPermissions", "worktree": "/repo/.worktrees/x"}),
+            "danger-full-access")
+        # An unplaced bypass session (home-directory chats, a repo with no
+        # branch.sh) keeps the rung's full meaning.
+        self.assertEqual(agentbackend.sandbox_for(
+            {"mode": "bypassPermissions"}), "danger-full-access")
+        # read-only still outranks everything.
+        self.assertEqual(agentbackend.sandbox_for(
+            {**placed, "read_only": True}), "read-only")
+
 
 class ArgvTest(unittest.TestCase):
     def _argv(self, spec, resume=None):

@@ -449,11 +449,12 @@ TEMPLATES = [
              "logic": {"operation": "contains", "value": "MARIGOLD-7"}},
             {"id": "slow", "name": "Probe: stage timeout", "model": "",
              "mode": "manual", "read_only": True, "needs": [],
-             "timeout_s": 90, "on_timeout": "continue",
-             "prompt": "Count from 1 to 400, one number per line, and after "
+             "timeout_s": 30, "on_timeout": "continue",
+             "prompt": "Count from 1 to 5000, one number per line, and after "
                        "every number write one full sentence about that "
                        "number. Do not summarise, do not skip, do not stop "
-                       "early."},
+                       "early, and do not use a tool or a script to "
+                       "generate the lines - write them yourself."},
             {"id": "slow_gate", "name": "Gate: timeout interrupted it",
              "mode": "logic", "needs": ["slow"],
              "logic": {"operation": "interrupt_honored", "value": ""}},
