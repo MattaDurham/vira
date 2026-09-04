@@ -791,6 +791,11 @@ def steps():
                 unlocks="everything Vira writes for you",
                 providers=providers,
                 active_id=active["id"] if active else "",
+                # The CONFIGURED go-to, distinct from active_id: a disabled
+                # go-to makes active() None on purpose (the call refuses),
+                # and the Config card still has to say "this is your go-to
+                # and it is off" rather than nothing.
+                go_to=str(settings.raw().get("ai_provider") or "anthropic"),
                 sessions=bool(active and active["can"]["sessions"])))
         elif sid == "disk":
             if not store_rows:

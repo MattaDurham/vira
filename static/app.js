@@ -8855,7 +8855,7 @@ function modelCatalog(refresh) {
 // whenever more than one is on offer, so a codex model reads as OpenAI's.
 function sessionModels(cat) {
   const provs = (cat.providers || []).filter((p) =>
-    p.sessions && (p.connected || p.id === "anthropic"));
+    p.sessions && !p.disabled && (p.connected || p.id === "anthropic"));
   const multi = provs.length > 1;
   const out = [];
   provs.forEach((p) => {
@@ -13146,10 +13146,12 @@ function renderSetup(flow, st) {
   const aiRows = (ai.providers || []).map((pr) => ({
     id: "prov-" + pr.id,
     title: pr.sub_name,
-    state: pr.connected ? "done" : "todo",
+    // A disabled provider is a choice, not a gap: dimmed like a skipped
+    // step, never a "todo" that nags to be set up.
+    state: pr.disabled ? "skipped" : pr.connected ? "done" : "todo",
     tag: pr.id === ai.active_id ? "go-to" : "",
-    pill: pr.connected ? "signed in" : "not connected",
-    sub: pr.detail,
+    pill: pr.disabled ? "disabled" : pr.connected ? "signed in" : "not connected",
+    sub: pr.disabled ? "Disabled by you - nothing runs on it" : pr.detail,
     render: (card) => provCard(card, pr, st, ai),
   }));
   aiRows.push({
@@ -13366,8 +13368,44 @@ function aiConnect(bodyObj) {
   });
 }
 
+// The disable switch (config providers_disabled). A disabled provider is
+// never drafted on and never runs a session — every path REFUSES by name
+// rather than rerouting — which is what lets the model-parity eval run the
+// whole app on one provider and know that it did. The list is computed
+// from the records on screen (each carries `disabled`), never from a
+// second copy of the config.
+function providerSwitch(card, pr, ai) {
+  const others = (ai.providers || [])
+    .filter((p) => p.disabled && p.id !== pr.id).map((p) => p.id);
+  const save = (list, btn, done) => setupAct(btn,
+    () => post("/api/config", { providers_disabled: list })
+      .then(() => modelCatalog(true))
+      .then(() => post("/api/health/ai/recheck", {})
+        .then((h) => renderAiHealth(h.latest || h)).catch(() => {})),
+    () => done);
+  if (pr.disabled) {
+    card.appendChild(el("p", "hint",
+      `${pr.sub_name} is disabled. Drafts, sessions and chat pinned to it `
+      + "refuse by name instead of running on another provider."
+      + (pr.id === ai.go_to
+         ? " It is also Vira's go-to, so anything that follows the go-to "
+           + "refuses too until you enable it or pick another." : "")));
+    const on = el("button", "btn primary", "Enable " + pr.sub_name);
+    on.onclick = () => save(others, on, `${pr.sub_name} enabled`);
+    card.appendChild(on);
+    return;
+  }
+  const off = el("button", "btn", "Disable for now");
+  off.title = "Nothing will run on it until you enable it again";
+  off.onclick = () => save(others.concat(pr.id), off,
+    `${pr.sub_name} disabled - nothing runs on it`);
+  card.appendChild(off);
+}
+
 // One provider's configuration card — the expanded body of its dashboard row.
 function provCard(card, pr, st, ai) {
+  providerSwitch(card, pr, ai);
+  if (pr.disabled) return;
   card.appendChild(el("p", "hint", pr.detail));
   if (!pr.can.sessions)
     card.appendChild(el("p", "hint",

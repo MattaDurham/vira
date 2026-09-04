@@ -199,8 +199,18 @@ def default_session_provider():
     qualify through Vira's function-calling session adapter.
     """
     want = str(settings.raw().get("ai_provider") or "").strip().lower()
-    if want in models.PROVIDERS and sessions_quality(want):
-        return want
+    if want in models.PROVIDERS:
+        # A disabled go-to REFUSES rather than falling through to
+        # anthropic: the fallback was written for a go-to that cannot host
+        # sessions, and re-using it here would run a dispatch on a provider
+        # the owner switched off - the exact reroute the switch exists to
+        # stop. See models.ProviderDisabled.
+        if models.is_disabled(want):
+            raise models.ProviderDisabled(want, role="the configured go-to")
+        if sessions_quality(want):
+            return want
+    if models.is_disabled("anthropic"):
+        raise models.ProviderDisabled("anthropic", role="the fallback")
     return "anthropic"
 
 
@@ -209,9 +219,16 @@ def session_provider(model=None, provider=None):
     wins; else the model names it; else the owner's configured go-to (see
     default_session_provider) rather than a hardcoded anthropic."""
     p = (provider or "").strip().lower()
-    if p in models.PROVIDERS:
+    if p not in models.PROVIDERS:
+        p = provider_of_model(model)
+    if p:
+        # An explicit pin - or a model that names its provider - never
+        # runs a disabled provider. Refuse by name; nothing else in the
+        # chain is consulted.
+        if models.is_disabled(p):
+            raise models.ProviderDisabled(p)
         return p
-    return provider_of_model(model) or default_session_provider()
+    return default_session_provider()
 
 
 def uses_cli_exec(spec):

@@ -20,6 +20,10 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 
 DEFAULTS = {
     "ai_provider": "anthropic",   # any server/models.py PROVIDERS id
+    # Providers switched OFF (models.disabled_providers): a disabled id is
+    # never drafted on or run as a session - every path REFUSES by name
+    # rather than rerouting. The eval switch (docs/model-parity-eval).
+    "providers_disabled": [],
     "ai_backend": "cli",          # "cli" (subscription login) | "api" (key)
     # cli_model is an ALIAS, so it names a tier and never a generation.
     "cli_model": "sonnet",
@@ -322,6 +326,11 @@ def effective_backend(cfg):
     pid = str(cfg.get("ai_provider") or "anthropic")
     if pid not in provider.PROVIDERS:
         pid = "anthropic"
+    if provider.is_disabled(pid):
+        # Raised BEFORE _run's try, on purpose: a disabled go-to is the
+        # owner's choice, not a backend failure, so it must never reach
+        # aihealth.note_failure and flip the banner red.
+        raise provider.ProviderDisabled(pid, role="the configured go-to")
     # The key may come from the env (existing installs) or the Keychain
     # (pasted in Setup by someone with no shell profile to edit).
     key = provider.api_key(pid)
