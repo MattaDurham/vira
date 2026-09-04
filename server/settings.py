@@ -80,6 +80,10 @@ DEFAULTS = {
     "vault_root": "",                    # notes vault for the Brain index; empty = dormant
                                          # (set via Setup > Brain or config.json)
     "vault_dirs": [],                    # vault subdirs to index; empty = vault.DEFAULT_DIRS
+    "vault_exclude_dirs": [],            # directory NAMES never indexed, at any
+                                         # depth, in any connected vault. Use it to
+                                         # take a tree while skipping one branch of
+                                         # it (raw/ minus raw/instagram).
     "vault_sources": [],                 # additional read-only markdown vaults:
                                          # [{id, name, root, dirs?}]; the
                                          # primary vault_root remains the
