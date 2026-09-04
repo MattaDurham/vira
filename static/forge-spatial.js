@@ -493,8 +493,8 @@
       button?.classList.toggle("is-active", scene.naturalMotion);
       button?.setAttribute("aria-pressed", String(scene.naturalMotion));
       button?.setAttribute("title", scene.naturalMotion
-        ? "Natural motion is on: drag-pan and scroll-zoom use the reversed direction"
-        : "Natural motion is off: drag-pan and scroll-zoom use the standard direction");
+        ? "Natural motion is on: a drag carries the scene with your hand, and scrolling up zooms in"
+        : "Natural motion is off: a drag moves the camera against your hand, and scrolling up zooms out");
     }
 
     function reset() {
@@ -594,12 +594,17 @@
           xOffset: drag.offset.x, zOffset: drag.offset.z,
         };
       } else if (drag.mode === "pan") {
-        const direction = scene.naturalMotion ? -1 : 1;
+        // Every gesture here was reversed on the owner's call (2026-09-04):
+        // natural motion ON carries the scene WITH the hand; OFF moves the
+        // camera against it. The toggle still flips between the two.
+        const direction = scene.naturalMotion ? 1 : -1;
         camera.panX += dx * direction;
         camera.panY += dy * direction;
       } else {
-        camera.yaw += dx * .006;
-        camera.pitch = clamp(camera.pitch + dy * .0045, -1.18, -.12);
+        // Orbit is reversed on both axes (same call) and sits outside the
+        // natural-motion toggle, which covers drag-pan and scroll-zoom only.
+        camera.yaw -= dx * .006;
+        camera.pitch = clamp(camera.pitch - dy * .0045, -1.18, -.12);
       }
       wake();
     });
@@ -627,7 +632,9 @@
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
       const toward = event.deltaY < 0;
-      zoom(scene.naturalMotion ? (toward ? .92 : 1.09) : (toward ? 1.09 : .92));
+      // Reversed 2026-09-04: natural motion ON zooms IN when the wheel
+      // rolls up (deltaY < 0); OFF zooms out on the same roll.
+      zoom(scene.naturalMotion ? (toward ? 1.09 : .92) : (toward ? .92 : 1.09));
     }, { passive: false });
     canvas.addEventListener("dblclick", (event) => {
       const layer = hitLayer(event.clientX, event.clientY);
@@ -644,7 +651,7 @@
     observer.observe(host);
     reducedMotion.addEventListener?.("change", wake);
 
-    return {
+    const api = {
       render(flow, selected, run) {
         scene.flow = flow || null;
         scene.selected = selected || null;
@@ -665,7 +672,13 @@
       zoom,
       reset,
       get zoomValue() { return camera.zoom; },
+      // Diagnostics (the __network3d pattern): a camera you cannot read is
+      // a camera whose gestures can only be argued about. A copy, never the
+      // live object - nothing outside this module steers the view.
+      get cameraState() { return { ...camera, naturalMotion: scene.naturalMotion, mode: scene.mode }; },
     };
+    window.__forgeSpatial = api;
+    return api;
   }
 
   window.ForgeSpatial = { create };

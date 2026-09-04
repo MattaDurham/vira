@@ -35,8 +35,21 @@ class ForgeSpatialTests(unittest.TestCase):
         renderer = (ROOT / "static" / "forge-spatial.js").read_text(encoding="utf-8")
         self.assertIn('id="forge-spatial-natural"', page)
         self.assertIn('localStorage.getItem("vira-forge-natural-motion") !== "0"', renderer)
-        self.assertIn("scene.naturalMotion ? -1 : 1", renderer)
-        self.assertIn("scene.naturalMotion ? (toward ? .92 : 1.09)", renderer)
+        # Owner's call 2026-09-04: natural motion ON carries the scene with
+        # the hand and zooms IN on a wheel-up; OFF is the inverse of both.
+        self.assertIn("scene.naturalMotion ? 1 : -1", renderer)
+        self.assertIn("scene.naturalMotion ? (toward ? 1.09 : .92)", renderer)
+        self.assertNotIn("scene.naturalMotion ? -1 : 1", renderer)
+        self.assertNotIn("scene.naturalMotion ? (toward ? .92 : 1.09)", renderer)
+
+    def test_orbit_drag_is_reversed_on_both_axes(self):
+        renderer = (ROOT / "static" / "forge-spatial.js").read_text(encoding="utf-8")
+        # Owner's call 2026-09-04: the left-drag orbit runs the other way on
+        # yaw AND pitch, and stays outside the natural-motion toggle.
+        self.assertIn("camera.yaw -= dx * .006", renderer)
+        self.assertIn("camera.pitch - dy * .0045", renderer)
+        self.assertNotIn("camera.yaw += dx * .006", renderer)
+        self.assertNotIn("camera.pitch + dy * .0045", renderer)
 
     def test_double_clicking_a_3d_layer_focuses_it_on_the_breadboard(self):
         bridge = (ROOT / "static" / "forge.js").read_text(encoding="utf-8")
