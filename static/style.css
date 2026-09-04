@@ -8589,3 +8589,101 @@ mark.doc-term {
 }
 .shr-detail { display: flex; flex-direction: column; gap: 10px; }
 .shr-chip.mod { color: var(--accent-bright); border-color: var(--accent-line); }
+
+/* ==================== Busy states - the Vira wheel ====================
+   The Attention window's orbit hero (rings carrying a lit dot around a
+   pulsing core) is Vira's "thinking" visual. This is that same figure at
+   control scale, worn by anything that has been clicked and is waiting on
+   the server, and by every placeholder line that says a surface is still
+   loading. Three surfaces, one figure:
+   - .is-busy on a control (set by busyTrack in app.js, or busyWhile): the
+     label goes transparent - width held, nothing reflows - and the wheel
+     is drawn in the button's own pseudo-elements, so a handler that
+     rewrites the label ("Refreshing...") or restores it never fights a
+     DOM node we inserted.
+   - .is-busy.rich: the refresh/scan/sweep shape - a wider wheel, a sheen
+     crossing the control and a breathing glow, because a scan is a
+     longer, richer wait than a save.
+   - .spin / .waiting: a placeholder line ("Loading...") wears the wheel to
+     the left of its text.
+   The pulsing core and the outer track ride the element's background
+   layers (background-image stacks over background-color), so a button's
+   own fill stays; only the two orbiting rings need pseudo-elements. */
+@keyframes vira-wheel-cw { to { transform: rotate(360deg); } }
+@keyframes vira-wheel-ccw { to { transform: rotate(-360deg); } }
+@keyframes vira-wheel-core { 50% { background-size: 8px 8px, 100% 100%; } }
+@keyframes vira-busy-sheen { to { background-position: -150% 0, 50% 50%, 0 0; } }
+@keyframes vira-busy-glow { 50% { box-shadow: 0 0 0 1px var(--accent-line), 0 0 18px var(--accent-soft); } }
+
+.is-busy {
+  position: relative !important;
+  color: transparent !important;
+  text-shadow: none !important;
+  pointer-events: none;
+  cursor: progress;
+  -webkit-text-fill-color: transparent;
+  /* core dot + outer track, centred; the button's own background-color
+     shows through behind them */
+  background-image:
+    radial-gradient(circle, var(--accent) 45%, transparent 55%),
+    radial-gradient(circle, transparent 7px, var(--accent-line) 7.5px, var(--accent-line) 8.2px, transparent 8.8px);
+  background-size: 4px 4px, 100% 100%;
+  background-position: 50% 50%, 50% 50%;
+  background-repeat: no-repeat;
+  animation: vira-wheel-core 2.4s ease-in-out infinite;
+}
+.is-busy > * { visibility: hidden; }
+.is-busy.is-busy::before, .is-busy.is-busy::after {
+  content: "" !important;
+  position: absolute; left: 50%; top: 50%; margin: 0;
+  border: 1px solid var(--accent-line); border-radius: 50%;
+  /* the lit dot rides the ring's top; rotating the pseudo carries it round */
+  background: radial-gradient(circle at 50% 0.5px, var(--accent) 1.4px, transparent 2.2px);
+  box-sizing: border-box; opacity: 1; visibility: visible;
+  transform-origin: 50% 50%;
+}
+.is-busy.is-busy::before {
+  width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px;
+  animation: vira-wheel-cw 1.5s linear infinite;
+}
+.is-busy.is-busy::after {
+  width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  animation: vira-wheel-ccw 1s linear infinite;
+}
+/* the rich wait: refresh, rescan, sweep, rebuild, compose - a longer wait,
+   a bigger figure, a sheen crossing the control and a breathing halo */
+.is-busy.rich {
+  background-image:
+    linear-gradient(110deg, transparent 35%, var(--accent-veil) 50%, transparent 65%),
+    radial-gradient(circle, var(--accent) 45%, transparent 55%),
+    radial-gradient(circle, transparent 10px, var(--accent-line) 10.5px, var(--accent-line) 11.2px, transparent 11.8px);
+  background-size: 250% 100%, 5px 5px, 100% 100%;
+  background-position: 150% 0, 50% 50%, 0 0;
+  animation: vira-busy-sheen 1.8s linear infinite, vira-busy-glow 2.4s ease-in-out infinite;
+}
+.is-busy.rich::before { width: 18px; height: 18px; margin: -9px 0 0 -9px; animation-duration: 2.2s; }
+.is-busy.rich::after { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; animation-duration: 1.4s; }
+.is-busy.rich::before, .is-busy.rich::after {
+  background: radial-gradient(circle at 50% 0.5px, var(--accent) 1.7px, transparent 2.6px);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+/* a placeholder line wears the wheel to the left of its text */
+.spin, .waiting { position: relative; padding-left: 26px !important; min-height: 18px; }
+.spin::before, .spin::after, .waiting::before, .waiting::after {
+  content: ""; position: absolute; left: 8px; top: 50%; box-sizing: border-box;
+  border: 1px solid var(--accent-line); border-radius: 50%;
+  background: radial-gradient(circle at 50% 0.5px, var(--accent) 1.3px, transparent 2px);
+  transform-origin: 50% 50%;
+}
+.spin::before, .waiting::before { width: 14px; height: 14px; margin: -7px 0 0 -7px; left: 12px; animation: vira-wheel-cw 1.6s linear infinite; }
+.spin::after, .waiting::after { width: 8px; height: 8px; margin: -4px 0 0 -4px; left: 12px; animation: vira-wheel-ccw 1.05s linear infinite; }
+.spin, .waiting { background: radial-gradient(circle at 12px 50%, var(--accent) 1.4px, transparent 2px) no-repeat; }
+/* a standalone wheel for anywhere a real element is wanted */
+.vira-wheel { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; }
+.vira-wheel.waiting { padding: 0 !important; min-height: 0; }
+.vira-wheel.waiting::before, .vira-wheel.waiting::after { left: 50%; }
+.vira-wheel.waiting { background-position: 50% 50%; background: radial-gradient(circle, var(--accent) 1.4px, transparent 2px) no-repeat; }
+@media (prefers-reduced-motion: reduce) {
+  .is-busy, .is-busy::before, .is-busy::after, .spin::before, .spin::after,
+  .waiting::before, .waiting::after { animation: none !important; }
+}

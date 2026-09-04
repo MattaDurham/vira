@@ -8,11 +8,14 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
-const api = async (path, opts) => {
+const apiRaw = async (path, opts) => {
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error((await r.text()).slice(0, 300));
   return r.json();
 };
+// Every request passes through busyTrack so the control that started it
+// can wear the Vira wheel while it waits - see ==== Busy states below.
+const api = (path, opts) => busyTrack(apiRaw(path, opts));
 const post = (path, body) => api(path, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -24,6 +27,120 @@ const put = (path, body) => api(path, {
   body: JSON.stringify(body),
 });
 const del = (path) => api(path, { method: "DELETE" });
+
+// ==================== Busy states - the Vira wheel on whatever is waiting
+// A click that kicks off a request and then sits there in silence is the
+// failure this closes: the owner cannot tell "working" from "did not
+// register". The fallback is AUTOMATIC so it reaches every button in the
+// app, including the ones added next month: a capture-phase click listener
+// remembers the control pressed, every api()/post()/put()/del() call is
+// routed through busyTrack, and a request started in the click's own
+// window - or chained right behind one already attributed to it - belongs
+// to that control. While any of them is in flight past a short delay (so a
+// 40ms answer never flickers) the control wears .is-busy, drawn entirely
+// in CSS pseudo-elements so a handler that rewrites its own label or
+// disables itself never fights an inserted node. Once shown it stays a
+// beat (BUSY_MIN_MS) so the wheel reads as a wheel and not a blink.
+//
+// The RICH shape (.rich - sheen, halo, the bigger wheel) is for the
+// refresh / scan / sweep / compose family: the label decides, or
+// data-busy="rich" / data-busy="plain" on the control overrides it, and
+// data-busy="off" opts a control out (a toggle whose optimistic repaint
+// already answers the click has nothing to wait for).
+//
+// busyWhile(node, work, {rich}) is the explicit form for a wait that is
+// not a request behind a click - a dynamic import, a long poll, a row or
+// tile rather than a button.
+const BUSY_DELAY_MS = 220;   // a request faster than this never shows
+const BUSY_MIN_MS = 480;     // once shown, hold at least this long
+const BUSY_CLICK_MS = 160;   // a request starting this soon after a click is its own
+const BUSY_CHAIN_MS = 200;   // ...or this soon after one of its requests settled
+const BUSY_SEL = "button, .btn, .fchip, .icon-btn, .seg-btn, .seg button, [role=button], .linkish, .ai-banner-btn, .fr-tile, .lp-tile, summary";
+const BUSY_RICH_RE = /^\s*(refresh|re-?scan|scan|sweep|rebuild|build|re-?check|recheck|re-?index|re-?score|compose|rewrite|re-?read|read again|read it again|check|sync|connect|reconnect|test|retry|have vira|land|resume|score|generate|regenerate|run)\b/i;
+const busyClicks = [];       // {node, at, pending, lastSettle, shownAt, timer}
+
+function busyRich(node) {
+  const mode = node.dataset.busy;
+  if (mode === "rich") return true;
+  if (mode === "plain") return false;
+  return BUSY_RICH_RE.test((node.textContent || node.getAttribute("aria-label") || node.title || "").trim());
+}
+function busyShow(e) {
+  if (e.shownAt) return;
+  e.shownAt = performance.now();
+  e.node.classList.add("is-busy");
+  e.node.classList.toggle("rich", !!e.rich);
+  e.node.setAttribute("aria-busy", "true");
+}
+function busyHide(e) {
+  e.node.classList.remove("is-busy", "rich");
+  e.node.removeAttribute("aria-busy");
+  const i = busyClicks.indexOf(e);
+  if (i >= 0) busyClicks.splice(i, 1);
+}
+function busyMaybeHide(e) {
+  if (e.pending.size) return;
+  const now = performance.now();
+  // a chained request may still be about to start; the min-time keeps a
+  // shown wheel from blinking away
+  const wait = Math.max(BUSY_CHAIN_MS - (now - e.lastSettle),
+    e.shownAt ? BUSY_MIN_MS - (now - e.shownAt) : 0, 0);
+  clearTimeout(e.timer);
+  e.timer = setTimeout(() => {
+    if (e.pending.size) return;
+    if (e.shownAt) busyHide(e);
+    else { const i = busyClicks.indexOf(e); if (i >= 0) busyClicks.splice(i, 1); }
+  }, wait + 4);
+}
+function busyAttach(e, p) {
+  e.pending.add(p);
+  clearTimeout(e.timer);
+  if (!e.shownAt) e.timer = setTimeout(() => { if (e.pending.size && e.node.isConnected) busyShow(e); }, BUSY_DELAY_MS);
+  const done = () => { e.pending.delete(p); e.lastSettle = performance.now(); busyMaybeHide(e); };
+  p.then(done, done);
+  return p;
+}
+function busyTrack(p) {
+  if (!(p && typeof p.then === "function")) return p;
+  const now = performance.now();
+  for (let i = busyClicks.length - 1; i >= 0; i--) {
+    const e = busyClicks[i];
+    if (!e.node.isConnected) { busyHide(e); continue; }
+    if (now - e.at <= BUSY_CLICK_MS || e.pending.size || now - e.lastSettle <= BUSY_CHAIN_MS) return busyAttach(e, p);
+  }
+  return p;
+}
+function busyWhile(node, work, opts = {}) {
+  const p = Promise.resolve(typeof work === "function" ? work() : work);
+  if (!node) return p;
+  let e = busyClicks.find((x) => x.node === node);
+  if (!e) {
+    e = { node, at: performance.now(), pending: new Set(), lastSettle: 0, shownAt: 0, timer: 0,
+      rich: opts.rich != null ? !!opts.rich : busyRich(node) };
+    busyClicks.push(e);
+  }
+  busyAttach(e, p);
+  return p;
+}
+document.addEventListener("click", (e) => {
+  if (e.button !== 0 || e.defaultPrevented) return;
+  const node = e.target.closest?.(BUSY_SEL);
+  if (!node || node.disabled || node.dataset.busy === "off") return;
+  if (node.classList.contains("is-busy")) return;
+  // a press that leaves a text selection is a read, not an activation
+  const sel = window.getSelection?.();
+  if (sel && !sel.isCollapsed && node.contains(sel.anchorNode)) return;
+  const now = performance.now();
+  // one live entry per control: a re-press inside the window just re-arms it
+  const prior = busyClicks.find((x) => x.node === node);
+  if (prior) { prior.at = now; return; }
+  const entry = { node, at: now, pending: new Set(), lastSettle: 0, shownAt: 0, timer: 0, rich: busyRich(node) };
+  busyClicks.push(entry);
+  // an entry that never attracted a request leaves quietly
+  entry.timer = setTimeout(() => { if (!entry.pending.size && !entry.shownAt) busyHide(entry); }, BUSY_CLICK_MS + 20);
+}, true);
+// a placeholder line that says what it is waiting on, wearing the wheel
+const waitLine = (text, cls = "") => el("div", ("waiting " + cls).trim(), text);
 
 // ---------- shared scaffolds ----------
 // lsGet/lsSet: the one JSON-parse-with-default localStorage wrapper every
@@ -5067,7 +5184,7 @@ async function toggleSimilar(box, it, btn) {
   if (open) { open.remove(); btn.classList.remove("on"); return; }
   btn.classList.add("on");
   const panel = el("div", "idea-similar");
-  panel.appendChild(el("div", "rel-loading", "Looking…"));
+  panel.appendChild(el("div", "rel-loading waiting", "Looking…"));
   box.appendChild(panel);
   try {
     const r = await fetchRelated(it.id);
@@ -7778,7 +7895,7 @@ function orphanContext(it, opts = {}) {
   box.className = "run-result run-ctx";
   box.appendChild(el("summary", "", "Full context — the whole prompt, "
     + "every commit, every changed file"));
-  const body = el("div", "run-ctx-body", "Reading the worktree…");
+  const body = el("div", "run-ctx-body waiting", "Reading the worktree…");
   box.appendChild(body);
   let loaded = false;
   box.addEventListener("toggle", async () => {
@@ -10144,7 +10261,7 @@ async function loadRules() {
   if (!host) return;
   if (!rulesCache) {
     host.innerHTML = "";
-    host.appendChild(el("div", "empty left", "Reading the ledger…"));
+    host.appendChild(el("div", "empty left waiting", "Reading the ledger…"));
   }
   rulesCache = await api("/api/lessons").catch(() => null);
   renderRules();
@@ -10362,8 +10479,8 @@ async function refreshUpdateStatus(fetch) {
 
 async function updCheck(btn) {
   btn.disabled = true;
-  $("#upd-hint").textContent = "Checking…";
-  await refreshUpdateStatus(true);
+  $("#upd-hint").textContent = "Checking…"; $("#upd-hint").classList.add("waiting");
+  try { await refreshUpdateStatus(true); } finally { $("#upd-hint")?.classList.remove("waiting"); }
   btn.disabled = false;
 }
 
@@ -11963,7 +12080,7 @@ async function openShowroomCard(it) {
   body.appendChild(shrMeta(it));
   body.appendChild(el("div", "shr-branch", it.branch + (it.worktree ? "  ·  " + it.worktree : "")));
   body.appendChild(el("div", "shr-pblurb", it.blurb || ""));
-  const det = el("div", "shr-detail", "Reading the branch…");
+  const det = el("div", "shr-detail waiting", "Reading the branch…");
   body.appendChild(det);
   await shrFillDetail(det, it);
 }
@@ -13809,7 +13926,7 @@ function cardMail(card, step, st) {
       m.failing ? `${m.ok} of ${m.accounts} polling` : `${m.accounts} polling`));
   card.appendChild(head);
   const acctBox = el("div", "acct-list"); acctBox.id = "mail-accounts";
-  acctBox.appendChild(el("p", "hint", "Reading account health…"));
+  acctBox.appendChild(el("p", "hint waiting", "Reading account health…"));
   card.appendChild(acctBox);
   renderMailAccounts(acctBox).catch(() => {});
   mailAddForms(card, st);
@@ -13964,7 +14081,7 @@ function cardUpdates(card) {
   card.appendChild(el("p", "hint",
     "Vira updates from its git remote: fast-forward the code, reinstall " +
     "dependencies, and restart in place."));
-  const cur = el("p", "hint", "Checking…"); cur.id = "upd-current";
+  const cur = el("p", "hint waiting", "Checking…"); cur.id = "upd-current";
   card.appendChild(cur);
   const bar = el("div", "setup-row");
   const chk = el("button", "btn", "Check for updates");
@@ -14102,7 +14219,7 @@ function openFirstrun() {
   const b = frBody();
   if (b) {
     b.appendChild(el("div", "fr-kicker", "Welcome to Vira"));
-    b.appendChild(el("p", "fr-sub", "Looking at what's on this machine…"));
+    b.appendChild(el("p", "fr-sub waiting", "Looking at what's on this machine…"));
   }
   frRefresh();
 }
@@ -15694,7 +15811,7 @@ async function openResumeView(role, kind) {
 async function docLoad() {
   const page = $("#doc-page");
   const rail = $("#doc-rail");
-  page.replaceChildren(el("div", "doc-busy", "Reading the package…"));
+  page.replaceChildren(el("div", "doc-busy waiting", "Reading the package…"));
   rail.replaceChildren();
   $("#doc-kind").querySelectorAll("button").forEach((b) =>
     b.classList.toggle("on", b.dataset.kind === docState.kind));
@@ -15986,7 +16103,7 @@ async function docAskClaim(blockId) {
   let answer = null;
   ask.addEventListener("click", async () => {
     ask.disabled = true;
-    out.replaceChildren(el("div", "doc-busy", "Checking your record…"));
+    out.replaceChildren(el("div", "doc-busy waiting", "Checking your record…"));
     try {
       answer = await post(
         `/api/applications/${encodeURIComponent(docState.uid)}/ask`,
@@ -17847,7 +17964,7 @@ function saveAppsFilters() {
 
 async function loadApplications() {
   const host = $("#app-list");
-  if (!appsData && host) host.innerHTML = "<p class='hint'>Loading roles…</p>";
+  if (!appsData && host) host.innerHTML = "<p class='hint waiting'>Loading roles…</p>";
   appsData = await api("/api/applications");
   const live = new Set(appsData.roles.filter((r) => r.has_description)
     .map((r) => r.uid));
@@ -17876,7 +17993,7 @@ async function appsCheckStale() {
   if (!r || !r.armed) return;
   const before = r.fetched || "";
   const strip = $("#app-boards-line");
-  if (strip) strip.textContent = "Checking the boards for closed postings…";
+  if (strip) { strip.textContent = "Checking the boards for closed postings…"; strip.classList.add("waiting"); }
   clearInterval(appsStaleTimer);
   let ticks = 0;
   appsStaleTimer = setInterval(async () => {
@@ -17946,6 +18063,7 @@ async function loadBoardsStrip() {
     line += ` · ${s.rescore_queue} queued for rescoring`;
   const bl = $("#app-boards-line");
   bl.textContent = line;
+  bl.classList.remove("waiting");
   bl.title = s.canon_at
     ? "A score is stale when it was written before your canon last changed "
       + "(" + new Date(s.canon_at).toLocaleString() + "). "
@@ -21283,7 +21401,7 @@ async function openModuleStory(winId) {
   $("#story-title").textContent = "What is " + (WIN_TITLES[winId] || winId) + "?";
   const body = $("#story-body");
   body.innerHTML = "";
-  body.appendChild(el("div", "bs-loading", "Composing the build story…"));
+  body.appendChild(el("div", "bs-loading waiting", "Composing the build story…"));
   let s;
   try {
     s = await api("/api/module/story/" + encodeURIComponent(winId));
