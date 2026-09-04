@@ -29,11 +29,20 @@
   .status { color: #a8a8b0; min-height: 44px; }
   .status.bad { color: #d67a64; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace;
     font-size: 12px; }
-  .bar { height: 3px; border-radius: 2px; background: #1d1d22; overflow: hidden; margin: 18px 0 8px; }
-  .bar i { display: block; height: 100%; width: 30%; background: #c9a961;
-    animation: slide 1.6s ease-in-out infinite; }
-  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
-  @media (prefers-reduced-motion: reduce) { .bar i { animation: none; width: 100%; opacity: .5; } }
+  /* the Vira wheel - the app's orbit figure (style.css "Busy states"), inlined
+     because this document links none of the app's stylesheets */
+  .bar { position: relative; width: 44px; height: 44px; margin: 18px 0 8px;
+    background:
+      radial-gradient(circle, #c9a961 45%, transparent 55%) 50% 50% / 6px 6px no-repeat,
+      radial-gradient(circle, transparent 19px, #3a3426 19.5px, #3a3426 20.4px, transparent 21px); }
+  .bar i, .bar i::after { content: ""; position: absolute; left: 50%; top: 50%; box-sizing: border-box;
+    border: 1px solid #3a3426; border-radius: 50%;
+    background: radial-gradient(circle at 50% 1px, #c9a961 2px, transparent 3px); }
+  .bar i { width: 32px; height: 32px; margin: -16px 0 0 -16px; animation: cw 2.2s linear infinite; }
+  .bar i::after { width: 18px; height: 18px; margin: -9px 0 0 -9px; animation: ccw 1.4s linear infinite; }
+  @keyframes cw { to { transform: rotate(360deg); } }
+  @keyframes ccw { to { transform: rotate(-360deg); } }
+  @media (prefers-reduced-motion: reduce) { .bar i, .bar i::after { animation: none; } }
   .hint { font-size: 12px; color: #6f6f78; margin-top: 12px; }
   a { color: #c9a961; }
 </style>

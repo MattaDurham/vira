@@ -14,11 +14,15 @@
   const copy = (value) => JSON.parse(JSON.stringify(value));
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const id = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const request = async (path, options) => {
+  const requestRaw = async (path, options) => {
     const response = await fetch(path, options);
     if (!response.ok) throw new Error((await response.text()).slice(0, 300));
     return response.json();
   };
+  // the board's own requests wear the app's busy wheel on the control that
+  // started them (app.js busyTrack) when the board runs inside Vira
+  const request = (path, options) => (typeof window.busyTrack === "function"
+    ? window.busyTrack(requestRaw(path, options)) : requestRaw(path, options));
   const send = (path, method, body) => request(path, {
     method,
     headers: { "content-type": "application/json" },
