@@ -115,7 +115,8 @@ def _is_chat(spec):
     on the owner and never counts as unlanded work - if a conversation
     leads to work, that work is dispatched as its own session and THAT
     session is what this surface watches."""
-    return ((spec.get("meta") or {}).get("kind") == "chat")
+    from . import session as session_mod
+    return session_mod.is_chat(spec.get("meta"))
 
 
 def _session_rows(registry, names):

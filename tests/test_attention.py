@@ -160,7 +160,12 @@ class Membership(Base):
                            spec={"meta": {"kind": "chat"}})
         working = self.handle("j3", {"status": "running", "awaiting": None},
                               spec={"meta": {"kind": "chat"}})
-        p = self.compose([parked, dead, working])
+        # a chat resumed after its window closed is a NEW record carrying
+        # kind=resume - the chat flag is what survives the resume
+        resumed = self.handle("j4", {"status": "running", "awaiting": "reply"},
+                              spec={"meta": {"kind": "resume", "chat": True,
+                                             "resumed_from": "j1"}})
+        p = self.compose([parked, dead, working, resumed])
         self.assertEqual(p["rows"], [])
         self.assertEqual(p["counts"], {"needs_you": 0, "working": 0})
 

@@ -533,6 +533,26 @@ class Session:
 
 # ---------- the registry / supervisor ----------
 
+def is_chat(meta):
+    """A chat is a CONVERSATION, never work (owner, 2026-09-03): it runs
+    as a session to reach the tools, but a parked or dead chat is not
+    something waiting on the owner and never counts as unlanded. Read
+    from ONE place because a resume mints a new record - the marker has to
+    survive the resume or the second turn of every chat reads as work."""
+    meta = meta or {}
+    return meta.get("kind") == "chat" or bool(meta.get("chat"))
+
+
+def _resume_meta(row, jid):
+    """The resumed record's meta. Machine markers are deliberately dropped
+    (see _resume_ended); the CHAT identity is the one thing carried, as a
+    flag beside kind=resume so kind_label still reads it as a resume."""
+    meta = {"kind": "resume", "resumed_from": jid}
+    if is_chat(row.get("meta")):
+        meta["chat"] = True
+    return meta
+
+
 class Sessions:
     """Registry of runs. SDK path: detached runner process per job,
     supervised through its job dir. Fallback path (SDK missing): the legacy
@@ -1049,7 +1069,7 @@ class Sessions:
             read_only=bool(row.get("read_only")),
             publish_plan=bool(row.get("publish_plan")),
             idea_id=row.get("idea_id") or None,
-            meta={"kind": "resume", "resumed_from": jid},
+            meta=_resume_meta(row, jid),
             resume_session=sid,
             resumed_from=jid,
         )
