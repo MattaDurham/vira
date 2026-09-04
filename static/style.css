@@ -276,7 +276,10 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
 .feed-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 
 /* feed filter chips */
-.fchips { display: flex; gap: 8px; margin: 0 0 12px; overflow-x: auto; scrollbar-width: none; }
+/* overflow-x: auto computes overflow-y to auto as well, so a chip bar
+   clips a busy wheel drawn past its chip - padding gives the wheel its
+   room and the negative margin keeps the bar's visual spacing */
+.fchips { display: flex; gap: 8px; padding: 6px 0; margin: -6px 0 6px; overflow-x: auto; scrollbar-width: none; }
 .fchips::-webkit-scrollbar { display: none; }
 .fchip {
   flex: none; background: var(--bg-card); border: 1px solid var(--line);
@@ -2313,7 +2316,7 @@ html { scrollbar-width: thin; scrollbar-color: var(--line-warm) transparent; }
 .mail-acct b { font-weight: 500; }
 .mail-status { color: var(--red); font-size: 11.5px; text-align: right; }
 .mail-status.ok { color: var(--green); }
-.seg { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.seg { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; margin: -6px 0 8px; }
 .seg-btn {
   flex: 1 1 84px; padding: 10px; border-radius: 2px; border: 1px solid var(--line);
   background: var(--bg-card); color: var(--text-dim); font-size: 13.5px; cursor: pointer;
@@ -5735,7 +5738,7 @@ h2 { font-weight: 300; letter-spacing: 0.05em; color: var(--text-head); }
 .rdr-tabs {
   display: flex; gap: 2px; align-items: flex-end; min-width: 0;
   overflow-x: auto; scrollbar-width: none;
-  border-bottom: 1px solid var(--line); padding: 0 2px;
+  border-bottom: 1px solid var(--line); padding: 6px 2px 0;
 }
 .rdr-tabs::-webkit-scrollbar { display: none; }
 .rdr-tab {
@@ -8614,6 +8617,13 @@ mark.doc-term {
 @keyframes vira-wheel-core { 50% { background-size: 8px 8px, 100% 100%; } }
 @keyframes vira-busy-sheen { to { background-position: -150% 0, 50% 50%, 0 0; } }
 @keyframes vira-busy-glow { 50% { box-shadow: 0 0 0 1px var(--accent-line), 0 0 18px var(--accent-soft); } }
+/* the ripple leaves the control entirely - the one part of the figure
+   that is unmistakably bigger than the thing you pressed */
+@keyframes vira-busy-ripple {
+  0%   { box-shadow: 0 0 0 0 var(--accent-soft); }
+  70%  { box-shadow: 0 0 0 13px transparent; }
+  100% { box-shadow: 0 0 0 13px transparent; }
+}
 
 .is-busy {
   position: relative !important;
@@ -8626,11 +8636,18 @@ mark.doc-term {
      shows through behind them */
   background-image:
     radial-gradient(circle, var(--accent) 45%, transparent 55%),
-    radial-gradient(circle, transparent 7px, var(--accent-line) 7.5px, var(--accent-line) 8.2px, transparent 8.8px);
+    radial-gradient(circle, transparent 5px, var(--accent-line) 5.5px, var(--accent-line) 6.2px, transparent 6.8px);
   background-size: 4px 4px, 100% 100%;
   background-position: 50% 50%, 50% 50%;
   background-repeat: no-repeat;
   animation: vira-wheel-core 2.4s ease-in-out infinite;
+  /* the rings are drawn OUTSIDE the control's box on purpose - a wheel
+     that sits entirely inside a 21px chip reads as a texture, not a
+     figure. A control that clips its own pseudo-elements would cut them,
+     hence the override; the three chip BARS that clip (.fchips, .seg,
+     .rdr-tabs - measured, they scroll horizontally, which makes them clip
+     vertically too) carry matching breathing room further down. */
+  overflow: visible !important;
 }
 .is-busy > * { visibility: hidden; }
 .is-busy.is-busy::before, .is-busy.is-busy::after {
@@ -8643,30 +8660,35 @@ mark.doc-term {
   transform-origin: 50% 50%;
 }
 .is-busy.is-busy::before {
-  width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px;
+  width: 18px; height: 18px; margin: -9px 0 0 -9px;
   animation: vira-wheel-cw 1.5s linear infinite;
 }
 .is-busy.is-busy::after {
-  width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px;
   animation: vira-wheel-ccw 1s linear infinite;
 }
 /* the rich wait: refresh, rescan, sweep, rebuild, compose - a longer wait,
    a bigger figure, a sheen crossing the control and a breathing halo */
 .is-busy.rich {
+  /* no static track ring here: the rotating rings are wider than the
+     control, and a background layer cannot paint outside the box, so the
+     track would draw a second, smaller circle inside the figure */
   background-image:
     linear-gradient(110deg, transparent 35%, var(--accent-veil) 50%, transparent 65%),
-    radial-gradient(circle, var(--accent) 45%, transparent 55%),
-    radial-gradient(circle, transparent 10px, var(--accent-line) 10.5px, var(--accent-line) 11.2px, transparent 11.8px);
-  background-size: 250% 100%, 5px 5px, 100% 100%;
-  background-position: 150% 0, 50% 50%, 0 0;
+    radial-gradient(circle, var(--accent) 45%, transparent 55%);
+  background-size: 250% 100%, 5px 5px;
+  background-position: 150% 0, 50% 50%;
   animation: vira-busy-sheen 1.8s linear infinite, vira-busy-glow 2.4s ease-in-out infinite;
 }
-.is-busy.rich::before { width: 18px; height: 18px; margin: -9px 0 0 -9px; animation-duration: 2.2s; }
-.is-busy.rich::after { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; animation-duration: 1.4s; }
-.is-busy.rich::before, .is-busy.rich::after {
-  background: radial-gradient(circle at 50% 0.5px, var(--accent) 1.7px, transparent 2.6px);
-  box-shadow: 0 0 6px var(--accent-soft);
+.is-busy.rich::before { width: 26px; height: 26px; margin: -13px 0 0 -13px; animation-duration: 2.2s; }
+.is-busy.rich::after {
+  width: 16px; height: 16px; margin: -8px 0 0 -8px;
+  animation: vira-wheel-ccw 1.4s linear infinite, vira-busy-ripple 2.2s ease-out infinite;
 }
+.is-busy.rich::before, .is-busy.rich::after {
+  background: radial-gradient(circle at 50% 0.5px, var(--accent) 1.9px, transparent 2.9px);
+}
+.is-busy.rich::before { box-shadow: 0 0 8px var(--accent-soft); }
 /* a placeholder line wears the wheel to the left of its text */
 .spin, .waiting { position: relative; padding-left: 26px !important; min-height: 18px; }
 .spin::before, .spin::after, .waiting::before, .waiting::after {
@@ -8678,6 +8700,27 @@ mark.doc-term {
 .spin::before, .waiting::before { width: 14px; height: 14px; margin: -7px 0 0 -7px; left: 12px; animation: vira-wheel-cw 1.6s linear infinite; }
 .spin::after, .waiting::after { width: 8px; height: 8px; margin: -4px 0 0 -4px; left: 12px; animation: vira-wheel-ccw 1.05s linear infinite; }
 .spin, .waiting { background: radial-gradient(circle at 12px 50%, var(--accent) 1.4px, transparent 2px) no-repeat; }
+/* the module-scale wait: the Attention hero's own orbit, at full size,
+   over a module that is still empty. Same markup and same CSS as the hero
+   - one figure, three scales (control, line, module). */
+.mod-wait {
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  padding: 54px 20px 60px; text-align: center;
+}
+.mod-wait .attention-orbit { flex: 0 0 108px; width: 108px; height: 108px; }
+.mod-wait-copy { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.mod-wait-copy > strong {
+  color: var(--text); font-size: 17px; font-weight: 500; letter-spacing: -.01em;
+}
+.mod-wait-note {
+  color: var(--text-dim); font-size: 12.5px; font-family: var(--mono);
+  letter-spacing: .04em; min-height: 16px;
+  animation: vira-modwait-note 2.2s ease-in-out infinite;
+}
+@keyframes vira-modwait-note { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .mod-wait-note { animation: none; opacity: 1; }
+}
 /* a standalone wheel for anywhere a real element is wanted */
 .vira-wheel { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; }
 .vira-wheel.waiting { padding: 0 !important; min-height: 0; }
@@ -8686,4 +8729,5 @@ mark.doc-term {
 @media (prefers-reduced-motion: reduce) {
   .is-busy, .is-busy::before, .is-busy::after, .spin::before, .spin::after,
   .waiting::before, .waiting::after { animation: none !important; }
+  .is-busy.rich::after { box-shadow: none; }
 }

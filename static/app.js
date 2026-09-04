@@ -51,7 +51,14 @@ const del = (path) => api(path, { method: "DELETE" });
 // busyWhile(node, work, {rich}) is the explicit form for a wait that is
 // not a request behind a click - a dynamic import, a long poll, a row or
 // tile rather than a button.
-const BUSY_DELAY_MS = 220;   // a request faster than this never shows
+const BUSY_DELAY_MS = 220;   // a plain request faster than this never shows
+// A RICH control is a deliberate press - Refresh, Sweep, Recheck - and the
+// answer can be fast: /api/attention returns in ~35ms, so the Attention
+// window's own Refresh built the wheel and never showed it, which reads
+// exactly like a button that does nothing. A rich press therefore
+// acknowledges AT ONCE and holds for BUSY_MIN_MS, so "it registered" no
+// longer depends on the server being slow.
+const BUSY_RICH_DELAY_MS = 0;
 const BUSY_MIN_MS = 480;     // once shown, hold at least this long
 const BUSY_CLICK_MS = 160;   // a request starting this soon after a click is its own
 const BUSY_CHAIN_MS = 200;   // ...or this soon after one of its requests settled
@@ -95,7 +102,8 @@ function busyMaybeHide(e) {
 function busyAttach(e, p) {
   e.pending.add(p);
   clearTimeout(e.timer);
-  if (!e.shownAt) e.timer = setTimeout(() => { if (e.pending.size && e.node.isConnected) busyShow(e); }, BUSY_DELAY_MS);
+  if (!e.shownAt) e.timer = setTimeout(() => { if (e.pending.size && e.node.isConnected) busyShow(e); },
+    e.rich ? BUSY_RICH_DELAY_MS : BUSY_DELAY_MS);
   const done = () => { e.pending.delete(p); e.lastSettle = performance.now(); busyMaybeHide(e); };
   p.then(done, done);
   return p;
@@ -141,6 +149,64 @@ document.addEventListener("click", (e) => {
 }, true);
 // a placeholder line that says what it is waiting on, wearing the wheel
 const waitLine = (text, cls = "") => el("div", ("waiting " + cls).trim(), text);
+
+// ---------- the module-scale wait ----------
+// A control wears the small wheel; a MODULE that is still empty on open
+// wears the big one. The figure is the Attention hero's own orbit - the
+// same markup, the same CSS, at full size - so this is a third SURFACE of
+// one drawing, not a third drawing of the wheel. It rotates a line of what
+// is being read, because "loading" alone says nothing about a 5s wait.
+//
+// It needs no teardown: every renderer here clears its container before it
+// paints, so the first real render removes the loader, and the rotation
+// stops on its own the tick after the node leaves the DOM.
+const MODULE_WAIT = {
+  "attention:now": ["#attention-body",
+    ["Reading what is running", "Checking what is waiting on you",
+     "Joining branches that never landed"]],
+  "attention:day": ["#brief-body",
+    ["Reading today's calendar", "Finding who is waiting on a reply",
+     "Gathering open loops and renewals"]],
+  "attention:decide": ["#review-body",
+    ["Gathering what needs a decision", "Sorting oldest and heaviest first"]],
+  applications: ["#app-list",
+    ["Reading the board snapshot", "Overlaying your scores",
+     "Checking which postings are still open"]],
+  showroom: ["#shr-grid",
+    ["Asking git what is on the branches", "Reading what each one was for"]],
+  evidence: ["#ev-list", ["Mining the build record", "Reading the case studies"]],
+  journal: ["#journal-list", ["Reading what you have told Vira"]],
+  reader: ["#reader-list", ["Opening the library", "Reading what is unread"]],
+  people: ["#people-list", ["Reading the registry", "Sorting by recent contact"]],
+};
+const MODULE_WAIT_ROTATE_MS = 2200;
+
+function moduleWait(key) {
+  const spec = MODULE_WAIT[key];
+  if (!spec) return;
+  const box = $(spec[0]);
+  // only ever over an EMPTY module: a repaint of a surface that already
+  // has content must never blank it behind a loader
+  if (!box || box.childElementCount || (box.textContent || "").trim()) return;
+  const wrap = el("div", "mod-wait");
+  const orbit = el("div", "attention-orbit");
+  orbit.setAttribute("aria-hidden", "true");
+  orbit.innerHTML = "<i></i><i></i><i></i><span></span>";
+  wrap.appendChild(orbit);
+  const copy = el("div", "mod-wait-copy");
+  copy.appendChild(el("strong", "", "Vira is reading"));
+  const note = el("small", "mod-wait-note", spec[1][0]);
+  copy.appendChild(note);
+  wrap.appendChild(copy);
+  wrap.setAttribute("role", "status");
+  box.appendChild(wrap);
+  let i = 0;
+  const t = setInterval(() => {
+    if (!wrap.isConnected) return clearInterval(t);
+    i = (i + 1) % spec[1].length;
+    note.textContent = spec[1][i];
+  }, MODULE_WAIT_ROTATE_MS);
+}
 
 // ---------- shared scaffolds ----------
 // lsGet/lsSet: the one JSON-parse-with-default localStorage wrapper every
@@ -14913,6 +14979,7 @@ const ATTENTION_ALIAS = { brief: "day", review: "decide", subsviz: "picker" };
 let attentionTab = "now";      // now | day | decide | picker
 
 function attentionTabLoad(tab) {
+  moduleWait("attention:" + tab);
   if (tab === "now") { renderAttention(); refreshAlerts(); }
   if (tab === "day" && Date.now() - briefLoadedAt > 300000)
     loadBrief().catch(() => {});
@@ -15046,6 +15113,10 @@ $("#people-tabs")?.querySelectorAll(".seg-btn").forEach((b) =>
   b.addEventListener("click", () => setPeopleTab(b.dataset.tab)));
 
 function viewLoad(id) {
+  // an empty module says what it is reading rather than sitting blank
+  // (Attention's own panes are covered by attentionTabLoad below, so a
+  // tab switch gets the same treatment as the module's first open)
+  moduleWait(id);
   if (id === "work") workTabLoad(workTab);
   if (id === "evidence") loadEvidence().catch(() => {});
   if (id === "applications") loadApplications().catch(() => {});
