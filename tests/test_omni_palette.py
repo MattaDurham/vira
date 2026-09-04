@@ -143,6 +143,21 @@ class TheSinkNeverSteals(unittest.TestCase):
         self.assertIn("paletteOpen", self.body)
         self.assertIn("isCollapsed", self.body)
 
+    def test_a_press_in_flight_is_never_claimed_over(self):
+        # The press that starts a click-and-drag collapses the selection,
+        # and that collapse fires selectionchange - so a sink that only
+        # tests isCollapsed focuses itself mid-drag and kills the selection
+        # (measured live 2026-09-03: 0 characters selected with the sink
+        # present, 54 with it detached). The guard is the FIRST test in
+        # eligible, and both ends of the press are wired in capture.
+        self.assertRegex(self.body, r"const eligible = \(\) => \{\s*if \(pressed\) return false;")
+        self.assertIn('document.addEventListener("pointerdown", down, true)', self.body)
+        self.assertIn('document.addEventListener("pointerup", up, true)', self.body)
+        self.assertIn('document.addEventListener("pointercancel", up, true)', self.body)
+        # the release re-runs the claim, so a plain click still hands the
+        # floor to the sink
+        self.assertRegex(self.body, r"const up = \(\) => \{ pressed = false; claimSoon\(\); \}")
+
     def test_dictated_text_opens_the_palette_seeded(self):
         self.assertIn("togglePalette(true, text)", self.body)
         # ...and togglePalette really carries a seed parameter that lands

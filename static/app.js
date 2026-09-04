@@ -24140,7 +24140,26 @@ function initOmniSink() {
     return !a || a === document.body || a === document.documentElement
       || a === sink;
   };
+  // A PRESS IN FLIGHT OWNS THE SELECTION (2026-09-03). The press that
+  // starts a click-and-drag COLLAPSES the selection, and that collapse
+  // fires selectionchange - so the isCollapsed test below read the empty
+  // selection as "nothing to protect" and focused the sink mid-drag, which
+  // moves the selection INTO the input and kills the drag. Measured on
+  // live: every drag across a lit profile selected 0 characters and left
+  // focus on the sink; with the sink detached the same drag selected 54.
+  // The sink waits for the button to come up; the release re-runs claim,
+  // and a selection that survived it is honoured by the test below.
+  // focus falls to the floor a beat AFTER the field that had it lets go
+  const claimSoon = () => setTimeout(claim, 0);
+  let pressed = false;
+  const down = () => { pressed = true; };
+  const up = () => { pressed = false; claimSoon(); };
+  document.addEventListener("pointerdown", down, true);
+  document.addEventListener("pointerup", up, true);
+  document.addEventListener("pointercancel", up, true);
+  window.addEventListener("blur", () => { pressed = false; });
   const eligible = () => {
+    if (pressed) return false;
     if (paletteOpen || openSheets.length) return false;
     if (document.body.classList.contains("lp-open")) return false;
     const sel = document.getSelection();
@@ -24151,8 +24170,6 @@ function initOmniSink() {
     if (document.hasFocus() && idle() && eligible())
       sink.focus({ preventScroll: true });
   };
-  // focus falls to the floor a beat AFTER the field that had it lets go
-  const claimSoon = () => setTimeout(claim, 0);
   document.addEventListener("focusout", claimSoon);
   document.addEventListener("selectionchange", claimSoon);
   window.addEventListener("focus", claimSoon);
