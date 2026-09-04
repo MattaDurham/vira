@@ -13371,14 +13371,23 @@ function aiConnect(bodyObj) {
 // The disable switch (config providers_disabled). A disabled provider is
 // never drafted on and never runs a session — every path REFUSES by name
 // rather than rerouting — which is what lets the model-parity eval run the
-// whole app on one provider and know that it did. The list is computed
-// from the records on screen (each carries `disabled`), never from a
-// second copy of the config.
+// whole app on one provider and know that it did.
+//
+// THE LIST IS READ FROM THE SERVER AT CLICK TIME, never from the records
+// this card was rendered with. A card closes over its render; the dashboard
+// re-renders only after /api/onboard/steps answers (it probes every CLI and
+// takes seconds), so a second click landing before that — or a card in
+// another browser tab — would re-apply a stale snapshot and silently
+// re-disable a provider just enabled. Measured on the branch instance:
+// Enable Gemini, then Disable Claude from the old card, put Gemini back off.
 function providerSwitch(card, pr, ai) {
-  const others = (ai.providers || [])
-    .filter((p) => p.disabled && p.id !== pr.id).map((p) => p.id);
-  const save = (list, btn, done) => setupAct(btn,
-    () => post("/api/config", { providers_disabled: list })
+  const current = () => api("/api/config")
+    .then((c) => (Array.isArray(c.providers_disabled) ? c.providers_disabled : [])
+      .filter((id) => id !== pr.id));
+  const save = (want, btn, done) => setupAct(btn,
+    () => current()
+      .then((others) => post("/api/config",
+        { providers_disabled: want ? others.concat(pr.id) : others }))
       .then(() => modelCatalog(true))
       .then(() => post("/api/health/ai/recheck", {})
         .then((h) => renderAiHealth(h.latest || h)).catch(() => {})),
@@ -13391,13 +13400,13 @@ function providerSwitch(card, pr, ai) {
          ? " It is also Vira's go-to, so anything that follows the go-to "
            + "refuses too until you enable it or pick another." : "")));
     const on = el("button", "btn primary", "Enable " + pr.sub_name);
-    on.onclick = () => save(others, on, `${pr.sub_name} enabled`);
+    on.onclick = () => save(false, on, `${pr.sub_name} enabled`);
     card.appendChild(on);
     return;
   }
   const off = el("button", "btn", "Disable for now");
   off.title = "Nothing will run on it until you enable it again";
-  off.onclick = () => save(others.concat(pr.id), off,
+  off.onclick = () => save(true, off,
     `${pr.sub_name} disabled - nothing runs on it`);
   card.appendChild(off);
 }
