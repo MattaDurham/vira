@@ -59,6 +59,18 @@ def vault_dirs():
     return list(settings.get("vault_dirs") or DEFAULT_DIRS)
 
 
+def exclude_names():
+    """Directory names the owner never wants indexed, at any depth.
+
+    A listed dir is walked whole (qocha rglobs it), so this is the only way
+    to take a tree and skip one branch of it - `raw/` carries 1,007 loose
+    full transcripts that exist nowhere else AND `raw/instagram`, whose
+    clippings are already carried in full by their wiki notes.
+    """
+    return {str(n).strip() for n in (settings.get("vault_exclude_dirs") or [])
+            if str(n).strip()}
+
+
 def _source_id(value, root):
     """Stable, URL/path-safe source id for a configured vault."""
     raw = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
@@ -183,6 +195,12 @@ def _vault_rows():
                 cfg = _QochaConfig(
                     root=spec["root"], dirs=spec["dirs"], db=spec["db"],
                     owner=settings.get("owner_name") or "the owner")
+                # Owner exclusions are ADDED to qocha's own defaults, never
+                # substituted for them: dropping .obsidian/.git/.venv is the
+                # engine's business, and a config key that silently turned
+                # those back on would be a footgun. Applies to every
+                # connected source, primary and secondary alike.
+                cfg.exclude_dirs = set(cfg.exclude_dirs) | exclude_names()
                 v = _QochaVault(cfg.root, config=cfg,
                                 embedder=_ViraEmbedder(), answerer=_answer)
                 if spec["primary"]:
