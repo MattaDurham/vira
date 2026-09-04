@@ -147,6 +147,23 @@ class Membership(Base):
                         spec={"meta": {"routine_id": "muse"}})
         self.assertEqual(self.compose([h])["rows"], [])
 
+    def test_a_chat_is_a_conversation_and_never_a_row(self):
+        # Chat with Vira parks in the reply window like any owner session,
+        # and a parked chat used to read "needs your input" - it is a
+        # conversation, not work, and never counts as unlanded (owner,
+        # 2026-09-03). If the chat leads to work, that is its own session.
+        parked = self.handle("j1", {"status": "running", "awaiting": "reply"},
+                             spec={"meta": {"kind": "chat"}})
+        dead = self.handle("j2", {"status": "error", "session_id": "s2",
+                                  "finished": iso(0.1),
+                                  "error": "spend limit reached"},
+                           spec={"meta": {"kind": "chat"}})
+        working = self.handle("j3", {"status": "running", "awaiting": None},
+                              spec={"meta": {"kind": "chat"}})
+        p = self.compose([parked, dead, working])
+        self.assertEqual(p["rows"], [])
+        self.assertEqual(p["counts"], {"needs_you": 0, "working": 0})
+
     def test_a_circuit_stage_session_defers_to_the_flow_row(self):
         from server import circuits
         h = self.handle("j1", {"status": "running", "awaiting": None},

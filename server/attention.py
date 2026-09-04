@@ -108,6 +108,16 @@ def _machine_meta(spec):
                 or meta.get("circuit_run") or meta.get("judge_of"))
 
 
+def _is_chat(spec):
+    """A CHAT is a conversation, never work (owner's ruling, 2026-09-03).
+    Chat with Vira runs as a session so it can reach the tools and so it
+    shows up as a run, but a parked or dead chat is not something waiting
+    on the owner and never counts as unlanded work - if a conversation
+    leads to work, that work is dispatched as its own session and THAT
+    session is what this surface watches."""
+    return ((spec.get("meta") or {}).get("kind") == "chat")
+
+
 def _session_rows(registry, names):
     """Live sessions from the supervisor's registry, state read FRESH off
     each job dir (the pending_all discipline: the cached copy is refreshed
@@ -121,6 +131,8 @@ def _session_rows(registry, names):
                    if x.kind == "detached"]
     rows = []
     for h in handles:
+        if _is_chat(h.spec):
+            continue                          # a conversation, not work
         st = jobfiles.read_json(h.dir / "state.json") or {}
         status = st.get("status")
         awaiting = st.get("awaiting")
