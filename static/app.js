@@ -3175,11 +3175,11 @@ function initFindView() {
   const input = el("input", "search");
   input.type = "text";
   input.autocomplete = "off";
-  input.placeholder = "Search or ask across notes, media, people, messages…";
-  const askBtn = el("button", "btn primary", "Ask");
+  input.placeholder = "Search notes, media, people, messages…";
+  const searchBtn = el("button", "btn primary", "Search");
   const chatBtn = el("button", "btn", "Chat");
   bar.appendChild(input);
-  bar.appendChild(askBtn);
+  bar.appendChild(searchBtn);
   bar.appendChild(chatBtn);
   const tabs = el("div", "fchips tight");
   const kinds = el("div", "fchips tight");
@@ -3278,7 +3278,7 @@ function initFindView() {
     } catch (e) {
       if (mine !== seq) return;
       status.textContent = ask
-        ? "Ask failed — is the model backend up?"
+        ? "Could not answer — is the model backend up?"
         : "Search unavailable.";
     }
   };
@@ -3294,7 +3294,7 @@ function initFindView() {
     // searches now instead of waiting out the debounce.
     run(last?.plan?.shape === "answer" || looksLikeQuestion(input.value));
   });
-  askBtn.addEventListener("click", () => { clearTimeout(timer); run(true); });
+  searchBtn.addEventListener("click", () => { clearTimeout(timer); run(true); });
   chatBtn.addEventListener("click", () => {
     clearTimeout(timer);
     showFindChat(input.value.trim());
@@ -21009,7 +21009,7 @@ function selectionMenuItems(text, ctx, x, y) {
     { head: "Selected text", sub: text },
     term && { label: "Define “" + term + "”", run: () => openDefine(term) },
     { label: "Chat", hint: "vault", run: () => openFindChatDraft(text) },
-    { label: "Ask", hint: "Find", run: () => openFindQuery(text, { ask: true }) },
+    { label: "Answer", hint: "Find", run: () => openFindQuery(text, { ask: true }) },
     { label: "Search", hint: "Find", run: () => openFindQuery(text) },
     { sep: true },
     { label: "Tell Vira", run: () => ctxTellVira(x, y, ctx) },
