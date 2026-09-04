@@ -335,6 +335,15 @@ function flingVelocity(samples) {
   return Math.max(-FLING_MAX, Math.min(FLING_MAX, v));
 }
 
+// the sun is the one thing a press MOVES rather than spins: everywhere else a
+// drag turns the record, but grabbing yourself slides the whole sky around the
+// screen. Radius mirrors the sun drawn in paint() (22 * k), with a small pad.
+function onSun(clientX, clientY) {
+  const r = S.canvas.getBoundingClientRect();
+  const px = clientX - r.left, py = clientY - r.top;
+  return Math.hypot(px - sx(0), py - sy(0)) <= 22 * S.cur.k + 4;
+}
+
 function sunAngle(px, py) {
   const r = S.canvas.getBoundingClientRect();
   return Math.atan2((py - r.top) - sy(0), (px - r.left) - sx(0));
@@ -353,7 +362,9 @@ function bindPointer() {
     // a drag is a SPIN about the sun: remember the pointer's angle around
     // the sun's screen position and turn the sky by how much it changes
     S.drag = { x0: e.clientX, y0: e.clientY, moved: false, button: e.button,
-      ang: sunAngle(e.clientX, e.clientY), samples: [] };
+      ang: sunAngle(e.clientX, e.clientY), samples: [],
+      // ... unless the press landed ON the sun, which pans the view instead
+      pan: onSun(e.clientX, e.clientY) ? { x: S.cam.x, y: S.cam.y } : null };
     S.spinV = 0;                            // a hand on the record stops it
   });
   cv.addEventListener("pointermove", (e) => {
@@ -370,6 +381,15 @@ function bindPointer() {
     if (S.drag) {
       const dx = e.clientX - S.drag.x0, dy = e.clientY - S.drag.y0;
       if (!S.drag.moved && Math.hypot(dx, dy) > 4) { S.drag.moved = true; S.follow = null; }
+      if (S.drag.moved && S.drag.pan) {
+        // the sky follows the hand exactly: cam AND cur, never eased, or the
+        // view would lag behind the pointer that is dragging it
+        const k = S.cur.k;
+        S.cam.x = S.drag.pan.x - dx / k; S.cam.y = S.drag.pan.y - dy / k;
+        S.cur.x = S.cam.x; S.cur.y = S.cam.y;
+        S.dirty = true; hideTip();
+        return;
+      }
       if (S.drag.moved) {
         // incremental, wrapped: the pointer can circle the sun any number
         // of times and a jump across the -pi/pi seam must not flip the sky
@@ -385,7 +405,9 @@ function bindPointer() {
       return;
     }
     const n = hit(e.clientX, e.clientY);
-    if (n !== S.hover) { S.hover = n; cv.style.cursor = n ? "pointer" : ""; S.dirty = true; }
+    const want = n ? "pointer" : (onSun(e.clientX, e.clientY) ? "grab" : "");
+    if (cv.style.cursor !== want) cv.style.cursor = want;
+    if (n !== S.hover) { S.hover = n; S.dirty = true; }
     if (n) showTip(n, e.clientX, e.clientY); else hideTip();
   });
   const up = (e) => {
@@ -393,6 +415,7 @@ function bindPointer() {
     if (S.pointers.size < 2) S.pinch = null;
     if (!S.drag) return;
     const d = S.drag; S.drag = null;
+    if (d.moved && d.pan) return;              // a pan coasts nowhere
     if (d.moved) { S.spinV = flingVelocity(d.samples); if (S.spinV) wake(); return; }
     if (d.button !== 0) return;
     const n = hit(e.clientX, e.clientY);

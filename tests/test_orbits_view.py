@@ -99,3 +99,37 @@ class OrbitsInertia(unittest.TestCase):
         body = self.src[self.src.index("function flingVelocity"):]
         body = body[:body.index("\n}\n")]
         self.assertIn("if (S.reduced", body)
+
+
+class GrabbingTheSunPansTheView(unittest.TestCase):
+    """A press on the sun MOVES the sky; every other press spins it.
+
+    Source contracts over static/orbits.js with comments stripped, so a
+    guard surviving only as the sentence explaining it cannot pass.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = _strip((ROOT / "static" / "orbits.js").read_text(encoding="utf-8"))
+
+    def test_the_press_records_whether_it_landed_on_the_sun(self):
+        self.assertRegex(self.js, r"pan:\s*onSun\(e\.clientX, e\.clientY\)")
+
+    def test_the_sun_hit_test_uses_the_radius_the_sun_is_drawn_at(self):
+        self.assertRegex(self.js, r"function onSun\b")
+        self.assertRegex(self.js, r"Math\.hypot\(px - sx\(0\), py - sy\(0\)\)\s*<=\s*22 \* S\.cur\.k")
+        self.assertIn("const sunR = 22 * k;", self.js)
+
+    def test_a_sun_drag_moves_the_camera_and_never_turns_the_sky(self):
+        move = self.js[self.js.index("if (S.drag.moved && S.drag.pan)"):]
+        move = move[:move.index("if (S.drag.moved) {")]
+        self.assertIn("S.cam.x = S.drag.pan.x - dx / k", move)
+        self.assertIn("S.cur.x = S.cam.x", move)   # follows the hand, never eased
+        self.assertNotIn("S.spin", move)
+        self.assertIn("return;", move)             # the spin branch is never reached
+
+    def test_a_pan_never_flings(self):
+        self.assertIn("if (d.moved && d.pan) return;", self.js)
+
+    def test_the_sun_advertises_itself_as_grabbable(self):
+        self.assertRegex(self.js, r'onSun\(e\.clientX, e\.clientY\) \? "grab"')
