@@ -62,6 +62,79 @@ class RegistryAdapterTests(unittest.TestCase):
         self.assertEqual(codexapp.approval_policy("manual"), "untrusted")
         self.assertEqual(codexapp.approval_policy("acceptEdits"), "on-request")
         self.assertEqual(codexapp.approval_policy("bypassPermissions"), "never")
+        # A PLACED bypass session asks on-request: its sandbox is
+        # workspace-write, and with `never` a write outside the worktree
+        # would fail silently inside Codex - no request, no branch-first
+        # denial on the record. The other rungs are unchanged by placement.
+        self.assertEqual(codexapp.approval_policy(
+            "bypassPermissions", placed=True), "on-request")
+        self.assertEqual(codexapp.approval_policy("manual", placed=True),
+                         "untrusted")
+        self.assertEqual(codexapp.approval_policy("acceptEdits", placed=True),
+                         "on-request")
+
+    def test_a_placed_bypass_thread_is_workspace_write_and_asks(self):
+        runner = FakeRunner(mode="bypassPermissions")
+        runner.spec["worktree"] = "/tmp/work"
+        runner.spec["live_root"] = "/tmp/live"
+        session = codexapp.CodexSession(runner, "/codex", {})
+        params = session._thread_params()
+        self.assertEqual(params["sandbox"], "workspace-write")
+        self.assertEqual(params["approvalPolicy"], "on-request")
+        # And the unplaced control keeps the rung's old shape.
+        loose = codexapp.CodexSession(
+            FakeRunner(mode="bypassPermissions"), "/codex", {})
+        loose_params = loose._thread_params()
+        self.assertEqual(loose_params["sandbox"], "danger-full-access")
+        self.assertEqual(loose_params["approvalPolicy"], "never")
+
+    def test_workspace_write_keeps_the_network(self):
+        # workspace-write cuts the network by default, and Vira's own HTTP
+        # API on :8377 is the session's whole-store fallback - so the argv
+        # opens loopback for every app-server it spawns.
+        seen = {}
+
+        async def fake_exec(*argv, **kw):
+            seen["argv"] = argv
+            raise OSError("stop here")
+
+        async def run():
+            rpc = codexapp.JsonRpcClient("/codex", "/tmp", {}, None)
+            with mock.patch.object(codexapp.asyncio, "create_subprocess_exec",
+                                   fake_exec):
+                with self.assertRaises(codexapp.AppServerUnavailable):
+                    await rpc.start()
+        asyncio.run(run())
+        argv = list(seen["argv"])
+        self.assertIn("sandbox_workspace_write.network_access=true", argv)
+        self.assertIn("mcp_servers={}", argv)
+        self.assertEqual(argv[:3], ["/codex", "app-server", "--stdio"])
+
+    def test_a_file_change_is_recorded_as_an_edit(self):
+        # The guard probe's write landed with nothing in state.tools: only
+        # commandExecution items were recorded, so the ledger could not say
+        # the session had edited anything.
+        runner = FakeRunner()
+        session = codexapp.CodexSession(runner, "/codex", {})
+        session.thread_id = "t1"
+
+        async def run():
+            await session._handle_notification({
+                "method": "item/completed",
+                "params": {"threadId": "t1", "item": {
+                    "type": "fileChange", "id": "i1",
+                    "changes": [{"path": "/tmp/work/README.md"},
+                                {"filePath": "/tmp/work/a.py"}]}}})
+            await session._handle_notification({
+                "method": "item/completed",
+                "params": {"threadId": "t1", "item": {
+                    "type": "commandExecution", "id": "i2",
+                    "command": "ls"}}})
+        asyncio.run(run())
+        self.assertEqual([t[0] for t in runner.tools], ["Edit", "Bash"])
+        self.assertEqual(runner.tools[0][1]["path"],
+                         "/tmp/work/README.md, /tmp/work/a.py")
+        self.assertIn("Edit: /tmp/work/README.md", "".join(runner.messages))
 
     def test_dynamic_tool_call_uses_vira_registry_and_gate(self):
         async def run():

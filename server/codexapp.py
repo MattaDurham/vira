@@ -56,6 +56,12 @@ class JsonRpcClient:
                 # Vira supplies a session-scoped tool registry. Do not inherit
                 # unrelated global MCP servers into a background Vira job.
                 "-c", "mcp_servers={}",
+                # A placed session runs workspace-write (see
+                # agentbackend.sandbox_for), whose default cuts the network -
+                # and Vira's own HTTP API on :8377 is the session's whole-store
+                # fallback. Loopback reach is part of the contract, not a
+                # sandbox escalation.
+                "-c", "sandbox_workspace_write.network_access=true",
                 cwd=self.cwd, env=self.env,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
@@ -183,9 +189,19 @@ class JsonRpcClient:
                 task.cancel()
 
 
-def approval_policy(mode):
+def approval_policy(mode, placed=False):
+    """Codex's approval vocabulary for a Vira rung.
+
+    A PLACED bypass session asks `on-request` rather than `never`: its
+    sandbox is workspace-write (agentbackend.sandbox_for says why), and with
+    `never` a write outside the worktree would simply FAIL inside Codex -
+    the live tree stays safe, but silently, with no request reaching the
+    gate and no branch-first denial on the record. `on-request` turns that
+    refusal into the escalation the gate exists to answer; the bypass rung
+    inside the gate still allows everything else on sight.
+    """
     if mode == "bypassPermissions":
-        return "never"
+        return "on-request" if placed else "never"
     if mode == "manual":
         return "untrusted"
     return "on-request"
@@ -236,6 +252,17 @@ def _permission_checks(profile, live_root=""):
     return checks
 
 
+def change_paths(item):
+    """Every path a fileChange item touched, as Codex reported them."""
+    out = []
+    for change in item.get("changes") or []:
+        if isinstance(change, dict):
+            path = change.get("path") or change.get("filePath") or ""
+            if path:
+                out.append(str(path))
+    return out
+
+
 def render_item(item):
     """One completed App Server ThreadItem in Vira's transcript vocabulary."""
     kind = item.get("type") or ""
@@ -247,12 +274,7 @@ def render_item(item):
         tail = f" (exit {code})" if code not in (None, 0) else ""
         return f"  → Bash: {command[:160]}{tail}\n" if command else None
     if kind == "fileChange":
-        names = []
-        for change in item.get("changes") or []:
-            if isinstance(change, dict):
-                path = change.get("path") or change.get("filePath") or ""
-                if path:
-                    names.append(str(path)[-60:])
+        names = [p[-60:] for p in change_paths(item)]
         return f"  → Edit: {', '.join(names[:4])}\n" if names else "  → Edit\n"
     if kind in ("dynamicToolCall", "mcpToolCall"):
         namespace = item.get("namespace") or item.get("server") or ""
@@ -374,7 +396,8 @@ class CodexSession:
             "cwd": spec["cwd"],
             "runtimeWorkspaceRoots": [spec["cwd"]],
             "sandbox": agentbackend.sandbox_for(spec),
-            "approvalPolicy": approval_policy(spec.get("mode")),
+            "approvalPolicy": approval_policy(spec.get("mode"),
+                                              agentbackend.placed(spec)),
             "approvalsReviewer": "user",
             "developerInstructions": viratools.preamble(
                 native=True,
@@ -451,6 +474,11 @@ class CodexSession:
                 if item.get("type") == "commandExecution":
                     self.runner.record_tool("Bash", {
                         "query": (item.get("command") or "")[:200]})
+                elif item.get("type") == "fileChange":
+                    # Codex's own file tool is a write the ledger must see:
+                    # the guard probe found an edit the record did not carry.
+                    self.runner.record_tool("Edit", {
+                        "path": ", ".join(change_paths(item))[:200]})
             return None
         if method == "error":
             error = params.get("error") or {}

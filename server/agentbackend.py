@@ -231,16 +231,36 @@ def sessions_quality(pid):
     return ""
 
 
+def placed(spec):
+    """Whether branch-first placement armed the live-tree guard for this
+    session - the spec carries both the worktree it may write and the
+    checkout it must not."""
+    return bool(spec.get("worktree") and spec.get("live_root"))
+
+
 def sandbox_for(spec):
     """Vira's permission ladder mapped onto codex's sandbox vocabulary.
-    read-only stays read-only; bypassPermissions means on this path
-    what it means on the SDK path; everything between runs workspace-write —
+    read-only stays read-only; everything between runs workspace-write -
     confined to the cwd, which branch-first placement has already made a
-    worktree for any session that can write."""
+    worktree for any session that can write.
+
+    bypassPermissions means on this path what it means on the SDK path,
+    WITH ONE EXCEPTION THAT IS THE WHOLE GUARD: a PLACED session never gets
+    danger-full-access. Under that sandbox Codex's own file tool answers to
+    nobody - the parity harness's guard probe appended a line to the LIVE
+    README through it on its first live run (2026-09-04, run_ed6768ed60)
+    with no denial anywhere, because Vira's gate only ever sees what Codex
+    ASKS about. Under workspace-write a write outside the worktree is an
+    escalation Codex has to request (item/permissions/requestApproval),
+    and that request is what reaches runner.gate, where the branch-first
+    denial fires by name. The rung keeps its meaning otherwise: the gate
+    auto-allows every other escalation, so no card reaches the owner.
+    """
     from . import session          # lazy: session imports this module
     if spec.get("read_only"):
         return "read-only"
-    if session.norm_mode(spec.get("mode")) == "bypassPermissions":
+    if (session.norm_mode(spec.get("mode")) == "bypassPermissions"
+            and not placed(spec)):
         return "danger-full-access"
     return "workspace-write"
 
