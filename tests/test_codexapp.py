@@ -285,3 +285,82 @@ class RenderingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FileChangeGuardTests(unittest.TestCase):
+    """A placed session's fileChange escalation is an out-of-worktree write
+    by definition - the app-server emits it only for a write the sandbox
+    blocked, and for a placed session the sandbox IS the worktree. The
+    request carries no changed path (grantRoot is null in codex-cli
+    0.153.1), so the handler must gate the LIVE ROOT, not cwd. Gating on cwd
+    (the worktree) is what whitewashed the parity guard probe's write to the
+    live README on 2026-09-04 (run_fb115f495e)."""
+
+    def _placed_runner(self, live, wt):
+        r = FakeRunner(mode="bypassPermissions")
+        r.spec["cwd"] = wt
+        r.spec["worktree"] = wt
+        r.spec["live_root"] = live
+
+        async def gate(tool, inp, _ctx):
+            r.gates.append((tool, inp))
+            from server import worktree
+            if tool in worktree.WRITE_TOOLS and worktree.violates(
+                    inp.get("file_path", ""), live, wt):
+                return PermissionResultDeny()
+            return PermissionResultAllow()
+
+        r.gate = gate
+        return r
+
+    def test_placed_pathless_escalation_gates_live_root_and_declines(self):
+        with tempfile.TemporaryDirectory() as d:
+            live = str(Path(d) / "vira")
+            wt = str(Path(live) / ".worktrees" / "wt")
+            Path(wt).mkdir(parents=True)
+            r = self._placed_runner(live, wt)
+            s = codexapp.CodexSession(r, "/codex", {})
+            dec = asyncio.run(s.handle_request(
+                "item/fileChange/requestApproval", {"grantRoot": None}))
+            # Declined, and the gate saw the LIVE ROOT - not cwd (the
+            # worktree), which is what the pre-fix code fell back to and
+            # which violates() would have read as a legitimate in-tree edit.
+            self.assertEqual(dec, {"decision": "decline"})
+            self.assertEqual(r.gates[-1], ("Edit", {"file_path": live}))
+
+    def test_placed_grant_inside_the_worktree_is_allowed(self):
+        with tempfile.TemporaryDirectory() as d:
+            live = str(Path(d) / "vira")
+            wt = str(Path(live) / ".worktrees" / "wt")
+            Path(wt).mkdir(parents=True)
+            r = self._placed_runner(live, wt)
+            s = codexapp.CodexSession(r, "/codex", {})
+            inside = str(Path(wt) / "server" / "x.py")
+            dec = asyncio.run(s.handle_request(
+                "item/fileChange/requestApproval", {"grantRoot": inside}))
+            self.assertEqual(dec, {"decision": "accept"})
+            self.assertEqual(r.gates[-1][1]["file_path"], inside)
+
+    def test_placed_grant_outside_the_worktree_declines(self):
+        with tempfile.TemporaryDirectory() as d:
+            live = str(Path(d) / "vira")
+            wt = str(Path(live) / ".worktrees" / "wt")
+            Path(wt).mkdir(parents=True)
+            r = self._placed_runner(live, wt)
+            s = codexapp.CodexSession(r, "/codex", {})
+            outside = str(Path(live) / "README.md")
+            dec = asyncio.run(s.handle_request(
+                "item/fileChange/requestApproval", {"grantRoot": outside}))
+            self.assertEqual(dec, {"decision": "decline"})
+            self.assertEqual(r.gates[-1][1]["file_path"], outside)
+
+    def test_unplaced_session_keeps_the_cwd_fallback(self):
+        # An unplaced session (a home-directory chat, a repo without
+        # branch.sh) has no branch-first constraint; the original grant-or-cwd
+        # fallback is preserved.
+        r = FakeRunner(mode="bypassPermissions")   # worktree/live_root empty
+        s = codexapp.CodexSession(r, "/codex", {})
+        dec = asyncio.run(s.handle_request(
+            "item/fileChange/requestApproval", {"grantRoot": None}))
+        self.assertEqual(dec, {"decision": "accept"})
+        self.assertEqual(r.gates[-1][1]["file_path"], "/tmp/work")  # cwd

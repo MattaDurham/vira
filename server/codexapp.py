@@ -340,7 +340,22 @@ class CodexSession:
                                   else "accept") if allowed else "decline"}
 
         if method == "item/fileChange/requestApproval":
-            target = params.get("grantRoot") or self.spec.get("cwd") or ""
+            # This request is emitted ONLY for a write the sandbox blocked,
+            # and for a PLACED (branch-first) session the sandbox is the
+            # worktree - so an escalated file write is by definition outside
+            # it. The request carries no changed path in this protocol
+            # (grantRoot is null in codex-cli 0.153.1), and cwd IS the
+            # worktree, so gating on cwd whitewashed every out-of-tree write:
+            # the parity guard probe wrote the LIVE README this way
+            # (2026-09-04, run_fb115f495e). Gate the concrete grantRoot when
+            # present, else the live root itself, so runner.gate's
+            # branch-first denial fires and is recorded - never cwd.
+            from . import agentbackend
+            grant = params.get("grantRoot")
+            if agentbackend.placed(self.spec):
+                target = grant or self.spec.get("live_root") or ""
+            else:
+                target = grant or self.spec.get("cwd") or ""
             allowed, session_scope = await self._gate(
                 "Edit", {"file_path": target})
             return {"decision": ("acceptForSession" if session_scope
