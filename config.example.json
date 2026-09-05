@@ -20,6 +20,8 @@
   "_family_calendars": "Calendar names (as they appear in Calendar.app) tagged as family in the daily brief, e.g. [\"Family\", \"Kids\"].",
   "brief_remote_events": [],
   "_brief_remote_events": "Event-title substrings (case-insensitive) treated as remote/virtual in the daily brief, e.g. [\"Weekly Standup\"]. A remote event is never flagged as an overlap against a same-time in-person event (two remote events still conflict). M365 events also auto-detect via the Graph isOnlineMeeting flag.",
+  "providers_disabled": [],
+  "_providers_disabled": "Provider ids switched OFF (anthropic | openai | google | xai). A disabled provider is never drafted on and never runs a session: a dispatch pinned to it, a go-to set to it, and the drafting ladder all REFUSE by name instead of rerouting to another provider. Built for the model-parity eval (disable all but one, then drive every surface) - toggle per provider under Config > AI.",
   "ai_backend": "cli",
   "_ai_backend": "\"cli\" uses the local claude CLI (Max plan); \"api\" uses the Anthropic API via the VIRA_ANTHROPIC_KEY env var.",
   "cli_model": "sonnet",

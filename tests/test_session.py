@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import jobfiles, session
+from server import jobfiles, models, session
 
 # The exact keys the pre-session Jobs dict carried; GET /api/jobs/{id}
 # consumers (the terminal render, joblog) rely on every one of them.
@@ -264,6 +264,14 @@ class ControlTests(unittest.TestCase):
 
 
 class LaunchTests(unittest.TestCase):
+    def setUp(self):
+        # launch() consults the provider disable switch (this machine's
+        # config); pinned clear so an owner who has switched a provider off
+        # cannot fail a launch test that pins that provider.
+        mock.patch.object(models, "disabled_providers",
+                          return_value=set()).start()
+        self.addCleanup(mock.patch.stopall)
+
     def _launch_stubbed(self, reg, **kwargs):
         """Launch through the real code path with the subprocess runner
         stubbed out (no claude CLI, no joblog writes). These are legacy
@@ -416,6 +424,9 @@ class ResumeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        mock.patch.object(models, "disabled_providers",
+                          return_value=set()).start()
+        self.addCleanup(mock.patch.stopall)
         self.calls = []
 
     def _reg(self, row):

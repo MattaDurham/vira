@@ -18,6 +18,14 @@ from server import agentbackend, jobfiles, joblog, models, session
 
 
 class RoutingTest(unittest.TestCase):
+    def setUp(self):
+        # session_provider consults the provider disable switch, which reads
+        # THIS machine's config. Pinned clear so a provider the owner has
+        # switched off cannot fail a routing test (the machine-read trap).
+        mock.patch.object(models, "disabled_providers",
+                          return_value=set()).start()
+        self.addCleanup(mock.patch.stopall)
+
     def test_provider_of_model(self):
         for m, want in (("gpt-5.1-codex", "openai"), ("o3", "openai"),
                         ("codex-mini", "openai"), ("gemini-2.5-pro", "google"),

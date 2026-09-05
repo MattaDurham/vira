@@ -296,6 +296,20 @@ def probe(write=True):
     """Run the deterministic health check against the CONFIGURED primary
     backend and return a status dict. Cheap: no model call, no token spend.
     Does NOT alert — the Watcher / recheck endpoint decide that."""
+    from . import models as provider
+    go_to = _provider_id()
+    if provider.is_disabled(go_to):
+        # A disabled go-to is a choice, and every call on it refuses by
+        # name (models.ProviderDisabled) - so the banner, whose job is
+        # "your WORKING Vira broke", has nothing to say. Checked BEFORE
+        # _never_configured: with every provider disabled that guard would
+        # read "no AI connected yet", which is the wrong explanation.
+        name = provider.PROVIDERS[go_to]["sub_name"]
+        return {"state": "setup",
+                "detail": f"{name} is disabled in Config (providers_disabled)",
+                "backend": "", "fallback": None, "provider": go_to,
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "action": ""}
     if _never_configured():
         # A brand-new install has no AI connected, and that is the EXPECTED
         # state — not a fault. Reporting red here put a clay "AI is paused"

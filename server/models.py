@@ -535,8 +535,53 @@ def _probe_auth(pid, binary):
     return SIGNED_IN, (out.splitlines() or ["signed in"])[0][:160]
 
 
+class ProviderDisabled(ValueError):
+    """Raised where a DISABLED provider would otherwise have run.
+
+    The switch exists for one reason: with everything but one provider
+    disabled, every fallback ladder in Vira must become a loud, recorded
+    refusal instead of a silent reroute, or "run everything on X" cannot
+    tell whether X ran. So the three places a disabled provider can still
+    be reached — an explicit pin, the go-to, the drafting ladder — raise
+    this rather than fall through. The message names the switch, because a
+    refusal that only says no invites a retry of the same call.
+    """
+
+    def __init__(self, pid, role=""):
+        self.pid = pid
+        # sub_name ("Gemini"), not label ("Google"): it is the name the
+        # Config card wears, so the refusal names the row to flip.
+        name = (PROVIDERS.get(pid) or {}).get("sub_name", pid)
+        what = f"{name} is disabled in Config (providers_disabled)"
+        if role:
+            what = f"{what} and it is {role}"
+        super().__init__(
+            f"{what} - enable it under Config > AI or pick another provider")
+
+
+def disabled_providers():
+    """The ids the owner has switched OFF (config `providers_disabled`).
+
+    Read fresh from config on every call — the switch is flipped from the
+    Config window while the server runs, and a cached answer would let a
+    provider keep running for a cache lifetime after it was disabled. Ids
+    are clamped to the registry so a typo disables nothing silently."""
+    raw = settings.raw().get("providers_disabled")
+    if not isinstance(raw, list):
+        return set()
+    return {str(x).strip().lower() for x in raw
+            if str(x).strip().lower() in PROVIDERS}
+
+
+def is_disabled(pid):
+    return pid in disabled_providers()
+
+
 def probe(pid):
-    """One provider's full record. Never raises."""
+    """One provider's full record. Never raises. `connected` means usable
+    HERE — auth works AND the owner has not disabled the provider; the raw
+    auth verdict survives as `auth` so Config can say "disabled by you"
+    rather than "not signed in"."""
     spec = PROVIDERS.get(pid)
     if not spec:
         return None
@@ -561,6 +606,8 @@ def probe(pid):
     login_cmd = login_command(pid, binary)
     from . import agentbackend
     caps = agentbackend.capabilities(pid)
+    disabled = is_disabled(pid)
+    auth_ok = auth in (SIGNED_IN, KEY)
     return {
         "id": pid,
         "label": spec["label"],
@@ -579,8 +626,12 @@ def probe(pid):
         "key_url": spec.get("key_url", ""),
         "install_url": spec.get("install_url", ""),
         "install_cmd": install_command(pid),
-        "connected": auth in (SIGNED_IN, KEY),
-        "action": _action_for(spec, binary, auth, login_cmd),
+        "connected": auth_ok and not disabled,
+        "disabled": disabled,
+        "action": (f"{spec['sub_name']} is disabled in Config - enable it "
+                   "under Config > AI to use it"
+                   if disabled else
+                   _action_for(spec, binary, auth, login_cmd)),
     }
 
 
@@ -624,6 +675,11 @@ def active():
     Mirrors suggest._run's ladder so Setup and the health banner cannot
     disagree with what a real call would do."""
     want = str(settings.raw().get("ai_provider") or "anthropic")
+    if is_disabled(want):
+        # The switch's contract: a disabled go-to REFUSES (suggest.
+        # effective_backend, agentbackend.default_session_provider), so
+        # the record must not claim another provider will answer.
+        return None
     rec = probe(want)
     if rec and rec["connected"]:
         return rec
@@ -835,6 +891,7 @@ def options(refresh=False):
         provs.append({
             "id": pid, "label": spec["label"],
             "connected": bool(rec.get("connected")),
+            "disabled": bool(rec.get("disabled")),
             "auth": rec.get("auth", ABSENT),
             "has_key": bool(rec.get("has_key")),
             "sessions": bool(caps.get("sessions")),
@@ -852,7 +909,10 @@ def options(refresh=False):
     # picker should offer. Empty = uncurated, offer everything.
     roster = settings.raw().get("model_roster")
     payload = {"providers": provs,
-               "active": want if want in usable else next(iter(usable), ""),
+               # Mirrors active(): a disabled go-to is nobody, not the next
+               # usable row, because the call itself refuses.
+               "active": ("" if is_disabled(want) else
+                          want if want in usable else next(iter(usable), "")),
                "roster": [str(m) for m in roster]
                if isinstance(roster, list) else []}
     known = {}

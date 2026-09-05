@@ -229,10 +229,17 @@ def chat_provider():
     provider enters this path by declaring session quality, not by adding a
     new name check here. Returns (provider, native_tools).
     """
+    from . import models
+    want = str(settings.raw().get("ai_provider") or "").strip().lower()
+    if want in models.PROVIDERS and models.is_disabled(want):
+        # Outside the try below on purpose: the broad except is for a
+        # broken PROBE, and a disabled go-to is a decision, not a failure.
+        # A chat opened against a disabled go-to refuses by name (the
+        # refusal becomes the turn's answer) instead of quietly running on
+        # whichever other provider is connected.
+        raise models.ProviderDisabled(want, role="the configured go-to")
     try:
-        from . import models
         connected = [p.get("id") for p in models.connected()]
-        want = str(settings.raw().get("ai_provider") or "").strip().lower()
         ordered = ([want] if want in connected else []) + connected
         for pid in ordered:
             quality = agentbackend.sessions_quality(pid)

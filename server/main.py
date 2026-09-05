@@ -3131,6 +3131,11 @@ def api_run(req: RunReq):
                           read_only=req.read_only, provider=req.provider,
                           subject=req.subject, about=req.about,
                           kind_label=req.kind_label)
+    except models.ProviderDisabled as e:
+        # A subclass of ValueError, so it must be caught FIRST: the branch
+        # below is the live-session cap, and "too many sessions" is the
+        # wrong story for "you switched that provider off".
+        raise HTTPException(400, str(e))
     except ValueError as e:
         raise HTTPException(429, str(e))
     return {"job_id": jid}
@@ -4508,12 +4513,27 @@ class ConfigReq(BaseModel):
     xai_api_model: str | None = None
     # The curated picker roster (Cursor-style); [] restores "everything".
     model_roster: list[str] | None = None
+    # Providers switched OFF (models.disabled_providers). Ids only; an id
+    # the registry does not know is refused rather than stored inert.
+    providers_disabled: list[str] | None = None
 
 
 @app.post("/api/config")
 def api_config_set(req: ConfigReq):
-    return suggest.save_config({k: v for k, v in req.model_dump().items()
-                                if v is not None})
+    if req.providers_disabled is not None:
+        bad = [p for p in req.providers_disabled if p not in models.PROVIDERS]
+        if bad:
+            raise HTTPException(
+                400, f"unknown provider id(s): {', '.join(bad)} - known: "
+                     f"{', '.join(models.PROVIDERS)}")
+        req.providers_disabled = sorted(set(req.providers_disabled))
+    out = suggest.save_config({k: v for k, v in req.model_dump().items()
+                               if v is not None})
+    if req.providers_disabled is not None:
+        # The picker payload caches for 30s; a flipped switch must reach
+        # the next picker paint, not the one after.
+        models.options(refresh=True)
+    return out
 
 
 @app.get("/api/models")
