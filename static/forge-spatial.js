@@ -601,9 +601,11 @@
         camera.panX += dx * direction;
         camera.panY += dy * direction;
       } else {
-        // Orbit is reversed on both axes (same call) and sits outside the
-        // natural-motion toggle, which covers drag-pan and scroll-zoom only.
-        camera.yaw -= dx * .006;
+        // Orbit PITCH is reversed (same call); YAW keeps its original
+        // direction - the owner's second look (2026-09-04) found the
+        // side-to-side flip wrong. Both sit outside the natural-motion
+        // toggle, which covers drag-pan and scroll-zoom only.
+        camera.yaw += dx * .006;
         camera.pitch = clamp(camera.pitch - dy * .0045, -1.18, -.12);
       }
       wake();

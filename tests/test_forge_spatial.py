@@ -42,13 +42,15 @@ class ForgeSpatialTests(unittest.TestCase):
         self.assertNotIn("scene.naturalMotion ? -1 : 1", renderer)
         self.assertNotIn("scene.naturalMotion ? (toward ? .92 : 1.09)", renderer)
 
-    def test_orbit_drag_is_reversed_on_both_axes(self):
+    def test_orbit_pitch_is_reversed_and_yaw_is_not(self):
         renderer = (ROOT / "static" / "forge-spatial.js").read_text(encoding="utf-8")
-        # Owner's call 2026-09-04: the left-drag orbit runs the other way on
-        # yaw AND pitch, and stays outside the natural-motion toggle.
-        self.assertIn("camera.yaw -= dx * .006", renderer)
+        # Owner's calls 2026-09-04: the left-drag orbit runs the other way on
+        # PITCH; a first cut flipped yaw too and his second look found the
+        # side-to-side flip wrong, so yaw keeps its original sign. Both stay
+        # outside the natural-motion toggle.
+        self.assertIn("camera.yaw += dx * .006", renderer)
         self.assertIn("camera.pitch - dy * .0045", renderer)
-        self.assertNotIn("camera.yaw += dx * .006", renderer)
+        self.assertNotIn("camera.yaw -= dx * .006", renderer)
         self.assertNotIn("camera.pitch + dy * .0045", renderer)
 
     def test_double_clicking_a_3d_layer_focuses_it_on_the_breadboard(self):
