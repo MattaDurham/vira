@@ -8731,3 +8731,7 @@ mark.doc-term {
   .waiting::before, .waiting::after { animation: none !important; }
   .is-busy.rich::after { box-shadow: none; }
 }
+
+/* Preparation remains scrollable on short desktops and phone screens. */
+#launch-review-sheet .sheet-card { max-height: 92dvh; overflow-y: auto; }
+#launch-review-sheet textarea { min-height: 72px; resize: vertical; }

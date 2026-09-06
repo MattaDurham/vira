@@ -593,10 +593,16 @@ class Surface(unittest.TestCase):
     def test_verdicts_go_through_the_sweepers_routes(self):
         js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))
         fn = js[js.index("function shrArm("):js.index("async function shrFillDetail")]
-        for route in ("/api/orphanwork/land", "/api/orphanwork/resume",
-                      "/api/orphanwork/discard", "/api/showroom/cleanup"):
+        for route in ("/api/orphanwork/land", "/api/orphanwork/discard",
+                      "/api/showroom/cleanup"):
             self.assertIn(route, fn)
         self.assertNotIn("/api/showroom/land", fn)
+        self.assertIn("orphanResume({ key: it.orphan_key", fn)
+        resume = js[js.index("async function orphanResume("):
+                    js.index("function armOrphanAction(")]
+        self.assertIn('post("/api/orphanwork/resume"', resume)
+        self.assertLess(resume.index("await reviewSessionLaunch"),
+                        resume.index('post("/api/orphanwork/resume"'))
 
     def test_the_window_is_registered_and_loads(self):
         js = (self.ROOT / "static" / "app.js").read_text(encoding="utf-8")

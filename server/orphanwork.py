@@ -937,7 +937,8 @@ def branch_about(item, act):
     return "\n".join(bits)
 
 
-def resume(item):
+def resume(item, *, prompt=None, model=None, provider=None, mode=None,
+           read_only=False):
     """Dispatch a session to resume stalled work in ITEM's worktree.
     Synchronous — the launch call itself is cheap, the session runs
     detached like any other. Raises ValueError when there is no worktree
@@ -952,9 +953,12 @@ def resume(item):
     branch = item.get("branch") or ""
     _refuse_if_busy(branch)
     from . import session
-    prompt = resume_prompt(item)
+    prompt = prompt.strip() if prompt is not None else resume_prompt(item)
+    if not prompt:
+        raise ValueError("resume instructions cannot be empty")
     return session.sessions.launch(
         prompt, cwd=wt, meta={"kind": "orphan-resume", "branch": item.get("branch")},
+        model=model, provider=provider, mode=mode, read_only=read_only,
         subject=branch_subject(item),
         about=branch_about(item, "Resume the work on"),
         pr=item.get("pr") or None)

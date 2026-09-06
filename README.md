@@ -282,18 +282,32 @@ goes live because its data landed - not because a run said so.
 
 ## Live sessions
 
-Coding jobs (Ideas > Plan / Implement, the Actions run buttons, the free
-prompt) run as persistent bidirectional sessions built on the Claude Agent
-SDK - the same Max-plan `claude` CLI underneath, now with a channel back
-into the run:
+Manual prompt and Action launches, plus Resume from Runs or Showroom, open a
+preparation window before dispatch. Review the provider, model, permissions,
+working directory, and prompt; add instructions, then click **Start session**.
+Cancel closes the preparation without starting an agent. Idea Plan/Implement
+keeps its existing settings sheet.
 
-- **Two modes.** *Interactive* (the default) runs with normal permissions
-  plus a server-side gate: any tool call that would prompt in Claude Code -
-  a file edit, a shell command - pauses the agent and raises an inline
-  **Approve / Approve for session / Deny** card in the job terminal. Deny
-  takes an optional reason that is fed back to the agent as guidance.
-  *Autopilot* is the old full-bypass behavior, kept as an explicit opt-out
-  (checkbox on the Implement sheet, remembered locally).
+**Refresh models** rechecks the connected catalogs without running a model.
+Codex uses its account's App Server model list, cached for ten minutes; a
+refresh bypasses that cache. If discovery fails, the installed catalog or
+configured model is labelled as unconfirmed. Claude offers CLI aliases and,
+when an API key is connected, live API model IDs. An alias does not guarantee
+the newest version: the terminal banner and status line display the exact
+model ID confirmed at startup. A curated model roster in Config can hide new
+models; the preparation window reports that filtering. Custom IDs remain
+available, and selecting a model for one run does not change saved defaults.
+
+Coding jobs (Ideas > Plan / Implement, the Actions run buttons, the free
+prompt) run as persistent sessions on the selected provider. Claude uses
+the Claude Agent SDK; OpenAI uses Codex App Server. Gemini and Grok use
+API tools and do not provide local shell or file tools.
+
+- **Permissions.** `manual` gates risky calls; `acceptEdits` allows file
+  edits while gating commands; `bypassPermissions` allows calls except
+  for the read-only and branch guards. Choose the rung before starting.
+  Gated calls raise an **Approve / Approve for session / Deny** card.
+  Deny takes an optional reason that the agent receives as guidance.
 - **Steering.** The terminal gains a compose bar: Send queues a message
   that is delivered at the next turn boundary; Stop ends the current turn
   (queued messages still deliver, so "type, Send, Stop" steers immediately).
@@ -304,7 +318,6 @@ into the run:
   never prompt. An unanswered card denies itself after
   `session_permission_timeout` seconds (default 600) so a session can't
   hang forever. Concurrent sessions are capped (`session_max_live`).
-  Session settings are config-file keys, not in the settings sheet yet.
 - **Fallback.** If `claude-agent-sdk` is not installed, sessions
   transparently fall back to the legacy one-shot subprocess: everything
   still runs, the steering/permission surfaces just hide, and the terminal

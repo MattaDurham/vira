@@ -189,6 +189,37 @@ class JsonRpcClient:
                 task.cancel()
 
 
+async def discover_models(binary, cwd, env):
+    """Read the account's picker catalog without creating a thread or turn."""
+    async def refuse_request(method, params):
+        raise AppServerUnavailable("model discovery cannot approve requests")
+
+    rpc = JsonRpcClient(binary, cwd, env, refuse_request)
+
+    async def collect():
+        await rpc.start()
+        rows = []
+        cursor = None
+        seen = set()
+        while True:
+            params = {"limit": 100, "includeHidden": False}
+            if cursor:
+                params["cursor"] = cursor
+            result = await rpc.request("model/list", params)
+            rows.extend(result.get("data") or [])
+            cursor = result.get("nextCursor")
+            if not cursor:
+                return rows
+            if cursor in seen:
+                raise AppServerUnavailable("model/list repeated a page cursor")
+            seen.add(cursor)
+
+    try:
+        return await asyncio.wait_for(collect(), 12)
+    finally:
+        await rpc.close()
+
+
 def approval_policy(mode, placed=False):
     """Codex's approval vocabulary for a Vira rung.
 

@@ -6825,7 +6825,7 @@ $("#idea-run-go").addEventListener("click", async () => {
   const runMode = perm;
   ideaRunSheet.close();
   const jid = await launchJob(prompt, cwd,
-    { permission_mode, model, provider, publish_plan, read_only, idea_id: it.id,
+    { reviewed: true, permission_mode, model, provider, publish_plan, read_only, idea_id: it.id,
       mode: runMode, subject: it.text, about: ideaAbout(it, mode, extra, fold) });
   // stamp the idea so the dispatch is visible next time it's opened
   const day = new Date().toISOString().slice(0, 10);
@@ -6881,7 +6881,134 @@ function ideaAbout(it, mode, extra, fold) {
   return lines.join("\n");
 }
 
+// Preparing a session is local UI state. Only Start resolves a launch request.
+const launchReviewSheet = bindSheet("#launch-review-sheet");
+let launchReviewCancel = null;
+const closeLaunchReview = launchReviewSheet.close.bind(launchReviewSheet);
+launchReviewSheet.close = () => {
+  closeLaunchReview();
+  if (launchReviewCancel) launchReviewCancel();
+};
+$("#launch-review-cancel").onclick = () => launchReviewSheet.close();
+
+function reviewSessionLaunch(initial) {
+  launchReviewSheet.close();
+  const promptBox = $("#launch-review-prompt");
+  const extra = $("#launch-review-extra");
+  const cwd = $("#launch-review-cwd");
+  const provider = $("#launch-review-provider");
+  const model = $("#launch-review-model");
+  const mode = $("#launch-review-mode");
+  const readOnly = $("#launch-review-readonly");
+  const source = $("#launch-review-source");
+  const refresh = $("#launch-review-refresh");
+  const go = $("#launch-review-go");
+  $("#launch-review-title").textContent = initial.subject || "Prepare session";
+  promptBox.value = initial.prompt || "";
+  extra.value = "";
+  cwd.value = initial.cwd || "";
+  cwd.readOnly = !!initial.lockCwd;
+  readOnly.checked = !!initial.read_only;
+  mode.innerHTML = "";
+  PERM_MODES.forEach((m) => {
+    const option = el("option", null, m.label);
+    option.value = m.id;
+    mode.appendChild(option);
+  });
+  mode.value = normPermMode(initial.mode || initial.permission_mode || savedPermMode());
+  mode.disabled = readOnly.checked;
+  readOnly.onchange = () => { mode.disabled = readOnly.checked; };
+  provider.innerHTML = "";
+  model.innerHTML = "";
+  go.disabled = true;
+  source.textContent = "Checking available models...";
+  launchReviewSheet.open();
+  $("#launch-review-sheet .sheet-card").scrollTop = 0;
+  const heading = $("#launch-review-title");
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  return new Promise((resolve) => {
+    let closed = false;
+    let catalog = null;
+    let config = {};
+    const finish = (value) => {
+      if (closed) return;
+      closed = true;
+      launchReviewCancel = null;
+      closeLaunchReview();
+      resolve(value);
+    };
+    launchReviewCancel = () => finish(null);
+    const fillModels = (current) => {
+      const p = (catalog.providers || []).find((p) => p.id === provider.value);
+      const all = sessionModels({ ...catalog, roster: [] })
+        .filter((m) => m.provider === provider.value);
+      const list = sessionModels(catalog).filter((m) => m.provider === provider.value);
+      fillModelSelect(model, list, current || "", "Provider default");
+      source.textContent = p
+        ? (p.cli_detail || p.api_detail || "No verified model list available.")
+          + (catalog.checked_at ? " Catalog loaded " + new Date(catalog.checked_at * 1000).toLocaleString() + "." : "")
+          + (all.length > list.length ? " Your Config model roster hides "
+            + (all.length - list.length) + " models." : "")
+          + " Selecting a model does not change your saved default."
+        : "No session provider is available. Connect one in Config.";
+      go.disabled = !p;
+    };
+    provider.onchange = () => fillModels("");
+    const load = async (force) => {
+      refresh.disabled = true;
+      go.disabled = true;
+      try {
+        const [cat, cfg] = await Promise.all([modelCatalog(force), api("/api/config")]);
+        if (closed) return;
+        config = cfg;
+        const previousProvider = provider.value;
+        const previousModel = model.value;
+        if (cat.error) throw new Error(cat.error);
+        catalog = cat;
+        const available = (cat.providers || []).filter((p) =>
+          p.sessions && !p.disabled && (p.connected || p.id === "anthropic"));
+        provider.innerHTML = "";
+        available.forEach((p) => {
+          const option = el("option", null, p.label);
+          option.value = p.id;
+          provider.appendChild(option);
+        });
+        const wanted = previousProvider || initial.provider
+          || (initial.model ? providerOfModel(initial.model) : (cfg.ai_provider || cat.active));
+        if (wanted) provider.value = wanted;
+        const p = available.find((p) => p.id === provider.value);
+        const saved = config[p?.config_keys?.cli || p?.config_keys?.api] || "";
+        fillModels(previousProvider ? previousModel : (initial.model || saved));
+      } catch (e) {
+        if (!closed) source.textContent = "Could not check models: " + e.message;
+      } finally {
+        if (!closed) refresh.disabled = false;
+      }
+    };
+    refresh.onclick = () => load(true);
+    go.onclick = () => {
+      const text = promptBox.value.trim();
+      if (!text) { promptBox.focus(); return; }
+      if (!provider.value || model.value === "__custom__") return;
+      finish({ prompt: text + (extra.value.trim()
+        ? "\n\nAdditional instructions:\n" + extra.value.trim() : ""),
+        cwd: cwd.value.trim() || null, provider: provider.value,
+        model: model.value || null, mode: mode.value,
+        read_only: readOnly.checked, reviewed: true });
+    };
+    load(false);
+  });
+}
+
 async function launchJob(promptText, cwd, opts = {}) {
+  if (!opts.reviewed) {
+    const draft = await reviewSessionLaunch({ prompt: promptText, cwd, ...opts });
+    if (!draft) return null;
+    promptText = draft.prompt;
+    cwd = draft.cwd;
+    opts = { ...opts, ...draft };
+  }
   const { job_id } = await post("/api/actions/run", {
     prompt: promptText,
     cwd: cwd || null,
@@ -8333,7 +8460,7 @@ function orphanBody(card, it, opts = {}) {
         : "Merge this branch into live main and push";
       land.addEventListener("click", () => armOrphanAction(foot, it, "land"));
       const resume = el("button", "fchip sm" + (rec === "resume" ? " rec" : ""), "Resume");
-      resume.title = "Dispatch an agent into this worktree to finish the work — "
+      resume.title = "Review settings and instructions before starting in this worktree — "
         + "it starts editing immediately and stops short of merge";
       resume.addEventListener("click", () => armOrphanAction(foot, it, "resume"));
       const disc = el("button", "fchip sm" + (rec === "discard" ? " rec" : ""), "Discard");
@@ -8466,28 +8593,25 @@ function scheduleRunsPoll() {
 
 async function orphanResume(it) {
   try {
-    const r = await post("/api/orphanwork/resume", { key: it.key });
+    const prepared = await api(
+      "/api/orphanwork/resume-prompt?key=" + encodeURIComponent(it.key));
+    const draft = await reviewSessionLaunch({ ...prepared,
+      subject: "Resume " + (it.branch || "session"), lockCwd: true });
+    if (!draft) return;
+    const r = await post("/api/orphanwork/resume", { key: it.key,
+      prompt: draft.prompt, model: draft.model, provider: draft.provider,
+      mode: draft.mode, read_only: draft.read_only });
     openSession(r.job_id);
     loadOrphans();
   } catch (e) {
-    if (String(e.message || e).includes("passive")) {
-      try {
-        const { prompt } = await api(
-          "/api/orphanwork/resume-prompt?key=" + encodeURIComponent(it.key));
-        await copyText(prompt);
-        toast("Passive instance — resume prompt copied");
-      } catch (e2) {
-        toast("Couldn't copy the resume prompt: " + e2.message);
-      }
-    } else {
-      toast("Resume failed: " + e.message);
-    }
+    toast("Resume failed: " + e.message);
   }
 }
 
 // Merge/discard are destructive-adjacent, so the confirm is INLINE on the
 // row's own foot — anchored to the button clicked, the armSkinApply shape.
 function armOrphanAction(foot, it, name) {
+  if (name === "resume") { orphanResume(it); return; }
   foot.innerHTML = "";
   const label = name === "land"
     ? (it.dirty
@@ -8502,14 +8626,6 @@ function armOrphanAction(foot, it, name) {
           + `these that can tell you whether that is still true.`
         : `Land ${it.branch}? It has uncommitted work, so a session runs in it.`)
       : `Land ${it.branch}? Merges into live main and pushes.`)
-    // Resume DISPATCHES — one click used to drop an autonomous agent into
-    // the worktree with no confirm while Land and Discard were both gated
-    // (owner, 2026-08-12: "does it start taking actions or just open up
-    // the session window?"). It is the same class of act, so it takes the
-    // same gate, and the copy says what actually happens.
-    : name === "resume"
-    ? `Resume ${it.branch}? Dispatches an agent into the worktree — it starts `
-      + "editing immediately, runs the tests, and stops short of merge."
     : name === "merge"
     ? `Merge ${it.branch} into live main?`
     : it.dirty
@@ -8541,7 +8657,6 @@ function armOrphanAction(foot, it, name) {
     const yes = el("button", "fchip sm warn", "Confirm");
     yes.addEventListener("click", () => {
       runsHold = false;
-      if (name === "resume") { orphanResume(it); return; }
       runOrphanAction(foot, it, name);
     });
     foot.append(yes, no);
@@ -8793,17 +8908,17 @@ function renderTermLine(line) {
   return div;
 }
 
-// Friendly label for a CLI model id/alias, matching the welcome line.
-// Generation-free on purpose: the aliases resolve to the newest tier model,
-// so a pinned number here would lie the week a new generation ships.
+// Preserve the resolved version: a tier label cannot prove which release ran.
 function ccModelLabel(m) {
-  if (!m) return null;
-  m = String(m).toLowerCase();
-  if (m.includes("opus")) return "Opus";
-  if (m.includes("haiku")) return "Haiku";
-  if (m.includes("sonnet")) return "Sonnet";
-  if (m.includes("fable")) return "Fable";
-  return m;
+  return m ? String(m) : null;
+}
+
+function sessionModelLabel(j) {
+  if (j.model_used) return String(j.model_used);
+  // A legacy request may name a model from a different provider.
+  if (j.model && (!j.provider || providerOfModel(j.model) === j.provider))
+    return String(j.model) + " (requested)";
+  return "Awaiting model confirmation";
 }
 
 // The engine badge on job terminals: which harness answers, on whose login.
@@ -8832,21 +8947,20 @@ async function instanceConfig() {
   }
   return _instCfg;
 }
-async function defaultModelLabel() {
-  return ccModelLabel((await instanceConfig()).cli_model) || "Sonnet 5";
-}
-
 // ---------- the model catalog: every dropdown's single source ----------
 // What THIS machine can actually be pointed at — each provider's installed
 // CLI catalog/aliases, and for API backends the live list from the key.
-// Fetched once per page (the server probes each CLI, so it is not free)
+// Cached briefly (the server probes each CLI, so it is not free)
 // and shared by Setup's default-model block, the circuit stage tray and
 // the idea-run sheet, so no picker can offer a model that isn't there.
 let _modelCat = null;
+let _modelCatAt = 0;
 function modelCatalog(refresh) {
-  if (!_modelCat || refresh)
+  if (!_modelCat || refresh || Date.now() - _modelCatAt > 30000) {
+    _modelCatAt = Date.now();
     _modelCat = api("/api/models" + (refresh ? "?refresh=true" : ""))
-      .catch(() => ({ providers: [], active: "" }));
+      .catch((e) => { _modelCat = null; return { providers: [], active: "", error: e.message }; });
+  }
   return _modelCat;
 }
 
@@ -8933,6 +9047,10 @@ function fillModelSelect(sel, list, current, firstLabel) {
   sel.appendChild(custom);
   sel.value = cur;
   sel.dataset.prev = cur;
+  // The select survives refreshes and provider switches; its listener must
+  // read the current catalog rather than the first list it closed over.
+  sel.modelProviders = [...new Set((list || [])
+    .map((m) => m.provider).filter(Boolean))];
   if (!sel.dataset.customArmed) {
     sel.dataset.customArmed = "1";
     sel.addEventListener("change", () => {
@@ -8940,8 +9058,7 @@ function fillModelSelect(sel, list, current, firstLabel) {
       const v = (prompt("Model id, exactly as the provider names it:") || "")
         .trim();
       if (v) {
-        const providers = [...new Set((list || [])
-          .map((m) => m.provider).filter(Boolean))];
+        const providers = sel.modelProviders;
         let provider = providers.length === 1 ? providers[0] : "";
         if (!provider && providers.length)
           provider = (prompt("Provider id (" + providers.join(", ")
@@ -8972,9 +9089,9 @@ const CC_MASCOT = `<svg class="cc-mascot" viewBox="0 0 48 44" aria-hidden="true"
   <rect x="17" y="31.5" width="14" height="3.2" rx="1.6" class="cc-hole"/>
 </svg>`;
 
-// The classic Claude Code welcome box, rendered once per job open.
-function renderCCBanner(host, j, defModel, inst) {
-  const model = ccModelLabel(j.model_used || j.model) || defModel;
+// The welcome box refreshes when the runner confirms its model and settings.
+function renderCCBanner(host, j, inst) {
+  const model = sessionModelLabel(j);
   const badge = providerBadge(j);
   const mode = j.publish_plan ? (j.read_only ? "plan (read-only)" : "plan")
     : normPermMode(j.mode) === "bypassPermissions"
@@ -9314,9 +9431,14 @@ function createJobTerm(jid, refs) {
     async render() {
       const j = await api("/api/jobs/" + this.jid);
       const r = this.refs;
+      // Refresh identity when the runner confirms it, including on replay.
+      const bannerKey = JSON.stringify([j.model_used, j.model, j.provider,
+        j.mode, j.worktree, j.cwd, j.publish_plan, j.read_only]);
+      if (this.bannerKey !== bannerKey) {
+        renderCCBanner(r.banner, j, await instanceConfig());
+        this.bannerKey = bannerKey;
+      }
       if (!this.banded) {
-        renderCCBanner(r.banner, j, await defaultModelLabel(),
-          await instanceConfig());
         if (r.cmd) renderFirstCmd(r.cmd, j);
         this.banded = true;
       }
@@ -9352,8 +9474,7 @@ function createJobTerm(jid, refs) {
         : j.awaiting === "paused" ? "wait"
         : replying ? "done"
         : j.status === "running" ? "run" : (j.status || ""));
-      const modelLbl = ccModelLabel(j.model_used || j.model)
-        || await defaultModelLabel();
+      const modelLbl = sessionModelLabel(j);
       r.statusbar.innerHTML = "";
       r.statusbar.appendChild(el("span", "cc-chev", "»"));
       const modeLbl = j.publish_plan ? "plan" : (j.mode || "run");
@@ -9510,6 +9631,7 @@ function followResume(term, newJid) {
   term.carry = (term.carry || "") + (term.lastOutput || "");
   if (term.carry && !term.carry.endsWith("\n")) term.carry += "\n";
   term.jid = newJid;
+  term.bannerKey = null;
   term.banded = false;               // the banner names a run; this is a new one
   term.permKey = "";
   term.wasStuck = false;
@@ -12073,13 +12195,15 @@ async function shrAct(path, it, okMsg) {
 // named on the card, Cancel repaints, and the poll is HELD while it is up
 // so a background repaint cannot disarm it under the cursor.
 function shrArm(foot, it, name) {
+  if (name === "resume") {
+    orphanResume({ key: it.orphan_key, branch: it.branch });
+    return;
+  }
   foot.innerHTML = "";
   const slug = it.branch.replace(/^claude\//, "");
   const q = name === "land"
     ? (it.dirty ? `Land ${slug}? It has uncommitted work, so a session runs in it first.`
       : `Land ${slug}? Merges into live main and pushes.`)
-    : name === "resume"
-    ? `Resume ${slug}? Dispatches an agent into the worktree - it starts editing immediately.`
     : name === "cleanup"
     ? `Clean up ${slug}? Removes its worktree and branch; the merge on main is untouched.`
     : (it.dirty ? `Discard ${it.dirty} uncommitted change${it.dirty === 1 ? "" : "s"}? This destroys them.`
@@ -12093,9 +12217,6 @@ function shrArm(foot, it, name) {
     try {
       if (name === "cleanup") {
         await post("/api/showroom/cleanup", { branch: it.branch });
-      } else if (name === "resume") {
-        const r = await post("/api/orphanwork/resume", { key: it.orphan_key });
-        if (r.job_id) openSession(r.job_id);
       } else if (name === "discard") {
         await post("/api/orphanwork/discard", { key: it.orphan_key, force: true });
       } else {
