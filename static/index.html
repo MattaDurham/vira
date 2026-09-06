@@ -1012,6 +1012,30 @@
   </div>
 </div>
 
+<!-- Session preparation: nothing dispatches until Start session. -->
+<div id="launch-review-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="launch-review-title">
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <div class="run-kind">Ready when you are</div>
+      <h3 id="launch-review-title">Prepare session</h3>
+      <p class="hint">Review the settings and instructions. The session starts when you click Start session.</p>
+    </div>
+    <label class="field">Provider<select id="launch-review-provider"></select></label>
+    <label class="field">Model<select id="launch-review-model"></select></label>
+    <div class="row-end"><button class="btn" id="launch-review-refresh">Refresh models</button></div>
+    <p class="hint" id="launch-review-source" role="status"></p>
+    <label class="field">Permissions<select id="launch-review-mode"></select></label>
+    <label class="run-flag"><input type="checkbox" id="launch-review-readonly">Read only</label>
+    <label class="field">Working directory<input id="launch-review-cwd" type="text" spellcheck="false"></label>
+    <label class="field">Session instructions<textarea id="launch-review-prompt" rows="6"></textarea></label>
+    <label class="field">Additional instructions<textarea id="launch-review-extra" rows="3" placeholder="Anything else to consider before starting..."></textarea></label>
+    <div class="row-end">
+      <button class="btn" id="launch-review-cancel">Cancel</button>
+      <button class="btn primary" id="launch-review-go">Start session</button>
+    </div>
+  </div>
+</div>
+
 <!-- RUN SHEET -->
 <div id="run-sheet" class="sheet">
   <div class="sheet-card">

@@ -3919,6 +3919,14 @@ class OrphanKeyReq(BaseModel):
     key: str
 
 
+class OrphanResumeReq(OrphanKeyReq):
+    prompt: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    mode: str | None = None
+    read_only: bool = False
+
+
 class OrphanLandReq(BaseModel):
     key: str
     # "diagnose" (default) reads why the earlier session stopped and asks
@@ -3958,7 +3966,7 @@ def api_orphanwork_dismiss(req: DismissGroupingReq):
 
 
 @app.post("/api/orphanwork/resume")
-def api_orphanwork_resume(req: OrphanKeyReq):
+def api_orphanwork_resume(req: OrphanResumeReq):
     """Dispatch a session back into the item's own worktree. Refused on a
     passive instance — it shares the live repo's worktrees, so it must
     never dispatch a real resume."""
@@ -3969,7 +3977,9 @@ def api_orphanwork_resume(req: OrphanKeyReq):
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
     try:
-        jid = orphanwork.resume(it)
+        jid = orphanwork.resume(it, prompt=req.prompt, model=req.model,
+                                provider=req.provider, mode=req.mode,
+                                read_only=req.read_only)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"job_id": jid}

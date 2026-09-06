@@ -28,13 +28,13 @@ Exactly three sources can be verified, and every picker in the app is fed
 from them:
 
   1. **An ALIAS the provider's own CLI resolves** (`opus`, `sonnet`,
-     `haiku`, `fable`). An alias names a TIER, never a generation, so it
-     is right the week Opus 5 ships and no one has to edit anything.
+     `haiku`, `fable`). An alias names a TIER, never a generation. It is
+     resolved by the installed CLI; it does not prove the newest version ran.
   2. **The LIVE `/v1/models` list**, when a key is on file. The provider
      is the authority on its own catalog.
   3. **The installed provider CLI's OWN CATALOG OR CONFIG** on this machine.
-     Codex exposes its bundled catalog through ``debug models --bundled``;
-     config.toml remains the compatibility fallback for older binaries.
+     Codex exposes its account catalog through App Server ``model/list``;
+     its bundled catalog and config.toml are labelled compatibility fallbacks.
      Both are probes like find_binary, not product pins.
 
 Anything else is a guess with a shelf life, and a guess renders exactly
@@ -48,6 +48,7 @@ So: do NOT reintroduce a hardcoded model id here, in suggest.DEFAULTS, in
 config.example.json, or as an <option> in index.html. If a picker looks
 empty, the fix is a key or an alias, never a literal.
 """
+import asyncio
 import json
 import os
 import re
@@ -95,8 +96,8 @@ PROVIDERS = {
         # resolves itself — generation-free by construction, so they cannot
         # rot. The API list is deliberately EMPTY: see MODEL SOURCES below.
         "models": {
-            "cli": [("sonnet", "Sonnet (latest)"), ("opus", "Opus (latest)"),
-                    ("haiku", "Haiku (latest)"), ("fable", "Fable (latest)")],
+            "cli": [("sonnet", "Sonnet (CLI alias)"), ("opus", "Opus (CLI alias)"),
+                    ("haiku", "Haiku (CLI alias)"), ("fable", "Fable (CLI alias)")],
             "api": [],
         },
         "models_url": "https://api.anthropic.com/v1/models?limit=100",
@@ -175,6 +176,7 @@ PROVIDERS = {
 # this invalidated because auth is probed separately every time.
 _bin_cache = {}
 _cli_catalog_cache = {}
+_codex_discovery_cache = {}
 _model_provider_cache = {}
 _lock = threading.Lock()
 
@@ -251,24 +253,25 @@ def cli_models(pid):
     return []
 
 
-def _codex_bundled_models():
+def _codex_bundled_models(refresh=False):
     """The installed Codex binary's own model catalog, or an empty list.
 
     ``codex debug models --bundled`` is deterministic and does not make a
     model call. It is a stronger source than config.toml: the config proves
     one selected id, while the bundled catalog proves every id this exact
-    installation offers. Cache by binary path for the process lifetime.
+    installation knows. Cache briefly; refresh re-reads even the same path.
     """
     binary = find_binary("openai")
     if not binary:
         return []
     with _lock:
-        if binary in _cli_catalog_cache:
-            return list(_cli_catalog_cache[binary])
+        hit = _cli_catalog_cache.get(binary)
+        if hit and not refresh and time.monotonic() - hit[0] < MODELS_TTL:
+            return list(hit[1])
     try:
         proc = subprocess.run(
             [binary, "debug", "models", "--bundled"],
-            capture_output=True, text=True, timeout=4,
+            capture_output=True, text=True, encoding="utf-8", timeout=4,
             env=settings.strip_env())
         payload = json.loads(proc.stdout) if proc.returncode == 0 else {}
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
@@ -284,11 +287,48 @@ def _codex_bundled_models():
                     "reasoning": [str(level.get("effort"))
                                   for level in row.get("supported_reasoning_levels", [])
                                   if level.get("effort")]})
-        if len(out) >= 40:
-            break
     with _lock:
-        _cli_catalog_cache[binary] = list(out)
+        _cli_catalog_cache[binary] = (time.monotonic(), list(out))
     return out
+
+
+def _codex_catalog(refresh=False):
+    """Account discovery first; label installed/config fallbacks honestly."""
+    binary = find_binary("openai")
+    if not binary:
+        return [], "Codex is not installed"
+    with _lock:
+        hit = _codex_discovery_cache.get(binary)
+    if hit and not refresh and time.monotonic() - hit[0] < MODELS_TTL:
+        return hit[1], hit[2]
+    try:
+        from .codexapp import discover_models
+        rows = asyncio.run(discover_models(binary, str(Path.home()),
+                                            settings.strip_env()))
+        out = []
+        seen = set()
+        for row in rows:
+            mid = str(row.get("model") or row.get("id") or "").strip()
+            if not mid or row.get("hidden") or mid in seen:
+                continue
+            seen.add(mid)
+            out.append({"id": mid, "label": row.get("displayName") or mid,
+                        "reasoning": [r["reasoningEffort"] for r in
+                                      row.get("supportedReasoningEfforts", [])
+                                      if r.get("reasoningEffort")]})
+        detail = f"Codex account catalog (model/list): {len(out)} models"
+    except Exception:  # A discovery failure must not break the settings page.
+        out = _codex_bundled_models(refresh=refresh)
+        detail = ("Codex account catalog unavailable; installed bundled catalog "
+                  "(availability not confirmed)")
+        if not out:
+            mid = cli_default_model("openai")
+            out = [{"id": mid, "label": mid}] if mid else []
+            detail = ("Codex account catalog unavailable; configured model only "
+                      "(availability not confirmed)")
+    with _lock:
+        _codex_discovery_cache[binary] = (time.monotonic(), out, detail)
+    return out, detail
 
 
 def install_command(pid):
@@ -814,10 +854,10 @@ def _live_models(pid, refresh=False):
 def catalog(pid, refresh=False):
     """What this provider can be pointed at, per backend.
 
-    The CLI list starts from the alias set its binary accepts — neither
-    CLI has a "list models" subcommand to ask, and an alias is the
-    spelling that keeps working across releases. When a key is on file the
-    LIVE model list is unioned in after the aliases: the CLIs accept full
+    Codex is queried through App Server model/list. Other CLI lists start
+    from the alias set their binary accepts; an alias keeps working across
+    releases but does not verify which version the installed CLI selects.
+    When a key is on file the LIVE model list is unioned in after the aliases: the CLIs accept full
     model ids too, so a brand-new model is pickable the day it ships.
 
     The API list IS the live answer, and there is no fallback. A curated
@@ -829,14 +869,17 @@ def catalog(pid, refresh=False):
         return {"cli": [], "api": [], "api_live": False,
                 "api_detail": "", "cli_detail": ""}
     live, detail = _live_models(pid, refresh)
-    cli = cli_models(pid)
-    if spec["models"]["cli"]:
-        cli_detail = "aliases the CLI resolves to its newest models"
+    cli = cli_models(pid) if pid != "openai" else []
+    if pid == "openai":
+        cli, cli_detail = _codex_catalog(refresh)
+    elif spec["models"]["cli"]:
+        cli_detail = ("CLI aliases; the installed CLI chooses the version. "
+                      "The session shows the exact model after startup. " + detail)
     elif cli:
         cli_detail = f"read from {spec['cli_config']['path']}"
     else:
         cli_detail = ""
-    if cli and live:
+    if cli and live and pid != "openai":
         known = {m["id"] for m in cli}
         cli = cli + [m for m in live if m["id"] not in known]
         cli_detail += f" + {len(live)} live ids from your API key"
@@ -908,7 +951,7 @@ def options(refresh=False):
     # The owner's curated roster (config model_roster): the ids every
     # picker should offer. Empty = uncurated, offer everything.
     roster = settings.raw().get("model_roster")
-    payload = {"providers": provs,
+    payload = {"providers": provs, "checked_at": time.time(),
                # Mirrors active(): a disabled go-to is nobody, not the next
                # usable row, because the call itself refuses.
                "active": ("" if is_disabled(want) else
