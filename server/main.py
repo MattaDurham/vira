@@ -4378,36 +4378,33 @@ def api_judge(jid: str, req: JudgeReq | None = None):
 
 
 class IdeaApproveReq(BaseModel):
+    # Refused, never ignored (the branch.sh serve-flags rule). This route
+    # started the plan-build-judge Flow on `build: true` until 2026-09-10;
+    # that path graded the wrong tree (the judge diffed the live checkout,
+    # not the build's worktree) and could mint a second branch on a retry.
+    # The Queue's button now approves here and dispatches ONE ordinary
+    # Implement session through /api/actions/run, with the idea's saved
+    # plan in the prompt (dispatchIdeaRun in app.js). A caller still asking
+    # for a build is told where it lives rather than silently approved
+    # without one.
     build: bool = False
-    cwd: str | None = None
 
 
 @app.post("/api/ideas/{idea_id}/approve")
-def api_idea_approve(idea_id: str, req: IdeaApproveReq):
-    """Approve a Vira-proposed idea: proposed -> open; with build=true the
-    plan-build-judge circuit dispatches on it immediately (the permissioned
-    autonomy loop closing)."""
+def api_idea_approve(idea_id: str, req: IdeaApproveReq | None = None):
+    """Approve a Vira-proposed idea: proposed -> open. Nothing on this route
+    starts a Flow, launches a session or merges anything - Approve & build
+    is approve-then-dispatch on the client, the same Implement session the
+    Implement button makes, placed on its own branch by session.launch."""
+    if req is not None and req.build:
+        raise HTTPException(400, "this route only approves; build by "
+                            "dispatching an Implement session through "
+                            "/api/actions/run (the Queue's button does)")
     try:
         item = ideas.update(idea_id, status="open")
     except KeyError:
         raise HTTPException(404, "unknown idea")
-    out = {"idea": item}
-    if req.build:
-        try:
-            run = circuits.start_run(
-                # Attached screenshots ride along, or approving-and-building
-                # an idea would hand the circuit the words without the
-                # evidence the owner attached to them.
-                "plan-build-judge",
-                (item["text"] + ideaimages.prompt_block(item)).strip(),
-                cwd=req.cwd,
-                notify=True, source=f"idea:{idea_id}", idea_id=idea_id)
-            ideas.stamp_note(idea_id,
-                             f"approved and building (run {run['id'][:10]})")
-            out["run"] = run
-        except (KeyError, ValueError) as e:
-            raise HTTPException(400, f"approved, but build failed: {e}")
-    return out
+    return {"idea": item}
 
 
 @app.post("/api/ideas/{idea_id}/defer")

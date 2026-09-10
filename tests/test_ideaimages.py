@@ -450,21 +450,6 @@ class EveryDispatchCarriesThem(ImageCase):
         it = self.new_idea("plain idea")
         self.assertEqual(flows.flow_for_idea(it["id"])["input"], "plain idea")
 
-    def test_approve_and_build_carries_the_image_paths(self):
-        from fastapi.testclient import TestClient
-        from server import circuits, ideatags, main
-        it = ideas.add("this screen is wrong", status="proposed")
-        meta = self.attach(it)
-        with mock.patch.object(ideatags, "STORE",
-                               Path(self.tmp.name) / "idea-index.json"), \
-             mock.patch.object(circuits, "start_run",
-                               return_value={"id": "run_abc123"}) as run:
-            r = TestClient(main.app).post(f"/api/ideas/{it['id']}/approve",
-                                          json={"build": True})
-        self.assertEqual(r.status_code, 200)
-        self.assertIn(meta["path"], run.call_args.args[1])
-        self.assertIn("this screen is wrong", run.call_args.args[1])
-
 
 class StoreMutators(ImageCase):
     """ideas.py owns the store, so the manifest writes live there — one
