@@ -32,7 +32,16 @@ CONFIG = _DATA / "config.json"
 LOG = _DATA / "notify-log.json"
 
 SENDER_COOLDOWN = 6 * 3600
+# TWO daily budgets, not one. DAILY_CAP is the human-facing one: a contact
+# emailed, a renewal is due. AGENT_DAILY_CAP is the machine's own chatter:
+# job-board finds, routine outcomes, circuit finishes. They used to share
+# one count, and measured over 2026-09-03..10 the agent pings filled all 20
+# slots on two of eight days and 17-18 on two more, so an email from an
+# active contact was dropped silently on exactly the days Vira was busiest.
+# A machine that talks a lot must never be the reason the owner does not
+# hear about a person.
 DAILY_CAP = 20
+AGENT_DAILY_CAP = 20
 
 # Every Vira-originated message in the self-thread MUST start with this.
 # It is half of the reply channel's echo filter (server/inbound.py): the
@@ -102,13 +111,25 @@ def _record(entry):
         _save_log(log)
 
 
+def _is_agent(entry_or_key):
+    """Which budget an entry (or a throttle key) draws on. Agent pings ride
+    the throttle as pseudo person ids prefixed "agent:" and land in the log
+    with channel "agent"; both spellings mean the same budget."""
+    if isinstance(entry_or_key, dict):
+        return (entry_or_key.get("channel") == "agent"
+                or str(entry_or_key.get("person_id") or "").startswith("agent:"))
+    return str(entry_or_key or "").startswith("agent:")
+
+
 def _throttled(person_id):
     now = time.time()
     sent = _load_log().get("sent", [])
     today = datetime.now().date().isoformat()
-    ok_today = [e for e in sent if e.get("ok") and
-                (e.get("at") or "").startswith(today)]
-    if len(ok_today) >= DAILY_CAP:
+    agent = _is_agent(person_id)
+    ok_today = [e for e in sent if e.get("ok")
+                and (e.get("at") or "").startswith(today)
+                and _is_agent(e) == agent]
+    if len(ok_today) >= (AGENT_DAILY_CAP if agent else DAILY_CAP):
         return "daily cap reached"
     for e in reversed(sent):
         if e.get("person_id") == person_id and e.get("ok"):
@@ -171,7 +192,8 @@ def agent_ping(text, key=None):
     routine outcomes) on the same iMessage path. `key` rides the throttle
     as a pseudo person id — a unique key per event means the 6h sender
     cooldown dedupes retries of the SAME event while distinct events still
-    ping; the daily cap always applies."""
+    ping. Counted against AGENT_DAILY_CAP, the machine's own budget - never
+    against DAILY_CAP, so a busy day of finds cannot silence a contact."""
     cfg = config()
     if not cfg["enabled"] or not (cfg["handle"] or _companion_paired()):
         return False
