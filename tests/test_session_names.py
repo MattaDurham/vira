@@ -463,8 +463,11 @@ class Surfaces(unittest.TestCase):
             self.assertIn(k + ": opts." + k, f)
 
     def test_the_idea_sheet_names_its_dispatch(self):
-        self.assertIn("subject: it.text, about: ideaAbout(it, mode, extra, fold)",
-                      APP_JS)
+        # ONE dispatch behind the Implement sheet and Approve & build
+        # (2026-09-10); it names the idea and carries the plan it builds from.
+        f = _fn("dispatchIdeaRun")
+        self.assertIn("subject: it.text", f)
+        self.assertIn("about: ideaAbout(it, mode, extra, fold, plan)", f)
         self.assertIn("function ideaAbout(", APP_JS)
 
     def test_every_run_surface_renders_the_pr_and_the_about(self):
