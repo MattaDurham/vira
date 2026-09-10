@@ -10253,6 +10253,12 @@ function attnCardBlock(row) {
 // every verb lands on the surface that owns the act (the terminal, the
 // Record stream, the health recheck), never a second implementation of it.
 function attnVerb(r) {
+  if (r.kind === "assistant" || r.id === "health:assistant")
+    return { label: "review", title: "Review this in your executive assistant",
+             run: () => {
+               openApp("brief");
+               window.ViraAssistant?.reveal(r.reminder_id || r.calendar_id);
+             } };
   if (r.kind === "flow")
     return { label: "trace",
              title: "Trace this run on the Forge board — live stage states "
@@ -10286,6 +10292,7 @@ function attnVerb(r) {
 }
 
 function attnKindLabel(r) {
+  if (r.kind === "assistant") return "Personal commitment";
   if (r.kind === "flow") return "Flow run";
   if (r.kind === "orphan") return "Branch to land";
   if (r.kind === "health") return "System health";
@@ -10355,6 +10362,8 @@ function renderAttention() {
   // owner just closed (the edge-trigger contract is membership-only).
   const key = (attnData.tokens || []).join("|") + "#"
     + cards.map((c) => c.card.req_id).join(",") + "#"
+    + JSON.stringify(rows.filter((r) => r.kind === "assistant"
+        || r.id === "health:assistant")) + "#"
     + rows.filter((r) => r.kind === "flow")
       .map((r) => (r.stages || [])
         .map((s) => s.status + (s.grade || "")).join(""))
@@ -12541,6 +12550,7 @@ function renderBrief(b) {
 }
 
 async function loadBrief() {
+  window.ViraAssistant?.load();
   const body = $("#brief-body");
   if (!body) return;   // stale cached index.html — don't crash the script
   try {
@@ -15235,6 +15245,7 @@ let attentionTab = "now";      // now | day | decide | picker
 
 function attentionTabLoad(tab) {
   moduleWait("attention:" + tab);
+  if (tab === "day") window.ViraAssistant?.load();
   if (tab === "now") { renderAttention(); refreshAlerts(); }
   if (tab === "day" && Date.now() - briefLoadedAt > 300000)
     loadBrief().catch(() => {});
@@ -25092,6 +25103,14 @@ function atlasNoteToFind(q) {
 // (e.g. #work/queue sub-tabs). The 06:00 iMessage deep-links #subs-visuals
 // once a day.
 const HASH_ROUTES = {
+  "person": (rest) => {
+    const id = decodeURIComponent(rest.join("/"));
+    if (id) openPerson(id);
+  },
+  "setup": (rest) => {
+    openApp("setup");
+    if (rest[0] === "notifications") dashJump("notifications");
+  },
   "subs-visuals": "subsviz",
   "brief": "brief",
   "review": "review",

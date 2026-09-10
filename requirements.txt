@@ -11,6 +11,9 @@
 # pinned here.
 fastapi
 uvicorn[standard]
+# IANA timezone rules for zoneinfo on Windows and other systems without an
+# OS timezone database. Assistant deadlines and calendar times need DST rules.
+tzdata
 # Pairing QR for the Android companion app (server/companion.py). Pure
 # python, zero transitive deps; absent at runtime the pairing card just
 # falls back to the copyable payload.

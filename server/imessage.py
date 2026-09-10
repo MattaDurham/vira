@@ -362,6 +362,11 @@ class Watcher:
                     # Outside the lock, and it never raises: a reply that
                     # cannot be routed must not stop the feed.
                     try:
+                        from . import contactintel
+                        contactintel.enqueue([dict(item, is_preview=True) for item in new])
+                    except Exception:  # noqa: BLE001 — index scan repairs it
+                        pass
+                    try:
                         from . import inbound
                         inbound.consume(new)
                     except Exception:  # noqa: BLE001

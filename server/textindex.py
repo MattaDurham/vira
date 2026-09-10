@@ -530,6 +530,53 @@ def status():
         con.close()
 
 
+def changes_since(cursor=None, *, since=None, limit=300):
+    """Durable evidence for background assistance, including owner replies.
+
+    A first scan starts in a recent date window; later scans follow the
+    insertion sequence so new mail indexed after a restart is not missed.
+    This accessor keeps full bodies. Prompt callers must report their own
+    truncation, rather than treating the search result's preview as a body.
+    It never creates an index just to report that there is no coverage.
+    """
+    if not DB.exists():
+        return {"items": [], "cursor": cursor, "available": False}
+    con = sqlite3.connect(f"file:{DB.as_posix()}?mode=ro", uri=True,
+                          timeout=10)
+    con.row_factory = sqlite3.Row
+    try:
+        top = con.execute("SELECT COALESCE(MAX(seq),0) FROM items").fetchone()[0]
+        # Rebuilt/replaced corpora can restart their insertion sequence.
+        # Re-enter the recent window; the consumer's source IDs deduplicate.
+        if cursor is not None and int(cursor) > top:
+            cursor = None
+        where, args = ["seq > ?"], [int(cursor or 0)]
+        if cursor is None and since:
+            where.append("date_ns >= ?")
+            args.append(_ns(since))
+        rows = con.execute(
+            "SELECT * FROM items WHERE " + " AND ".join(where)
+            + " ORDER BY seq LIMIT ?", args + [max(1, min(int(limit), 1000))]
+        ).fetchall()
+        items = []
+        for row in rows:
+            when = mediaindex.apple_dt(row["date_ns"])
+            items.append({
+                "id": row["uid"], "seq": row["seq"],
+                "chat_id": row["chat_id"],
+                "channel": row["source"], "account": row["account"],
+                "person_id": row["chat_pid"], "handle": row["sender_handle"],
+                "group": bool(row["is_group"]),
+                "is_from_me": bool(row["from_me"]),
+                "when": when.isoformat() if when else None,
+                "subject": row["subject"] or "", "text": row["text"] or "",
+            })
+        return {"items": items, "cursor": rows[-1]["seq"] if rows else top,
+                "available": True}
+    finally:
+        con.close()
+
+
 class Indexer(threading.Thread):
     """Background maintainer for the two corpora the Find window added:
     new message bodies, and the CRM index's vector top-up. One thread

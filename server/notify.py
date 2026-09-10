@@ -20,6 +20,8 @@ sends; use the handle your self-thread actually lives on). State + a
 rolling log live in data/notify-log.json (surfaced in the Jobs window).
 """
 import json
+import os
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -121,6 +123,13 @@ def _is_agent(entry_or_key):
     return str(entry_or_key or "").startswith("agent:")
 
 
+def _is_assistant(entry):
+    # Executive reminders already reserve their own daily attempt budget.
+    # Their shared delivery log must not spend either notification budget.
+    return (entry.get("channel") == "assistant"
+            or entry.get("person_id") == "channel:assistant")
+
+
 def _throttled(person_id):
     now = time.time()
     sent = _load_log().get("sent", [])
@@ -128,6 +137,7 @@ def _throttled(person_id):
     agent = _is_agent(person_id)
     ok_today = [e for e in sent if e.get("ok")
                 and (e.get("at") or "").startswith(today)
+                and not _is_assistant(e)
                 and _is_agent(e) == agent]
     if len(ok_today) >= (AGENT_DAILY_CAP if agent else DAILY_CAP):
         return "daily cap reached"
@@ -361,6 +371,43 @@ def channel_send(text, kind="reply", ref=None):
                 break
         _save_log(log)
     return True
+
+
+def assistant_send(text, ref=None):
+    """A structured receipt for durable assistant reminders.
+
+    Accepted by Messages is distinct from definitely rejected or unknown.
+    A timeout may happen after send; only the rejected case can auto-retry.
+    The prefix and pre-send log keep self-thread echoes from becoming tasks.
+    """
+    from . import send, settings
+    cfg = config()
+    if (os.environ.get("VIRA_PASSIVE") or settings.fixture_mode() or settings.sandboxed()
+            or not cfg["enabled"] or not cfg["handle"]):
+        return {"status": "blocked", "detail": "The owner notification channel is unavailable."}
+    body = (text if text.startswith(VIRA_PREFIX) else VIRA_PREFIX + text)[:1400]
+    entry = {"at": datetime.now().isoformat(timespec="microseconds"),
+             "person_id": "channel:assistant", "person_name": "Vira", "channel": "assistant",
+             "text": body, "ref": ref, "ok": False, "delivery": "sending"}
+    _record(entry)
+    try:
+        result = send.send_message(body, handle=cfg["handle"])
+        status = "sent" if result.get("ok") is True else "failed"
+        detail = result.get("note") or ""
+    except subprocess.TimeoutExpired:
+        status, detail = "uncertain", "Messages timed out; delivery may have occurred."
+    except (ValueError, RuntimeError, OSError):
+        status, detail = "failed", "Messages rejected the reminder; check the notification channel."
+    except Exception:
+        status, detail = "uncertain", "The delivery result is unknown; inspect the owner text thread."
+    with _lock:
+        log = _load_log()
+        for row in reversed(log.get("sent", [])):
+            if row.get("at") == entry["at"] and row.get("text") == body:
+                row.update(ok=status == "sent", delivery=status, error=detail or None)
+                break
+        _save_log(log)
+    return {"status": status, "detail": detail}
 
 
 def sent_texts(window_s=1800):

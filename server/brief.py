@@ -13,6 +13,7 @@ Calendar.app and they appear here automatically. Calendars named in the
 """
 import datetime as dt
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -572,6 +573,21 @@ def _radar_top():
 
 def compose(feed_items=None):
     now = dt.datetime.now()
+    if settings.fixture_mode():
+        # A preview shares the host OS even with synthetic CRM data. Reading
+        # Calendar.app, mailbox drafts or chat.db here would expose real life
+        # through a supposedly synthetic Day tab.
+        return {
+            "generated_at": now.isoformat(),
+            "date_label": settings.strf(now, "%A, %B %-d, %Y"),
+            "calendar": {"today": [], "tomorrow": [], "birthdays": [],
+                         "available": False, "error": "Fixture preview", "m365": ""},
+            "waiting": {"imessage": [], "email": []},
+            "loops": _consolidate_loops(_open_loops(limit=None))[:LOOPS_CAP],
+            "quiet": [], "radar": [], "drafts": {"items": [], "status": None},
+            "subs": None, "triage": {"count": 0, "contact_worthy": 0, "top": []},
+            "journal": [], "narrative": None,
+        }
     return {
         "generated_at": now.isoformat(),
         "date_label": settings.strf(now, "%A, %B %-d, %Y"),
@@ -644,6 +660,12 @@ def cached_narrative():
 
 
 def generate_narrative(feed_items=None, force=False):
+    if settings.fixture_mode():
+        return {"text": "This is a fixture preview. Connect your sources to build a personal daily brief.",
+                "generated_at": dt.datetime.now().isoformat(), "status": "fixture"}
+    if os.environ.get("VIRA_PASSIVE"):
+        return cached_narrative() or {"text": "Narration is paused in this preview.",
+                                       "generated_at": None, "status": "passive"}
     if not force:
         hit = cached_narrative()
         if hit and hit.get("text"):

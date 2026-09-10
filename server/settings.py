@@ -59,6 +59,25 @@ DEFAULTS = {
     # extends inbound.MACHINE_PREFIXES so their texts are never read as
     # the owner talking. Match is a prefix, not a substring.
     "inbound_ignore_prefixes": [],
+    # The standing assistant is opt-in; all records stay in local stores.
+    "assistant_enabled": False,
+    "assistant_contact_updates": True,
+    "assistant_notify": False,
+    "assistant_quiet_start": 22,
+    "assistant_quiet_end": 8,
+    "assistant_timezone": "",
+    "assistant_calendar_auto_create": False,
+    "assistant_calendar_name": "",
+    "assistant_calendar_id": "",
+    "assistant_calendar_work_start": 9,
+    "assistant_calendar_work_end": 17,
+    "assistant_calendar_block_minutes": 30,
+    "assistant_stale_days": 3,
+    "assistant_notify_daily_cap": 3,
+    "assistant_due_soon_hours": 24,
+    "assistant_debounce_s": 90,
+    "assistant_batch_size": 3,
+    "assistant_catchup_days": 14,
     "family_calendars": [],              # calendar names tagged "family" in the brief
     "brief_remote_events": [],           # event-title substrings treated as remote/virtual
                                          # (a remote event never conflicts with an in-person one)

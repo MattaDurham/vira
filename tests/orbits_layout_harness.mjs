@@ -12,12 +12,9 @@
 //
 // Run by tests/test_orbits_view.py; exits non-zero on the first failure.
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
-import path from "node:path";
 
 globalThis.window = globalThis;
-const here = path.dirname(new URL(import.meta.url).pathname);
-const mod = await import(pathToFileURL(path.join(here, "..", "static", "orbits.js")));
+const mod = await import(new URL("../static/orbits.js", import.meta.url));
 const { cardFor, arrange, minSep, relaxCards, sunBox, clampToSun, sunZoomCap } = mod;
 for (const f of [cardFor, arrange, minSep, relaxCards, sunBox, clampToSun, sunZoomCap])
   assert.equal(typeof f, "function", "orbits.js must export its geometry seams");

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -159,8 +160,13 @@ def _call_cli(prompt, model, timeout, tools=None):
            "--permission-mode", "default"]
     if tools:
         cmd += ["--allowedTools", ",".join(tools)]
+    elif tools == []:
+        # Background extraction carries untrusted messages. Permission mode
+        # alone still exposes read tools and inherited MCP servers.
+        cmd += ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                "--safe-mode", "--no-session-persistence"]
     res = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                         timeout=timeout, env=settings.strip_env())
+                         encoding="utf-8", timeout=timeout, env=settings.strip_env())
     if res.returncode != 0:
         raise RuntimeError(f"claude exit {res.returncode}: {res.stderr.strip()[-400:]}")
     try:
@@ -220,7 +226,7 @@ def _call_api(prompt, model, timeout, key):
     return "".join(b.get("text", "") for b in payload.get("content", []))
 
 
-def _call_codex_cli(prompt, model, timeout):
+def _call_codex_cli(prompt, model, timeout, restricted=False):
     """OpenAI's subscription path, the mirror of _call_cli: `codex exec`
     runs non-interactively against the ChatGPT login. The binary is often
     NOT on PATH (it ships inside ChatGPT.app), so it is resolved through
@@ -233,11 +239,31 @@ def _call_codex_cli(prompt, model, timeout):
     # sandbox rather than its default workspace-write one. `exec` accepts
     # --sandbox (only `exec resume` does not -- see agentbackend).
     cmd = [binary, "exec", "--skip-git-repo-check", "--sandbox", "read-only"]
+    if restricted:
+        # Documented CLI/config controls, with a clean cwd so no trusted
+        # project configuration or instructions can re-enable capabilities.
+        # Auth stays with the existing login; no credentials are copied.
+        cmd += ["--ignore-user-config", "--ephemeral", "-c", 'approval_policy="never"',
+                "-c", 'web_search="disabled"', "-c", "tools.view_image=false",
+                "-c", "project_doc_max_bytes=0", "-c", "mcp_servers={}"]
+        for feature in ("shell_tool", "unified_exec", "apps", "plugins",
+                        "multi_agent", "hooks", "memories", "browser_use",
+                        "computer_use", "image_generation", "code_mode"):
+            cmd += ["--disable", feature]
     if model:                       # empty = codex's own configured default
         cmd += ["--model", model]
-    cmd += [prompt]
-    res = subprocess.run(cmd, capture_output=True, text=True,
-                         timeout=timeout, env=settings.strip_env())
+    if restricted:
+        # A long private transcript belongs on stdin, never in a process
+        # argument visible to other local process-list consumers.
+        cmd += ["-"]
+        with tempfile.TemporaryDirectory(prefix="vira-extract-") as scratch:
+            res = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                 encoding="utf-8", cwd=scratch,
+                                 timeout=timeout, env=settings.strip_env())
+    else:
+        cmd += [prompt]
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", timeout=timeout, env=settings.strip_env())
     if res.returncode != 0:
         raise RuntimeError(f"codex exit {res.returncode}: "
                            f"{res.stderr.strip()[-400:]}")
@@ -380,6 +406,8 @@ def _run(prompt, cfg, tools=None):
                 return _call_xai_api(prompt, api_model, cfg["timeout"], key), backend
             return _call_api(prompt, api_model, cfg["timeout"], key), backend
         if pid == "openai":
+            if tools == []:
+                return _call_codex_cli(prompt, cli_model, cfg["timeout"], restricted=True), backend
             return _call_codex_cli(prompt, cli_model, cfg["timeout"]), backend
         return _call_cli(prompt, cli_model, cfg["timeout"], tools), backend
     except Exception as e:  # noqa: BLE001 — classify + record, then re-raise
@@ -390,7 +418,12 @@ def _run(prompt, cfg, tools=None):
 def complete(prompt, tools=None):
     """One-shot completion on the configured backend.
 
-    `tools` is an explicit, read-only allow-list for a caller that needs to
+    An explicit empty list requests restricted extraction: Claude exposes
+    no tools/MCP; Codex disables action integrations and shell tools inside
+    a read-only sandbox with no inherited project/user configuration.
+    API completions have no tool declarations.
+
+    A nonempty `tools` is an explicit, read-only allow-list for a caller that needs to
     gather its own context (see READ_TOOLS). It is honoured ONLY on the
     Anthropic CLI path -- every other backend is a plain completion -- so a
     caller must treat it as an enhancement and still work when it does
