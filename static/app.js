@@ -4850,6 +4850,15 @@ function ideaHasPlan(it) {
   return IDEA_PLAN_LINK.test(it.note || "");
 }
 
+// The plan an Implement dispatch builds from: the NEWEST [plan pl_...: title]
+// token in the note - "Plan again" appends rather than replaces, so the last
+// one is the current plan. Empty when the idea was never planned, or its
+// plan failed to finalize ("plan produced ... see terminal" carries no id).
+function ideaPlanId(it) {
+  const hits = [...String(it?.note || "").matchAll(/\[plan (pl_[a-z0-9]+): /g)];
+  return hits.length ? hits[hits.length - 1][1] : "";
+}
+
 // Active tag filters are ANDed: picking "reader" then "mobile-layout"
 // means the ideas that are BOTH, which is how a filter earns its keep.
 function ideaMatchesTags(it) {
@@ -5075,24 +5084,42 @@ function ideaRow(it) {
     ok.title = "Accept onto the backlog (status: open)";
     ok.addEventListener("click", async () => {
       try {
-        await post(`/api/ideas/${it.id}/approve`, { build: false });
+        await post(`/api/ideas/${it.id}/approve`, {});
         toast("Approved — on the backlog");
         await loadIdeas();
       } catch (e) { alert("Approve failed: " + e.message); }
     });
+    // Approve & build: approve, then ONE ordinary Implement session on its
+    // own branch — the same dispatch the Implement button makes, with the
+    // sheet's remembered settings and no sheet. It used to start the
+    // plan-build-judge Flow, whose judge graded the wrong tree (the live
+    // checkout, not the build's worktree) and whose retry minted a second
+    // branch; owner's call, 2026-09-10: until Flows are fixed, just build
+    // it. The plan Vira already wrote rides in (ideaPlanFor), so Plan ->
+    // Approve & build is one continuous piece of work. The result is a
+    // branch the Showroom lists, with a test instance one click away there;
+    // nothing on this path merges.
     const build = el("button", "idea-run-btn plan", "Approve & build");
-    build.title = "Approve and dispatch the plan-build-judge circuit on it now";
+    build.title = "Approve, then build it in one Implement session on its "
+      + "own branch (Vira's saved plan rides in when there is one). Review "
+      + "the branch in the Showroom; nothing merges on its own.";
     build.addEventListener("click", async () => {
-      const cwd = prompt("Target repository for the build",
-                         "~/workspace/vira");
-      if (cwd == null) return;
+      build.disabled = true;
       try {
-        const r = await post(`/api/ideas/${it.id}/approve`,
-                             { build: true, cwd: cwd.trim() || null });
-        toast("Approved — circuit running");
+        const r = await post(`/api/ideas/${it.id}/approve`, {});
+        if (r && r.idea) Object.assign(it, r.idea);
+        const { jid, plan } = await dispatchIdeaRun(it, "implement", {
+          cwd: ideaRunCwd(it),
+          model: localStorage.getItem("vira-idea-model") || "",
+          provider: null, extra: "", perm: savedPermMode(), fold: [],
+        });
+        toast(jid
+          ? "Approved — building on its own branch"
+            + (plan ? " from its plan" : "")
+          : "Approved — on the backlog");
         await loadIdeas();
-        if (r.run) { openApp("circuits"); loadCircuits().catch(() => {}); }
       } catch (e) { alert("Approve & build failed: " + e.message); }
+      finally { build.disabled = false; }
     });
     // Defer is the third answer, and the one the other two were missing:
     // "not now, but keep it". The idea leaves the queue for Record >
@@ -6383,6 +6410,41 @@ function ideaExtraBlock(extra) {
   return extra ? "\nAdditional instructions from the owner:\n" + extra + "\n" : "";
 }
 
+// The plan Vira's planning pass already wrote for this idea, carried INTO
+// the build. Before this the two buttons were strangers: Plan saved a
+// dossier to the vault and Implement started from the idea text alone, so
+// planning bought the owner a document and the build nothing. Inlined
+// rather than pointed at - a session can read the vault file, but a path
+// it has to go and find is a step it can skip, and the plan is the one
+// thing it must not skip. Shaped like the other blocks so it joins the
+// task lines the same way.
+function ideaPlanBlock(plan) {
+  const md = String(plan?.markdown || "").trim();
+  if (!md) return "";
+  return ["",
+    "THE PLAN. Vira's planning pass already wrote an implementation plan for",
+    "this idea" + (plan.path ? " (saved in the vault at " + plan.path + ")" : "")
+      + ". Build from it: it names the files, the order of work and how",
+    "to verify. Where the code has moved since it was written, follow the",
+    "code and say so in your report.",
+    "",
+    md,
+    ""].join("\n");
+}
+
+// The plan behind an idea, read fresh from the registry at dispatch time.
+// null when there is none, when the note's link points at a plan whose
+// file is gone (the registry says `missing`), or when the read fails - a
+// build then proceeds from the idea alone, and the stamp says so.
+async function ideaPlanFor(it) {
+  const pid = ideaPlanId(it);
+  if (!pid) return null;
+  try {
+    const p = await api("/api/plans/" + pid);
+    return p && p.markdown && !p.missing ? p : null;
+  } catch (e) { return null; }
+}
+
 // Backlog items the owner ticked to fold into THIS dispatch. Stated as
 // part of the same piece of work — the whole point is that the agent
 // does them together rather than leaving three near-identical tasks
@@ -6455,12 +6517,14 @@ function ideaSlug(it, kind) {
 }
 
 // The task itself — identical in every prompt shape that carries an idea.
-// The three optional blocks are dropped when empty rather than joined as
-// empty strings: an idea with no images, folds or extra instructions is the
-// common case, and it was opening a gap of three blank lines between the
-// ask and the instructions. One blank line always separates them.
-function ideaTaskLines(it, extra, fold) {
-  const blocks = [ideaImageBlock(it), ideaFoldBlock(fold),
+// The optional blocks are dropped when empty rather than joined as empty
+// strings: an idea with no images, folds, plan or extra instructions is the
+// common case, and it was opening a gap of blank lines between the ask and
+// the instructions. One blank line always separates them. The plan (a build
+// only - Plan and Export never pass one) sits BEFORE the owner's extra
+// instructions, so those win a disagreement with it.
+function ideaTaskLines(it, extra, fold, plan) {
+  const blocks = [ideaImageBlock(it), ideaFoldBlock(fold), ideaPlanBlock(plan),
                   ideaExtraBlock(extra)].filter(Boolean);
   return [
     "This task comes from the owner's Vira idea backlog:",
@@ -6470,7 +6534,7 @@ function ideaTaskLines(it, extra, fold) {
   ];
 }
 
-function ideaImplementPrompt(it, extra, cwd, perm, fold) {
+function ideaImplementPrompt(it, extra, cwd, perm, fold, plan) {
   // What each rung stops for. The owner is reachable in ALL of them — the
   // session holds open at the end of its turn, so a closing question is
   // something they can actually answer rather than shout into a dead log.
@@ -6496,7 +6560,7 @@ function ideaImplementPrompt(it, extra, cwd, perm, fold) {
     "need a decision, ASK and stop — do not guess, and do not sign off with a",
     "question you have already assumed the answer to.",
     "",
-    ...ideaTaskLines(it, extra, fold),
+    ...ideaTaskLines(it, extra, fold, plan),
     "Carry it out end to end:",
     "- First read the repo's agent contract (AGENTS.md, and CLAUDE.md where",
     "  present) and the relevant modules, so your changes fit the existing",
@@ -6753,6 +6817,15 @@ $("#idea-run-analyze").addEventListener("click", async (e) => {
   }
 });
 
+// Which folder a dispatch lands in. A connected project already answers
+// "which folder?", so the idea's own project wins over the last-used value
+// — otherwise the owner points at a folder during setup and is still asked
+// for it on every dispatch. One ladder for the sheet and for Approve & build.
+function ideaRunCwd(it) {
+  return projectPathsCache[it.project]
+    || localStorage.getItem("vira-idea-cwd") || "~/workspace/vira";
+}
+
 function openIdeaRun(it, mode) {
   ideaRunCtx = { it, mode, related: [], picked: new Set(), verdicts: {} };
   $("#idea-run-related").style.display = "none";
@@ -6761,12 +6834,9 @@ function openIdeaRun(it, mode) {
   $("#idea-run-mode").textContent = mode === "plan" ? "Plan" : "Implement";
   $("#idea-run-title").textContent =
     mode === "plan" ? "Plan this idea" : "Implement this idea";
-  $("#idea-run-text").textContent = it.text;
-  // A connected project already answers "which folder?", so the idea's own
-  // project wins over the last-used value — otherwise the owner points at a
-  // folder during setup and is still asked for it on every dispatch.
-  $("#idea-run-cwd").value = projectPathsCache[it.project]
-    || localStorage.getItem("vira-idea-cwd") || "~/workspace/vira";
+  $("#idea-run-text").textContent = it.text
+    + (mode !== "plan" && ideaPlanId(it) ? "  ·  builds from Vira's saved plan" : "");
+  $("#idea-run-cwd").value = ideaRunCwd(it);
   // The model menu is built from the catalog, not a hand-list in the
   // markup — the same source Setup's defaults and circuit stages read.
   modelCatalog().then((cat) => fillModelSelect(
@@ -6812,9 +6882,24 @@ $("#idea-run-go").addEventListener("click", async () => {
   if (mode !== "plan") lsSet("vira-idea-perm", perm);
   const fold = (ideaRunCtx.related || [])
     .filter((r) => ideaRunCtx.picked.has(r.id));
+  ideaRunSheet.close();
+  await dispatchIdeaRun(it, mode, { cwd, model, provider, extra, perm, fold });
+});
+
+// ONE dispatch behind both doors to a build: the Implement sheet (settings
+// the owner just reviewed) and the approval bar's Approve & build (the
+// sheet's remembered settings, no sheet). Composes the prompt — a build
+// carries the idea's saved plan — launches, and stamps the idea and any
+// folded rows. Two copies of this would be two chances for the doors to
+// drift on what a build receives. Returns {jid, plan}.
+async function dispatchIdeaRun(it, mode, o) {
+  const { cwd, model, extra, perm } = o;
+  const provider = o.provider || null;
+  const fold = o.fold || [];
+  const plan = mode === "plan" ? null : await ideaPlanFor(it);
   const prompt = mode === "plan"
     ? ideaPlanPrompt(it, extra, cwd, fold)
-    : ideaImplementPrompt(it, extra, cwd, perm, fold);
+    : ideaImplementPrompt(it, extra, cwd, perm, fold, plan);
   // Plan asks for two separate things and now says both: publish_plan
   // finalizes the output as a plan (vault note + HTML dossier), read_only
   // denies writes. They were one flag until 2026-08-04, which is why a
@@ -6822,16 +6907,16 @@ $("#idea-run-go").addEventListener("click", async () => {
   const permission_mode = perm === "bypassPermissions" ? "bypassPermissions" : null;
   const publish_plan = mode === "plan";
   const read_only = mode === "plan";
-  const runMode = perm;
-  ideaRunSheet.close();
   const jid = await launchJob(prompt, cwd,
-    { reviewed: true, permission_mode, model, provider, publish_plan, read_only, idea_id: it.id,
-      mode: runMode, subject: it.text, about: ideaAbout(it, mode, extra, fold) });
+    { reviewed: true, permission_mode, model, provider, publish_plan, read_only,
+      idea_id: it.id, mode: perm, subject: it.text,
+      about: ideaAbout(it, mode, extra, fold, plan) });
   // stamp the idea so the dispatch is visible next time it's opened
   const day = new Date().toISOString().slice(0, 10);
   const job = " (job " + String(jid || "?").slice(0, 8) + ")";
   try {
     const stamp = "dispatched " + mode + " " + day
+      + (plan ? " from its plan" : "")
       + (fold.length ? ` with ${fold.length} folded in` : "") + job;
     const note = (it.note ? it.note + " · " : "") + stamp;
     Object.assign(it, await put("/api/ideas/" + it.id, { note }));
@@ -6847,7 +6932,8 @@ $("#idea-run-go").addEventListener("click", async () => {
     }));
     renderIdeas();
   } catch (e) { /* stamping is best-effort */ }
-});
+  return { jid, plan };
+}
 
 // ---------- actions ----------
 async function loadActions() {
@@ -6868,11 +6954,12 @@ async function loadActions() {
 // owner's note and extra instructions, and whatever was folded in - what
 // this is, the goal, what is being built - read back from the run card and
 // the terminal without opening the prompt.
-function ideaAbout(it, mode, extra, fold) {
+function ideaAbout(it, mode, extra, fold, plan) {
   const lines = [
     (mode === "plan" ? "Plan for the idea: " : "Implement the idea: ")
       + (it.text || "").trim(),
   ];
+  if (plan && plan.title) lines.push("Following the plan: " + plan.title);
   if (it.note) lines.push("Note on the idea: " + it.note.trim());
   if (extra && extra.trim()) lines.push("Extra instructions: " + extra.trim());
   if (fold && fold.length)
