@@ -280,6 +280,50 @@ The session proposes; the server validates and applies. Config and
 generated pages are never written by the agent's own hands, and a module
 goes live because its data landed - not because a run said so.
 
+## Background assistant
+
+Open **Attention > Day > Assistant settings**, or the focused `/assistant` page,
+to enable background learning.
+The assistant processes new messages and reconciles recent indexed messages
+after downtime. It keeps source quotes with learned facts, promises, deadlines,
+and completion evidence. Updates merge into existing contact profiles; owner
+edits and closed commitments keep priority. Self reminders, service emails,
+and messages from people outside the CRM become private owner tasks rather
+than new contact records. The self-record is never rewritten.
+
+The Day view shows commitments with **Done**, **Snooze**, and their evidence.
+Due or overdue owner commitments also appear in Attention's Now view. Optional
+texts go to the configured owner notification channel, with quiet hours, a
+daily limit, and delivery tracking. A failed send can retry; an interrupted
+send with an unknown outcome is held rather than duplicated. Ordinary replies
+do not count as completion of an unrelated promise.
+
+Calendar suggestions stay local until acted on. Download a calendar draft,
+or use your current writable Calendar.app default for personal events on macOS.
+Vira discovers existing calendars; choose a different one from the selector
+when desired. No calendar name needs to be typed.
+With automatic personal events enabled, the assistant can reserve available
+work time for a due task using the configured work hours and block duration.
+It distinguishes that chosen time from a time stated in the source. Explicit
+personal scheduling requests can also create events. Meetings involving other
+people remain suggestions; Vira never sends their invitations automatically.
+
+Coverage and processing failures are visible beside the assistant controls.
+Mail-body indexing must be enabled for full email evidence and sent-reply
+reconciliation; a feed preview alone does not provide that coverage. Ambiguous
+or unsupported timing remains a suggestion. The worker runs in the local Vira
+process, so the machine must be awake and sources and the selected model must
+be available. Passive and fixture previews process no messages and cannot send
+texts or create calendar events.
+
+Reusable settings are off by default. Private queues, non-contact tasks,
+calendar drafts, and reminder delivery state live under `data/`; contact
+findings live in the configured CRM profiles. A separate CRM synthesis pipeline
+must preserve evidence-backed records with `source: "vira-assistant"` and their
+`assistant_key` independently from human-curated records. Otherwise a later
+full synthesis can discard incremental findings; see its merge contract before
+enabling background updates against an external pipeline.
+
 ## Live sessions
 
 Manual prompt and Action launches, plus Resume from Runs or Showroom, open a

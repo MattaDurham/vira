@@ -12,6 +12,8 @@ sight (the readinglist lesson)."""
 import json
 import os
 import tempfile
+import shutil
+import subprocess
 import threading
 import unittest
 from datetime import datetime, timedelta
@@ -53,6 +55,7 @@ class Base(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         from server import aihealth, circuits, jobboards, joblog, orphanwork
         patches = [
+            mock.patch.object(attention, "_assistant_rows", return_value=[]),
             mock.patch.object(joblog, "list_records", return_value=[]),
             mock.patch.object(circuits, "list_runs", return_value=[]),
             mock.patch.object(orphanwork, "compose",
@@ -341,6 +344,24 @@ class ReviewBoundary(Base):
 
 class Contract(Base):
 
+    def test_assistant_reminders_join_the_same_tokens_and_counts(self):
+        attention._assistant_rows.return_value = [attention._row(
+            "assistant:sample", "assistant", "overdue", True,
+            "Send the agenda", "Example contact - overdue", "Review",
+            activity_at=500, reminder_id="sample",
+            trigger="assistant:sample@overdue:2030-01-01")]
+        p = self.compose()
+        self.assertEqual(p["counts"], {"needs_you": 1, "working": 0})
+        self.assertEqual(p["tokens"], ["assistant:sample@overdue:2030-01-01"])
+        self.assertEqual(p["rows"][0]["reminder_id"], "sample")
+
+    def test_an_assistant_failure_does_not_hide_other_work(self):
+        attention._assistant_rows.side_effect = ValueError("assistant store corrupt")
+        h = self.handle("j1", {"status": "running", "awaiting": None})
+        p = self.compose([h])
+        self.assertEqual([r["kind"] for r in p["rows"]], ["working"])
+        self.assertIn("assistant store corrupt", p["errors"]["assistant"])
+
     def test_a_broken_source_never_breaks_the_list(self):
         from server import orphanwork
         orphanwork.compose.side_effect = RuntimeError("store corrupt")
@@ -370,6 +391,20 @@ class Contract(Base):
         h = self.handle("j1", {"status": "running", "awaiting": "reply"})
         p = self.compose([h])
         self.assertEqual(p["tokens"], [r["trigger"] for r in p["rows"]])
+
+
+class AssistantFrontend(unittest.TestCase):
+
+    def test_owner_actions_and_polling_use_the_actual_frontend(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js is unavailable")
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [node, str(root / "tests" / "assistant_frontend_harness.js")],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+            timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 
 if __name__ == "__main__":

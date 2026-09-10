@@ -339,6 +339,13 @@ def _health_rows():
 
 # --------------------------------------------------------------- compose
 
+def _assistant_rows():
+    """Urgent commitments and failures from the assistant's persisted state.
+    Its Day surface owns the reminder and calendar actions."""
+    from . import executive
+    return executive.attention_rows()
+
+
 def _names(registry):
     """Job id -> canonical session title, the same ledger naming every
     other job surface uses (joblog.name over the fuller ledger record)."""
@@ -384,6 +391,7 @@ def compose(registry=None):
     rows += _safe(_flow_rows, errors, "flows")
     rows += _safe(_orphan_rows, errors, "orphans")
     rows += _safe(_health_rows, errors, "health")
+    rows += _safe(_assistant_rows, errors, "assistant")
 
     # Now is a chronology, not a triage queue: a session that just started
     # leads immediately even when older work is waiting on the owner. That

@@ -133,6 +133,7 @@ class BriefNarrative(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         with mock.patch.object(brief, "compose",
                                lambda f=None: {"pad": "y" * 60_000}), \
+             mock.patch.object(brief.settings, "fixture_mode", return_value=False), \
              mock.patch.object(brief, "NARRATIVE_CACHE",
                                Path(tmp.name) / "n.json"), \
              mock.patch.object(brief.suggest, "complete",

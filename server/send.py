@@ -222,7 +222,7 @@ def send_message(text, person_id=None, handle=None, channel=None, timeout=20):
                 "iPhone may be off (Messages needs an SMS account). "
                 + str(e))
         return {"handle": target, "channel": "sms", "downgraded": False,
-                "note": None}
+                "note": None, "ok": True}
 
     # iMessage attempt, then verify + fall back to SMS on a delivery error.
     since_ns = imessage.apple_ns(datetime.datetime.now())
@@ -236,7 +236,7 @@ def send_message(text, person_id=None, handle=None, channel=None, timeout=20):
         except RuntimeError:
             # iMessage failed AND we can't text — surface the honest state.
             return {"handle": target, "channel": "imessage",
-                    "downgraded": False,
+                    "downgraded": False, "ok": False,
                     "note": "iMessage was not delivered and no SMS route is "
                             "set up (Text Message Forwarding may be off)."}
         # Remember, so next time is proactive.
@@ -245,10 +245,11 @@ def send_message(text, person_id=None, handle=None, channel=None, timeout=20):
         except Exception:  # noqa: BLE001 — persistence is best-effort
             pass
         return {"handle": target, "channel": "sms", "downgraded": True,
+                "ok": True,
                 "note": "iMessage was not delivered, so Vira sent it as a "
                         "text instead."}
     return {"handle": target, "channel": "imessage", "downgraded": False,
-            "note": None}
+            "note": None, "ok": True}
 
 
 def _group_send_errored(chat_ids, since_ns, wait_seconds):

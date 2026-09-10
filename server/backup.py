@@ -38,6 +38,11 @@ FILES = ("ideas.json", "config.json", "subscriptions.json",
          # entry (verified against the writer 2026-08-10).
          "atlas-groups.json", "jobs-log.json", "applications.json",
          "atlas-circles.json",   # circle names, stories, history, renames
+         # Assistant ledgers contain owner decisions and pending work.
+         # Losing the calendar/delivery claims risks replaying side effects;
+         # the contact queue also contains unprocessed source evidence.
+         "assistant-state.json", "assistant-commitments.json",
+         "calendar-plans.json", "contact-intelligence.json",
          "mail-accounts.json", "circuits.json", "evidence.json",
          # The Reader's queue: which documents are worth reading and which are
          # read. The documents themselves live at their sources, but the
@@ -87,7 +92,11 @@ def snapshot():
             DEST.mkdir(exist_ok=True)
             target = DEST / f"{src.stem}-{stamp}{src.suffix}"
             if not target.exists():
-                shutil.copy2(src, target)
+                # A crash during copy must not leave a partial JSON file
+                # that later daily runs mistake for a completed backup.
+                tmp = target.with_name(target.name + ".tmp")
+                shutil.copy2(src, tmp)
+                tmp.replace(target)
             olds = sorted(DEST.glob(f"{src.stem}-*{src.suffix}"))
             for old in olds[:-KEEP]:
                 old.unlink()

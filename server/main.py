@@ -35,6 +35,7 @@ from . import (
                designstudio,
                draftcheck,
                evidence,
+               executive,
                feedstate,
                find,
                flows,
@@ -204,6 +205,7 @@ async def _startup():
     # from the thread. Reading his replies needs no thread of its own — it
     # rides the message watcher's tick (server/inbound.py).
     inbound.start()
+    executive.start()  # durable contact learning and commitment follow-up
     # Job boards: fetch-and-diff the registered career boards on a cadence,
     # iMessage the owner when a new eligible role appears (server/jobboards).
     jobboards_poller.start()
@@ -1558,6 +1560,78 @@ class ReadAllReq(BaseModel):
 @app.post("/api/feed/read-all")
 def api_feed_read_all(req: ReadAllReq):
     return feedstate.read_all(req.rowids)
+
+
+@app.get("/api/assistant")
+def api_assistant():
+    return executive.status()
+
+
+@app.get("/assistant")
+def assistant_page():
+    return FileResponse(ROOT / "static" / "assistant-page.html", media_type="text/html")
+
+
+@app.get("/api/assistant/calendars")
+def api_assistant_calendars(refresh: bool = False):
+    from . import calendarplan
+    return calendarplan.destinations(refresh=refresh)
+
+
+@app.post("/api/assistant/config")
+def api_assistant_config(req: dict):
+    try:
+        return executive.save_config(req)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class AssistantReminderReq(BaseModel):
+    action: str
+    hours: int = 24
+    due: str | None = None
+
+
+@app.post("/api/assistant/reminders/{rid}")
+def api_assistant_reminder(rid: str, req: AssistantReminderReq):
+    try:
+        return executive.reminder_action(rid, req.action, req.hours, req.due)
+    except (KeyError, LookupError):
+        raise HTTPException(404, "Reminder is no longer open")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class AssistantCalendarReq(BaseModel):
+    action: str
+
+
+@app.post("/api/assistant/calendar/{draft_id}")
+def api_assistant_calendar(draft_id: str, req: AssistantCalendarReq):
+    from . import calendarplan
+    try:
+        if req.action == "create":
+            return calendarplan.create_owner_event(draft_id, automatic=False)
+        if req.action == "dismiss":
+            return calendarplan.dismiss(draft_id)
+        raise ValueError("action must be create or dismiss")
+    except KeyError:
+        raise HTTPException(404, "Calendar draft not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/assistant/calendar/{draft_id}.ics")
+def api_assistant_calendar_ics(draft_id: str):
+    from . import calendarplan
+    try:
+        body = calendarplan.ics(draft_id)
+    except KeyError:
+        raise HTTPException(404, "Calendar draft not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return Response(body, media_type="text/calendar", headers={
+        "Content-Disposition": 'attachment; filename="calendar-draft.ics"'})
 
 
 @app.get("/api/brief")

@@ -6,6 +6,8 @@ The root comes from settings (data/config.json `crm_root`); in fixture mode
 it is the seeded copy of fixtures/crm-data.
 """
 import datetime as _dt
+import copy
+import hashlib
 import json
 import re
 import shutil
@@ -13,6 +15,7 @@ import threading
 import time
 
 from . import settings
+from .filelock import locked
 
 
 class ProfileCorruptError(RuntimeError):
@@ -207,7 +210,7 @@ def save_profile_field(pid, field, value):
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
-    with _write_lock:
+    with _write_lock, locked(_profile_path(pid)):
         return _save_field_locked(pid, p, field, value)
 
 
@@ -285,7 +288,7 @@ def _load_profile_for_write(pid, p):
     if not path.exists():
         return {"name": p["name"]}
     try:
-        prof = json.loads(path.read_text())
+        prof = json.loads(path.read_text(encoding="utf-8"))
         _backup_profile(path, pid)
         return prof
     except (OSError, json.JSONDecodeError) as e:
@@ -309,7 +312,7 @@ def _save_field_locked(pid, p, field, value):
     prof[f"{field}_updated_by_vira"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(prof, indent=1, ensure_ascii=False))
+    tmp.write_text(json.dumps(prof, indent=1, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
     invalidate()
     return prof
@@ -330,7 +333,7 @@ def save_profile_refresh(pid, summary, how_met=None, reason="refresh"):
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
-    with _write_lock:
+    with _write_lock, locked(_profile_path(pid)):
         path = _profile_path(pid)
         prof = _load_profile_for_write(pid, p)
         prev = prof.get("relationship_summary")
@@ -366,7 +369,7 @@ def update_loop(pid, match_what, action, new_what=None):
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
-    with _write_lock:
+    with _write_lock, locked(_profile_path(pid)):
         prof = _load_profile_for_write(pid, p)
         loops = prof.get("open_loops")
         if not isinstance(loops, list):
@@ -402,7 +405,7 @@ def add_loop(pid, what, owed_by="me"):
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
-    with _write_lock:
+    with _write_lock, locked(_profile_path(pid)):
         prof = _load_profile_for_write(pid, p)
         loops = prof.get("open_loops")
         if not isinstance(loops, list):
@@ -429,7 +432,7 @@ def add_fact(pid, fact):
     fact = (fact or "").strip()
     if not fact:
         raise ValueError("fact text required")
-    with _write_lock:
+    with _write_lock, locked(_profile_path(pid)):
         prof = _load_profile_for_write(pid, p)
         facts = prof.get("personal_facts")
         if not isinstance(facts, list):
@@ -439,3 +442,204 @@ def add_fact(pid, fact):
         facts.append(entry)
         _save_field_locked(pid, p, "personal_facts", facts)
         return entry
+
+
+def _latest_evidence(refs):
+    stamps = []
+    for ref in refs:
+        try:
+            stamp = _dt.datetime.fromisoformat(str(ref["when"]).replace("Z", "+00:00"))
+            stamps.append(stamp.replace(tzinfo=_dt.timezone.utc) if stamp.tzinfo is None else stamp)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return max(stamps, default=_dt.datetime.min.replace(tzinfo=_dt.timezone.utc))
+
+
+def set_loop_due(pid, assistant_key, due):
+    """Apply the owner's deadline correction to one stable assistant task.
+
+    API callers validate the date; this write seam protects the exact task,
+    retains its source evidence, and marks timing as owner-controlled.
+    """
+    if not isinstance(assistant_key, str) or not assistant_key:
+        raise ValueError("An exact assistant task key is required")
+    if not isinstance(due, str) or not due.strip():
+        raise ValueError("A deadline is required")
+    person = _load()["by_id"].get(pid)
+    if not person:
+        raise KeyError(pid)
+    with _write_lock, locked(_profile_path(pid)):
+        profile = _load_profile_for_write(pid, person)
+        loops = profile.get("open_loops")
+        if not isinstance(loops, list):
+            raise LookupError("No open tasks on file")
+        target = next((loop for loop in loops if isinstance(loop, dict)
+                       and loop.get("assistant_key") == assistant_key), None)
+        if target is None or target.get("status") == "closed":
+            raise LookupError("Task is missing or already closed")
+        target.update(due=due.strip(), due_updated_by_owner=_dt.datetime.now(_dt.timezone.utc).isoformat())
+        target.pop("deadline_review", None)
+        _save_field_locked(pid, person, "open_loops", loops)
+        return target
+
+
+def _import_digest(loop):
+    return hashlib.sha256(json.dumps({k: v for k, v in loop.items() if k != "assistant_origin"},
+                                    sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _origin_alias(loop, normalized):
+    origin = loop.get("assistant_origin") or {}
+    subject, key = origin.get("subject_key"), origin.get("assistant_key")
+    return bool(subject and key and hashlib.sha256(
+        f"{subject}:{normalized}".encode("utf-8")).hexdigest()[:24] == key)
+
+
+def save_contact_intelligence(pid, update, *, expected_summary=None, expected_profile=None, imported_loops=None):
+    """Merge validated assistant findings without replacing curated lists.
+
+    The caller validates quotes against source messages. This final write
+    gate preserves owner edits, all closed loops, and concurrent summary
+    changes. Machine findings remain distinguishable from owner-told facts.
+    """
+    import os
+    from . import jsonstore
+    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
+        raise ValueError("contact intelligence is disabled on a test instance")
+    person = _load()["by_id"].get(pid)
+    if not person:
+        raise KeyError(pid)
+    counts = {"facts": 0, "loops": 0, "closed": 0, "summary": 0, "revised": 0, "held_deadlines": 0, "migrated": 0}
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    path = _profile_path(pid)
+    with _write_lock, locked(path):
+        prof = _load_profile_for_write(pid, person)
+        changed_loops = set()
+        facts = prof.get("personal_facts") or []
+        loops = prof.get("open_loops") or []
+        # Unexpected existing shapes fail closed, rather than erasing data.
+        if not isinstance(facts, list) or not isinstance(loops, list):
+            raise ValueError("profile facts or loops are not lists")
+        for imported in imported_loops or []:
+            incoming = copy.deepcopy(imported["loop"])
+            origin = {"subject_key": imported["subject_key"], "assistant_key": incoming["assistant_key"],
+                      "imported_digest": _import_digest(incoming)}
+            incoming["assistant_origin"] = origin
+            current = next((loop for loop in loops if isinstance(loop, dict)
+                            and (loop.get("assistant_key") == incoming["assistant_key"]
+                                 or _origin_alias(incoming, _norm_what(loop.get("what"))))), None)
+            if current is not None:
+                prior_origin = current.get("assistant_origin") or {}
+                if prior_origin.get("imported_digest") == origin["imported_digest"]:
+                    continue  # destination owner edits after the copy win
+                if prior_origin:
+                    if _import_digest(current) != prior_origin.get("imported_digest"):
+                        raise ValueError("Both inbox and contact versions of this task changed; review the task")
+                elif (current.get("edited") or current.get("due_updated_by_owner")
+                      or current.get("status") == "closed" or current.get("source") != "vira-assistant"):
+                    raise ValueError("The contact already has an owner-curated version of this task")
+                loops[loops.index(current)] = incoming
+            else:
+                loops.append(incoming)
+            changed_loops.add(_norm_what(incoming.get("what")))
+            counts["migrated"] += 1
+        for field, current, key in (("facts", facts, "fact"),
+                                    ("loops", loops, "what")):
+            known = {_norm_what(x.get(key)) if isinstance(x, dict)
+                     else _norm_what(str(x)) for x in current}
+            known_keys = {x.get("assistant_key") for x in current if isinstance(x, dict)}
+            for item in update.get(field, []):
+                normalized = _norm_what(item.get(key))
+                if not normalized:
+                    continue
+                assistant_key = hashlib.sha256(
+                    f"{pid}:{field}:{normalized}".encode("utf-8")).hexdigest()[:24]
+                evidence = item.get("evidence") or []
+                if not evidence or any(not e.get("id") or not e.get("quote")
+                                       for e in evidence):
+                    raise ValueError("assistant finding needs source evidence")
+                origin_match = next((x for x in current if isinstance(x, dict) and _origin_alias(x, normalized)), None)
+                if normalized in known or assistant_key in known_keys or origin_match is not None:
+                    if field == "loops" and (item.get("due") or item.get("deadline_review")):
+                        existing = next((x for x in current if isinstance(x, dict)
+                                         and (_norm_what(x.get("what")) == normalized
+                                              or x.get("assistant_key") == assistant_key
+                                              or x is origin_match)), None)
+                        expected = next((x for x in (expected_profile or {}).get("open_loops", [])
+                                         if isinstance(x, dict) and _norm_what(x.get("what")) == normalized), None)
+                        if (existing and existing == expected and existing.get("source") == "vira-assistant"
+                                and not existing.get("edited") and not existing.get("due_updated_by_owner")
+                                and existing.get("status") != "closed"
+                                and existing.get("owed_by") == item.get("owed_by")
+                                and (existing.get("due") != item["due"]
+                                     or existing.get("deadline_review") != item.get("deadline_review"))
+                                and _latest_evidence(evidence) > _latest_evidence(existing.get("evidence") or [])):
+                            existing.update(due=item["due"], due_quote=item.get("due_quote"),
+                                            due_evidence=item.get("due_evidence"), updated_at=now)
+                            if item.get("deadline_review"):
+                                existing["deadline_review"] = item["deadline_review"]
+                                counts["held_deadlines"] += 1
+                            else:
+                                existing.pop("deadline_review", None)
+                            existing["evidence"] += [e for e in evidence if e not in existing["evidence"]]
+                            changed_loops.add(normalized)
+                            counts["revised"] += 1
+                    continue
+                entry = dict(item)
+                entry["source"] = "vira-assistant"
+                entry["assistant_key"] = assistant_key
+                entry["updated_at"] = now
+                if field == "loops":
+                    entry.update(status="open", quote=evidence[0]["quote"],
+                                 channel=evidence[0]["channel"])
+                    entry.setdefault("since", evidence[0]["when"][:10])
+                else:
+                    entry.setdefault("as_of", evidence[0]["when"][:10])
+                current.append(entry)
+                known.add(normalized)
+                known_keys.add(assistant_key)
+                if field == "loops":
+                    changed_loops.add(normalized)
+                    if entry.get("deadline_review"):
+                        counts["held_deadlines"] += 1
+                counts[field] += 1
+        for closing in update.get("closed_loops", []):
+            for loop in loops:
+                if not isinstance(loop, dict):
+                    continue
+                if (loop.get("source") == "vira-assistant"
+                        and not loop.get("edited")
+                        and loop.get("status") != "closed"
+                        and loop.get("what") == closing.get("what")):
+                    expected = next((x for x in (expected_profile or {}).get("open_loops", [])
+                                     if isinstance(x, dict) and x.get("what") == loop.get("what")), None)
+                    if (expected_profile is not None and expected is not None and loop != expected
+                            and _norm_what(loop.get("what")) not in changed_loops):
+                        continue
+                    if _latest_evidence(closing.get("evidence") or []) < _latest_evidence(loop.get("evidence") or []):
+                        continue
+                    loop.update(status="closed", closed_on=now[:10],
+                                closed_evidence=closing["evidence"])
+                    counts["closed"] += 1
+                    break
+        summary = update.get("relationship_summary")
+        if (summary and summary != prof.get("relationship_summary")
+                and prof.get("relationship_summary") == expected_summary):
+            if expected_summary:
+                prof["prev_relationship_summary"] = expected_summary
+            prof["relationship_summary"] = summary
+            prof["relationship_summary_evidence"] = update["summary_evidence"]
+            prof["relationship_summary_updated_by_vira"] = now
+            prof["last_refresh_reason"] = "vira-assistant"
+            prof["refresh_count"] = int(prof.get("refresh_count") or 0) + 1
+            counts["summary"] = 1
+        if any(counts.values()):
+            prof["personal_facts"], prof["open_loops"] = facts, loops
+            if counts["facts"]:
+                prof["personal_facts_updated_by_vira"] = now
+            if counts["loops"] or counts["closed"] or counts["revised"] or counts["migrated"]:
+                prof["open_loops_updated_by_vira"] = now
+            prof["assistant_updated_at"] = now
+            jsonstore.write_atomic(path, prof, indent=1, ensure_ascii=False)
+            invalidate()
+    return counts
