@@ -25,6 +25,27 @@
    beside it), and the next drag spins the sky about the sun from wherever
    it then sits, dropping the follow so the pivot stays put under the hand.
 
+   THE SUN NEVER LEAVES THE STAGE (owner's call, 2026-09-10): grabbing it is
+   how the whole picture is moved, and a sun dragged, zoomed or flown off
+   the edge cannot be grabbed back. keepSun() clamps the camera - target AND
+   eased - so the sun's centre stays a grab-sized pad inside every edge, and
+   flyTo caps its zoom so centring a card can never push the sun out; past
+   that cap the card is simply centred less deep in. One clamp, applied in
+   the frame loop, so every camera path (pan, wheel, pinch, fly, follow,
+   resize) inherits it.
+
+   CARDS OVERLAP, BUT NEVER BURY EACH OTHER (same call): the wedge layout
+   hands every contact one angular slot whatever its radius, and on the inner
+   rings a slot is a few units of arc against a 22-44 unit card. relaxCards()
+   runs after the slots are dealt and pushes pairs apart until the smaller
+   card of any two keeps a strip of its own width clear of the larger one -
+   measured on the centre distance, so it holds at EVERY spin, since the
+   cards are screen-aligned rectangles and the sky turns under them. A card
+   may drift a little off its time-radius and a little past its wedge edge
+   (bounded, both), never further. hit() then reads the paint order top-down,
+   so the card you see on top is the card you click, and the exposed strip of
+   the one behind is the one behind.
+
    WHAT A CLICK SHOWS: the card grows and the sky centres on it; its ties
    light up as chords to the people it is tied to, everyone else recedes;
    the panel beside the stage carries the dossier - who they are, the
@@ -60,6 +81,21 @@ const SPIN = 0.012;               // rad/s - the sky's own drift
 // (FLING_WINDOW_MS), so a hand that STOPS before letting go hands over zero.
 const FLING_DECAY = 2.5, FLING_MIN = 0.02, FLING_MAX = 3.0, FLING_WINDOW_MS = 80;
 const WEDGE_GAP = 2.2;            // empty slots between wedges
+// OVERLAP LIMIT - the smaller of any two cards keeps a strip at least
+// EXPOSE of its own width (never under EXPOSE_MIN world units) clear of the
+// larger one, at every spin. R_SLACK is how far a card may leave its
+// time-radius to get there; A_SLACK how far past its wedge edge, in slots -
+// under half the WEDGE_GAP, so a bled card sits in the gap, never over the
+// neighbouring wedge's arc. A wedge too crowded to settle inside those
+// bounds (a hundred contacts all spoken to this week) widens its radial
+// slack by R_WIDEN per round, up to R_ROUNDS times: the click guarantee
+// outranks the time-radius in the one case they cannot both hold. The live
+// graph settles in round one on every lens (measured 2026-09-10).
+const EXPOSE = 0.55, EXPOSE_MIN = 14, R_SLACK = 26, A_SLACK = 0.9, RELAX_ITERS = 80;
+const R_WIDEN = 1.5, R_ROUNDS = 4;
+// THE SUN STAYS ON SCREEN - its centre never comes closer than sunPad(k)
+// px to a stage edge: enough of the disc (drawn at 22 * k) to grab at any
+// zoom, and a floor so a tiny far-out sun is not a sliver.
 const BAND_COLORS = [
   "#a39c8d", "#7a8f9c", "#a9651b", "#7d8a74", "#a0715f",
   "#5d6a80", "#8a9a4a", "#7a5d75", "#4f8a86", "#b9a06a",
@@ -69,6 +105,7 @@ const UNPLACED = "#5a5b58";
 const LENS_ORDER = ["groups", "circles", "companies", "locations"];
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const sunPad = (k) => clamp(22 * k + 6, 16, 48);
 const lerp = (a, b, t) => a + (b - a) * t;
 const easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 const TAU = Math.PI * 2;
@@ -202,10 +239,7 @@ function setGraph(g) {
   S.byId = new Map();
   const maxAct = Math.max(1, ...g.nodes.map((n) => n.act || 0));
   S.nodes = g.nodes.map((n) => {
-    const d = daysAgo(n.last);
-    const node = { ...n, days: d, r: radiusFor(d), a: 0, ax: 0, ay: 0, band: null, color: UNPLACED,
-      w: CARD_MIN + (CARD_MAX - CARD_MIN) * Math.log1p(n.act || 0) / Math.log1p(maxAct) };
-    node.h = node.w * 1.22;
+    const node = cardFor(n, maxAct);
     S.byId.set(n.id, node);
     return node;
   });
@@ -232,6 +266,15 @@ function setGraph(g) {
   wake();
 }
 
+// one contact as a card: radius from recency, size from activity
+export function cardFor(n, maxAct) {
+  const d = daysAgo(n.last);
+  const node = { ...n, days: d, r: radiusFor(d), a: 0, ax: 0, ay: 0, band: null, color: UNPLACED,
+    w: CARD_MIN + (CARD_MAX - CARD_MIN) * Math.log1p(n.act || 0) / Math.log1p(maxAct) };
+  node.h = node.w * 1.22;
+  return node;
+}
+
 function bandsFor(lensId) {
   const lens = (S.graph.lenses || []).find((l) => l.id === lensId) || (S.graph.lenses || [])[0];
   if (!lens) return { bands: [], nodeBand: {} };
@@ -244,11 +287,26 @@ function bandsFor(lensId) {
 // first, so the loudest voices in a community sit at its leading edge.
 function layout(lensId, snap) {
   const { bands, nodeBand } = bandsFor(lensId);
+  S.wedges = arrange(S.nodes, bands, nodeBand);
+  if (snap || S.reduced) {
+    for (const n of S.nodes) { n.a = n.ta; n.rr = n.tr; }
+    S.migration = null;
+  } else {
+    for (const n of S.nodes) n._mig = { a0: n.a, r0: n.rr, a1: n.ta, r1: n.tr };
+    S.migration = { t0: performance.now(), ms: 1000 };
+  }
+  placeAll();
+}
+
+// Deal the wedges and slots, then relax the overlap. Pure: sets ta/tr/band/
+// color on each card and returns the wedges, touching nothing else - a test
+// can run it on synthetic cards.
+export function arrange(nodes, bands, nodeBand) {
   const groups = new Map();
   bands.forEach((b, i) => groups.set(b.id, {
     band: b.id, label: b.label, color: BAND_COLORS[i % BAND_COLORS.length], members: [] }));
   const none = { band: "__none", label: "everyone else", color: UNPLACED, members: [] };
-  for (const n of S.nodes) {
+  for (const n of nodes) {
     const bid = nodeBand[n.id];
     const g = bid != null && groups.has(bid) ? groups.get(bid) : none;
     g.members.push(n); n.band = g.band; n.color = g.color;
@@ -265,21 +323,79 @@ function layout(lensId, snap) {
     w.members.forEach((n, i) => {
       n.ta = w.a0 + per * (i + 0.5);
       // a small radial stagger keeps two same-ring neighbours from
-      // stacking edge to edge
+      // stacking edge to edge - the relaxation below does the real work
       n.tr = n.r + ((i % 3) - 1) * 9;
+      n._wedge = w;
     });
     w.a1 = w.a0 + per * w.members.length;
     a += per * (w.members.length + WEDGE_GAP);
   }
-  S.wedges = wedges;
-  if (snap || S.reduced) {
-    for (const n of S.nodes) { n.a = n.ta; n.rr = n.tr; }
-    S.migration = null;
-  } else {
-    for (const n of S.nodes) n._mig = { a0: n.a, r0: n.rr, a1: n.ta, r1: n.tr };
-    S.migration = { t0: performance.now(), ms: 1000 };
+  wedges.relax = relaxCards(nodes, per * A_SLACK);
+  return wedges;
+}
+
+// The centre distance two cards must keep so the smaller one stays
+// clickable whatever the spin. Exposure along an axis is |offset| minus half
+// the size difference; the worst rotation of the offset leaves at least
+// D / sqrt(2) - max(gx, gy) on the better axis, and gy >= gx (h = 1.22 w), so
+// D >= sqrt(2) * (E + gy) guarantees a strip E wide at every angle.
+export function minSep(a, b) {
+  const sm = a.w <= b.w ? a : b, lg = sm === a ? b : a;
+  const e = Math.max(EXPOSE_MIN, EXPOSE * sm.w);
+  return Math.SQRT2 * (e + (lg.h - sm.h) / 2);
+}
+
+// Push overlapping pairs apart in the sky frame (spin 0 - the separation is
+// a distance, so any spin inherits it), then hold each card to its time
+// radius +- the radial slack and its wedge span +- aSlack. Gauss-Seidel
+// sweeps; the clamps run every sweep so a card is never parked outside its
+// bounds. Returns {round, rSlack, unresolved}: the round it settled in, the
+// radial slack that round used, and any pairs still too close after the
+// last widening (none on the live graph; a test reads it).
+export function relaxCards(nodes, aSlack) {
+  const cs = nodes.map((n) => ({ n, x: Math.cos(n.ta) * n.tr, y: Math.sin(n.ta) * n.tr }));
+  const wrap = (d) => Math.atan2(Math.sin(d), Math.cos(d));
+  const N = cs.length;
+  let rSlack = R_SLACK, round = 1, moved = 0;
+  for (let it = 0; it < RELAX_ITERS * R_ROUNDS; it++) {
+    if (it && it % RELAX_ITERS === 0) {          // a round out and still moving: widen
+      if (!moved || round >= R_ROUNDS) break;
+      rSlack *= R_WIDEN; round++;
+    }
+    moved = 0;
+    for (let i = 0; i < N; i++) {
+      const p = cs[i];
+      for (let j = i + 1; j < N; j++) {
+        const q = cs[j];
+        const m = minSep(p.n, q.n);
+        let dx = q.x - p.x, dy = q.y - p.y;
+        if (Math.abs(dx) >= m || Math.abs(dy) >= m) continue;
+        let d = Math.hypot(dx, dy);
+        if (d >= m - 1e-6) continue;           // settled (the polar clamp re-projects by a float hair)
+        if (d < 1e-6) {                        // coincident: part along the tangent
+          const t = Math.atan2(p.y, p.x) + Math.PI / 2;
+          dx = Math.cos(t); dy = Math.sin(t); d = 1;
+        }
+        const push = (m - d) / 2 / d;
+        p.x -= dx * push; p.y -= dy * push;
+        q.x += dx * push; q.y += dy * push;
+        moved++;
+      }
+    }
+    for (const c of cs) {                      // back inside the bounds
+      const w = c.n._wedge;
+      let r = Math.hypot(c.x, c.y), ang = Math.atan2(c.y, c.x);
+      r = clamp(r, c.n.r - rSlack, c.n.r + rSlack);
+      if (w) {
+        const mid = (w.a0 + w.a1) / 2;
+        ang = mid + clamp(wrap(ang - mid), w.a0 - aSlack - mid, w.a1 + aSlack - mid);
+      }
+      c.x = Math.cos(ang) * r; c.y = Math.sin(ang) * r;
+    }
+    if (!moved) break;
   }
-  placeAll();
+  for (const c of cs) { c.n.ta = Math.atan2(c.y, c.x); c.n.tr = Math.hypot(c.x, c.y); }
+  return { round, rSlack, unresolved: moved };
 }
 
 function placeAll() {
@@ -296,6 +412,47 @@ const sy = (wy) => (wy - S.cur.y) * S.cur.k + S.H / 2;
 const wx = (px) => (px - S.W / 2) / S.cur.k + S.cur.x;
 const wy = (py) => (py - S.H / 2) / S.cur.k + S.cur.y;
 
+// the box (world units) the camera may not leave at zoom k: at its edge the
+// sun's centre sits sunPad(k) px inside the stage edge
+export function sunBox(k, W, H) {
+  const pad = sunPad(k);
+  return { x: Math.max(0, W / 2 - pad) / k, y: Math.max(0, H / 2 - pad) / k };
+}
+export function clampToSun(c, W, H) {
+  const b = sunBox(c.k, W, H);
+  const x = clamp(c.x, -b.x, b.x), y = clamp(c.y, -b.y, b.y);
+  const changed = x !== c.x || y !== c.y;
+  c.x = x; c.y = y;
+  return changed;
+}
+// the one place the rule is applied: target and eased camera alike, every
+// frame, before the draw - so no camera path can leave the sun off screen
+function keepSun() {
+  const a = clampToSun(S.cam, S.W, S.H), b = clampToSun(S.cur, S.W, S.H);
+  return a || b;
+}
+// the panel covers part of the stage, so a card we fly to is framed in the
+// space it leaves: half the panel's width when it docks at the side, half
+// its height when it is the phone's bottom sheet (it spans the stage then)
+function cardShift() {
+  const el = S.cardEl;
+  if (el.style.display === "none") return { x: 0, y: 0 };
+  const w = el.offsetWidth, h = el.offsetHeight;
+  return w >= 0.8 * S.W ? { x: 0, y: h / 2 } : { x: w / 2, y: 0 };
+}
+// the zoom past which centring this card (at screen offset shift from the
+// stage centre) would carry the sun outside its pad
+export function sunZoomCap(node, shift, k, W, H) {
+  const pad = sunPad(k);
+  const cx = W / 2 - shift.x, cy = H / 2 - shift.y;   // where the card lands
+  let cap = Infinity;
+  if (node.ax > 0) cap = Math.min(cap, (cx - pad) / node.ax);       // sun to its left
+  if (node.ax < 0) cap = Math.min(cap, (W - pad - cx) / -node.ax);  // sun to its right
+  if (node.ay > 0) cap = Math.min(cap, (cy - pad) / node.ay);       // sun above
+  if (node.ay < 0) cap = Math.min(cap, (H - pad - cy) / -node.ay);  // sun below
+  return cap;
+}
+
 function frameAll(snap) {
   const R = R_OUT + 90;
   const k = Math.min(S.W, S.H) / (2 * R) || 1;
@@ -305,19 +462,33 @@ function frameAll(snap) {
 }
 
 function flyTo(node, k, opts = {}) {
-  const kk = clamp(k ?? Math.max(S.cam.k, 2.2), 0.15, 6);
-  // the panel docks at the right edge, so a card we fly to is framed in the
-  // space left of it: shift the target right by half the panel's width
-  let dx = 0;
-  if (opts.clearCard && S.cardEl.style.display !== "none") dx = (S.cardEl.offsetWidth / 2) / kk;
+  let kk = clamp(k ?? Math.max(S.cam.k, 2.2), 0.15, 6);
+  const shift = opts.clearCard ? cardShift() : { x: 0, y: 0 };
+  // never so deep that centring the card puts the sun off the stage; two
+  // passes because the pad itself grows with the zoom
+  for (let i = 0; i < 2; i++) kk = Math.min(kk, sunZoomCap(node, shift, kk, S.W, S.H));
+  kk = clamp(kk, 0.15, 6);
   S.cam.k = kk;
-  S.cam.x = node.ax + dx; S.cam.y = node.ay;
+  S.cam.x = node.ax + shift.x / kk; S.cam.y = node.ay + shift.y / kk;
+  keepSun();
   S.follow = node;                            // keep centred while the sky turns
   if (S.reduced) Object.assign(S.cur, S.cam);
   S.dirty = true;
 }
 
 // ---------- pointer ----------
+// A pointer event arrives in SCREEN pixels; the canvas is laid out in its
+// own pixels, and the two differ by the window's content zoom (the desk
+// zooms a floating window's body with CSS zoom, 0.6x-1.6x). Every hit
+// test, angle and delta below goes through this one conversion - before
+// it, a World window zoomed to 0.6 drew the sun in one place and grabbed
+// it in another (measured 2026-09-10: the press on the drawn sun spun the
+// sky; the press that panned landed where nothing was drawn).
+function toCanvas(clientX, clientY) {
+  const r = S.canvas.getBoundingClientRect();
+  const z = r.width && S.W ? r.width / S.W : 1;
+  return { x: (clientX - r.left) / z, y: (clientY - r.top) / z, z };
+}
 // the pointer's angle about the sun (world origin) as drawn on screen
 // angular velocity (rad/s) carried out of a drag: the summed turn over the
 // trailing window divided by its span. Zero under reduced motion (a coast is
@@ -339,14 +510,13 @@ function flingVelocity(samples) {
 // drag turns the record, but grabbing yourself slides the whole sky around the
 // screen. Radius mirrors the sun drawn in paint() (22 * k), with a small pad.
 function onSun(clientX, clientY) {
-  const r = S.canvas.getBoundingClientRect();
-  const px = clientX - r.left, py = clientY - r.top;
+  const { x: px, y: py } = toCanvas(clientX, clientY);
   return Math.hypot(px - sx(0), py - sy(0)) <= 22 * S.cur.k + 4;
 }
 
-function sunAngle(px, py) {
-  const r = S.canvas.getBoundingClientRect();
-  return Math.atan2((py - r.top) - sy(0), (px - r.left) - sx(0));
+function sunAngle(clientX, clientY) {
+  const { x: px, y: py } = toCanvas(clientX, clientY);
+  return Math.atan2(py - sy(0), px - sx(0));
 }
 
 function bindPointer() {
@@ -372,8 +542,9 @@ function bindPointer() {
     if (S.pinch && S.pointers.size === 2) {
       const [a, b] = [...S.pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const m = toCanvas((a.x + b.x) / 2, (a.y + b.y) / 2);
+      if (S.pinch.d > 0) zoomAt(m.x, m.y, d / S.pinch.d);
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      if (S.pinch.d > 0) zoomAt(mx, my, d / S.pinch.d);
       // zoom only: a pinch that also panned would walk the sun off centre
       S.pinch = { d, mx, my }; S.dirty = true;
       return;
@@ -383,10 +554,13 @@ function bindPointer() {
       if (!S.drag.moved && Math.hypot(dx, dy) > 4) { S.drag.moved = true; S.follow = null; }
       if (S.drag.moved && S.drag.pan) {
         // the sky follows the hand exactly: cam AND cur, never eased, or the
-        // view would lag behind the pointer that is dragging it
-        const k = S.cur.k;
-        S.cam.x = S.drag.pan.x - dx / k; S.cam.y = S.drag.pan.y - dy / k;
+        // view would lag behind the pointer that is dragging it (the hand's
+        // screen delta is read in canvas pixels first, or a zoomed window
+        // moves the sky by the zoom's fraction of the hand)
+        const k = S.cur.k, z = toCanvas(e.clientX, e.clientY).z;
+        S.cam.x = S.drag.pan.x - dx / z / k; S.cam.y = S.drag.pan.y - dy / z / k;
         S.cur.x = S.cam.x; S.cur.y = S.cam.y;
+        keepSun();                            // the hand may go past the edge; the sun stops at it
         S.dirty = true; hideTip();
         return;
       }
@@ -427,8 +601,8 @@ function bindPointer() {
   cv.addEventListener("dblclick", (e) => { const n = hit(e.clientX, e.clientY); if (n) openPerson(n.id); });
   cv.addEventListener("wheel", (e) => {
     e.preventDefault();
-    const r = cv.getBoundingClientRect();
-    zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0016));
+    const p = toCanvas(e.clientX, e.clientY);
+    zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0016));
     S.follow = null;
   }, { passive: false });
   cv.addEventListener("contextmenu", (e) => {
@@ -455,23 +629,37 @@ function zoomAt(px, py, f) {
   const wxp = (px - S.W / 2) / k0 + S.cam.x, wyp = (py - S.H / 2) / k0 + S.cam.y;
   S.cam.k = k1;
   S.cam.x = wxp - (px - S.W / 2) / k1; S.cam.y = wyp - (py - S.H / 2) / k1;
+  keepSun();                                  // zooming at the rim pivots on the sun's edge, never past it
   S.dirty = true;
 }
 
+// cards paint far to near: small under large, the selected one last. hit()
+// walks the same order from the top, so the card you see is the card you
+// get - and the strip the relaxation keeps clear on the card behind is
+// exactly where a click reaches it.
+function paintOrder() {
+  return [...S.nodes].sort((a, b) => (a === S.sel) - (b === S.sel) || a.w - b.w);
+}
+
 function hit(clientX, clientY) {
-  const r = S.canvas.getBoundingClientRect();
-  const px = clientX - r.left, py = clientY - r.top;
-  let best = null, bestD = Infinity;
-  for (const n of S.nodes) {
-    const cx = sx(n.ax), cy = sy(n.ay);
-    const sc = n === S.sel ? 1.6 : 1;
-    const hw = n.w * S.cur.k * sc / 2 + 3, hh = n.h * S.cur.k * sc / 2 + 3;
-    if (Math.abs(px - cx) <= hw && Math.abs(py - cy) <= hh) {
-      const d = Math.hypot(px - cx, py - cy);
-      if (d < bestD) { bestD = d; best = n; }
+  const { x: px, y: py } = toCanvas(clientX, clientY);
+  const order = paintOrder();
+  const pass = (slop) => {
+    for (let i = order.length - 1; i >= 0; i--) {
+      const n = order[i];
+      const cx = sx(n.ax), cy = sy(n.ay);
+      const sc = n === S.sel ? 1.6 : 1;
+      const hw = n.w * S.cur.k * sc / 2 + slop, hh = n.h * S.cur.k * sc / 2 + slop;
+      if (Math.abs(px - cx) <= hw && Math.abs(py - cy) <= hh) return n;
     }
-  }
-  return best;
+    return null;
+  };
+  // exact boxes first: a press on painted card lands on the card painted
+  // there. The 3px slop that makes a tiny far-out card easier to hit runs
+  // only when nothing was painted under the pointer - with it in the first
+  // pass, the front card's slop swallowed the strip kept clear on the card
+  // behind (measured: 47 of 104 overlapping pairs at the default framing).
+  return pass(0) || pass(3);
 }
 
 function showTip(n, x, y) {
@@ -481,9 +669,10 @@ function showTip(n, x, y) {
   const sub = [n.title, n.company].filter(Boolean).join(" - ") || n.relationship_class || "";
   if (sub) t.appendChild(dom("div", "hint", sub));
   t.appendChild(dom("div", "orbits-tip-when", "last spoke " + agoText(n.days)));
-  const r = S.stage.getBoundingClientRect();
-  t.style.left = Math.min(r.width - 230, x - r.left + 14) + "px";
-  t.style.top = Math.max(6, y - r.top - 48) + "px";
+  // the tip is positioned in the stage's own (zoomed) pixels, like the cards
+  const p = toCanvas(x, y);
+  t.style.left = Math.min(S.stage.clientWidth - 230, p.x + 14) + "px";
+  t.style.top = Math.max(6, p.y - 48) + "px";
 }
 function hideTip() { S.tipEl.style.display = "none"; }
 
@@ -790,8 +979,9 @@ function draw() {
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText("YOU", cx, cy + 1);
 
-  // cards, far to near (the selected one last so it sits on top)
-  const order = [...S.nodes].sort((a, b) => (a === S.sel) - (b === S.sel) || a.w - b.w);
+  // cards, far to near (the selected one last so it sits on top) - the
+  // order hit() reads back from the top
+  const order = paintOrder();
   const showNames = k > 1.35;
   for (const n of order) {
     const isSel = n === S.sel, isNb = S.nb1.has(n.id), isHover = n === S.hover;
@@ -868,14 +1058,15 @@ function frame(t) {
   }
   if (moving || S.dirty) placeAll();
   if (S.follow) {              // stay centred on the card while the sky turns
-    const dx = S.cardEl.style.display !== "none" ? (S.cardEl.offsetWidth / 2) / S.cam.k : 0;
-    S.cam.x = S.follow.ax + dx; S.cam.y = S.follow.ay;
+    const sh = cardShift();
+    S.cam.x = S.follow.ax + sh.x / S.cam.k; S.cam.y = S.follow.ay + sh.y / S.cam.k;
   }
   const kk = S.reduced ? 1 : 1 - Math.exp(-8 * dt);
   for (const key of ["x", "y", "k"]) {
     const d = S.cam[key] - S.cur[key];
     if (Math.abs(d) > 1e-4 * (key === "k" ? 1 : S.cur.k)) { S.cur[key] += d * kk; moving = true; } else S.cur[key] = S.cam[key];
   }
+  if (keepSun()) moving = true;               // the sun stays on the stage
   if (moving || S.dirty) { draw(); S.dirty = false; }
   requestAnimationFrame(frame);
 }
@@ -887,5 +1078,11 @@ window.__orbits = {
     rings: S.nodes.reduce((m, n) => { const r = ringOf(n.days)?.label || "undated"; m[r] = (m[r] || 0) + 1; return m; }, {}) }),
   select: (pid) => { const n = S.byId.get(pid); if (n) select(n, true); },
   setLens, clear: clearSel, frameAll,
+  // the sun's screen position and the pad it must keep - what "never off
+  // the stage" means, as a measurement rather than a screenshot
+  sun: () => ({ x: sx(0), y: sy(0), pad: sunPad(S.cur.k), W: S.W, H: S.H }),
+  cards: () => S.nodes.map((n) => ({ id: n.id, x: sx(n.ax), y: sy(n.ay), w: n.w * S.cur.k, h: n.h * S.cur.k })),
+  // canvas pixels in, like cards(): converted to a screen point the way a real event would arrive
+  hit: (px, py) => { const r = S.canvas.getBoundingClientRect(), z = r.width && S.W ? r.width / S.W : 1; const n = hit(r.left + px * z, r.top + py * z); return n ? n.id : null; },
 };
 window.orbitsLoad = load;
