@@ -37,6 +37,7 @@ class ExecutiveTests(unittest.TestCase):
         self.corpus = {"by_id": {"p_test": {"id": "p_test", "name": "Casey Example"}},
                        "profiles": {"p_test": {"open_loops": [commitment()]}}}
         patches = [
+            mock.patch("server.assistantresources.enrich", side_effect=lambda rows, source_items=(): rows),
             mock.patch.object(executive, "STATE", self.root / "assistant.json"),
             mock.patch.object(executive, "_worker_error", None),
             mock.patch.object(executive.notify, "LOG", self.root / "notify.json"),

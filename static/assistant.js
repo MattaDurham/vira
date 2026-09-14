@@ -11,6 +11,9 @@ window.ViraAssistant = (() => {
   let painted = "";
   let feedback = null;
   const dateEdits = new Map();
+  const emailViews = new Map();
+  const expandedResources = new Set();
+  const copyStates = new Map();
   const host = () => document.querySelector("#assistant-body");
   const node = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -264,6 +267,190 @@ window.ViraAssistant = (() => {
     more.appendChild(node("p", "", text));
     parent.appendChild(more);
   }
+  function externalResource(resource) {
+    if (typeof resource?.url !== "string" || /[\u0000-\u0020\u007f]/.test(resource.url)) return null;
+    try {
+      const url = new URL(resource.url);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+      return { ...resource, url: url.href, domain: url.hostname };
+    } catch (_) { return null; }
+  }
+  function emailPath(resource) {
+    if (resource?.kind !== "email" || resource.url || !plain(resource.account).trim()) return "";
+    const params = new URLSearchParams();
+    [["account", resource.account], ["rowid", resource.rowid],
+      ["mid", resource.message_id], ["graph_id", resource.graph_id]].forEach(([key, value]) => {
+      if (value != null && String(value).trim()) params.set(key, String(value));
+    });
+    return params.has("rowid") || params.has("mid") || params.has("graph_id")
+      ? "/api/mail/message?" + params.toString() : "";
+  }
+  function resourceLink(resource) {
+    const row = node("div", "assistant-resource");
+    const label = resource.kind === "payment" ? "Open payment page"
+      : plain(resource.label) || (resource.kind === "mailbox" ? "Open mailbox" : "Open link");
+    const link = node("a", "btn small", label);
+    link.href = resource.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.referrerPolicy = "no-referrer";
+    row.appendChild(link);
+    row.appendChild(node("span", "assistant-resource-context", resource.domain));
+    return row;
+  }
+  function resourceList(parent, resources, scope, renderRow) {
+    const more = resources.length > 3 ? node("details", "assistant-resource-more") : null;
+    if (more) {
+      more.open = expandedResources.has(scope);
+      more.appendChild(node("summary", "", "Show " + (resources.length - 3) + " more actions"));
+      more.addEventListener("toggle", () => {
+        if (more.open) expandedResources.add(scope); else expandedResources.delete(scope);
+      });
+    }
+    resources.forEach((resource, index) => (index >= 3 && more ? more : parent).appendChild(renderRow(resource)));
+    if (more) parent.appendChild(more);
+  }
+  function emailContent(message, scope) {
+    const content = node("div", "assistant-email-content");
+    content.appendChild(node("h6", "assistant-email-subject", plain(message.subject) || "Email"));
+    const sender = [plain(message.from_name), plain(message.from_addr)].filter(Boolean).join(" · ");
+    if (sender) notice(content, "From: " + sender);
+    if (message.account) notice(content, "Account: " + plain(message.account));
+    if (message.when) notice(content, date(message.when, true));
+    const seen = new Set();
+    const links = [...(Array.isArray(message.links) ? message.links : []),
+      ...(Array.isArray(message.mail_actions) ? message.mail_actions : [])]
+      .map(externalResource).filter((resource) => {
+        if (!resource || seen.has(resource.url)) return false;
+        seen.add(resource.url);
+        return true;
+      });
+    if (links.length) {
+      const actions = node("div", "assistant-email-links");
+      actions.appendChild(node("h6", "assistant-resource-title", "Links in this email"));
+      resourceList(actions, links, scope + ":links", resourceLink);
+      content.appendChild(actions);
+    }
+    const text = node("div", "assistant-email-text", plain(message.text) || "No readable text was returned for this email.");
+    text.tabIndex = 0;
+    text.setAttribute("aria-label", "Email text");
+    content.appendChild(text);
+    return content;
+  }
+  function emailResource(resource, reminderId, preview) {
+    const path = emailPath(resource);
+    const key = JSON.stringify([reminderId, resource.account, resource.source_id || path]);
+    if (!emailViews.has(key)) emailViews.set(key, { reminderId, open: false, loading: false, error: "", message: null });
+    const state = emailViews.get(key);
+    const item = node("div", "assistant-email-resource");
+    const row = node("div", "assistant-resource");
+    const view = node("div", "assistant-email-preview");
+    async function fetchEmail() {
+      if (preview || state.loading) return;
+      state.loading = true;
+      state.error = "";
+      state.render();
+      try {
+        const message = await request(path);
+        if (!message || typeof message !== "object") throw new Error("The email response was unreadable.");
+        state.message = message;
+        state.content = null;
+      } catch (e) {
+        state.error = e.message;
+      } finally {
+        state.loading = false;
+        state.render();
+      }
+    }
+    const open = button("Open email", async () => {
+      if (open.disabled) return;
+      state.open = !state.open;
+      state.render();
+      if (state.open && !state.message && !state.error) await fetchEmail();
+    }, preview);
+    row.appendChild(open);
+    row.appendChild(node("span", "assistant-resource-context", resource.account));
+    item.appendChild(row);
+    if (resource.subject) notice(item, plain(resource.subject));
+    if (preview) notice(item, "Open the connected instance to read this email.");
+    item.appendChild(view);
+    state.render = () => {
+      open.textContent = state.open ? "Hide email" : plain(resource.label) || "Open email";
+      open.setAttribute("aria-expanded", String(state.open));
+      view.replaceChildren();
+      if (!state.open) return;
+      if (state.loading) {
+        const loading = node("p", "assistant-note", "Opening email...");
+        loading.setAttribute("role", "status");
+        view.appendChild(loading);
+      } else if (state.error) {
+        const error = node("p", "assistant-action-error", "Email could not be opened: " + state.error);
+        error.setAttribute("role", "alert");
+        view.appendChild(error);
+        view.appendChild(button("Try opening email again", fetchEmail, preview));
+      } else if (state.message) {
+        if (!state.content) state.content = emailContent(state.message, key);
+        view.appendChild(state.content);
+      }
+    };
+    state.render();
+    return item;
+  }
+  function copyDetails(section, reminder) {
+    if (!copyStates.has(reminder.id)) copyStates.set(reminder.id, { loading: false, text: "", error: false });
+    const state = copyStates.get(reminder.id);
+    const row = node("div", "assistant-resource-copy");
+    const status = node("span", "assistant-resource-context");
+    status.setAttribute("role", "status");
+    const copy = button("Copy details", async () => {
+      if (state.loading) return;
+      state.loading = true;
+      state.text = "Copying...";
+      state.error = false;
+      state.render();
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable in this browser.");
+        const lines = [plain(reminder.what)];
+        if (reminder.due) lines.push("Due: " + reminder.due);
+        const evidence = (Array.isArray(reminder.evidence) ? reminder.evidence : [])
+          .map((e) => typeof e === "string" ? e : plain(e.quote)).filter(Boolean);
+        if (evidence.length) lines.push("", "Source:", ...evidence);
+        const resources = [...(Array.isArray(reminder.resources) ? reminder.resources : [])];
+        for (const email of emailViews.values()) {
+          if (email.reminderId !== reminder.id || !email.message) continue;
+          for (const key of ["links", "mail_actions"])
+            if (Array.isArray(email.message[key])) resources.push(...email.message[key]);
+        }
+        const links = [...new Set(resources.map(externalResource).filter(Boolean).map((r) => r.url))];
+        if (links.length) lines.push("", "Links:", ...links);
+        await navigator.clipboard.writeText(lines.join("\n"));
+        state.text = "Details copied.";
+      } catch (e) {
+        state.text = "Could not copy details: " + e.message;
+        state.error = true;
+      } finally { state.loading = false; state.render(); }
+    });
+    state.render = () => {
+      copy.disabled = state.loading;
+      status.textContent = state.text;
+      status.className = "assistant-resource-context" + (state.error ? " assistant-warning" : "");
+    };
+    state.render();
+    row.appendChild(copy);
+    row.appendChild(status);
+    section.appendChild(row);
+  }
+  function actionResources(card, reminder, data) {
+    const resources = (Array.isArray(reminder.resources) ? reminder.resources : [])
+      .map((resource) => externalResource(resource) || (emailPath(resource) ? resource : null)).filter(Boolean);
+    const section = node("div", "assistant-resources");
+    section.appendChild(node("h6", "assistant-resource-title", "Take action"));
+    resourceList(section, resources, reminder.id, (resource) => resource.url
+      ? resourceLink(resource) : emailResource(resource, reminder.id, !!(data.passive || data.fixture)));
+    notice(section, plain(reminder.resources_note));
+    copyDetails(section, reminder);
+    card.appendChild(section);
+  }
   function deadlineReview(card, row, data) {
     const review = row.deadline_review;
     if (!review) return;
@@ -321,6 +508,7 @@ window.ViraAssistant = (() => {
       if (!r.person_id && r.person_name) notice(card, r.person_name);
       notice(card, r.reason);
       deadlineReview(card, r, data);
+      actionResources(card, r, data);
       evidence(card, r.evidence);
       const actions = node("div", "assistant-actions");
       if (r.person_id) actions.appendChild(button(r.person_name || "Open contact", () => openPerson(r.person_id)));
@@ -436,6 +624,9 @@ window.ViraAssistant = (() => {
   function render(data) {
     const body = host();
     if (!body || !data) return;
+    const ids = new Set((data.reminders || []).map((row) => row.id));
+    for (const [key, state] of emailViews) if (!ids.has(state.reminderId)) emailViews.delete(key);
+    for (const key of copyStates.keys()) if (!ids.has(key)) copyStates.delete(key);
     const signature = JSON.stringify([data, feedback]);
     if (signature === painted && !body.querySelector(".assistant-load-error")) return;
     painted = signature;

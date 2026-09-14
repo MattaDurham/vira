@@ -40,6 +40,7 @@ import urllib.parse
 
 from . import mail as mailmod
 from . import msgraph
+from . import commitmentresources
 
 IMAP_TIMEOUT = 30
 SMTP_TIMEOUT = 30
@@ -47,7 +48,7 @@ BODY_MAX = 400_000
 SCOPE_SEND = "https://graph.microsoft.com/Mail.Send offline_access"
 
 GRAPH_SELECT = ("id,subject,from,toRecipients,ccRecipients,replyTo,"
-                "receivedDateTime,body,internetMessageId")
+                "receivedDateTime,body,internetMessageId,webLink")
 
 
 def _accounts():
@@ -161,6 +162,11 @@ def _from_imap(msg, acct, uid):
 
 def _fetch_imap(acct, rowid, message_id):
     addr, host = acct["email"], acct.get("host", "")
+    if message_id is not None and (not isinstance(message_id, str)
+            or len(message_id) > 998 or re.search(r"[\x00-\x1f\x7f]", message_id)):
+        raise ValueError("invalid email Message-ID")
+    message_id = (message_id or "").strip()
+    search_id = message_id.replace("\\", "\\\\").replace('"', '\\"')
     pw = mailmod.keychain_password(addr)
     if not pw:
         raise RuntimeError(f"no password in keychain for {addr}")
@@ -177,18 +183,23 @@ def _fetch_imap(acct, rowid, message_id):
             if box == "INBOX" and uid:
                 _, md = con.uid("fetch", str(uid), "(RFC822)")
                 if md and md[0] is not None:
-                    return _from_imap(
-                        email.message_from_bytes(md[0][1]), acct, uid)
+                    message = _from_imap(email.message_from_bytes(md[0][1]), acct, uid)
+                    if not message_id or message["message_id"] == message_id:
+                        return message
             if message_id:
                 _, data = con.uid(
-                    "search", None, f'(HEADER Message-ID "{message_id}")')
+                    "search", None, f'(HEADER Message-ID "{search_id}")')
                 uids = (data[0] or b"").split()
-                if uids:
-                    _, md = con.uid("fetch", uids[-1].decode(), "(RFC822)")
+                # IMAP HEADER search is a substring match. Check the actual
+                # header before showing it as this commitment's source.
+                for found_uid in reversed(uids):
+                    _, md = con.uid("fetch", found_uid.decode(), "(RFC822)")
                     if md and md[0] is not None:
-                        return _from_imap(
+                        message = _from_imap(
                             email.message_from_bytes(md[0][1]), acct,
-                            int(uids[-1]))
+                            int(found_uid))
+                        if message["message_id"] == message_id:
+                            return message
         raise RuntimeError("message not found in the mailbox "
                            "(it may have been deleted)")
     finally:
@@ -209,12 +220,21 @@ def _graph_lookup(addr, message_id, select=GRAPH_SELECT):
     return rows[0]
 
 
-def _fetch_graph(acct, message_id):
+def _fetch_graph(acct, message_id, graph_id=None):
     addr = acct["email"]
-    if not message_id:
+    if not message_id and not graph_id:
         raise RuntimeError("this email predates message ids in the feed — "
                            "open the person's profile instead")
-    m = _graph_lookup(addr, message_id)
+    if message_id:
+        m = _graph_lookup(addr, message_id)
+    else:
+        # Full IDs from the body index are usable; the feed's truncated
+        # rowid tail is not. Only an explicit graph_id enters this path.
+        if (not isinstance(graph_id, str) or len(graph_id) > 4096
+                or not graph_id.strip() or re.search(r"[\s\x00-\x1f]", graph_id)):
+            raise ValueError("invalid full Graph message id")
+        path = "/me/messages/" + urllib.parse.quote(graph_id, safe="")
+        m = msgraph._graph_request(addr, path + "?$select=" + GRAPH_SELECT)
     sender = (m.get("from") or {}).get("emailAddress") or {}
     reply_to = [(r.get("emailAddress") or {}).get("address")
                 for r in (m.get("replyTo") or [])]
@@ -237,14 +257,19 @@ def _fetch_graph(acct, message_id):
         "message_id": m.get("internetMessageId"),
         "references": None,      # Graph reply threads server-side
         "graph_id": m.get("id"),
+        "web_link": m.get("webLink"),
     }
 
 
-def get_message(account, rowid=None, message_id=None):
+def get_message(account, rowid=None, message_id=None, *, graph_id=None):
     acct = _account(account)
     if acct.get("type") == "graph":
-        return _fetch_graph(acct, message_id)
-    return _fetch_imap(acct, rowid, message_id)
+        message = _fetch_graph(acct, message_id, graph_id=graph_id)
+    else:
+        message = _fetch_imap(acct, rowid, message_id)
+    message["links"] = commitmentresources.extract_links(message.get("text"), message.get("html"))
+    message["mail_actions"] = commitmentresources.email_actions(message, [acct])
+    return message
 
 
 # ---------- reply ----------

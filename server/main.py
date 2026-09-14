@@ -1564,7 +1564,11 @@ def api_feed_read_all(req: ReadAllReq):
 
 @app.get("/api/assistant")
 def api_assistant():
-    return executive.status()
+    if settings.fixture_mode() or settings.sandboxed() or os.environ.get("VIRA_PASSIVE"):
+        return executive.status()
+    with watcher.lock:
+        source_items = list(watcher.feed)
+    return executive.status(source_items=source_items)
 
 
 @app.get("/assistant")
@@ -2703,10 +2707,12 @@ def api_mail_draft(req: DraftReq):
 
 
 @app.get("/api/mail/message")
-def api_mail_message(account: str, rowid: str = "", mid: str = ""):
+def api_mail_message(account: str, rowid: str = "", mid: str = "", graph_id: str = ""):
     """The full email behind a feed card — body, recipients, threading
     ids — so clicking one reads like opening the mail, not the caption."""
     try:
+        if graph_id:
+            return mailread.get_message(account, rowid or None, mid or None, graph_id=graph_id)
         return mailread.get_message(account, rowid or None, mid or None)
     except ValueError as e:
         raise HTTPException(404, str(e))
