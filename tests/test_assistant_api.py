@@ -63,6 +63,10 @@ class AssistantAPI(unittest.TestCase):
         self.commitments_path.write_text(json.dumps({"subjects": {SUBJECT: {
             "person_name": "Synthetic inbox", "open_loops": [copy.deepcopy(LOOP)]}}}), encoding="utf-8")
         patches = [
+            mock.patch("server.channels.mail_accounts", return_value=[]),
+            mock.patch("server.textindex.lookup_sources", create=True, return_value={}),
+            mock.patch("server.mail.accounts_view", return_value={"accounts": []}),
+            mock.patch("server.contactintel.status", return_value={}),
             mock.patch.object(settings, "CONFIG_PATH", self.config_path),
             mock.patch.object(settings, "raw", side_effect=self.read_config),
             mock.patch.object(settings, "fixture_mode", return_value=False),
@@ -95,6 +99,9 @@ class AssistantAPI(unittest.TestCase):
         self.addCleanup(patcher.stop)
         from fastapi.testclient import TestClient
         from server import main
+        patcher = mock.patch.object(main.watcher, "feed", [])
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # Do not use a with block: TestClient's context manager starts lifespan.
         self.client = TestClient(main.app)
         self.addCleanup(self.client.close)
@@ -118,7 +125,7 @@ class AssistantAPI(unittest.TestCase):
             response = self.client.get("/api/assistant")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), snapshot)
-        status.assert_called_once_with()
+        status.assert_called_once_with(source_items=[])
         start.assert_not_called()
         tick.assert_not_called()
         self.send.assert_not_called()
@@ -131,6 +138,42 @@ class AssistantAPI(unittest.TestCase):
         self.assertNotIn('src="/app.js"', response.text)
         self.send.assert_not_called()
         self.native_create.assert_not_called()
+
+    def test_status_connects_existing_commitment_to_its_email_and_payment_link(self):
+        from server import channels, textindex
+        record = json.loads(self.commitments_path.read_text(encoding="utf-8"))
+        loop = record["subjects"][SUBJECT]["open_loops"][0]
+        loop["evidence"] = [{"id": "mail:<invoice@example.com>", "channel": "email",
+                             "when": NOW.isoformat(), "quote": "Please pay the workshop invoice."}]
+        self.commitments_path.write_text(json.dumps(record), encoding="utf-8")
+        channels.mail_accounts.return_value = [{"email": "owner@example.com", "host": "imap.gmail.com"}]
+        textindex.lookup_sources.return_value = {"mail:<invoice@example.com>": {
+            "account": "owner@example.com", "message_id": "<invoice@example.com>",
+            "channel": "email", "text": "Please pay the workshop invoice. https://billing.example.com/pay"}}
+        response = self.client.get("/api/assistant")
+        self.assertEqual(response.status_code, 200)
+        resources = response.json()["reminders"][0]["resources"]
+        self.assertTrue(any(r.get("message_id") == "<invoice@example.com>" for r in resources))
+        self.assertTrue(any(r.get("url") == "https://billing.example.com/pay" for r in resources))
+        self.send.assert_not_called()
+        self.native_create.assert_not_called()
+
+    def test_mail_route_preserves_full_graph_id_without_reinterpreting_rowid(self):
+        with mock.patch("server.mailread.get_message", return_value={"text": "Synthetic email", "links": []}) as read:
+            response = self.client.get("/api/mail/message", params={
+                "account": "owner@example.com", "graph_id": "full+opaque/id=="})
+        self.assertEqual(response.status_code, 200)
+        read.assert_called_once_with("owner@example.com", None, None, graph_id="full+opaque/id==")
+
+    def test_fixture_status_does_not_consult_the_live_feed(self):
+        from server import main
+        with mock.patch.object(settings, "fixture_mode", return_value=True), \
+             mock.patch.object(executive, "status", return_value={}) as status, \
+             mock.patch.object(main.watcher, "lock") as lock:
+            response = self.client.get("/api/assistant")
+        self.assertEqual(response.status_code, 200)
+        status.assert_called_once_with()
+        lock.__enter__.assert_not_called()
 
     def test_config_save_preserves_other_settings_without_triggering_work(self):
         response = self.client.post("/api/assistant/config", json={

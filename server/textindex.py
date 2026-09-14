@@ -53,6 +53,9 @@ BATCH = 2000          # rows per commit on the iMessage backfill
 MIN_CHARS = 2
 MAIL_BODY_MAX = 20000
 GRAPH_PAGE = 50
+# Exact source reads return complete indexed bodies. Bound each request to
+# avoid an unbounded response and keep below SQLite's parameter limits.
+SOURCE_LOOKUP_BATCH = 100
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
@@ -61,7 +64,7 @@ CREATE TABLE IF NOT EXISTS items(
   source TEXT, account TEXT,
   chat_id INTEGER, is_group INTEGER, from_me INTEGER,
   sender_pid TEXT, chat_pid TEXT, sender_handle TEXT,
-  date_ns INTEGER, subject TEXT, text TEXT,
+  date_ns INTEGER, subject TEXT, text TEXT, source_meta TEXT,
   pending INTEGER DEFAULT 1);
 CREATE INDEX IF NOT EXISTS items_date ON items(date_ns);
 CREATE INDEX IF NOT EXISTS items_chat ON items(chat_pid);
@@ -76,6 +79,17 @@ def _db():
     con = sqlite3.connect(DB, timeout=60)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
+    # Add metadata only when an index is opened for normal indexing. Old
+    # rows remain untouched: a missing locator must not trigger a mail scan.
+    if "source_meta" not in {r[1] for r in con.execute("PRAGMA table_info(items)")}:
+        try:
+            con.execute("ALTER TABLE items ADD COLUMN source_meta TEXT")
+        except sqlite3.OperationalError:
+            # Another index connection may have performed the same additive
+            # migration while this connection waited for SQLite's DDL lock.
+            if "source_meta" not in {r[1] for r in con.execute("PRAGMA table_info(items)")}:
+                con.close()
+                raise
     return con
 
 
@@ -101,13 +115,14 @@ def set_state(con, key, val):
 
 def _insert(con, *, uid, source, text, date_ns, account=None, chat_id=None,
             is_group=0, from_me=0, sender_pid=None, chat_pid=None,
-            sender_handle=None, subject=None):
+            sender_handle=None, subject=None, source_meta=None):
     cur = con.execute(
         "INSERT OR IGNORE INTO items(uid, source, account, chat_id, is_group,"
         " from_me, sender_pid, chat_pid, sender_handle, date_ns, subject,"
-        " text) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        " text, source_meta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (uid, source, account, chat_id, is_group, from_me, sender_pid,
-         chat_pid, sender_handle, date_ns, subject, text))
+         chat_pid, sender_handle, date_ns, subject, text,
+         json.dumps(source_meta, ensure_ascii=False) if source_meta else None))
     if cur.rowcount:
         con.execute("INSERT INTO fts(rowid, text, subject) VALUES(?,?,?)",
                     (cur.lastrowid, text, subject or ""))
@@ -178,6 +193,7 @@ def backfill_graph(account, since=None, limit=400, log=print):
     page walk COMPLETES — an interrupted run re-pages the overlap and
     INSERT OR IGNORE eats the duplicates, which is cheaper than a gap."""
     from . import msgraph
+    from .commitmentresources import extract_links
     con = _db()
     n = 0
     wm_key = f"wm_mailg:{account}"
@@ -191,7 +207,7 @@ def backfill_graph(account, since=None, limit=400, log=print):
         path = ("/me/messages?" + (f"$filter={urllib.parse.quote(flt)}&"
                                    if flt else "")
                 + f"$top={GRAPH_PAGE}&$select=id,subject,from,toRecipients,"
-                  "receivedDateTime,body,internetMessageId")
+                  "receivedDateTime,body,internetMessageId,webLink")
         while path and n < limit:
             out = msgraph._graph_request(account, path)
             for m in out.get("value", []):
@@ -200,8 +216,11 @@ def backfill_graph(account, since=None, limit=400, log=print):
                 from_addr = (frm.get("address") or "").lower()
                 body = (m.get("body") or {})
                 content = body.get("content") or ""
+                html_body = ""
                 if (body.get("contentType") or "").lower() == "html":
+                    html_body = content
                     content = _strip_html(content)
+                links = extract_links(content, html=html_body)
                 content = re.sub(r"\s+", " ", content).strip()[:MAIL_BODY_MAX]
                 if len(content) < MIN_CHARS:
                     continue
@@ -221,7 +240,11 @@ def backfill_graph(account, since=None, limit=400, log=print):
                     sender_pid="me" if from_me else crm.resolve_handle(
                         from_addr),
                     chat_pid=_counterpart(from_me, from_addr, m),
-                    sender_handle=from_addr)
+                    sender_handle=from_addr,
+                    source_meta={"message_id": m.get("internetMessageId") or "",
+                                 "graph_id": m.get("id") or "",
+                                 "web_link": m.get("webLink") or "",
+                                 "links": links})
             con.commit()
             nxt = out.get("@odata.nextLink")
             path = (nxt[len(msgraph.GRAPH):]
@@ -254,6 +277,8 @@ def backfill_imap(acct, limit=400, log=print):
     watermark. mail._body_preview already knows how to pull plain text
     out of a MIME tree (and to strip HTML when that is all there is), so
     it does the extraction here too, just with a bigger ceiling."""
+    from .commitmentresources import extract_links
+    from .mailread import message_bodies
     addr, host = acct["email"], acct.get("host", "")
     pw = mailmod.keychain_password(addr)
     if not pw:
@@ -308,6 +333,7 @@ def backfill_imap(acct, limit=400, log=print):
                             break
                     dt = email.utils.parsedate_to_datetime(msg.get("Date")) \
                         if msg.get("Date") else datetime.now(timezone.utc)
+                    plain, html_body = message_bodies(msg)
                     n += _insert(
                         con, uid="mail:" + (msg.get("Message-ID")
                                             or f"{addr}:{uid}").strip(),
@@ -319,7 +345,12 @@ def backfill_imap(acct, limit=400, log=print):
                         else crm.resolve_handle(from_addr),
                         chat_pid=to_pid if from_me
                         else crm.resolve_handle(from_addr),
-                        sender_handle=from_addr)
+                        sender_handle=from_addr,
+                        source_meta={"message_id": (msg.get("Message-ID") or "").strip(),
+                                     # These UIDs belong to the selected All
+                                     # Mail folder, not mailread's INBOX rowid.
+                                     "imap_uid": uid, "mailbox": box,
+                                     "links": extract_links(plain, html=html_body)})
                     fails = 0
                     wm = max(wm, uid)
                 except Exception as e:  # noqa: BLE001
@@ -530,6 +561,88 @@ def status():
         con.close()
 
 
+def _source_row(row):
+    """Full local evidence plus only locators the index actually recorded."""
+    when = mediaindex.apple_dt(row["date_ns"])
+    item = {
+        "id": row["uid"], "seq": row["seq"], "chat_id": row["chat_id"],
+        "channel": row["source"], "account": row["account"],
+        "person_id": row["chat_pid"], "handle": row["sender_handle"],
+        "group": bool(row["is_group"]), "is_from_me": bool(row["from_me"]),
+        "when": when.isoformat() if when else None,
+        "subject": row["subject"] or "", "text": row["text"] or "",
+        "links": [],
+    }
+    raw_meta = row["source_meta"] if "source_meta" in row.keys() else None
+    try:
+        metadata = json.loads(raw_meta) if raw_meta else {}
+    except (ValueError, TypeError):
+        metadata = {}
+    if isinstance(metadata, dict):
+        for key in ("message_id", "graph_id", "web_link", "mailbox"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                item[key] = value.strip()
+        uid = metadata.get("imap_uid")
+        if isinstance(uid, int) and not isinstance(uid, bool) and uid > 0:
+            item["imap_uid"] = uid
+        links = metadata.get("links")
+        if isinstance(links, list):
+            item["links"] = [link for link in links if isinstance(link, dict)]
+    # Legacy corpora did not retain Graph IDs or the selected IMAP folder.
+    # Only an RFC Message-ID with its unambiguous brackets can be recovered;
+    # an opaque Graph id and account:UID must never become invented rowids.
+    source_id = str(item["id"] or "")
+    if item["channel"] == "email" and "message_id" not in item:
+        match = re.fullmatch(r"mail:(<[^<>\s@]+@[^<>\s@]+>)", source_id)
+        if match:
+            item["message_id"] = match[1]
+    if item["channel"] == "imessage":
+        match = re.fullmatch(r"imsg:([1-9][0-9]*)", source_id)
+        if match:
+            item["rowid"] = int(match[1])
+    return item
+
+
+def _source_db():
+    # as_uri quotes ?/# and works with Windows drive letters. mode=ro is
+    # essential: opening an absent sidecar must never create an empty one.
+    con = sqlite3.connect(DB.resolve().as_uri() + "?mode=ro", uri=True,
+                          timeout=10)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def lookup_sources(ids):
+    """Read exact source IDs locally without search, migrations, or network.
+
+    Fixture and sandbox previews must never consult an owner's text index,
+    even if their data directory points to an existing private sidecar.
+    Callers can split larger requests into SOURCE_LOOKUP_BATCH chunks.
+    """
+    if settings.sandboxed() or settings.fixture_mode() or not DB.exists():
+        return {}
+    if isinstance(ids, str):
+        ids = [ids]
+    wanted = []
+    for source_id in ids:
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("Source IDs must be nonempty strings")
+        wanted.append(source_id)
+        if len(wanted) > SOURCE_LOOKUP_BATCH:
+            raise ValueError(f"Read at most {SOURCE_LOOKUP_BATCH} source IDs at a time")
+    if not wanted:
+        return {}
+    con = _source_db()
+    try:
+        rows = con.execute(
+            "SELECT * FROM items WHERE uid IN ("
+            + ",".join("?" for _ in wanted) + ")", wanted).fetchall()
+        return {row["uid"]: _source_row(row) for row in rows}
+    finally:
+        con.close()
+
+
 def changes_since(cursor=None, *, since=None, limit=300):
     """Durable evidence for background assistance, including owner replies.
 
@@ -539,11 +652,9 @@ def changes_since(cursor=None, *, since=None, limit=300):
     truncation, rather than treating the search result's preview as a body.
     It never creates an index just to report that there is no coverage.
     """
-    if not DB.exists():
+    if settings.sandboxed() or settings.fixture_mode() or not DB.exists():
         return {"items": [], "cursor": cursor, "available": False}
-    con = sqlite3.connect(f"file:{DB.as_posix()}?mode=ro", uri=True,
-                          timeout=10)
-    con.row_factory = sqlite3.Row
+    con = _source_db()
     try:
         top = con.execute("SELECT COALESCE(MAX(seq),0) FROM items").fetchone()[0]
         # Rebuilt/replaced corpora can restart their insertion sequence.
@@ -558,19 +669,7 @@ def changes_since(cursor=None, *, since=None, limit=300):
             "SELECT * FROM items WHERE " + " AND ".join(where)
             + " ORDER BY seq LIMIT ?", args + [max(1, min(int(limit), 1000))]
         ).fetchall()
-        items = []
-        for row in rows:
-            when = mediaindex.apple_dt(row["date_ns"])
-            items.append({
-                "id": row["uid"], "seq": row["seq"],
-                "chat_id": row["chat_id"],
-                "channel": row["source"], "account": row["account"],
-                "person_id": row["chat_pid"], "handle": row["sender_handle"],
-                "group": bool(row["is_group"]),
-                "is_from_me": bool(row["from_me"]),
-                "when": when.isoformat() if when else None,
-                "subject": row["subject"] or "", "text": row["text"] or "",
-            })
+        items = [_source_row(row) for row in rows]
         return {"items": items, "cursor": rows[-1]["seq"] if rows else top,
                 "available": True}
     finally:

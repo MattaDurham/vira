@@ -76,12 +76,23 @@ const fixture = {
 };
 let snapshot = structuredClone(fixture), getError = "", actionResult = null, tick;
 let requests = [], posts = [], opened = [];
+let mailResponse = {}, mailError = "", mailGate = null, clipboardError = "";
+const copied = [];
 const document = { hidden: false, createElement: (tag) => new Element(tag),
   querySelector: (selector) => selector === "#assistant-body" ? host : selector === "#attention-day-pane" ? pane : null };
-const context = vm.createContext({ document,
+const context = vm.createContext({ document, URL, URLSearchParams,
+  navigator: { clipboard: { writeText: async (value) => {
+    if (clipboardError) throw Error(clipboardError);
+    copied.push(value);
+  } } },
   window: { matchMedia: () => ({ matches: true }) },
   setInterval: (callback) => { tick = callback; }, setTimeout: () => {},
   api: async (url) => { requests.push(url); if (getError) throw Error(getError);
+    if (url.startsWith("/api/mail/message?")) {
+      if (mailGate) await mailGate;
+      if (mailError) throw Error(mailError);
+      return structuredClone(mailResponse);
+    }
     return structuredClone(url.startsWith("/api/assistant/calendars") ? snapshot.calendar.destinations : snapshot); },
   post: async (url, data) => {
     posts.push({ url, data: JSON.parse(JSON.stringify(data)) });
@@ -302,6 +313,114 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
     calendars: fixture.calendar.destinations.calendars.filter((c) => c.writable).map((c) => ({...c,is_default:false})) };
   await ui.load();
   assert.match(text(), /No system default was found. Choose a writable calendar above/);
+
+  snapshot = structuredClone(fixture);
+  snapshot.reminders[0].resources = [
+    {kind:"email",label:"Open email",source_id:"mail:source",account:"owner@example.test",rowid:"imap:42",message_id:"<invoice@example.test>",graph_id:"",subject:"Workshop invoice"},
+    {kind:"payment",label:"Pay now",url:"https://pay.example.test/invoice/42",domain:"misleading.example.test"},
+    {kind:"document",label:"Open invoice",url:"https://docs.example.test/invoice.pdf"},
+    {kind:"web",label:"View booking",url:"https://events.example.test/booking"},
+    {kind:"web",label:"Unsafe javascript",url:"javascript:alert(1)"},
+    {kind:"web",label:"Unsafe data",url:"data:text/html,unsafe"},
+    {kind:"web",label:"Unsafe relative",url:"//other.example.test/"},
+    {kind:"web",label:"Unsafe credentials",url:"https://name:secret@example.test/"},
+  ];
+  const mailRequests = () => requests.filter((url) => url.startsWith("/api/mail/message?"));
+  await ui.load();
+  assert.equal(mailRequests().length, 0, "rendering resources never fetches email");
+  assert.equal(copied.length, 0, "rendering resources never touches the clipboard");
+  assert.match(text(card("r1")), /Take action/);
+  assert.match(text(card("r1")), /owner@example.test/);
+  assert.doesNotMatch(text(card("r1")), /Unsafe|misleading.example.test/);
+  const payment = card("r1").querySelectorAll("a").find((a) => a.textContent === "Open payment page");
+  assert.equal(payment.href, "https://pay.example.test/invoice/42");
+  assert.equal(payment.target, "_blank");
+  assert.equal(payment.rel, "noopener noreferrer");
+  assert.equal(payment.referrerPolicy, "no-referrer");
+  assert.match(text(card("r1")), /pay.example.test/);
+  const resourceMore = card("r1").querySelector(".assistant-resource-more");
+  resourceMore.open = true;
+  await resourceMore.emit("toggle");
+  mailResponse = {subject:"Workshop invoice",account:"owner@example.test",from_name:"Workshop team",from_addr:"billing@example.test",when:"2030-01-01T12:00:00Z",
+    text:'Invoice details. <img src="https://tracking.example.test/pixel">', html:'<script>unexpected()</script>',
+    links:[{kind:"payment",label:"Pay",url:"https://billing.example.test/pay"},
+      {kind:"document",label:"Open receipt",url:"https://docs.example.test/receipt.pdf"},
+      {kind:"link",label:"Unsafe email link",url:"javascript:unexpected()"}],
+    mail_actions:[{kind:"mailbox",label:"Open mailbox",url:"https://mail.example.test/inbox"},
+      {kind:"link",label:"Duplicate payment",url:"https://billing.example.test/pay"}]};
+  await button("Open email", card("r1")).emit("click");
+  assert.equal(mailRequests().length, 1);
+  const mailQuery = new URL(mailRequests()[0], "http://localhost").searchParams;
+  assert.equal(mailQuery.get("account"), "owner@example.test");
+  assert.equal(mailQuery.get("rowid"), "imap:42");
+  assert.equal(mailQuery.get("mid"), "<invoice@example.test>");
+  assert.equal(mailQuery.has("graph_id"), false, "blank locators are omitted");
+  const emailContent = card("r1").querySelector(".assistant-email-content");
+  assert.match(text(emailContent), /Workshop team/);
+  assert.match(text(emailContent), /Links in this email/);
+  assert.match(text(emailContent), /Open receipt/);
+  assert.match(text(emailContent), /Open mailbox/);
+  assert.doesNotMatch(text(emailContent), /Unsafe email link|unexpected\(\)|Duplicate payment/);
+  assert.equal(emailContent.querySelectorAll("img").length, 0, "email content never creates tracking images");
+  assert.match(text(emailContent), /<img src=/, "email text is shown literally");
+  emailContent.querySelector(".assistant-email-text").scrollTop = 61;
+  snapshot.last_run = "2030-01-01T12:02:00Z";
+  await ui.load();
+  assert.equal(mailRequests().length, 1);
+  assert.equal(card("r1").querySelector(".assistant-email-content"), emailContent, "polling preserves the opened email DOM");
+  assert.equal(emailContent.querySelector(".assistant-email-text").scrollTop, 61);
+  assert.equal(card("r1").querySelector(".assistant-resource-more").open, true);
+  await button("Copy details", card("r1")).emit("click");
+  assert.match(copied[0], /Send the agenda\nDue: 2030-01-01/);
+  assert.match(copied[0], /I will send the agenda tomorrow/);
+  assert.match(copied[0], /https:\/\/billing.example.test\/pay/);
+  assert.doesNotMatch(copied[0], /javascript:|data:text|name:secret/);
+  assert.match(text(card("r1")), /Details copied/);
+  clipboardError = "Clipboard permission denied";
+  await button("Copy details", card("r1")).emit("click");
+  assert.match(text(card("r1")), /Could not copy details: Clipboard permission denied/);
+  clipboardError = "";
+  await button("Hide email", card("r1")).emit("click");
+  await button("Open email", card("r1")).emit("click");
+  assert.equal(mailRequests().length, 1, "reopening a loaded source does not refetch it");
+
+  snapshot.reminders[0].resources = [{kind:"email",label:"Open email",source_id:"mail:graph",account:"other@example.test",graph_id:"graph/+id",rowid:"",message_id:""}];
+  await ui.load();
+  mailError = "Source no longer available";
+  await button("Open email", card("r1")).emit("click");
+  assert.match(text(card("r1")), /Email could not be opened: Source no longer available/);
+  const graphQuery = new URL(mailRequests().at(-1), "http://localhost").searchParams;
+  assert.equal(graphQuery.get("graph_id"), "graph/+id");
+  assert.equal(graphQuery.has("mid"), false);
+  assert.equal(graphQuery.has("rowid"), false);
+  snapshot.last_run = "2030-01-01T12:03:00Z";
+  await ui.load();
+  assert.equal(mailRequests().length, 2, "polling does not retry a failed email fetch");
+  assert.match(text(card("r1")), /Source no longer available/);
+  mailError = "";
+  let releaseMail;
+  mailGate = new Promise((resolve) => { releaseMail = resolve; });
+  const retrying = button("Try opening email again", card("r1")).emit("click");
+  assert.match(text(card("r1")), /Opening email/);
+  await button("Hide email", card("r1")).emit("click");
+  await button("Open email", card("r1")).emit("click");
+  assert.equal(mailRequests().length, 3, "opening during an existing fetch cannot duplicate it");
+  releaseMail();
+  await retrying;
+  mailGate = null;
+  assert.match(text(card("r1")), /Links in this email/);
+  snapshot.passive = true;
+  snapshot.reminders[0].resources = [{kind:"email",label:"Open email",source_id:"mail:preview",account:"preview@example.test",rowid:"42"}];
+  await ui.load();
+  const previewEmail = button("Open email", card("r1"));
+  assert.equal(previewEmail.disabled, true);
+  await previewEmail.emit("click");
+  assert.equal(mailRequests().length, 3, "passive previews cannot fetch a real email, even through a programmatic click");
+  snapshot.reminders[0].resources = [];
+  snapshot.reminders[0].resources_note = "The original message is no longer indexed.";
+  await ui.load();
+  assert.match(text(card("r1")), /The original message is no longer indexed/);
+  assert.ok(button("Copy details", card("r1")), "a source without a URL can still be copied");
 
   const count = requests.length;
   document.hidden = true;

@@ -163,6 +163,7 @@ def _subject(item):
 
 
 def _normalize(item):
+    from .assistantresources import metadata
     channel = item["channel"]
     ident = item.get("id")
     if not ident:
@@ -176,7 +177,7 @@ def _normalize(item):
         raise ValueError("message source has no stable identity")
     body = str(item.get("text") or "").strip()
     pid, subject, label = _subject(item)
-    return {"id": str(ident), "channel": channel, "when": item["when"],
+    return {**metadata(item), "id": str(ident), "channel": channel, "when": item["when"],
             "text": body, "original_chars": len(body),
             "is_preview": bool(item.get("is_preview")),
             "group": bool(item.get("group") or item.get("is_group")),
@@ -260,6 +261,7 @@ def catch_up(now=None):
 
 
 def _prompt(detail, sources):
+    from .assistantresources import model_view
     profile = detail.get("profile") or {}
     return (
         "Maintain this private contact dossier using the source messages below. "
@@ -307,11 +309,11 @@ def _prompt(detail, sources):
            "a person, personal fact, or relationship summary from this correspondence.\n"
            if detail.get("owner_tasks") else "")
         + "CONTACT: " + json.dumps(detail["person"], ensure_ascii=False) + "\n"
-        "EXISTING PROFILE: " + json.dumps({k: profile.get(k) for k in
-            ("relationship_summary", "personal_facts", "open_loops")}, ensure_ascii=False)
+        "EXISTING PROFILE: " + json.dumps(model_view({k: profile.get(k) for k in
+            ("relationship_summary", "personal_facts", "open_loops")}), ensure_ascii=False)
         + "\nSOURCE MESSAGES (is_preview explicitly marks truncated feed excerpts; "
           "original_chars records available length, not guaranteed full source length): "
-        + json.dumps(sources, ensure_ascii=False))
+        + json.dumps(model_view(sources), ensure_ascii=False))
 
 
 def _deadline(value, quote, evidence, sources):
@@ -392,6 +394,7 @@ def _explicit_closure(what, evidence, sources, detail):
 
 
 def _evidence(raw, sources):
+    from .assistantresources import metadata
     if not isinstance(raw, list) or not raw:
         raise ValueError("missing source evidence")
     out = []
@@ -400,7 +403,7 @@ def _evidence(raw, sources):
         quote = ref.get("quote") if isinstance(ref, dict) else None
         if not source or not isinstance(quote, str) or len(quote.strip()) < 8 or quote not in source["text"]:
             raise ValueError("source quote could not be verified")
-        out.append({"id": source["id"], "quote": quote,
+        out.append({**metadata(source), "id": source["id"], "quote": quote,
                     "when": source["when"], "channel": source["channel"]})
     return out
 
@@ -423,6 +426,7 @@ def _group_attribution(evidence, sources):
 
 
 def _clean(raw, sources, detail):
+    from .assistantresources import metadata
     if not isinstance(raw, dict):
         raise ValueError("assistant response is not an object")
     by_id = {source["id"]: source for source in sources}
@@ -467,6 +471,7 @@ def _clean(raw, sources, detail):
                         item["deadline_review"] = {
                             "text": due_quote, "proposed": row["due"],
                             "reason": "Could not resolve the deadline from its source"}
+                    due_evidence = {**metadata(by_id[due_evidence["id"]]), **due_evidence}
                     if due_evidence not in evidence:
                         evidence.append(due_evidence)
                     item.update(due=due, due_quote=due_quote, due_evidence=due_evidence)

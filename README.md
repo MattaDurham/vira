@@ -292,6 +292,14 @@ and messages from people outside the CRM become private owner tasks rather
 than new contact records. The self-record is never rewritten.
 
 The Day view shows commitments with **Done**, **Snooze**, and their evidence.
+Each commitment also offers source-backed actions: open its original email
+inside Vira, jump to the connected mailbox, and follow payment, statement,
+account, scheduling, or help links found in the source. Email buttons become
+available from the full message, including links that its text preview omitted.
+Website links show their destination domain and open only when clicked; Vira
+does not invent a payment address or submit a payment. **Copy details** collects
+the task, due date, evidence, and available links. Older commitments can recover
+their resources from the local message index without rewriting saved records.
 Due or overdue owner commitments also appear in Attention's Now view. Optional
 texts go to the configured owner notification channel, with quiet hours, a
 daily limit, and delivery tracking. A failed send can retry; an interrupted

@@ -446,7 +446,7 @@ def tick():
         _tick_lock.release()
 
 
-def status():
+def status(source_items=()):
     from . import calendarplan, contactintel
     cfg = config()
     try:
@@ -455,6 +455,13 @@ def status():
     except (OSError, ValueError):
         state = {"last_error": "Assistant delivery state needs repair; reminders are held."}
         reminder_rows = []
+    try:
+        from . import assistantresources
+        assistantresources.enrich(reminder_rows, source_items)
+    except Exception:  # noqa: BLE001 - keep commitments visible if navigation fails
+        for row in reminder_rows:
+            row["resources"] = []
+            row["resources_note"] = "Source links could not be loaded. Your commitment is still saved."
     try:
         contact = contactintel.status()
     except Exception as exc:
