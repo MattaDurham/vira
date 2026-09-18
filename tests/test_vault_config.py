@@ -217,6 +217,14 @@ class VaultPolicyRouteTests(unittest.TestCase):
         from server import main
         cls.client = TestClient(main.app, raise_server_exceptions=False)
 
+    @mock.patch("server.main.onboard.status", return_value={"vault": {
+        "policy_version": 1, "sources": [], "default_destination": ""}})
+    def test_sources_advertise_policy_editor_support_even_without_connections(self, status):
+        response = self.client.get("/api/vault/sources")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"policy_version": 1,
+                                          "sources": [], "default_destination": ""})
+
     @mock.patch("server.main.onboard.vault_source_set", return_value={"id": "notes"})
     def test_route_carries_independent_policy_fields(self, save):
         changes = {"read_enabled": True, "write_enabled": True,

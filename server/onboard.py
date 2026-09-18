@@ -761,7 +761,7 @@ def status():
         "python": sys.executable,
         "feed": {"chat_db": sources.chatdb_state()},
         "contacts": {"apple_sources": len(sources.addressbook_dbs())},
-        "vault": {"root": vraw, "connected": vault_ok,
+        "vault": {"policy_version": 1, "root": vraw, "connected": vault_ok,
                   "notes": sum(row["notes"] for row in vault_sources),
                   "notes_capped": any(row["notes_capped"] for row in vault_sources),
                   "default_destination": settings.get("vault_default_destination") or "",

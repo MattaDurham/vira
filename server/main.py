@@ -3083,7 +3083,7 @@ def api_onboard_vault(req: OnboardVaultReq):
 @app.get("/api/vault/sources")
 def api_vault_sources():
     state = onboard.status()["vault"]
-    return {"sources": state["sources"],
+    return {"policy_version": state["policy_version"], "sources": state["sources"],
             "default_destination": state.get("default_destination", "")}
 
 
