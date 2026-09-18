@@ -88,6 +88,48 @@ class VaultWriteRaceTests(unittest.TestCase):
         self.assertEqual(vaultwrite._lock_path(self.root / "inbox/CAFÉ.md"),
                          vaultwrite._lock_path(self.root / "inbox/cafe\u0301.md"))
 
+    def test_resolver_alias_keeps_confined_create_update_and_delete_working(self):
+        if os.name == "nt":
+            root = str(self.root)
+            alias = Path("\\\\?\\UNC\\" + root[2:] if root.startswith("\\\\")
+                         else "\\\\?\\" + root)
+        else:
+            alias = self.root.with_name(self.root.name.upper())
+            if not alias.exists() or not alias.samefile(self.root):
+                self.skipTest("requires a filesystem path alias")
+        original = Path.resolve
+        rel = "inbox/future/note.md"
+
+        def resolve(path, *args, **kwargs):
+            if path.name == "note.md":
+                return alias / rel
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "resolve", resolve):
+            receipt = vaultwrite.write_note(self.spec, rel, "original")
+            changed = vaultwrite.write_note(self.spec, rel, "updated",
+                                           expected_hash=receipt["sha256"], create_only=False)
+            self.assertEqual((self.root / rel).read_text(encoding="utf-8"),
+                             "updated")
+            vaultwrite.delete_text(self.spec, rel, changed["sha256"])
+        self.assertFalse((self.root / rel).exists())
+
+    def test_resolver_alias_to_another_directory_still_refuses_write(self):
+        outside = self.base / "outside"
+        outside.mkdir()
+        original = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            if path.name == "note.md":
+                return outside / "note.md"
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "resolve", resolve):
+            with self.assertRaisesRegex(ValueError, "leaves the vault"):
+                vaultwrite.write_note(self.spec, "inbox/note.md", "blocked")
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertFalse((self.root / "inbox/note.md").exists())
+
     def test_parallel_case_alias_updates_accept_only_one_original_hash(self):
         target = self.root / "inbox/Note.md"
         target.write_text("original", encoding="utf-8")

@@ -128,8 +128,9 @@ def _relative_inside(path, root):
     """Return the confined relative path, recognizing filesystem aliases.
 
     resolve() follows links but does not canonicalize capitalization on a
-    case-insensitive volume. Compare ancestor identities after the lexical
-    fast path so an alias cannot become a second source with a weaker policy.
+    case-insensitive volume, and Windows can retain its extended-path prefix
+    while resolving a concurrently created child. Compare ancestor identities
+    after the lexical fast path so aliases retain the same confinement policy.
     Missing child folders remain valid when their existing ancestor is root.
     """
     path, root = Path(path).resolve(), Path(root).resolve()

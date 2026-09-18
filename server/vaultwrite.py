@@ -125,6 +125,8 @@ def _under(rel, folder, protected=False):
 
 def safe_path(spec, rel, operation="write"):
     """Recheck live policy and all path components before touching a file."""
+    from .vault import _relative_inside
+
     current = next((s for s in _specs() if s["id"] == spec["id"]), None)
     if current is None or current["root"].resolve() != spec["root"].resolve():
         raise ValueError("vault destination changed or was disconnected")
@@ -150,7 +152,7 @@ def safe_path(spec, rel, operation="write"):
         if path.is_symlink():
             raise ValueError("symlinks are not allowed in vault file paths")
     try:
-        path.resolve().relative_to(root)
+        _relative_inside(path, root)
     except (OSError, ValueError) as exc:
         raise ValueError("path leaves the vault") from exc
     return path
