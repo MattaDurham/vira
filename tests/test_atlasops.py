@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import atlasops, imageatlas
+from server import atlasops, imageatlas, settings
 
 
 def _write(p: Path, text: str = "x") -> None:
@@ -55,6 +55,10 @@ class Base(unittest.TestCase):
             {"id": "dest", "name": "Dest", "root": str(self.dst),
              "exists": True, "primary": False},
         ]
+        self.text_config = {}
+        policy_patch = mock.patch.object(settings, "get", side_effect=self.text_config.get)
+        policy_patch.start()
+        self.addCleanup(policy_patch.stop)
         p1 = mock.patch.object(imageatlas, "vaults", side_effect=lambda: list(self.vaults))
         p2 = mock.patch.object(atlasops, "STORE", Path(self.tmp.name) / "ops.json")
         p1.start(); p2.start()
@@ -221,6 +225,71 @@ class ApplyAndUndo(Base):
             res = atlasops.apply_plan(plan["id"])
         self.assertEqual(res["dest"], "brand-new")
         self.assertTrue((nv_root / "misc" / "loose.png").is_file())
+
+
+class TextVaultPolicyTests(Base):
+    def govern(self, root, **policy):
+        self.text_config.update(vault_root=str(root), vault_primary=policy)
+
+    def test_readonly_source_rejects_the_whole_approved_plan(self):
+        plan = self.plan(["misc/loose.png", "raw/aaa.png"])
+        self.govern(self.src, write_enabled=False)
+        with mock.patch.object(atlasops.shutil, "move") as move:
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                atlasops.apply_plan(plan["id"])
+        move.assert_not_called()
+        self.assertEqual(atlasops.get_plan(plan["id"])["status"], "proposed")
+        self.assertTrue((self.src / "misc/loose.png").exists())
+
+    def test_protected_destination_companion_rejects_before_any_move(self):
+        plan = self.plan(["misc/loose.png", "raw/aaa.png"])
+        self.govern(self.dst, write_enabled=True, write_dirs=["misc", "raw", "wiki"],
+                    protected_dirs=["wiki"])
+        with mock.patch.object(atlasops.shutil, "move") as move:
+            with self.assertRaisesRegex(ValueError, "protected"):
+                atlasops.apply_plan(plan["id"])
+        move.assert_not_called()
+        self.assertFalse((self.dst / "misc/loose.png").exists())
+
+    def test_undo_rechecks_current_write_permissions_before_any_move(self):
+        plan = self.plan(["raw/aaa.png"])
+        atlasops.apply_plan(plan["id"])
+        self.govern(self.src, write_enabled=False)
+        with mock.patch.object(atlasops.shutil, "move") as move:
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                atlasops.undo_plan(plan["id"])
+        move.assert_not_called()
+        self.assertTrue((self.dst / "raw/aaa.png").exists())
+
+    def test_image_only_roots_keep_the_existing_approved_workflow(self):
+        plan = self.plan(["misc/loose.png"])
+        self.assertEqual(atlasops.apply_plan(plan["id"])["moved"], 1)
+        self.assertEqual(atlasops.undo_plan(plan["id"])["returned"], 1)
+
+    def test_policy_revoked_mid_plan_is_rechecked_for_remaining_files(self):
+        plan = self.plan(["misc/loose.png", "raw/aaa.png"])
+        self.govern(self.src, write_enabled=True, write_dirs=["misc", "raw", "wiki"])
+        real_move = atlasops.shutil.move
+        def move_then_revoke(src, dst):
+            result = real_move(src, dst)
+            self.text_config["vault_primary"]["write_enabled"] = False
+            return result
+        with mock.patch.object(atlasops.shutil, "move", side_effect=move_then_revoke):
+            result = atlasops.apply_plan(plan["id"])
+        self.assertEqual(result["moved"], 1)
+        self.assertEqual(len(result["failed"]), 2)
+        self.assertTrue((self.src / "raw/aaa.png").exists())
+
+    def test_new_vault_inside_protected_source_is_not_created(self):
+        target = self.src / "private/new-images"
+        plan = self.plan(["misc/loose.png"], dest="", new_vault={"name": "New", "root": str(target)})
+        self.govern(self.src, write_enabled=True, write_dirs=["misc", "private"],
+                    protected_dirs=["private"])
+        with mock.patch.object(imageatlas, "register_vault") as register:
+            with self.assertRaisesRegex(ValueError, "protected"):
+                atlasops.apply_plan(plan["id"])
+        register.assert_not_called()
+        self.assertFalse(target.exists())
 
 
 @unittest.skipUnless(atlasops.CHASKA_OK, "chaska not installed (optional dependency)")

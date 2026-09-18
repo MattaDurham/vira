@@ -433,7 +433,9 @@ def dispatch(r):
         run = circuits.start_run(cid, r.get("prompt") or r["name"],
                                  cwd=r.get("cwd") or None,
                                  notify=bool(r.get("notify")),
-                                 source=f"routine:{r['id']}")
+                                 source=f"routine:{r['id']}",
+                                 vault_destination=r.get("vault_destination"),
+                                 vault_context=r.get("vault_context"))
         _stamp(r["id"], last_run=_now_iso(), last_run_id=run["id"],
                last_job=None, last_status="running")
         return {"run_id": run["id"]}
@@ -503,6 +505,8 @@ def dispatch(r):
                                   # no stored mode -> the session_default_mode
                                   # config default, same as every dispatch
                                   mode=session.norm_mode(r.get("mode")),
+                                  vault_destination=r.get("vault_destination"),
+                                  vault_context=r.get("vault_context"),
                                   meta={"routine_id": r["id"],
                                         "kind": r["kind"]},
                                   subject=r.get("name") or r["id"],

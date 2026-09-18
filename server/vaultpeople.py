@@ -139,7 +139,7 @@ def search(q, limit=8, root=None):
     return (starts + contains)[:limit]
 
 
-def create_stub(name, qualifier="", root=None):
+def create_stub(name, qualifier="", root=None, destination=None):
     """Mint a minimal person page for a name the index cannot resolve.
 
     Refuses an existing page rather than touching it — an existing page is
@@ -152,7 +152,14 @@ def create_stub(name, qualifier="", root=None):
     if not name:
         raise ValueError("name required")
     qualifier = " ".join((qualifier or "").split())[:QUALIFIER_CAP]
-    root = Path(root or vault.vault_root()).expanduser()
+    from . import fullingest, vaultwrite
+    if root is not None and not Path(root).is_dir():
+        raise FileNotFoundError("no vault wiki to write into")
+    try:
+        spec = fullingest._destination(destination, root=root, operation="person")
+    except fullingest.StageError as exc:
+        raise ValueError(str(exc)) from exc
+    root = Path(spec["root"])
     wiki = root / WIKI_SUBDIR
     if not wiki.is_dir():
         raise FileNotFoundError("no vault wiki to write into")
@@ -166,6 +173,7 @@ def create_stub(name, qualifier="", root=None):
     body = (f'---\ntitle: "{name}"\ntype: person\ntags:\n  - {slug}\n'
             f"created: {today}\nupdated: {today}\n---\n\n# {name}\n\n"
             + (qualifier + "\n" if qualifier else ""))
-    path.write_text(body, encoding="utf-8")
+    receipt = vaultwrite.write_note(spec, f"wiki/{slug}.md", body)
     _cache.pop(str(wiki), None)
-    return {"name": name, "ref": f"wiki/{slug}.md", "qualifier": qualifier}
+    return {"name": name, "ref": receipt["path"], "qualifier": qualifier,
+            "source_id": spec["id"], "source_name": spec["name"]}

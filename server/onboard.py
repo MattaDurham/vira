@@ -16,8 +16,8 @@ Deterministic movers, one model seam:
   already have a profile, so it is resumable and re-runnable.
 - vault_setup(path, init) — point vault_root at the primary notes vault, or
   seed a fresh one with the bundled qocha CLI (`qocha init`).
-- vault_source_set/remove — connect named, read-only markdown vaults to the
-  same search/chat surface while leaving every write on the primary.
+- vault_source_set/remove — configure named markdown vaults with independent
+  reading, writing, model exposure, and destination policies.
 
 Never touches the fixture copy: all writes go to the real crm_root."""
 import csv
@@ -52,10 +52,9 @@ def config_set(**updates):
     """Merge keys into data/config.json (atomic). settings has no setter and
     suggest.save_config filters to the AI keys only — this one is for
     identity/data keys (vault_root, crm_root)."""
-    cfg = settings.raw()
-    cfg.update(updates)
-    jsonstore.write_atomic(settings.CONFIG_PATH, cfg, indent=2)
-    return cfg
+    def update(cfg):
+        cfg.update(updates)
+    return jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
 
 
 # ---------- contact sources ----------
@@ -503,81 +502,205 @@ def _configured_vault_sources():
 
 
 def _paths_overlap(a, b):
-    try:
-        a.relative_to(b)
-        return True
-    except ValueError:
-        try:
-            b.relative_to(a)
-            return True
-        except ValueError:
-            return False
+    from . import vault
+    return vault._overlaps(a, b)
 
 
-def vault_source_set(path, name="", source_id=None):
-    """Add or update one secondary, read-only markdown source."""
+_VAULT_POLICY_FIELDS = (
+    "read_enabled", "write_enabled", "model_exposure", "purpose", "contexts",
+    "capture_dir", "write_dirs", "protected_dirs", "model_exclude_dirs", "allow_publish", "dirs",
+)
+
+
+def _relative_scope(value):
+    """A portable folder below a vault; never accept an absolute/parent path."""
+    text = str(value or "").strip().replace("\\", "/")
+    parts = text.split("/")
+    if (not text or text.startswith("/") or ":" in text
+            or any(part in ("", ".", "..") for part in parts)):
+        raise ValueError("vault folders must be relative paths without . or ..")
+    return text
+
+
+def _vault_policy(existing, changes, primary=False):
+    policy = {key: existing[key] for key in _VAULT_POLICY_FIELDS
+              if key in existing and existing[key] is not None}
+    policy.update(changes)
+    for key in ("read_enabled", "write_enabled", "model_exposure", "allow_publish"):
+        if key in policy and not isinstance(policy[key], bool):
+            raise ValueError(f"{key} must be true or false")
+    for key in ("write_dirs", "protected_dirs", "model_exclude_dirs", "dirs"):
+        if key in policy:
+            if not isinstance(policy[key], list):
+                raise ValueError(f"{key} must be a list of relative folders")
+            policy[key] = list(dict.fromkeys(_relative_scope(p) for p in policy[key]))
+    if "capture_dir" in policy:
+        policy["capture_dir"] = _relative_scope(policy["capture_dir"])
+    contexts = policy.get("contexts", [])
+    if not isinstance(contexts, list) or any(not isinstance(c, str) for c in contexts):
+        raise ValueError("contexts must be a list of names")
+    policy["contexts"] = list(dict.fromkeys(c.strip().lower() for c in contexts if c.strip()))
+    policy["purpose"] = str(policy.get("purpose") or "").strip()
+    writable = policy.get("write_enabled", primary)
+    scopes = policy.get("write_dirs", ["inbox", "plans", "wiki", "raw"] if primary else [])
+    capture = policy.get("capture_dir", "inbox")
+    if writable:
+        if not scopes:
+            raise ValueError("choose at least one writable folder before enabling writes")
+        if not any(capture == scope or capture.startswith(scope + "/") for scope in scopes):
+            raise ValueError("the capture folder must be inside a writable folder")
+        if any(capture == scope or capture.startswith(scope + "/")
+               for scope in policy.get("protected_dirs", [])):
+            raise ValueError("the capture folder cannot be protected")
+    return policy
+
+
+def _legacy_source_rows(cfg):
+    """Migrate outside-root vault_dirs without changing their citation identity."""
+    from . import vault
+    specs = vault.source_specs()
+    rows = _configured_vault_sources()
+    for spec in specs:
+        if not spec.get("legacy"):
+            continue
+        rows.append({"id": spec["id"], "name": spec["name"],
+                     "root": str(spec["root"]), "read_enabled": True,
+                     "write_enabled": False, "model_exposure": True})
+        if spec.get("dirs") is not None:
+            rows[-1]["dirs"] = spec["dirs"]
+    # Remove every represented external legacy entry, including roots already
+    # represented by a configured row, so disconnect cannot resurrect one.
+    primary = Path(vault.vault_root()).expanduser().resolve()
+    represented = [Path(row["root"]).expanduser().resolve()
+                   for row in rows if row.get("root")]
+    dirs = cfg.get("vault_dirs")
+    if isinstance(dirs, list):
+        kept = []
+        for item in dirs:
+            path = (primary / str(item)).expanduser().resolve()
+            if not vault._inside(path, primary) and any(
+                    _paths_overlap(path, root) for root in represented):
+                continue
+            kept.append(item)
+        cfg["vault_dirs"] = kept
+    return rows, specs
+
+
+def vault_source_set(path, name="", source_id=None, **changes):
+    """Configure a source; policy changes and legacy migration are one transaction."""
+    unknown = set(changes) - set(_VAULT_POLICY_FIELDS) - {"default_destination"}
+    if unknown:
+        raise ValueError("unknown vault settings: " + ", ".join(sorted(unknown)))
     raw = str(path or "").strip()
     if not raw:
         raise ValueError("a vault path is required")
     root = Path(raw).expanduser().resolve()
-    if not root.is_dir():
-        raise ValueError(f"{root} is not a directory")
-    primary_raw = str(settings.get("vault_root") or "").strip()
-    if primary_raw and _paths_overlap(
-            root, Path(primary_raw).expanduser().resolve()):
-        raise ValueError("vault folders cannot overlap the primary vault")
-
-    rows = _configured_vault_sources()
     sid = str(source_id or "").strip().lower()
     if sid and not _VAULT_SOURCE_ID.fullmatch(sid):
-        raise ValueError("vault id must use lowercase letters, numbers, "
-                         "and hyphens")
-    existing = (next((row for row in rows if row.get("id") == sid), None)
-                if sid else None)
-    same_root = next((row for row in rows
-                      if str(Path(str(row.get("root") or "")).expanduser()
-                             .resolve()) == str(root)), None)
-    if same_root and existing is not same_root:
-        existing = same_root
-        sid = str(same_root.get("id") or "")
-    for row in rows:
-        if row is existing or not row.get("root"):
-            continue
-        other = Path(str(row["root"])).expanduser().resolve()
-        if _paths_overlap(root, other):
-            raise ValueError("connected vault folders cannot overlap")
-    if not sid:
-        base = _vault_source_id(name or root.name)
-        used = {str(row.get("id") or "") for row in rows}
-        sid = base
-        suffix = 2
-        while sid in used or sid == "primary":
-            tail = f"-{suffix}"
-            sid = base[:48 - len(tail)].rstrip("-") + tail
-            suffix += 1
+        raise ValueError("vault id must use lowercase letters, numbers, and hyphens")
+    choose_default = changes.pop("default_destination", None)
+    if choose_default is not None and not isinstance(choose_default, bool):
+        raise ValueError("default_destination must be true or false")
+    result = {}
 
-    item = {"id": sid, "name": str(name or root.name or sid).strip(),
-            "root": str(root)}
-    if existing is None:
-        rows.append(item)
-    else:
-        item["dirs"] = existing.get("dirs") if existing.get("dirs") else None
-        item = {k: v for k, v in item.items() if v is not None}
-        rows[rows.index(existing)] = item
-    config_set(vault_sources=rows)
-    return {**item, "primary": False, "read_only": True,
-            "notes": _md_count(root)}
+    def update(cfg):
+        nonlocal sid
+        rows, specs = _legacy_source_rows(cfg)
+        existing_spec = next((s for s in specs if s["id"] == sid), None) if sid else None
+        if sid and existing_spec is None:
+            raise ValueError("unknown vault source")
+        primary = sid == "primary"
+        existing = (cfg.get("vault_primary") or {}) if primary else next(
+            (row for row in rows if row.get("id") == sid), None)
+        same_root = next((row for row in rows if row.get("root") and
+                          Path(row["root"]).expanduser().resolve() == root), None)
+        if same_root and not primary and not sid:
+            existing = same_root
+            sid = same_root["id"]
+            existing_spec = next((s for s in specs if s["id"] == sid), None)
+        if not root.is_dir() and not (existing_spec and
+                                      existing_spec["root"].resolve() == root):
+            raise ValueError(f"{root} is not a directory")
+        for spec in specs:
+            if spec["id"] == sid:
+                continue
+            if _paths_overlap(root, spec["root"].resolve()):
+                raise ValueError("connected vault folders cannot overlap")
+        if not sid:
+            base = _vault_source_id(name or root.name)
+            used = {s["id"] for s in specs}
+            sid = base
+            suffix = 2
+            while sid in used or sid == "primary":
+                tail = f"-{suffix}"
+                sid = base[:48 - len(tail)].rstrip("-") + tail
+                suffix += 1
+        item = dict(existing or {})
+        item.update(_vault_policy(item, changes, primary=primary))
+        item.update(id=sid, name=str(name or item.get("name") or root.name or sid).strip(),
+                    root=str(root))
+        writable = item.get("write_enabled", primary)
+        if (choose_default and cfg.get("vault_default_destination") != sid
+                and (not writable or not root.is_dir())):
+            raise ValueError("the default destination must be connected and writable")
+        if primary:
+            cfg["vault_root"] = str(root)
+            cfg["vault_primary"] = {key: value for key, value in item.items()
+                                    if key not in ("id", "root")}
+            if "dirs" in changes:
+                cfg["vault_dirs"] = item["dirs"]
+        elif existing is None:
+            rows.append(item)
+        else:
+            rows[rows.index(existing)] = item
+        cfg["vault_sources"] = rows
+        if choose_default:
+            cfg["vault_default_destination"] = sid
+        elif choose_default is False and cfg.get("vault_default_destination") == sid:
+            cfg["vault_default_destination"] = ""
+        notes = _md_count(root) if root.is_dir() else 0
+        result.update(item, primary=primary, read_only=not writable,
+                      connected=root.is_dir(), notes=notes, notes_capped=notes >= 3000,
+                      default_destination=cfg.get("vault_default_destination") == sid)
+
+    jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
+    return result
 
 
 def vault_source_remove(source_id):
-    """Disconnect one configured secondary source; never delete its files."""
+    """Disconnect a source, including legacy rows; never delete source files."""
     sid = str(source_id or "").strip().lower()
-    rows = _configured_vault_sources()
-    kept = [row for row in rows if str(row.get("id") or "") != sid]
-    if len(kept) == len(rows):
-        raise KeyError(sid)
-    config_set(vault_sources=kept)
+
+    def update(cfg):
+        rows, specs = _legacy_source_rows(cfg)
+        if not any(spec["id"] == sid for spec in specs):
+            raise KeyError(sid)
+        if sid == "primary":
+            cfg["vault_root"] = ""
+            cfg["vault_primary"] = {}
+            cfg["vault_dirs"] = []
+        cfg["vault_sources"] = [row for row in rows if row.get("id") != sid]
+        # Keep a selected destination even when unavailable. An unqualified
+        # save must fail closed until the owner chooses a new default.
+
+    jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
     return {"id": sid, "removed": True}
+
+
+def vault_default_set(source_id):
+    """Choose or explicitly clear a default; never infer one from a removal."""
+    from . import vault
+    sid = str(source_id or "").strip()
+
+    def update(cfg):
+        if sid:
+            spec = next((s for s in vault.source_specs() if s["id"] == sid), None)
+            if not spec or not spec.get("write_enabled") or not spec["root"].is_dir():
+                raise ValueError("the default destination must be connected and writable")
+        cfg["vault_default_destination"] = sid
+
+    jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
+    return {"default_destination": sid}
 
 
 # ---------- the one status payload the Setup window reads ----------
@@ -599,18 +722,22 @@ def status():
     vault_sources = []
     for spec in vault.source_specs():
         connected = spec["root"].is_dir()
+        notes = _md_count(spec["root"]) if connected else 0
         vault_sources.append({
+            **{key: spec[key] for key in _VAULT_POLICY_FIELDS if key in spec},
             "id": spec["id"], "name": spec["name"],
             "root": str(spec["root"]), "primary": spec["primary"],
-            "read_only": not spec["primary"], "connected": connected,
+            "read_only": not spec.get("write_enabled", spec["primary"]),
+            "connected": connected,
             "legacy": bool(spec.get("legacy")),
-            "removable": not spec["primary"] and not spec.get("legacy"),
-            "notes": _md_count(spec["root"]) if connected else 0,
+            "removable": bool(vraw) if spec["primary"] else True,
+            "notes": notes, "notes_capped": notes >= 3000,
+            "default_destination": settings.get("vault_default_destination") == spec["id"],
         })
     # The guided step is specifically the WRITE-target connection. A stray
     # read-only source can make Find useful, but must not make Setup claim the
     # Brain is fully wired while plans and ingestion still have nowhere to go.
-    vault_ok = any(row["primary"] and row["connected"]
+    vault_ok = any(not row["read_only"] and row["connected"]
                    for row in vault_sources)
     # Accounts plus the watcher's last health per row (mail.HEALTH), so a
     # mailbox that stopped signing in reads as "needs attention" on the
@@ -636,6 +763,8 @@ def status():
         "contacts": {"apple_sources": len(sources.addressbook_dbs())},
         "vault": {"root": vraw, "connected": vault_ok,
                   "notes": sum(row["notes"] for row in vault_sources),
+                  "notes_capped": any(row["notes_capped"] for row in vault_sources),
+                  "default_destination": settings.get("vault_default_destination") or "",
                   "sources": vault_sources},
         "mail": mail_sum,
         "dossiers": build,
@@ -868,7 +997,8 @@ def steps():
             out.append(mk(
                 sid, title, opens,
                 "done" if st["vault"]["connected"] else "todo",
-                (f"{st['vault']['notes']} notes indexed."
+                (("At least " if st["vault"].get("notes_capped") else "")
+                 + f"{st['vault']['notes']} Markdown files found."
                  if st["vault"]["connected"] else "No vault connected."),
                 unlocks="Brain — grounded answers from your own notes"))
         else:  # mail

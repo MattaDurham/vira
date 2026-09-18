@@ -2623,6 +2623,33 @@ function defineRows(card) {
   return wrap;
 }
 
+function defineDestinationPicker(target, term, destination = "") {
+  const wrap = el("div", "define-acts");
+  const select = el("select", "input");
+  select.setAttribute("aria-label", "Definition vault");
+  select.appendChild(new Option("Choose a vault", ""));
+  select.disabled = true;
+  const button = el("button", "btn", "Define here");
+  button.disabled = true;
+  wrap.append(select, button);
+  target.appendChild(wrap);
+  api("/api/vault/destinations").then((data) => {
+    (data.destinations || []).filter((s) => s.read_enabled && s.connected).forEach((s) => {
+      select.appendChild(new Option(s.name + (s.write_enabled ? "" : " (read only)"), s.id));
+    });
+    select.value = destination;
+    select.disabled = false;
+    button.disabled = !select.value;
+  }).catch((error) => {
+    select.replaceChildren(new Option("Vaults unavailable", ""));
+    select.title = error.message;
+  });
+  select.addEventListener("change", () => { button.disabled = !select.value; });
+  button.addEventListener("click", () => openDefine(term, {
+    destination: select.value, noContext: true,
+  }));
+}
+
 function renderDefineInto(target) {
   if (!target) return;
   target.innerHTML = "";
@@ -2653,6 +2680,8 @@ function renderDefineInto(target) {
   // The provenance line is not decoration: an unsourced card is the model's
   // recollection, and the owner has to be able to tell that at a glance.
   target.appendChild(el("div", "define-why", why));
+  if (c.source_name) target.appendChild(el("div", "define-why", "Vault: " + c.source_name));
+  if (c.write_error) target.appendChild(el("div", "define-why", "Not saved: " + c.write_error));
   target.appendChild(defineRows(c));
 
   if ((c.related || []).length) {
@@ -2661,7 +2690,7 @@ function renderDefineInto(target) {
     const chips = el("div", "define-chips");
     c.related.forEach((r) => {
       const b = el("button", "define-chip", r);
-      b.addEventListener("click", () => openDefine(r));
+      b.addEventListener("click", () => openDefine(r, { destination: c.source_id }));
       chips.appendChild(b);
     });
     rel.appendChild(chips);
@@ -2687,16 +2716,17 @@ function renderDefineInto(target) {
   acts.appendChild(ask);
   if (!c.sourced) {
     const src = el("button", "btn", "Verify and source");
-    src.addEventListener("click", () => defineSource(c.term, src));
+    src.addEventListener("click", () => defineSource(c.term, src, c.source_id));
     acts.appendChild(src);
   }
   if (c.note) {
     const open = el("button", "btn", "Open note");
     open.addEventListener("click", () => openNoteWindow(
-      c.note.split("/").slice(-2).join("/"), c.term));
+      c.path || c.note, c.term));
     acts.appendChild(open);
   }
   target.appendChild(acts);
+  defineDestinationPicker(target, c.term, c.source_id);
 }
 
 function renderDefines() {
@@ -2707,9 +2737,16 @@ function renderDefines() {
     ? (DEFINE_RUNGS[defineCard.rung] || DEFINE_RUNGS.model)[0] : "";
 }
 
-async function openDefine(term) {
+async function openDefine(term, options = {}) {
   const t = (term || "").trim();
   if (!t) return;
+  const selected = options.noContext ? null : selectedTextTarget(null);
+  const note = selected?.closest("[data-note-path]");
+  const path = options.path || note?.dataset.notePath || "";
+  const sourceId = path ? (path.match(/^@([^/]+)\//)?.[1] || "primary") : "";
+  const payload = { term: t, destination: options.destination || sourceId,
+    source_id: sourceId, path,
+    text: path ? (selected?.closest("p, li, blockquote")?.textContent || "") : "" };
   definePending = t;
   defineCard = null;
   if (isDesktop) {
@@ -2734,16 +2771,16 @@ async function openDefine(term) {
   }
   renderDefines();
   try {
-    defineCard = await api("/api/define?term=" + encodeURIComponent(t));
+    defineCard = await post("/api/define", payload);
   } catch (e) {
     definePending = "";
     renderDefines();
-    const root = $("#find-define-root");
-    if (root) {
+    [$("#find-define-root"), $("#find-mobile-define-root")].filter(Boolean).forEach((root) => {
       root.innerHTML = "";
       root.appendChild(el("div", "empty left",
         "Could not define that: " + e.message));
-    }
+      defineDestinationPicker(root, t, payload.destination);
+    });
     return;
   }
   definePending = "";
@@ -2763,11 +2800,11 @@ function defineFollowUp(card) {
   showFindChat(seed);
 }
 
-async function defineSource(term, btn) {
+async function defineSource(term, btn, destination = "") {
   btn.disabled = true;
   btn.textContent = "Starting…";
   try {
-    const d = await post("/api/define/source", { term });
+    const d = await post("/api/define/source", { term, destination });
     toast("Sourcing " + term + " — session opened");
     openSession(d.job_id);
   } catch (e) {
@@ -6611,7 +6648,7 @@ function ideaPlanPrompt(it, extra, cwd, fold) {
     "",
     "Output ONLY the plan as markdown — no preamble, no closing remarks, no",
     "code fence around the whole thing. Vira saves it to the vault as an",
-    "editable note and renders it as a hosted dossier. Follow this plan",
+    "editable note. Rendering a hosted dossier is a separate opt-in. Follow this plan",
     "format exactly:",
     '- First line: "# Title" (a short noun phrase, max ~8 words).',
     '- Then "## Executive Summary" (2-3 sentences: what is built, the',
@@ -6826,6 +6863,45 @@ function ideaRunCwd(it) {
     || localStorage.getItem("vira-idea-cwd") || "~/workspace/vira";
 }
 
+async function loadIdeaRunDestinations(ctx) {
+  const select = $("#idea-run-vault");
+  select.innerHTML = "";
+  select.appendChild(new Option("Loading destinations…", ""));
+  select.disabled = true;
+  $("#idea-run-go").disabled = ctx.mode === "plan";
+  $("#idea-run-vault-note").textContent = "This choice applies to this run only.";
+  try {
+    const { destinations, default_destination } = await api("/api/vault/destinations");
+    if (ideaRunCtx !== ctx) return;
+    const choices = (destinations || []).filter((source) =>
+      source.connected && source.write_enabled && source.model_exposure);
+    select.innerHTML = "";
+    select.appendChild(new Option(ctx.mode === "plan" ? "Choose a destination" : "Use configured routing", ""));
+    choices.forEach((source) => select.appendChild(new Option(
+      source.name + (source.default ? " (default)" : ""), source.id)));
+    const saved = ctx.it.vault_destination || default_destination
+      || (destinations || []).find((source) => source.default)?.id;
+    const preferred = saved
+      || (choices.length === 1 ? choices[0].id : "");
+    if (saved && !choices.some((source) => source.id === saved)) {
+      select.appendChild(new Option("Configured destination unavailable", saved));
+      select.lastElementChild.disabled = true;
+    }
+    select.value = preferred;
+    select.disabled = false;
+    ctx.vaultChoices = choices.map((source) => source.id);
+    $("#idea-run-vault-note").textContent = choices.length
+      ? "The plan and later saves keep this destination. Only writable vaults with model access are listed."
+      : "No writable vault permits model access. Configure one in Config > Brain.";
+    $("#idea-run-go").disabled = ctx.mode === "plan" && !ctx.vaultChoices.includes(select.value);
+  } catch (e) {
+    if (ideaRunCtx !== ctx) return;
+    select.innerHTML = "";
+    select.appendChild(new Option("Destinations unavailable", ""));
+    $("#idea-run-vault-note").textContent = "Could not load destinations. Reopen this sheet to retry.";
+  }
+}
+
 function openIdeaRun(it, mode) {
   ideaRunCtx = { it, mode, related: [], picked: new Set(), verdicts: {} };
   $("#idea-run-related").style.display = "none";
@@ -6856,10 +6932,15 @@ function openIdeaRun(it, mode) {
   sel.value = savedPermMode();
   $("#idea-run-perm-field").style.display = mode === "plan" ? "none" : "";
   $("#idea-run-note").textContent = ideaRunNote(mode);
+  loadIdeaRunDestinations(ideaRunCtx);
   ideaRunSheet.open();
   $("#idea-run-extra").focus();
 }
 const ideaRunSheet = bindSheet("#idea-run-sheet", "#idea-run-cancel");
+$("#idea-run-vault").addEventListener("change", () => {
+  if (ideaRunCtx) $("#idea-run-go").disabled = ideaRunCtx.mode === "plan"
+    && !(ideaRunCtx.vaultChoices || []).includes($("#idea-run-vault").value);
+});
 $("#idea-run-perm").addEventListener("change", () => {
   if (ideaRunCtx) $("#idea-run-note").textContent = ideaRunNote(ideaRunCtx.mode);
 });
@@ -6876,6 +6957,7 @@ $("#idea-run-go").addEventListener("click", async () => {
   const provider = $("#idea-run-model").selectedOptions[0]?.dataset.provider
     || null;
   const extra = $("#idea-run-extra").value;
+  const vault_destination = $("#idea-run-vault").value || null;
   const perm = mode === "plan" ? PERM_DEFAULT : $("#idea-run-perm").value;
   localStorage.setItem("vira-idea-cwd", cwd);
   localStorage.setItem("vira-idea-model", model);
@@ -6883,7 +6965,7 @@ $("#idea-run-go").addEventListener("click", async () => {
   const fold = (ideaRunCtx.related || [])
     .filter((r) => ideaRunCtx.picked.has(r.id));
   ideaRunSheet.close();
-  await dispatchIdeaRun(it, mode, { cwd, model, provider, extra, perm, fold });
+  await dispatchIdeaRun(it, mode, { cwd, model, provider, extra, perm, fold, vault_destination });
 });
 
 // ONE dispatch behind both doors to a build: the Implement sheet (settings
@@ -6901,7 +6983,7 @@ async function dispatchIdeaRun(it, mode, o) {
     ? ideaPlanPrompt(it, extra, cwd, fold)
     : ideaImplementPrompt(it, extra, cwd, perm, fold, plan);
   // Plan asks for two separate things and now says both: publish_plan
-  // finalizes the output as a plan (vault note + HTML dossier), read_only
+  // finalizes the output as a plan note (rendering is opt-in), read_only
   // denies writes. They were one flag until 2026-08-04, which is why a
   // planning run could not search the web or spawn a subagent.
   const permission_mode = perm === "bypassPermissions" ? "bypassPermissions" : null;
@@ -6910,6 +6992,7 @@ async function dispatchIdeaRun(it, mode, o) {
   const jid = await launchJob(prompt, cwd,
     { reviewed: true, permission_mode, model, provider, publish_plan, read_only,
       idea_id: it.id, mode: perm, subject: it.text,
+      vault_destination: o.vault_destination || plan?.source_id || null,
       about: ideaAbout(it, mode, extra, fold, plan) });
   // stamp the idea so the dispatch is visible next time it's opened
   const day = new Date().toISOString().slice(0, 10);
@@ -7104,6 +7187,8 @@ async function launchJob(promptText, cwd, opts = {}) {
     provider: opts.provider || null,
     publish_plan: opts.publish_plan || false,
     read_only: opts.read_only || false,
+    vault_destination: opts.vault_destination || null,
+    vault_context: opts.vault_context || null,
     idea_id: opts.idea_id || null,
     mode: opts.mode || null,
     // The three-part name's inputs (server/joblog.py): the surface that
@@ -13480,7 +13565,7 @@ function dashHero(flow, st, ai, attn, hard) {
       ok: st.feed.chat_db === "ok", na: st.feed.chat_db === "missing" && !(st.platform === "mac") },
     { id: "contacts", k: "people", v: fmtNum(st.crm.people), ok: st.crm.people > 0 },
     { id: "dossiers", k: "dossiers", v: fmtNum(st.crm.profiles), ok: st.crm.profiles > 0 },
-    { id: "brain", k: "notes", v: fmtNum(st.vault.notes), ok: st.vault.connected },
+    { id: "brain", k: "files", v: (st.vault.notes_capped ? "≥ " : "") + fmtNum(st.vault.notes), ok: st.vault.connected },
     { id: "mail", k: "mailboxes",
       v: m.accounts ? (m.failing ? `${m.ok} of ${m.accounts}` : String(m.accounts)) : "0",
       ok: m.accounts > 0 && !m.failing, attn: !!m.failing },
@@ -14169,79 +14254,204 @@ function cardDossiers(card, step, st) {
   card.appendChild(row);
 }
 
+let brainOpenSource = null;
+
+function brainNoteCount(source) {
+  return `${source.notes_capped ? "at least " : ""}${fmtNum(source.notes || 0)} Markdown ${source.notes === 1 ? "file" : "files"}`;
+}
+
+function brainSourceEditor(card, source) {
+  const tile = el("details", "setup-prov vault-config" + (source.connected ? " on" : ""));
+  tile.dataset.sourceId = source.id;
+  tile.open = brainOpenSource === source.id;
+  tile.ontoggle = () => {
+    if (tile.open) brainOpenSource = source.id;
+    else if (brainOpenSource === source.id) brainOpenSource = null;
+  };
+  const head = el("summary", "setup-prov-head");
+  head.appendChild(el("span", "setup-prov-name", source.name));
+  const states = [source.connected ? "connected" : "folder unavailable"];
+  states.push(source.write_enabled ? "writable" : "read only");
+  if (!source.read_enabled) states.push("reading off");
+  if (!source.model_exposure) states.push("model access off");
+  if (source.default_destination) states.push("default destination");
+  head.appendChild(el("span", "setup-prov-state", states.join(" · ")));
+  head.appendChild(el("span", "vault-config-edit", "Configure"));
+  tile.appendChild(head);
+  tile.appendChild(el("p", "hint vault-config-path", source.root));
+  tile.appendChild(el("p", "hint", brainNoteCount(source) +
+    (source.legacy ? " · existing connection; saving preserves its source links" : "")));
+  if (source.purpose) tile.appendChild(el("p", "hint", source.purpose));
+
+  const form = el("form", "vault-config-form");
+  const fields = el("div", "vault-config-fields");
+  const controls = {};
+  const field = (key, label, value, help, wide = false) => {
+    const wrap = el("label", "vault-config-field" + (wide ? " wide" : ""));
+    wrap.appendChild(el("span", "vault-config-label", label));
+    const input = el("input", "search");
+    input.type = "text"; input.name = key; input.value = value || "";
+    input.autocomplete = "off";
+    wrap.appendChild(input);
+    if (help) wrap.appendChild(el("span", "hint", help));
+    fields.appendChild(wrap); controls[key] = input;
+    return input;
+  };
+  field("name", "Vault name", source.name);
+  field("path", "Folder on this machine", source.root);
+  field("purpose", "What belongs here", source.purpose,
+    "Describe this vault's purpose so the assistant can choose appropriately.", true);
+  field("contexts", "Route these contexts here", (source.contexts || []).join(", "),
+    "Comma-separated context names. Matching contexts route to this vault.", true);
+  form.appendChild(fields);
+
+  const capabilities = el("div", "vault-config-capabilities");
+  const toggle = (key, label, help) => {
+    const wrap = el("label", "vault-config-toggle");
+    const input = el("input"); input.type = "checkbox"; input.name = key;
+    input.checked = !!source[key]; controls[key] = input;
+    const words = el("span");
+    words.appendChild(el("strong", "", label));
+    words.appendChild(el("span", "hint", help));
+    wrap.appendChild(input); wrap.appendChild(words); capabilities.appendChild(wrap);
+    return input;
+  };
+  toggle("read_enabled", "Read and search", "Include this vault in local retrieval.");
+  toggle("model_exposure", "Share with the answering model",
+    "Allow content to enter model prompts. The connected model may be hosted remotely.");
+  const writable = toggle("write_enabled", "Allow writing",
+    "Create and update notes only in the folders allowed below.");
+  toggle("allow_publish", "Allow plan rendering hooks",
+    "Permit the configured plan rendering or publication hook for this vault.");
+  form.appendChild(capabilities);
+
+  const destinations = el("div", "vault-config-fields");
+  form.appendChild(destinations);
+  field("capture_dir", "Capture inbox", source.capture_dir || "inbox",
+    "New ideas go here; use a relative folder such as inbox/notes.");
+  field("write_dirs", "Writable folders", (source.write_dirs || []).join(", "),
+    "Comma-separated relative folders. Include the capture inbox.");
+  field("protected_dirs", "Protected folders", (source.protected_dirs || []).join(", "),
+    "These folders and their contents cannot be changed, even inside a writable folder.", true);
+  field("model_exclude_dirs", "Folders hidden from models", (source.model_exclude_dirs || []).join(", "),
+    "Comma-separated relative folders. Keep local reading available while excluding these contents from model prompts.", true);
+  // Keep these policy fields together after the capability controls.
+  ["capture_dir", "write_dirs", "protected_dirs", "model_exclude_dirs"].forEach((key) =>
+    destinations.appendChild(controls[key].parentElement));
+  const defaultWrap = el("label", "vault-config-toggle vault-config-default");
+  const useDefault = el("input"); useDefault.type = "checkbox";
+  useDefault.checked = !!source.default_destination;
+  useDefault.disabled = !useDefault.checked && (!writable.checked || !source.connected);
+  writable.onchange = () => {
+    useDefault.disabled = !useDefault.checked && (!writable.checked || !source.connected);
+  };
+  defaultWrap.appendChild(useDefault);
+  defaultWrap.appendChild(el("span", "", "Use as the default destination when no vault or context is selected"));
+  form.appendChild(defaultWrap);
+  const error = el("p", "vault-config-error"); error.setAttribute("role", "alert");
+  form.appendChild(error);
+  const actions = el("div", "setup-row vault-config-actions");
+  const save = el("button", "btn primary vault-config-save", "Save vault settings"); save.type = "submit";
+  actions.appendChild(save);
+  if (source.removable) {
+    const remove = el("button", "btn", "Disconnect"); remove.type = "button";
+    remove.onclick = () => setupAct(remove,
+      () => api("/api/vault/sources/" + encodeURIComponent(source.id), { method: "DELETE" }),
+      () => `${source.name} disconnected; its files were not changed`);
+    actions.appendChild(remove);
+  }
+  form.appendChild(actions);
+  form.appendChild(el("p", "hint", "Disconnecting removes the connection and keeps every file."));
+  form.onsubmit = (event) => {
+    event.preventDefault(); error.textContent = "";
+    const split = (key) => controls[key].value.split(",").map((x) => x.trim()).filter(Boolean);
+    const body = { id: source.id, name: controls.name.value.trim(), path: controls.path.value.trim(),
+      purpose: controls.purpose.value.trim(), contexts: split("contexts"),
+      capture_dir: controls.capture_dir.value.trim(), write_dirs: split("write_dirs"),
+      protected_dirs: split("protected_dirs"), model_exclude_dirs: split("model_exclude_dirs"),
+      default_destination: useDefault.checked };
+    ["read_enabled", "write_enabled", "model_exposure", "allow_publish"].forEach((key) => {
+      body[key] = controls[key].checked;
+    });
+    brainOpenSource = source.id;
+    setupAct(save, async () => {
+      try {
+        return await post("/api/vault/sources", body);
+      } catch (e) {
+        let message = e.message || "Could not save vault settings.";
+        try {
+          const detail = JSON.parse(message).detail;
+          if (typeof detail === "string") message = detail;
+        } catch (_) { /* Plain-text failures already carry a useful message. */ }
+        error.textContent = message;
+        throw new Error(message);
+      }
+    }, (r) => `${r.name} settings saved`).then(() => {
+      document.querySelector(`.vault-config[data-source-id="${CSS.escape(source.id)}"] .vault-config-save`)?.focus();
+    });
+  };
+  tile.appendChild(form); card.appendChild(tile);
+}
+
 function cardBrain(card, step, st) {
   card.appendChild(el("p", "hint",
-    "Connect one or more notes vaults (Obsidian, or any folder of markdown). " +
-    "Find and Chat with my Vault search them together and keep every citation " +
-    "attached to its source. Indexing stays on this machine."));
+    "Choose what Vira can read, write, and share with its answering model in each vault. " +
+    "Explicit destinations take priority over matching contexts and your default. " +
+    "When several destinations fit, Vira asks which one to use."));
+  const sources = (st.vault.sources || []).filter((source) => !source.primary || st.vault.root);
   card.appendChild(el("div", "setup-sub", "Connected vaults"));
-  (st.vault.sources || []).forEach((source) => {
-    const tile = el("div", "setup-prov" + (source.connected ? " on" : ""));
-    const head = el("div", "setup-prov-head");
-    head.appendChild(el("span", "setup-prov-name", source.name));
-    head.appendChild(el("span", "setup-prov-state",
-      source.primary ? "primary · write target" : "connected · read only"));
-    if (source.removable) {
-      const remove = el("button", "btn vault-source-remove", "Disconnect");
-      remove.onclick = () => setupAct(remove,
-        () => api("/api/vault/sources/" + encodeURIComponent(source.id), {
-          method: "DELETE",
-        }), () => `${source.name} disconnected; its files were not changed`);
-      head.appendChild(remove);
-    }
-    tile.appendChild(head);
-    tile.appendChild(el("div", "hint",
-      `${source.root} · ${source.notes} ${source.notes === 1 ? "note" : "notes"}` +
-      (source.legacy ? " · connected through legacy vault_dirs" : "")));
-    card.appendChild(tile);
-  });
-  card.appendChild(el("div", "setup-sub", "Primary vault"));
-  card.appendChild(el("p", "hint",
-    "Plans, definitions, and ingested notes are written here. Secondary " +
-    "vaults below are searched and read, never modified."));
-  const row = el("div", "setup-row");
-  const vin = el("input");
-  vin.className = "search";
-  vin.placeholder = st.platform === "win"
-    ? "C:\\Users\\you\\Documents\\Notes" : "~/Documents/Notes";
-  vin.value = st.vault.root || "";
-  const vb = el("button", "btn primary", "Use this vault");
-  vb.onclick = () => setupAct(vb,
-    () => api("/api/onboard/vault", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: vin.value.trim(), init: false }),
-    }), (r) => `Brain connected — ${r.notes} ${r.notes === 1 ? "note" : "notes"}`);
-  const vnb = el("button", "btn", "Start a new vault here");
-  vnb.onclick = () => setupAct(vnb,
-    () => api("/api/onboard/vault", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: vin.value.trim(), init: true }),
-    }), () => "Vault created and connected");
-  row.appendChild(vin);
-  row.appendChild(vb);
-  row.appendChild(vnb);
-  card.appendChild(row);
+  if (!sources.length) card.appendChild(el("p", "hint", "No vaults connected yet."));
+  sources.forEach((source) => brainSourceEditor(card, source));
+  const selected = st.vault.default_destination;
+  if (selected && !sources.some((source) => source.id === selected && source.connected && source.write_enabled)) {
+    card.appendChild(el("p", "vault-config-error",
+      "The selected default destination is unavailable or read only. Saves without a destination will wait for a valid choice."));
+    const clear = el("button", "btn", "Clear unavailable default");
+    clear.onclick = () => setupAct(clear,
+      () => post("/api/vault/default-destination", { source_id: "" }),
+      () => "Default cleared; choose a destination or configure a context");
+    card.appendChild(clear);
+  }
+  if (!st.vault.default_destination) card.appendChild(el("p", "hint",
+    "No default selected. A single writable destination is used automatically; with several, choose a vault or configure a context."));
 
-  card.appendChild(el("div", "setup-sub", "Add a read-only vault"));
-  const add = el("div", "setup-row");
-  const name = el("input");
-  name.className = "search"; name.placeholder = "Name, e.g. Work notes";
-  const path = el("input");
-  path.className = "search";
-  path.placeholder = st.platform === "win"
-    ? "C:\\Users\\you\\Documents\\Work" : "~/Documents/Work";
-  const button = el("button", "btn", "Add vault");
-  button.onclick = () => setupAct(button,
-    () => api("/api/vault/sources", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.value.trim(), path: path.value.trim() }),
-    }), (source) => `${source.name} connected — ${source.notes} ` +
-      `${source.notes === 1 ? "note" : "notes"}`);
-  add.appendChild(name); add.appendChild(path); add.appendChild(button);
-  card.appendChild(add);
+  if (!st.vault.root) {
+    card.appendChild(el("div", "setup-sub", "Primary vault"));
+    card.appendChild(el("p", "hint", "Connect an existing folder, or create your first notes vault."));
+    const row = el("div", "setup-row");
+    const vin = el("input", "search");
+    vin.setAttribute("aria-label", "Primary vault folder");
+    vin.placeholder = st.platform === "win" ? "C:\\Users\\you\\Documents\\Notes" : "~/Documents/Notes";
+    const vb = el("button", "btn primary", "Use this vault");
+    vb.onclick = () => setupAct(vb,
+      () => post("/api/onboard/vault", { path: vin.value.trim(), init: false }),
+      () => "Primary vault connected");
+    const vnb = el("button", "btn", "Start a new vault here");
+    vnb.onclick = () => setupAct(vnb,
+      () => post("/api/onboard/vault", { path: vin.value.trim(), init: true }),
+      () => "Vault created and connected");
+    row.appendChild(vin); row.appendChild(vb); row.appendChild(vnb); card.appendChild(row);
+  }
+
+  card.appendChild(el("div", "setup-sub", "Add a vault"));
+  card.appendChild(el("p", "hint", "New connections start with writing off. Configure allowed folders after connecting."));
+  const add = el("form", "setup-row vault-config-add");
+  const name = el("input", "search"); name.placeholder = "Name, e.g. Work notes";
+  name.setAttribute("aria-label", "New vault name");
+  const path = el("input", "search");
+  path.setAttribute("aria-label", "New vault folder");
+  path.placeholder = st.platform === "win" ? "C:\\Users\\you\\Documents\\Work" : "~/Documents/Work";
+  path.required = true;
+  const button = el("button", "btn", "Add vault"); button.type = "submit";
+  add.onsubmit = (event) => {
+    event.preventDefault();
+    setupAct(button, async () => {
+      const source = await post("/api/vault/sources", { name: name.value.trim(), path: path.value.trim() });
+      brainOpenSource = source.id;
+      return source;
+    }, (source) => `${source.name} connected; choose its permissions below`);
+  };
+  add.appendChild(name); add.appendChild(path); add.appendChild(button); card.appendChild(add);
 }
 
 function cardMail(card, step, st) {
@@ -16057,6 +16267,7 @@ async function openNoteWindow(path, title, anchor) {
     return;
   }
   const win = el("div", "fwin note-window");
+  win.dataset.notePath = path;
   const bar = el("div", "fwin-bar");
   const close = el("button", "fwin-close");
   close.title = "Close window";
@@ -25110,6 +25321,7 @@ const HASH_ROUTES = {
   "setup": (rest) => {
     openApp("setup");
     if (rest[0] === "notifications") dashJump("notifications");
+    if (rest[0] === "brain") dashJump("brain");
   },
   "subs-visuals": "subsviz",
   "brief": "brief",

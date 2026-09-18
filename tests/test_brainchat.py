@@ -66,7 +66,7 @@ class BrainChatTest(unittest.TestCase):
         # asserting a literal is part of how the old 10 sat unexamined.
         search.assert_called_once_with(
             "What did I decide?",
-            limit=brainchat.vault.ask_hits(brainchat.BUDGET))
+            limit=brainchat.vault.ask_hits(brainchat.BUDGET), for_model=True)
         ask.assert_called_once_with("What did I decide?", hits=HITS)
         self.assertIn("PRIOR CONCEPTS", complete.call_args.args[0])
 

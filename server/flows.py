@@ -635,16 +635,23 @@ def save_flow(payload, save_as=False):
 
 
 def run_flow(flow_id, input_text, cwd=None, notify=False, output="",
-             idea_id=None, provider=None):
+             idea_id=None, provider=None, vault_destination=None, vault_context=None):
     if flow_id.startswith("routine:"):
         row = routines.get_routine(flow_id.split(":", 1)[1])
         if not row:
             raise KeyError(flow_id)
+        row = {**row}
+        if vault_destination is not None:
+            row["vault_destination"] = vault_destination
+        if vault_context is not None:
+            row["vault_context"] = vault_context
         return routines.dispatch(row)
     return circuits.start_run(flow_id, input_text, cwd=cwd, notify=notify,
                               source="forge", idea_id=idea_id,
                               flow_options={"output": output},
-                              provider=provider)
+                              provider=provider,
+                              vault_destination=vault_destination,
+                              vault_context=vault_context)
 
 
 DEFAULT_IDEA_TEMPLATE = "plan-build-judge"

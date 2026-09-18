@@ -567,6 +567,8 @@ def record_launch(job):
         "provider": job.get("provider") or "anthropic",
         "permission_mode": job.get("permission_mode"),
         "publish_plan": bool(job.get("publish_plan")),
+        "vault_destination": job.get("vault_destination") or "",
+        "vault_context": job.get("vault_context") or "",
         "idea_id": job.get("idea_id"),
         "mode": job.get("mode"),
         "read_only": bool(job.get("read_only")),
@@ -691,6 +693,17 @@ def record_session(jid, session_id, transport=""):
                 changed = True
             return changed
         return False
+    _mutate(fn)
+
+
+def record_plan(jid, receipt):
+    """Keep the source-aware save receipt after the detached job is pruned."""
+    def fn(s):
+        row = next((r for r in s["jobs"] if r["id"] == jid), None)
+        if row is None:
+            return False
+        row["plan"] = dict(receipt or {})
+        return True
     _mutate(fn)
 
 

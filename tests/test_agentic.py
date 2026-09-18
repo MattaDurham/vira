@@ -48,7 +48,8 @@ class VaultIndexTests(unittest.TestCase):
         (self.vault_dir / "wiki" / "beach-house.md").write_text(
             "# Beach house\n## Plans\nRenovating the porch with cedar "
             "planks next summer.\n")
-        for p in [mock.patch.object(vault, "DB_PATH",
+        for p in [mock.patch.object(vault.settings, "CONFIG_PATH", root / "absent-config.json"),
+                  mock.patch.object(vault, "DB_PATH",
                                     root / "vault-index.sqlite"),
                   mock.patch.object(vault, "vault_root",
                                     lambda: self.vault_dir),

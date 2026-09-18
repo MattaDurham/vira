@@ -812,7 +812,8 @@ def get_run(run_id):
 
 
 def start_run(cid, input_text, cwd=None, notify=False, source="manual",
-              idea_id=None, overrides=None, flow_options=None, provider=None):
+              idea_id=None, overrides=None, flow_options=None, provider=None,
+              vault_destination=None, vault_context=None):
     circ = get_circuit(cid)
     if not circ:
         raise KeyError(cid)
@@ -846,6 +847,8 @@ def start_run(cid, input_text, cwd=None, notify=False, source="manual",
         "circuit_id": cid, "circuit_name": circ["name"],
         "input": input_text, "cwd": cwd or None, "idea_id": idea_id,
         "provider": provider,
+        "vault_destination": str(vault_destination or "").strip(),
+        "vault_context": str(vault_context or "").strip(),
         "status": "running", "source": source, "notify": bool(notify),
         "launch_options": flow_options,
         "started": _now(), "finished": None, "error": "",
@@ -856,6 +859,12 @@ def start_run(cid, input_text, cwd=None, notify=False, source="manual",
                               "result_text": "", "decision": None}
                    for st in stages},
     }
+
+    if (run["vault_destination"] or run["vault_context"]
+            or any(writes_a_plan(stage, run) for stage in stages)):
+        from . import plans
+        spec = plans.destination_spec(run["vault_destination"], run["vault_context"])
+        run["vault_destination"] = spec["id"]
 
     def fn(s):
         s["runs"].append(run)
@@ -1571,6 +1580,8 @@ class Driver(threading.Thread):
             model=model or None, provider=provider or None,
             mode=mode, read_only=read_only,
             publish_plan=writes_a_plan(st_def, run),
+            vault_destination=run.get("vault_destination") or None,
+            vault_context=run.get("vault_context") or None,
             meta={"circuit_run": run["id"], "stage": sid,
                   "circuit": run["circuit_id"]},
             **launch_kw,

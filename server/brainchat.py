@@ -125,6 +125,10 @@ def _transcript(prior_turns):
     total, per_turn = modelbudget.split(BUDGET, parts=max(len(prior_turns), 1))
     blocks, used = [], 0
     for turn in reversed(prior_turns):
+        if any(not vault.model_path_allowed(c.get("path"))
+               for c in turn.get("citations", []) + turn.get("hits", [])
+               if isinstance(c, dict)):
+            continue
         block = ("User: " + str(turn.get("question") or "")[:per_turn]
                  + "\nAssistant: " + str(turn.get("answer") or "")[:per_turn])
         # `split` FLOORS a part at a few hundred characters, so parts x
@@ -312,7 +316,8 @@ def ask(question, session_id=None):
     try:
         from . import research
         if research.may_answer(question):
-            research_result = research.answer_question(question)
+            if vault.model_path_allowed("wiki/index.md"):
+                research_result = research.answer_question(question)
     except Exception:  # a dormant graph must never break ordinary vault chat
         research_result = None
     if research_result:
@@ -328,7 +333,7 @@ def ask(question, session_id=None):
         # concept prompt read different sets and nobody could see it.
         # vault.ask_hits() is the single answer, budgeted against the
         # backend that will read it and the engine's own prompt ceiling.
-        hits = vault.search(question, limit=vault.ask_hits(BUDGET))
+        hits = vault.search(question, limit=vault.ask_hits(BUDGET), for_model=True)
         answer = _answer_question(question, session.get("turns") or [], hits)
     answer_text = str(answer.get("answer") or "")
 
@@ -336,7 +341,9 @@ def ask(question, session_id=None):
     if answer_text.strip() and hits:
         try:
             raw = _extract_json(suggest.complete(_concept_prompt(
-                question, answer_text, hits, session.get("concepts") or [])))
+                question, answer_text, hits, [c for c in session.get("concepts", [])
+                    if all(vault.model_path_allowed(path) for path in
+                           [c.get("primary_path")] + c.get("related_paths", []))])))
             concepts, followups, clusters = _validate_concepts(raw, hits)
         except Exception:  # the answer is useful even if its companions fail
             pass

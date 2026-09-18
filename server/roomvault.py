@@ -51,7 +51,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from . import readingroom, vault
+from . import readingroom, vault, vaultwrite
 
 ROOMS_SUBDIR = "wiki/rooms"
 HUB_SUBDIR = "wiki"
@@ -101,6 +101,14 @@ def _vault_ref(item, root):
     """
     raw = (item.get("vault") or "").strip()
     if not raw:
+        return ""
+    if raw.startswith("@"):
+        sid, _, rel = raw[1:].partition("/")
+        spec = next((s for s in vault.source_specs() if s["id"] == sid), None)
+        if not spec or Path(spec["root"]).resolve() != Path(root).resolve():
+            return ""
+        raw = rel
+    if not vault._inside(root / raw, root) or (root / raw).is_symlink():
         return ""
     stem = Path(raw).stem
     if not stem:
@@ -257,17 +265,17 @@ def _preserve_created(new_text, path):
     return new_text, strip(old) != strip(new_text)
 
 
-def _write(path, text, dry_run):
+def _write(path, text, dry_run, spec):
+    expected_hash = vaultwrite.digest(path.read_text(encoding="utf-8")) if path.exists() else None
     text, changed = _preserve_created(text, path)
     if changed and not dry_run:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(path)
+        vaultwrite.write_note(spec, path.relative_to(spec["root"]).as_posix(), text,
+                              expected_hash=expected_hash,
+                              create_only=expected_hash is None)
     return changed
 
 
-def ingest(slug, dry_run=False):
+def ingest(slug, dry_run=False, destination=None):
     """Project one room's CATALOG into the vault. Since 2026-08-05 this
     mints no pointer notes — it renders the hub, linking each item to the
     best note that exists: the owner/reconciled summary, else the item's
@@ -280,11 +288,17 @@ def ingest(slug, dry_run=False):
     room = readingroom.load_room(slug)
     if room is None:
         raise IngestError(f"no such room: {slug}")
-    root = vault.vault_root()
+    from . import fullingest
+    try:
+        spec = fullingest._destination(destination, room=room)
+    except fullingest.StageError as exc:
+        raise IngestError(str(exc)) from exc
+    if not dry_run:
+        fullingest.set_destination(slug, spec["id"])
+    root = Path(spec["root"])
     if not root.exists():
         raise IngestError(f"vault root does not exist: {root}")
 
-    from . import fullingest
     known = _index_by_item_id(root / ROOMS_SUBDIR)
     summaries = fullingest.summaries_by_item(root)
     stems = _existing_stems(root)
@@ -306,20 +320,26 @@ def ingest(slug, dry_run=False):
         else:
             pending += 1
 
-    hub_path = root / HUB_SUBDIR / f"{slug}-reading-room.md"
-    hub_changed = _write(hub_path, hub_note(room, rows, stems), dry_run)
+    subdir = HUB_SUBDIR if spec["primary"] else str(spec["capture_dir"]).rstrip("/") + "/rooms"
+    try:
+        hub_path = vaultwrite.safe_path(spec, f"{subdir}/{slug}-reading-room.md")
+        hub_changed = _write(hub_path, hub_note(room, rows, stems), dry_run, spec)
+    except (ValueError, PermissionError, OSError) as exc:
+        raise IngestError(str(exc)) from exc
 
     orphans = sorted(p.name for iid, p in known.items()
                      if iid not in {i["id"] for i in room["items"]})
     return {
         "room": slug, "title": room["title"], "items": len(room["items"]),
         "linked": linked, "pending": pending,
-        "hub": str(hub_path.relative_to(root)), "hub_changed": hub_changed,
+        "hub": vault._public_path(spec, hub_path.relative_to(root).as_posix()),
+        "hub_changed": hub_changed, "source_id": spec["id"],
+        "source_name": spec["name"],
         "orphans": orphans, "dry_run": bool(dry_run),
     }
 
 
-def sync(slug):
+def sync(slug, destination=None):
     """Best-effort projection for a real entry point (the create_reading_room
     tool, the update route). Returns the summary dict, or None when the
     vault is unset, passive-blocked or unwritable — a room is never worth
@@ -336,7 +356,7 @@ def sync(slug):
     their material staged for the nightly synthesis without anyone
     remembering to run anything."""
     try:
-        res = ingest(slug)
+        res = ingest(slug, destination=destination) if destination else ingest(slug)
     except Exception:  # noqa: BLE001 — see above
         return None
     try:
@@ -429,7 +449,7 @@ def set_link(slug, item_id, path):
     return path
 
 
-def resolve(slug, items, root=None):
+def resolve(slug, items, root=None, destination=None):
     """Annotate each item with where its vault note actually is.
 
     Three states, and the caller must be able to tell them apart because
@@ -440,9 +460,19 @@ def resolve(slug, items, root=None):
       absent  — nothing, and only then may a surface say so
     """
     from . import fullingest
-    idx = notes_by_item(root)
+    room = readingroom.load_room(slug) or {}
+    try:
+        spec = fullingest._destination(destination, root=root, room=room, operation="read")
+    except fullingest.StageError:
+        # A disconnected source is an honest absence, never an invitation to
+        # resolve an identically named note in the default vault.
+        for it in items:
+            it["vault_note"] = ""
+            it["vault_note_kind"] = ""
+        return items
+    vroot = Path(spec["root"])
+    idx = notes_by_item(vroot)
     links = _load_links()
-    vroot = Path(root or vault.vault_root()).expanduser()
     summaries = fullingest.summaries_by_item(vroot)
     for it in items:
         owner = (it.get("vault") or "").strip()
@@ -454,8 +484,9 @@ def resolve(slug, items, root=None):
         if not found:
             note = summaries.get(it.get("id", ""))
             if note is not None:
-                found = str(note.relative_to(vroot).as_posix())
-        found = found or idx.get(it.get("id", ""))
+                found = vault._public_path(spec, note.relative_to(vroot).as_posix())
+        if not found and idx.get(it.get("id", "")):
+            found = vault._public_path(spec, idx[it["id"]])
         it["vault_note"] = found or ""
         it["vault_note_kind"] = "room" if found else ""
     return items

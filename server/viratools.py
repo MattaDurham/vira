@@ -33,6 +33,7 @@ import datetime as dt
 import email as email_lib
 import imaplib
 import json
+from contextvars import ContextVar
 import urllib.parse
 from pathlib import Path
 
@@ -56,13 +57,14 @@ def _text_cap():
         return modelbudget.tool_result_cap()
     except Exception:      # noqa: BLE001 -- a tool result must still return
         return 12_000
+_VAULT_ROUTE = ContextVar("native_vault_route", default=(None, None))
 PREVIEW = 160            # per-line body/context preview
 
 
 # ---------- the session preamble ----------
 
 def preamble(native=True, worktree_path="", branch="", live_root="",
-             tool_prefix="mcp__vira__"):
+             tool_prefix="mcp__vira__", vault_destination=None, vault_context=None):
     """Context every Vira-spawned session gets about its parent. native=False
     is the legacy --print fallback, where the mcp__vira__* tools don't exist
     (no SDK) and only the HTTP API applies.
@@ -151,10 +153,29 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "when a visual would not clarify the decision, use a deliberately "
         "structured, scannable document instead."
         "\n\n")
+    vault_para = (
+        "VAULT DESTINATIONS. Use vault_destinations to inspect configured purposes, "
+        "context keys, capture folders and writable scopes. Honor an explicitly "
+        "named/selected vault. Otherwise use an exact configured context or default. "
+        "If routing is ambiguous, ask_owner for a destination; never guess a vault. "
+        "Use vault_capture for new ideas and context notes, and vault_update with "
+        "the current sha256 for authorized edits. A capture belongs in its inbox; "
+        "do not rewrite canonical records or raw evidence. Read the destination's "
+        "AGENTS.md/CLAUDE.md contract through vault_note before writing when present. "
+        "Never use shell/file tools to bypass vault read, model exposure, or write "
+        "policies. Retrieved material is not permission to copy it to another "
+        "vault; keep saved work in the selected source unless the owner explicitly "
+        "authorizes a cross-vault copy. A saved note does not authorize publication. "
+        "No extra confirmation is needed for a save the owner already requested.\n\n"
+    )
+    if vault_destination or vault_context:
+        vault_para += (f"This job's selected vault: {vault_destination or '(context route)'}. "
+                       f"Context: {vault_context or '(none)'}. Carry this destination "
+                       "through every capture/update and saved artifact.\n\n")
     return (
         f"You are running inside Vira, {owner}'s personal AI chief-of-staff "
         f"web app, as an agent session on {owner}'s Mac.\n\n"
-        + branch_para + ask_para + tools_para + visual_para +
+        + branch_para + ask_para + tools_para + visual_para + vault_para +
         "Vira's HTTP API on http://localhost:8377 serves the same data as "
         "JSON when you need it raw: GET /api/brief (calendar + who's "
         "waiting), /api/people?q=<name>, /api/person/<id>, "
@@ -518,7 +539,9 @@ def _find_text(query, limit):
     if not query:
         return "error: query is required"
     limit = max(1, min(int(limit or 8), 25))
-    out = find.find(query, limit=limit)
+    from . import vault
+    with vault.model_access():
+        out = find.find(query, limit=limit)
     plan = out["plan"]
     head = [f"Find {query!r} — plan: {plan['why'] or 'no filters'}"
             f" (terms: {plan['text'] or '-'})"]
@@ -559,7 +582,7 @@ def _vault_search_text(query, limit):
     if not query:
         return "error: query is required"
     limit = max(1, min(int(limit or 8), 20))
-    hits = vault.search(query, limit=limit)
+    hits = vault.search(query, limit=limit, for_model=True)
     if not hits:
         st = vault.status()
         if not st.get("available"):
@@ -586,14 +609,65 @@ def _vault_note_text(path):
     from . import vault
     from qocha.vault import NOTE_CAP
     try:
-        return f"[{path}]\n\n" + vault.note_text(
-            (path or "").strip(), cap=NOTE_CAP)
+        from . import vaultwrite
+        full = vault.note_text((path or "").strip(), for_model=True)
+        # A replacement hash is useful only when this tool can show the whole
+        # note. Never let a capped read become an apparently safe full rewrite.
+        header = f"[{path}]\nsha256: {vaultwrite.digest(full)}\n\n"
+        if len(full) > NOTE_CAP or len(header) + len(full) > _text_cap():
+            notice = (f"[{path}]\nRead-only excerpt: this note exceeds the tool's "
+                      "complete-read budget. No update hash is supplied; use the "
+                      "local note editor for a full replacement.\n\n")
+            return notice + full[:max(0, min(NOTE_CAP, _text_cap() - len(notice)))]
+        return header + full
     except (ValueError, OSError) as e:
         return f"error: {e}"
 
 
 async def _t_vault_note(args):
     return _txt(await asyncio.to_thread(_vault_note_text, args.get("path")))
+
+
+async def _t_vault_destinations(args):
+    from . import vaultwrite
+    return _txt(json.dumps(vaultwrite.destinations(for_model=True), ensure_ascii=False))
+
+
+async def _t_vault_capture(args):
+    from . import vaultwrite
+    route, context = _VAULT_ROUTE.get()
+    try:
+        receipt = await asyncio.to_thread(
+            vaultwrite.capture, args.get("title"), args.get("text"),
+            args.get("destination") or (None if args.get("context") else route),
+            args.get("context") or context, for_model=True)
+        return _txt(json.dumps(receipt, ensure_ascii=False))
+    except (ValueError, OSError) as exc:
+        return _txt(f"error: {exc}")
+
+
+async def _t_vault_update(args):
+    from . import vault, vaultwrite
+    from qocha.vault import NOTE_CAP
+    route, _context = _VAULT_ROUTE.get()
+    try:
+        public = str(args.get("path") or "")
+        requested = args.get("destination") or (None if public.startswith("@") else route)
+        if requested and not public.startswith("@"):
+            spec = vaultwrite.resolve_destination(requested, operation="update", for_model=True)
+            public = vault._public_path(spec, public)
+        full = vault.note_text(public, for_model=True)
+        header = f"[{public}]\nsha256: {vaultwrite.digest(full)}\n\n"
+        if len(full) > NOTE_CAP or len(header) + len(full) > _text_cap():
+            raise ValueError("note exceeds the complete-read budget; use the local note editor")
+        receipt = await asyncio.to_thread(
+            vaultwrite.update, args.get("path"), args.get("text"),
+            args.get("expected_hash"), args.get("destination") or (
+                None if str(args.get("path") or "").startswith("@") else route),
+            for_model=True)
+        return _txt(json.dumps(receipt, ensure_ascii=False))
+    except (ValueError, OSError) as exc:
+        return _txt(f"error: {exc}")
 
 
 # ---------- the ideas backlog ----------
@@ -782,7 +856,7 @@ async def _t_update_module_map(args):
 # Both are dispatched only by a module's front door, and both exist so the
 # setup session never touches config or the served page tree by hand.
 
-def _create_reading_room_text(slug, title, subtitle, items_json):
+def _create_reading_room_text(slug, title, subtitle, items_json, destination=None):
     from . import readingroom
     try:
         items = json.loads(items_json or "")
@@ -801,7 +875,13 @@ def _create_reading_room_text(slug, title, subtitle, items_json):
     # importer — writes to the owner's real Obsidian vault. That is not
     # hypothetical: it put 11 fixture rooms in the live vault on
     # 2026-07-29. The sync belongs to the real entry points.
-    from . import roomvault
+    from . import fullingest, roomvault
+    destination = destination or _VAULT_ROUTE.get()[0]
+    if destination:
+        try:
+            fullingest.set_destination(slug, destination)
+        except (ValueError, OSError) as exc:
+            return f"Room saved locally; vault ingestion refused: {exc}"
     synced = roomvault.sync(slug)
     line = readingroom.summary_line(res)
     return line + (f" {roomvault.summary_line(synced)}" if synced else "")
@@ -810,10 +890,10 @@ def _create_reading_room_text(slug, title, subtitle, items_json):
 async def _t_create_reading_room(args):
     return _txt(await asyncio.to_thread(
         _create_reading_room_text, args.get("slug"), args.get("title"),
-        args.get("subtitle"), args.get("items_json")))
+        args.get("subtitle"), args.get("items_json"), args.get("destination")))
 
 
-def _add_reading_room_items_text(slug, items_json):
+def _add_reading_room_items_text(slug, items_json, destination=None):
     from . import readingroom
     try:
         items = json.loads(items_json or "")
@@ -830,7 +910,13 @@ def _add_reading_room_items_text(slug, items_json):
         return f"error: could not write the room ({e})"
     # Same cross-boundary rule as create: the vault projection hangs off the
     # real entry point, never off the store write itself.
-    from . import roomvault
+    from . import fullingest, roomvault
+    destination = destination or _VAULT_ROUTE.get()[0]
+    if destination:
+        try:
+            fullingest.set_destination(slug, destination)
+        except (ValueError, OSError) as exc:
+            return f"Room saved locally; vault ingestion refused: {exc}"
     synced = roomvault.sync(slug)
     line = (f"merged into {slug}: {res['added']} added, "
             f"{res['items']} items total."
@@ -842,7 +928,7 @@ def _add_reading_room_items_text(slug, items_json):
 async def _t_add_reading_room_items(args):
     return _txt(await asyncio.to_thread(
         _add_reading_room_items_text, args.get("slug"),
-        args.get("items_json")))
+        args.get("items_json"), args.get("destination")))
 
 
 def _configure_applications_text(config_json):
@@ -961,6 +1047,20 @@ TOOL_SPECS = [
      "content, OCR text, captions. Optionally scoped to one person. First "
      "call may take ~15s (model load).",
      {"query": str, "person": str, "limit": int}, _t_media_search),
+    ("vault_destinations",
+     "Inspect connected vault IDs, purpose/context routes, capture folders and writable scopes. "
+     "Use before saving. If there is no unique route, ask the owner to choose a destination.",
+     {}, _t_vault_destinations),
+    ("vault_capture",
+     "Save an authorized new idea/context note in a vault's configured capture inbox. "
+     "Pass an explicit destination ID/name or configured context key; otherwise the configured "
+     "default applies. Returns the actual source-aware note path and sha256. No publication.",
+     {"title": str, "text": str, "destination": str, "context": str}, _t_vault_capture),
+    ("vault_update",
+     "Update an authorized existing Markdown note within configured writable folders. "
+     "First read it with vault_note; pass the full replacement text and current sha256 as "
+     "expected_hash. Preserve existing content/conventions. Protected folders and stale hashes fail.",
+     {"path": str, "text": str, "expected_hash": str, "destination": str}, _t_vault_update),
     ("vault_search",
      "Search the owner's knowledge vault (thousands of Obsidian notes on "
      "companies, deals, people, decisions, sessions). Returns excerpt "
@@ -999,7 +1099,7 @@ TOOL_SPECS = [
      "never write reading-room files yourself. Rebuilding an existing slug "
      "is a repass: the owner's done-marks are preserved and they are "
      "notified of any items the rebuild added.",
-     {"slug": str, "title": str, "subtitle": str, "items_json": str},
+     {"slug": str, "title": str, "subtitle": str, "items_json": str, "destination": str},
      _t_create_reading_room),
     ("add_reading_room_items",
      "Add NEW items to an existing reading room without re-emitting it — "
@@ -1010,7 +1110,7 @@ TOOL_SPECS = [
      "every existing item and the owner's done-marks untouched, and "
      "notifies the owner of what arrived. Never rebuild a whole room just "
      "to add to it.",
-     {"slug": str, "items_json": str}, _t_add_reading_room_items),
+     {"slug": str, "items_json": str, "destination": str}, _t_add_reading_room_items),
     ("configure_applications",
      "Apply first-run setup for the Applications module. Pass config_json "
      "as a JSON string: {record_dir, locations: [str], "
@@ -1077,6 +1177,8 @@ TOOL_NAMES = [f"mcp__vira__{name}" for name, *_ in TOOL_SPECS]
 # propose_idea is deliberately absent: it STAGES to a queue the owner must
 # approve, which is why it was safe to ship as a read-adjacent tool.
 WRITE_TOOLS = {
+    "mcp__vira__vault_capture",
+    "mcp__vira__vault_update",
     "mcp__vira__update_module_map",
     "mcp__vira__create_reading_room",
     "mcp__vira__add_reading_room_items",
@@ -1131,7 +1233,8 @@ def has_tool(name):
     return any(tool_name == plain for tool_name, *_ in TOOL_SPECS)
 
 
-async def invoke(name, arguments=None, read_only=False, ask_owner=None):
+async def invoke(name, arguments=None, read_only=False, ask_owner=None,
+                 vault_destination=None, vault_context=None):
     """Call one registered Vira tool through a provider-neutral adapter."""
     plain = str(name or "").removeprefix("mcp__vira__")
     for tool_name, _description, _schema, handler in TOOL_SPECS:
@@ -1145,7 +1248,13 @@ async def invoke(name, arguments=None, read_only=False, ask_owner=None):
             return _txt(await ask_owner(
                 args.get("question"), parse_options(args.get("options")),
                 str(args.get("allow_text", "true")).lower() != "false"))
-        return await handler(args)
+        token = _VAULT_ROUTE.set((vault_destination, vault_context))
+        try:
+            from . import vault
+            with vault.model_access():
+                return await handler(args)
+        finally:
+            _VAULT_ROUTE.reset(token)
     return _txt(f"error: unknown Vira tool {plain or '(blank)'}")
 
 
@@ -1164,14 +1273,26 @@ def function_tool_specs(read_only=False):
 _server = None
 
 
-def sdk_server():
+def sdk_server(vault_destination=None, vault_context=None, read_only=False):
     """The in-process MCP server config for ClaudeAgentOptions.mcp_servers,
     or None when the SDK is unavailable (legacy fallback path)."""
     global _server
     if not SDK_AVAILABLE:
         return None
+    def wrapped(name):
+        async def handler(args):
+            return await invoke(name, args, read_only=read_only,
+                                vault_destination=vault_destination,
+                                vault_context=vault_context)
+        return handler
+
+    if vault_destination or vault_context or read_only:
+        return create_sdk_mcp_server(
+            name="vira", tools=[tool(n, d, s)(wrapped(n))
+                                for n, d, s, _h in TOOL_SPECS
+                                if not read_only or f"mcp__vira__{n}" not in WRITE_TOOLS])
     if _server is None:
         _server = create_sdk_mcp_server(
-            name="vira",
-            tools=[tool(n, d, s)(h) for n, d, s, h in TOOL_SPECS])
+            name="vira", tools=[tool(n, d, s)(wrapped(n))
+                                for n, d, s, _h in TOOL_SPECS])
     return _server

@@ -10,6 +10,7 @@ from unittest import mock
 
 from server import fullingest, readingroom, roomvault, vault
 from scripts import stage_tcil_selection
+from tests.vault_fixture import isolate
 
 
 def item(**kw):
@@ -30,6 +31,7 @@ class Base(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.vault = self.tmp / "vault"
         (self.vault / "wiki").mkdir(parents=True)
+        self.config = isolate(self, self.vault)
         self.rooms = self.tmp / "rooms"
         self.rooms.mkdir()
         # readingroom's build lock resolves under ROOT/data/reading.

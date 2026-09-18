@@ -42,7 +42,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote
 
-from . import imageatlas, jsonstore
+from . import imageatlas, jsonstore, vaultwrite
 
 try:
     from chaska.config import Config as _ChaskaConfig, EXCLUDE_DIRS as _EXCLUDE
@@ -348,6 +348,26 @@ def _inbound_links(root: Path, moving: set[str]) -> dict:
 
 # ----------------------------------------------------------------- apply ---
 
+def _authorize_move(src_root, dest_root, rel):
+    """Image approval never bypasses a connected text vault's write policy."""
+    _contained_rel(src_root, rel)
+    _contained_rel(dest_root, rel)
+    src = vaultwrite.authorize_existing_path(src_root / rel, operation="move")
+    dst = vaultwrite.authorize_existing_path(dest_root / rel, operation="move")
+    return src, dst
+
+
+def _planned_new_root(new_vault):
+    # Same default location as imageatlas.register_vault, without creating a
+    # skeleton before policies for all planned paths have been checked.
+    if new_vault.get("root"):
+        return Path(new_vault["root"]).expanduser()
+    name = str(new_vault.get("name") or "").strip()
+    vid = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
+    vid = re.sub(r"-+", "-", vid)[:40]
+    return Path.home() / "vaults" / vid
+
+
 def apply_plan(pid: str) -> dict:
     """Execute an approved plan. Refused on passive instances (the moves
     land in the real vaults). Verifies the disk still matches the plan —
@@ -375,6 +395,15 @@ def apply_plan(pid: str) -> dict:
             raise ValueError("the vault changed since this plan was made — "
                              "re-plan. Drifted: " + ", ".join(drifted[:5]))
 
+        moving = [rec["path"] for rec in plan["files"]] + \
+                 [rec["path"] for rec in plan["notes"]]
+        # Preflight EVERY source and destination before the first move (or
+        # registration). A single protected companion note rejects the plan.
+        prospective_dest = (_root_of(plan["dest"]) if plan["dest"] else
+                            _planned_new_root(plan["new_vault"] or {}))
+        for rel in moving:
+            _authorize_move(src_root, prospective_dest, rel)
+
         # destination: existing vault, or create + register the new one now
         if plan["dest"]:
             dest_root = _root_of(plan["dest"])
@@ -386,8 +415,6 @@ def apply_plan(pid: str) -> dict:
             dest_root = Path(entry["root"])
             dest_vid = entry["id"]
 
-        moving = [rec["path"] for rec in plan["files"]] + \
-                 [rec["path"] for rec in plan["notes"]]
         collisions = [rel for rel in moving if (dest_root / rel).exists()]
         if collisions:
             raise ValueError("destination already has: " + ", ".join(collisions[:5]))
@@ -395,13 +422,12 @@ def apply_plan(pid: str) -> dict:
         receipt: list[dict] = []
         failures: list[dict] = []
         for rel in moving:
-            src = src_root / rel
-            dst = dest_root / rel
             try:
+                src, dst = _authorize_move(src_root, dest_root, rel)
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src), str(dst))
                 receipt.append({"path": rel})
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 failures.append({"path": rel, "error": str(e)})
 
         # empty anchor dirs left behind by fully-moved pages
@@ -409,8 +435,9 @@ def apply_plan(pid: str) -> dict:
             parent = (src_root / rel["path"]).parent
             try:
                 if parent.is_dir() and parent != src_root and not any(parent.iterdir()):
+                    vaultwrite.authorize_existing_path(parent, operation="move")
                     parent.rmdir()
-            except OSError:
+            except (OSError, ValueError):
                 pass
 
         migrated = _migrate_sidecar_rows(src_root, dest_root,
@@ -448,6 +475,8 @@ def undo_plan(pid: str) -> dict:
         dest_root = Path(plan.get("dest_root") or "")
         if not dest_root.is_dir():
             raise ValueError("destination vault is gone")
+        for rec in plan.get("receipt", []):
+            _authorize_move(dest_root, src_root, rec["path"])
         returned: list[dict] = []
         failures: list[dict] = []
         for rec in plan.get("receipt", []):
@@ -461,10 +490,11 @@ def undo_plan(pid: str) -> dict:
                 failures.append({"path": rel, "error": "source path re-occupied"})
                 continue
             try:
+                src, dst = _authorize_move(dest_root, src_root, rel)
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src), str(dst))
                 returned.append({"path": rel})
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 failures.append({"path": rel, "error": str(e)})
         _migrate_sidecar_rows(dest_root, src_root, [r["path"] for r in returned])
 

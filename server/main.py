@@ -633,6 +633,8 @@ def api_plan_remove(pid: str):
         return plans.delete_plan(pid)
     except KeyError:
         raise HTTPException(404, "unknown plan")
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/changelog")
@@ -1905,6 +1907,31 @@ class RoomLinkReq(BaseModel):
     path: str = ""
 
 
+class RoomDestinationReq(BaseModel):
+    destination: str
+
+
+@app.post("/api/reading/rooms/{name}/destination")
+def api_reading_room_destination(name: str, req: RoomDestinationReq):
+    from . import fullingest
+    try:
+        return fullingest.set_destination(name, req.destination)
+    except fullingest.StageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/reading/rooms/{name}/ingest")
+def api_reading_room_ingest(name: str, req: RoomDestinationReq):
+    from . import fullingest
+    try:
+        destination = fullingest.set_destination(name, req.destination)
+        hub = roomvault.ingest(name, destination=destination["source_id"])
+        fullingest.sync(name, destination=destination["source_id"])
+        return {**destination, "hub": hub, "staging": "started"}
+    except (fullingest.StageError, roomvault.IngestError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/reading/rooms/{name}/link")
 def api_reading_room_link(name: str, req: RoomLinkReq):
     """Attach a vault note to an item by hand — for a note the derivation
@@ -1979,6 +2006,7 @@ def api_reading_room_definition(name: str, req: RoomDefinitionReq):
 class VaultPersonReq(BaseModel):
     name: str
     qualifier: str = ""
+    destination: str = ""
 
 
 @app.get("/api/vault/people")
@@ -1995,7 +2023,7 @@ def api_vault_people_create(req: VaultPersonReq):
     curating a room grows the people graph as a side effect."""
     from . import vaultpeople
     try:
-        return vaultpeople.create_stub(req.name, req.qualifier)
+        return vaultpeople.create_stub(req.name, req.qualifier, destination=req.destination)
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except FileExistsError as e:
@@ -2871,6 +2899,22 @@ class VaultSourceReq(BaseModel):
     path: str
     name: str | None = ""
     id: str | None = None
+    read_enabled: bool | None = None
+    write_enabled: bool | None = None
+    model_exposure: bool | None = None
+    purpose: str | None = None
+    contexts: list[str] | None = None
+    capture_dir: str | None = None
+    write_dirs: list[str] | None = None
+    protected_dirs: list[str] | None = None
+    model_exclude_dirs: list[str] | None = None
+    dirs: list[str] | None = None
+    allow_publish: bool | None = None
+    default_destination: bool | None = None
+
+
+class VaultDefaultReq(BaseModel):
+    source_id: str = ""
 
 
 class OnboardAiReq(BaseModel):
@@ -3038,13 +3082,25 @@ def api_onboard_vault(req: OnboardVaultReq):
 
 @app.get("/api/vault/sources")
 def api_vault_sources():
-    return {"sources": onboard.status()["vault"]["sources"]}
+    state = onboard.status()["vault"]
+    return {"sources": state["sources"],
+            "default_destination": state.get("default_destination", "")}
 
 
 @app.post("/api/vault/sources")
 def api_vault_source_set(req: VaultSourceReq):
     try:
-        return onboard.vault_source_set(req.path, req.name or "", req.id)
+        changes = req.model_dump(exclude_none=True,
+                                 exclude={"path", "name", "id"})
+        return onboard.vault_source_set(req.path, req.name or "", req.id, **changes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/vault/default-destination")
+def api_vault_default_set(req: VaultDefaultReq):
+    try:
+        return onboard.vault_default_set(req.source_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -3167,6 +3223,8 @@ def api_actions():
 
 
 class RunReq(BaseModel):
+    vault_destination: str | None = None
+    vault_context: str | None = None
     prompt: str
     cwd: str | None = None
     permission_mode: str | None = None
@@ -3210,7 +3268,9 @@ def api_run(req: RunReq):
                           req.publish_plan, req.idea_id, req.mode,
                           read_only=req.read_only, provider=req.provider,
                           subject=req.subject, about=req.about,
-                          kind_label=req.kind_label)
+                          kind_label=req.kind_label,
+                          vault_destination=req.vault_destination,
+                          vault_context=req.vault_context)
     except models.ProviderDisabled as e:
         # A subclass of ValueError, so it must be caught FIRST: the branch
         # below is the live-session cap, and "too many sessions" is the
@@ -3530,6 +3590,8 @@ def api_flow_update(flow_id: str, req: FlowReq):
 
 
 class FlowRunReq(BaseModel):
+    vault_destination: str | None = None
+    vault_context: str | None = None
     input: str = ""
     cwd: str | None = None
     notify: bool = False
@@ -3548,7 +3610,9 @@ def api_flow_run(flow_id: str, req: FlowRunReq):
         return flows.run_flow(flow_id, req.input, cwd=req.cwd,
                               notify=req.notify, output=req.output or "",
                               provider=req.provider,
-                              idea_id=req.idea_id)
+                              idea_id=req.idea_id,
+                              vault_destination=req.vault_destination,
+                              vault_context=req.vault_context)
     except KeyError:
         raise HTTPException(404, "unknown flow")
     except ValueError as e:
@@ -3598,11 +3662,52 @@ def api_vault_search(q: str, limit: int = 10):
 @app.get("/api/vault/note")
 def api_vault_note(path: str):
     try:
-        return {"path": path, "text": vault.note_text(path)}
+        from . import vaultwrite
+        text = vault.note_text(path)
+        return {"path": path, "text": text, "sha256": vaultwrite.digest(text)}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except OSError:
         raise HTTPException(404, "note not found")
+
+
+class VaultCaptureReq(BaseModel):
+    title: str
+    text: str
+    destination: str | None = None
+    context: str | None = None
+
+
+class VaultUpdateReq(BaseModel):
+    path: str
+    text: str
+    expected_hash: str
+    destination: str | None = None
+
+
+@app.get("/api/vault/destinations")
+def api_vault_destinations():
+    from . import vaultwrite
+    return {"destinations": vaultwrite.destinations(),
+            "default_destination": settings.get("vault_default_destination") or ""}
+
+
+@app.post("/api/vault/capture")
+def api_vault_capture(req: VaultCaptureReq):
+    from . import vaultwrite
+    try:
+        return vaultwrite.capture(req.title, req.text, req.destination, req.context)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/vault/update")
+def api_vault_update(req: VaultUpdateReq):
+    from . import vaultwrite
+    try:
+        return vaultwrite.update(req.path, req.text, req.expected_hash, req.destination)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(409, str(exc))
 
 
 @app.get("/api/vault/resolve")
@@ -3624,16 +3729,19 @@ def api_vault_stems():
 # ------------------------------------------------------------- definitions
 
 @app.get("/api/define")
-def api_define(term: str):
+def api_define(term: str, destination: str = "", context: str = ""):
     with admission.cpu("define"):
         try:
-            return define.lookup(term)
+            return define.lookup(term, destination=destination, context=context)
         except define.DefineError as e:
             raise HTTPException(400, str(e))
 
 
 class DefineReq(BaseModel):
     term: str
+    destination: str = ""
+    context: str = ""
+    source_id: str = ""
     # The passage the term was selected in. A caller that KNOWS the source -
     # the note on screen, an article a lookup came from - hands it in and it
     # always survives retrieval, instead of competing with the whole vault
@@ -3647,10 +3755,12 @@ class DefineReq(BaseModel):
 def api_define_post(req: DefineReq):
     src = None
     if (req.text or "").strip():
-        src = {"text": req.text, "path": req.path, "label": req.label}
+        src = {"text": req.text, "path": req.path, "label": req.label,
+               "source_id": req.source_id}
     with admission.cpu("define"):
         try:
-            return define.lookup(req.term, source=src)
+            return define.lookup(req.term, source=src, destination=req.destination,
+                                 context=req.context)
         except define.DefineError as e:
             raise HTTPException(400, str(e))
 
@@ -3662,6 +3772,8 @@ def api_define_status():
 
 class SourceReq(BaseModel):
     term: str
+    destination: str = ""
+    context: str = ""
 
 
 @app.post("/api/define/source")
@@ -3675,12 +3787,16 @@ def api_define_source(req: SourceReq):
         raise HTTPException(403, "passive instance: sourcing writes the "
                                  "live vault")
     try:
-        jid = jobs.launch(define.source_prompt(term), cwd=str(ROOT),
-                          meta={"define_term": term},
+        spec = define._destination(req.destination, req.context, "definition", for_model=True)
+        jid = jobs.launch(define.source_prompt(term, spec["id"]), cwd=str(ROOT),
+                          meta={"define_term": term, "vault_destination": spec["id"]},
+                          vault_destination=spec["id"], vault_context=req.context,
                           subject=term,
                           about=(f"Source a definition of '{term}': browse "
                                  "for it, cite only what could be fetched, "
                                  "and bank the card as a vault page."))
+    except define.DefineError as e:
+        raise HTTPException(400, str(e))
     except ValueError as e:
         raise HTTPException(429, str(e))
     return {"job_id": jid}
@@ -3757,6 +3873,8 @@ def api_circuit_stages(cid: str, req: CircuitStagesReq):
 
 
 class CircuitRunReq(BaseModel):
+    vault_destination: str | None = None
+    vault_context: str | None = None
     input: str
     cwd: str | None = None
     notify: bool = False
@@ -3769,7 +3887,9 @@ def api_circuits_run(cid: str, req: CircuitRunReq):
     try:
         return circuits.start_run(cid, req.input, cwd=req.cwd,
                                   notify=req.notify, overrides=req.stages,
-                                  provider=req.provider)
+                                  provider=req.provider,
+                                  vault_destination=req.vault_destination,
+                                  vault_context=req.vault_context)
     except KeyError:
         raise HTTPException(404, "unknown circuit")
     except ValueError as e:

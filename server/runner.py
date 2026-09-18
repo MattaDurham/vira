@@ -1085,7 +1085,10 @@ class Runner:
             # supervises exactly one session, so there is no ambiguity about
             # whose transcript the question belongs in.
             viratools.bind_ask(self.ask_owner)
-            vira_srv = viratools.sdk_server()
+            vira_srv = viratools.sdk_server(
+                vault_destination=spec.get("vault_destination"),
+                vault_context=spec.get("vault_context"),
+                read_only=bool(spec.get("read_only")))
             options = ClaudeAgentOptions(
                 cwd=spec["cwd"],
                 # See session.SESSION_DEFAULTS for why this is set at all:
@@ -1114,7 +1117,9 @@ class Runner:
                                "append": viratools.preamble(
                                    worktree_path=spec.get("worktree") or "",
                                    branch=spec.get("branch") or "",
-                                   live_root=spec.get("live_root") or "")},
+                                   live_root=spec.get("live_root") or "",
+                                   vault_destination=spec.get("vault_destination"),
+                                   vault_context=spec.get("vault_context"))},
                 mcp_servers={"vira": vira_srv} if vira_srv else {},
                 allowed_tools=list(viratools.TOOL_NAMES) if vira_srv else [],
                 # ALWAYS "default" + ALWAYS our gate. Handing the SDK its own
@@ -1245,11 +1250,15 @@ class Runner:
             md = _extract_plan_md(result_text or self.output_tail)
             self.append("\n[vira] saving the plan…\n")
             plan_res = await asyncio.to_thread(
-                _finalize_plan, md, spec.get("idea_id"), spec["id"])
+                _finalize_plan, md, spec.get("idea_id"), spec["id"],
+                destination=spec.get("vault_destination"),
+                context=spec.get("vault_context"))
+            self.state["plan"] = plan_res
+            joblog.record_plan(spec["id"], plan_res)
             self.append((
                 f"[vira] plan saved: {_plan_ref(plan_res)}\n"
                 if plan_res.get("plan_id") else
-                "[vira] plan could not be saved — see runner.log\n"))
+                f"[vira] plan could not be saved: {plan_res.get('error', 'unknown error')}\n"))
             if plan_res.get("url"):
                 self.append(f"[vira] plan published: {plan_res['url']}\n")
         status = ("done" if ok or self.interrupted or self.closing

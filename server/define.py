@@ -28,13 +28,14 @@ does not reliably know a URL, a date, or who said it first.  So rung 3 emits
 prose and NO links, and `_validate` strips any it invents.  Only rung 4,
 which actually browses, may write the `links` list.
 """
+import hashlib
 import json
 import os
 import re
 from datetime import date
 from pathlib import Path
 
-from . import atlasterms, filelock, jsonstore, settings, suggest, vault
+from . import atlasterms, filelock, jsonstore, settings, suggest, vault, vaultwrite
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "glossary.json"
 LOCK = Path(__file__).resolve().parent.parent / "data" / "glossary.build"
@@ -124,14 +125,48 @@ def index():
     return jsonstore.read(STORE, _blank())
 
 
-def entry(term):
-    return (index().get("terms") or {}).get(_norm(term))
+def _destination(destination=None, context=None, operation="read", for_model=False):
+    try:
+        spec = vaultwrite.resolve_destination(destination, context=context,
+                                               operation=operation,
+                                               for_model=for_model)
+        return dict(spec, root=Path(spec["root"]).resolve())
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise DefineError(str(exc)) from exc
+
+
+def _key(term, spec):
+    return f"{spec['id']}:{_norm(term)}"
+
+
+def entry(term, destination=None):
+    spec = destination if isinstance(destination, dict) else _destination(destination)
+    terms = index().get("terms") or {}
+    ent = terms.get(_key(term, spec))
+    # The old cache belonged only to the primary vault. Never let an old
+    # absolute pointer escape its source after reconnecting a different root.
+    if ent is None and spec["id"] == "primary":
+        ent = terms.get(_norm(term))
+    if ent:
+        try:
+            rel = Path(ent["path"]).resolve().relative_to(Path(spec["root"]).resolve())
+            vaultwrite.safe_path(spec, rel.as_posix(), operation="read")
+        except (KeyError, ValueError, PermissionError, OSError):
+            return None
+    return ent
 
 
 # -------------------------------------------------------------- note shape
 
-def wiki_dir():
-    return Path(vault.vault_root()) / WIKI_SUBDIR
+def wiki_dir(destination=None):
+    spec = destination if isinstance(destination, dict) else _destination(destination)
+    # A connected folder need not use a wiki layout. Its capture scope is
+    # the safe home for generated definitions when wiki is not writable.
+    try:
+        return vaultwrite.safe_path(spec, WIKI_SUBDIR + "/definition.md").parent
+    except (ValueError, PermissionError):
+        return vaultwrite.safe_path(
+            spec, str(spec.get("capture_dir") or "inbox") + "/definitions/definition.md").parent
 
 
 def _yaml_str(v):
@@ -307,34 +342,43 @@ def _index_by_term(root):
 
 def _from_vault_note(path):
     try:
-        return parse_note(path.read_text(encoding="utf-8", errors="replace"))
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return dict(parse_note(text), sha256=hashlib.sha256(text.encode("utf-8")).hexdigest())
     except OSError:
         return None
 
 
-def _title_match(term):
+def _title_match(term, spec=None, for_model=False):
     """A vault note whose own title IS this term — the vault defining it.
 
     Deliberately narrow. A note that MENTIONS a term forty times still does
     not define it, so a body hit feeds rung 3 as context instead of
     answering here and passing an aside off as a definition.
     """
-    root = Path(vault.vault_root())
+    spec = spec or _destination()
+    root = Path(spec["root"])
     if not root.exists():
         return None
     slug = slugify(term)
-    for cand in (root / WIKI_SUBDIR / f"{slug}.md", root / f"{slug}.md"):
+    for cand in (root / WIKI_SUBDIR / f"{slug}.md", root / f"{slug}.md",
+                 root / str(spec.get("capture_dir") or "inbox") / "definitions" / f"{slug}.md"):
+        if for_model and not vault.model_path_allowed(vault._public_path(spec, cand.relative_to(root))):
+            continue
+        try:
+            vaultwrite.safe_path(spec, cand.relative_to(root).as_posix(), operation="read")
+        except (ValueError, PermissionError):
+            continue
         if cand.exists():
             card = _from_vault_note(cand)
             if card and any(r.get("value") for r in card.get("rows") or []):
                 card["term"] = card.get("term") or term
                 card["rung"] = card.get("rung") or "vault"
-                card["note"] = str(cand)
+                card.update(_location(spec, cand))
                 return card
     return None
 
 
-def _context(term, pinned=None):
+def _context(term, pinned=None, spec=None):
     """Passages to seed rung 3. Never the answer.
 
     THE PINNED PASSAGE IS THE POINT, and it is what the vault search could
@@ -352,6 +396,27 @@ def _context(term, pinned=None):
     total, each = modelbudget.split("interactive", MAX_CONTEXT_NOTES)
     out, used = [], 0
 
+    if pinned and spec:
+        path = str(pinned.get("path") or "")
+        source_id = pinned.get("source_id") or pinned.get("vault_id")
+        if path.startswith("@"):
+            source_id = path[1:].partition("/")[0]
+        elif Path(path).is_absolute():
+            source_id = next((s["id"] for s in vault.source_specs()
+                              if vault._inside(Path(path), Path(s["root"]))), source_id)
+        elif path.endswith(".md"):
+            source_id = source_id or "primary"
+        if source_id and source_id != spec["id"]:
+            raise DefineError("The selected passage belongs to another vault; choose that destination.")
+        if source_id:
+            source_spec = _destination(source_id, for_model=True)
+            if path:
+                if Path(path).is_absolute():
+                    path = Path(path).resolve().relative_to(source_spec["root"]).as_posix()
+                public = path if path.startswith("@") else vault._public_path(source_spec, path)
+                if not vault.model_path_allowed(public):
+                    raise DefineError("The selected passage is excluded from model access.")
+
     if pinned:
         text = (pinned.get("text") or "").strip()
         if text:
@@ -364,10 +429,14 @@ def _context(term, pinned=None):
             used = len(head)
 
     try:
-        hits = vault.search(term, limit=MAX_CONTEXT_NOTES) or []
+        hits = vault.search(term, limit=MAX_CONTEXT_NOTES, for_model=True) or []
     except Exception:
         return out
     for h in hits[:MAX_CONTEXT_NOTES]:
+        # A generated definition stays within the selected source. Reading
+        # another source is not permission to copy its context into this one.
+        if spec and (h.get("vault_id") or "primary") != spec["id"]:
+            continue
         if used >= total:
             break
         text = (h.get("text") or h.get("chunk") or "").strip()
@@ -484,7 +553,7 @@ def _passive():
     return bool(os.environ.get("VIRA_PASSIVE"))
 
 
-def _write_note(path, text):
+def _write_note(path, text, spec, expected_hash=None):
     """Preserve `created:`, and make an unchanged run a true no-op."""
     if path.exists():
         old = path.read_text(encoding="utf-8", errors="replace")
@@ -494,15 +563,16 @@ def _write_note(path, text):
                           text, count=1, flags=re.M)
         strip = lambda t: re.sub(r"^updated:.*$", "", t, count=1, flags=re.M)
         if strip(old) == strip(text):
-            return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
-    return True
+            return hashlib.sha256(old.encode("utf-8")).hexdigest()
+        if not expected_hash:
+            raise DefineError("definition already exists; reopen it before replacing its content")
+    receipt = vaultwrite.write_note(spec, path.relative_to(spec["root"]).as_posix(), text,
+                                    expected_hash=expected_hash,
+                                    create_only=expected_hash is None)
+    return receipt["sha256"]
 
 
-def _backlink(path, term, slug, ref=None):
+def _backlink(path, term, slug, ref=None, spec=None):
     """Add `[[wiki/slug|term]]` to an existing term note's Related list.
 
     This is the half that makes the graph grow in BOTH directions: writing
@@ -519,6 +589,7 @@ def _backlink(path, term, slug, ref=None):
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
+    expected_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if f"[[{ref}" in text or f"[[{slug}]" in text or f"[[{slug}|" in text:
         return False
     if not re.search(r"\b" + re.escape(term) + r"\b", text, re.I):
@@ -534,25 +605,41 @@ def _backlink(path, term, slug, ref=None):
         text = text.rstrip() + f"\n\n## {RELATED_LABEL}\n\n{line}\n"
     text = re.sub(r"^updated:.*$", f"updated: {date.today().isoformat()}",
                   text, count=1, flags=re.M)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    vaultwrite.write_note(spec, path.relative_to(spec["root"]).as_posix(), text,
+                          expected_hash=expected_hash, create_only=False)
     return True
 
 
-def save(card):
+def _location(spec, path):
+    rel = path.resolve().relative_to(Path(spec["root"]).resolve()).as_posix()
+    public = vault._public_path(spec, rel)
+    return {"note": str(path) if spec["primary"] else public,
+            "path": public, "source_id": spec["id"], "source_name": spec["name"]}
+
+
+def save(card, destination=None, context=None):
     """Write the card into the vault and index it. Returns the card, with
     `note` set. This is what makes the next lookup free."""
     if _passive():
         raise DefineError(
             "passive instance: vault_root is outside the cloned data/, so "
             "this would write the live vault. Refusing.")
-    root = Path(vault.vault_root())
+    spec = _destination(destination or card.get("source_id"), context, "definition")
+    provenance = set(card.get("context_sources") or [])
+    if provenance - {spec["id"]}:
+        raise DefineError("Definition context belongs to another vault; refusing to copy it.")
+    root = Path(spec["root"])
     if not root.exists():
         raise DefineError(f"vault root does not exist: {root}")
     term = card["term"]
     with filelock.locked(LOCK):
-        known = _index_by_term(root)
+        known = {}
+        for key, candidate in _index_by_term(root).items():
+            try:
+                vaultwrite.safe_path(spec, candidate.relative_to(root).as_posix())
+            except (ValueError, PermissionError):
+                continue
+            known[key] = candidate
         path = known.get(_norm(term))
         stems = _existing_stems(root)
         if path is None:
@@ -563,8 +650,12 @@ def save(card):
             while cand in stems:
                 n += 1
                 cand = f"{base}-term" if n == 1 else f"{base}-term-{n}"
-            path = wiki_dir() / f"{cand}.md"
-        _write_note(path, note_text(card, stems))
+            path = wiki_dir(spec) / f"{cand}.md"
+        try:
+            saved_hash = _write_note(path, note_text(card, stems), spec,
+                                     expected_hash=card.get("sha256"))
+        except (ValueError, PermissionError, OSError) as exc:
+            raise DefineError(str(exc)) from exc
         slug = path.stem
         try:
             ref = path.relative_to(root).with_suffix("").as_posix()
@@ -572,15 +663,21 @@ def save(card):
             ref = slug
         linked = 0
         for other_term, other_path in known.items():
-            if other_path != path and _backlink(other_path, term, slug, ref):
-                linked += 1
+            if other_path != path:
+                try:
+                    if _backlink(other_path, term, slug, ref, spec=spec):
+                        linked += 1
+                except (ValueError, PermissionError, OSError):
+                    # A protected or concurrently edited older note stays put.
+                    continue
         def _record(st):
             terms = st.setdefault("terms", {})
-            prev = terms.get(_norm(term)) or {}
-            terms[_norm(term)] = {
+            prev = terms.get(_key(term, spec)) or {}
+            terms[_key(term, spec)] = {
                 "term": term,
                 "slug": slug,
                 "path": str(path),
+                "source_id": spec["id"],
                 "rung": card.get("rung", "model"),
                 "sourced": bool(card.get("sourced")),
                 "updated": date.today().isoformat(),
@@ -589,15 +686,16 @@ def save(card):
 
         jsonstore.mutate(STORE, _record, _blank())
     card = dict(card)
-    card["note"] = str(path)
+    card.update(_location(spec, path))
     card["slug"] = slug
     card["backlinks"] = linked
+    card["sha256"] = saved_hash
     return card
 
 
-def _bump(term):
+def _bump(term, spec):
     def _hit(st):
-        ent = (st.get("terms") or {}).get(_norm(term))
+        ent = (st.get("terms") or {}).get(_key(term, spec))
         if ent is not None:
             ent["hits"] = ent.get("hits", 0) + 1
 
@@ -606,7 +704,7 @@ def _bump(term):
 
 # ------------------------------------------------------------------ ladder
 
-def lookup(term, write=True, source=None):
+def lookup(term, write=True, source=None, destination=None, context=None, for_model=False):
     """The card for `term`, by the cheapest rung that can answer.
 
     `write` is False on a passive instance and in tests that must not touch
@@ -615,40 +713,52 @@ def lookup(term, write=True, source=None):
     term = clean_term(term)
     if not term:
         raise DefineError("that selection is not a term")
+    if not destination and source:
+        destination = source.get("source_id") or source.get("vault_id")
+        if not destination and str(source.get("path") or "").startswith("@"):
+            destination = source["path"][1:].partition("/")[0]
+    for_model = for_model or vault._MODEL_ACCESS.get()
+    spec = _destination(destination, context, for_model=for_model)
 
     # rung 0 — already banked
-    ent = entry(term)
+    ent = entry(term, spec)
     if ent and Path(ent["path"]).exists():
+        if for_model and not vault.model_path_allowed(vault._public_path(
+                spec, Path(ent["path"]).resolve().relative_to(spec["root"]))):
+            raise DefineError("This definition is excluded from model access.")
         card = _from_vault_note(Path(ent["path"]))
         if card and card.get("rows"):
             card["term"] = card.get("term") or term
-            card["note"] = ent["path"]
+            card.update(_location(spec, Path(ent["path"])))
             card["slug"] = ent.get("slug", "")
             card["cached"] = True
-            _bump(term)
+            _bump(term, spec)
             return card
 
     # rung 1 — the curated atlas
     hit = atlasterms.lookup(term)
     if hit:
-        card = dict(hit)
+        card = dict(hit, source_id=spec["id"], source_name=spec["name"])
         if write and not _passive():
             try:
-                card = save(card)
-            except DefineError:
-                pass                          # a card is still worth showing
+                card = save(card, destination=spec["id"])
+            except DefineError as exc:
+                card["write_error"] = str(exc)
         return card
 
     # rung 2 — the vault already has a page titled this
-    card = _title_match(term)
+    card = _title_match(term, spec, for_model=for_model)
     if card:
         return card
 
     # rung 3 — one model call, seeded with whatever the vault knows
-    card = _compose(term, _context(term, source))
+    spec = _destination(spec["id"], for_model=True)
+    card = _compose(term, _context(term, source, spec))
+    card["context_sources"] = [spec["id"]]
+    card.update(source_id=spec["id"], source_name=spec["name"])
     if write and not _passive():
         try:
-            card = save(card)
+            card = save(card, destination=spec["id"])
         except DefineError as e:
             card["write_error"] = str(e)
     return card
@@ -671,7 +781,7 @@ one or two current authoritative uses.
 3. Correct any claim in the note that your research contradicts — especially \
 in "Etymology and lineage", which was written from memory and is the field \
 most likely to be wrong.
-4. Rewrite the note, keeping its existing structure exactly: the same \
+4. Prepare an updated note, keeping its existing structure exactly: the same \
 frontmatter fields, the same `## ` section headings in the same order. \
 Set `vira_rung: sourced` and `vira_sourced: true`.
 5. Add a `## Read further` section (or replace the existing one) as a \
@@ -680,16 +790,38 @@ fetched and confirmed resolves. Omit a link you could not verify rather than \
 guessing; a dead citation is the whole reason this step exists.
 6. Leave the `## Related` section's wikilinks alone.
 
+Save only through the governed native vault_update tool, using destination \
+{destination}, path {public_path}, text containing the complete revised note, \
+and expected_hash {expected_hash}. Do not write files with shell or filesystem \
+tools. If the note is not yet written, use vault_capture with destination \
+{destination}, title equal to the term, and text containing the full card. \
+Refuse any unavailable or disallowed destination; never switch vaults.
+
 Do not create other notes. Do not restart the Vira server. Finish with a \
 two-line report: what you corrected, and how many links you verified."""
 
 
-def source_prompt(term):
-    ent = entry(term) or {}
+def source_prompt(term, destination=None, context=None):
+    spec = _destination(destination, context, "definition", for_model=True)
+    ent = entry(term, spec) or {}
+    path = Path(ent["path"]).resolve() if ent.get("path") else None
+    digest, public = "", ""
+    if path:
+        rel = path.relative_to(spec["root"]).as_posix()
+        try:
+            vaultwrite.safe_path(spec, rel)
+        except (ValueError, PermissionError) as exc:
+            raise DefineError(str(exc)) from exc
+        public = vault._public_path(spec, rel)
+        if not vault.model_path_allowed(public):
+            raise DefineError("This definition is excluded from model access.")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return SOURCE_PROMPT.format(
         term=term,
         path=ent.get("path") or f"(not yet written; look under "
-                                f"{wiki_dir()} for {slugify(term)}.md)")
+                                f"{wiki_dir(spec)} for {slugify(term)}.md)",
+        destination=json.dumps(spec["id"]), public_path=json.dumps(public),
+        expected_hash=json.dumps(digest))
 
 
 def status():

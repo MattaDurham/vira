@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import roomvault
+from tests.vault_fixture import isolate
 
 
 def _note(root, name, item_id):
@@ -28,6 +29,7 @@ class ResolveTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "vault"
         (self.root / "wiki").mkdir(parents=True)
+        self.config = isolate(self, self.root)
         self.links = Path(self.tmp.name) / "room-links.json"
         roomvault._notes_cache.clear()
         self.p_links = mock.patch.object(roomvault, "LINKS_PATH", self.links)

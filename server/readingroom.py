@@ -485,6 +485,7 @@ def build(slug, title, subtitle, items, legacy_key=""):
         "legacy_key": legacy_key or (prev or {}).get("legacy_key") or "",
         # A rebuild replaces the ITEMS; the owner's definition rides along.
         "definition": (prev or {}).get("definition") or {},
+        "vault_destination": (prev or {}).get("vault_destination") or "",
         "items": clean,
     }
     ROOMS_DIR.mkdir(parents=True, exist_ok=True)
