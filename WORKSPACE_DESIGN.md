@@ -61,8 +61,10 @@ data/reminder-stickies.json. The visible text, evidence, deadline, and status
 resolve from the original reminder. Done and Snooze use the existing reminder
 authority. Missing sources remain visibly unavailable, rather than becoming
 false completions. Keyboard movement/resizing and a phone tray cover other
-input methods. A synthetic preview permits pin layout changes while task
-mutations remain disabled.
+input methods. Branch previews read canonical reminders and permit pin layout
+changes in their complete, isolated data snapshot. Shared or linked layout
+stores are refused. Done, Snooze, and deadline changes remain disabled in every
+preview, including at the reminder authority.
 
 ## Review and rollout
 

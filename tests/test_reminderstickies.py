@@ -27,13 +27,16 @@ class ReminderStickiesTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
+        (self.root / "data").mkdir()
         self.fixture = False
         self.sandbox = False
+        self.crm_load = executive.crm._load
         self.cfg = dict(executive.DEFAULT_CONFIG, assistant_enabled=True, assistant_timezone="UTC")
         patches = [
             mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(stickies, "STORE", self.root / "pins.json"),
+            mock.patch.object(stickies.settings, "ROOT", self.root),
+            mock.patch.object(stickies, "STORE", self.root / "data" / "reminder-stickies.json"),
             mock.patch.object(executive, "STATE", self.root / "assistant.json"),
             mock.patch.object(commitments, "STORE", self.root / "commitments.json"),
             mock.patch.object(stickies.settings, "fixture_mode", side_effect=lambda: self.fixture),
@@ -174,7 +177,7 @@ class ReminderStickiesTests(unittest.TestCase):
         self.assertEqual(self.snapshot()["items"], [])
         self.assertEqual(commitments.STORE.read_bytes(), before)
 
-    def test_passive_real_data_is_never_read_or_mutated(self):
+    def test_unverified_passive_instance_never_reads_sources_or_writes_layout(self):
         with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}), \
                 mock.patch.object(stickies, "_read", side_effect=AssertionError("read pins")), \
                 mock.patch.object(stickies, "_sources", side_effect=AssertionError("read sources")):
@@ -185,7 +188,83 @@ class ReminderStickiesTests(unittest.TestCase):
             self.assertEqual(self.client.delete(f"/api/reminder-stickies/{self.rid}").status_code, 403)
         self.assertFalse(stickies.STORE.exists())
 
+    def prepare_snapshot(self):
+        (self.root / ".git").write_text("gitdir: ../primary/.git/worktrees/preview\n", encoding="utf-8")
+        (self.root / "data" / ".test-snapshot").write_text("complete clone\n", encoding="utf-8")
+
+    def test_real_snapshot_reads_canonical_reminders_and_only_changes_local_layout(self):
+        self.prepare_snapshot()
+        source = self.root / "external-crm"
+        (source / "profiles").mkdir(parents=True)
+        (source / "people.json").write_text(json.dumps({"people": [{
+            "id": "p_example", "name": "Casey Example"}]}), encoding="utf-8")
+        (source / "profiles" / "p_example.json").write_text(json.dumps({
+            "open_loops": [dict(LOOP, assistant_key="contact-agenda")]}), encoding="utf-8")
+        source_before = {p: p.read_bytes() for p in source.rglob("*.json")}
+        commitments_before = commitments.STORE.read_bytes()
+        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}), \
+                mock.patch.object(executive.crm, "_load", side_effect=self.crm_load), \
+                mock.patch.object(executive.crm, "_cache", {"loaded_at": 0}), \
+                mock.patch.object(executive.settings, "crm_root", return_value=source), \
+                mock.patch("server.contactcard.added_handles", return_value={}):
+            data = self.snapshot()
+            self.assertEqual(len(data["eligible_ids"]), 2)
+            self.assertFalse(data["read_only"])
+            self.assertTrue(data["actions_read_only"])
+            self.pin(x=240, y=180)
+            self.assertEqual(self.snapshot()["items"][0]["reminder"]["what"], LOOP["what"])
+            self.assertEqual(self.client.put(f"/api/reminder-stickies/{self.rid}", json={"x": 420}).status_code, 200)
+            self.assertEqual(self.snapshot()["items"][0]["x"], 420)
+            for action in ("done", "snooze", "date"):
+                with self.assertRaisesRegex(ValueError, "disabled in a preview"):
+                    executive.reminder_action(self.rid, action, due="2030-10-01")
+            self.assertEqual(self.client.delete(f"/api/reminder-stickies/{self.rid}").status_code, 200)
+        self.assertEqual({p: p.read_bytes() for p in source.rglob("*.json")}, source_before)
+        self.assertEqual(commitments.STORE.read_bytes(), commitments_before)
+        self.assertFalse(executive.STATE.exists())
+        self.assertEqual(json.loads(stickies.STORE.read_text(encoding="utf-8")), {"pins": {}})
+
+    def test_shared_snapshot_data_root_refuses_reads_and_layout_changes(self):
+        self.prepare_snapshot()
+        local = self.root / "data"
+        shared = self.root / "shared-data"
+        local.rename(shared)
+        try:
+            local.symlink_to(shared, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"Symlinks are unavailable: {exc}")
+        before = {p: p.read_bytes() for p in shared.iterdir()}
+        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}), \
+                mock.patch.object(stickies, "_sources", side_effect=AssertionError("read shared sources")):
+            self.assertTrue(self.snapshot()["read_only"])
+            self.assertEqual(self.client.post("/api/reminder-stickies", json={"reminder_id": self.rid}).status_code, 403)
+            self.assertEqual(self.client.put(f"/api/reminder-stickies/{self.rid}", json={"x": 100}).status_code, 403)
+            self.assertEqual(self.client.delete(f"/api/reminder-stickies/{self.rid}").status_code, 403)
+        self.assertEqual({p: p.read_bytes() for p in shared.iterdir()}, before)
+
+    def test_linked_store_or_writer_sidecar_refuses_layout_changes(self):
+        self.prepare_snapshot()
+        shared = self.root / "shared.json"
+        shared.write_text("owner content", encoding="utf-8")
+        for suffix in ("", ".lock", ".tmp"):
+            path = stickies.STORE.with_name(stickies.STORE.name + suffix)
+            for kind in ("symlink", "hardlink"):
+                with self.subTest(suffix=suffix, kind=kind):
+                    try:
+                        path.symlink_to(shared) if kind == "symlink" else os.link(shared, path)
+                    except OSError as exc:
+                        self.skipTest(f"Links are unavailable: {exc}")
+                    try:
+                        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}), \
+                                mock.patch.object(stickies, "_sources", side_effect=AssertionError("read sources")):
+                            self.assertTrue(self.snapshot()["read_only"])
+                            self.assertEqual(self.client.post("/api/reminder-stickies", json={"reminder_id": self.rid}).status_code, 403)
+                        self.assertEqual(shared.read_text(encoding="utf-8"), "owner content")
+                    finally:
+                        path.unlink()
+
     def test_fixture_preview_can_test_layout_but_task_actions_are_read_only(self):
+        self.prepare_snapshot()
         self.fixture = True
         before = commitments.STORE.read_bytes()
         with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):

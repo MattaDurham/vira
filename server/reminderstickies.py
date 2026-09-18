@@ -2,8 +2,8 @@
 
 Only identifiers and geometry persist here. Every read resolves current task
 text and state from executive; an unavailable source is not called completed.
-Synthetic fixture instances can exercise layout changes in their local stores;
-other preview instances never consult or modify the owner's reminder stores.
+Branch previews can exercise layout changes in their isolated data snapshots;
+canonical reminder sources are read without changing their task state.
 """
 import json
 import math
@@ -12,7 +12,7 @@ import re
 
 from fastapi import APIRouter, HTTPException
 
-from . import executive, jsonstore, settings
+from . import executive, jsonstore, settings, worktree
 from .filelock import locked
 
 
@@ -29,8 +29,34 @@ def isolated():
     return bool(os.environ.get("VIRA_PASSIVE") or settings.sandboxed())
 
 
+def _snapshot_layout():
+    """Allow local geometry only in a complete, unshared branch snapshot.
+
+    The branch tool writes the marker after cloning data. A linked data root,
+    store, or writer sidecar would defeat that isolation, so refuse it before
+    reading sources or opening the lock. No Git subprocess is needed per poll.
+    """
+    try:
+        root = settings.ROOT.resolve()
+        data = root / "data"
+        marker = data / ".test-snapshot"
+        if (not worktree.is_worktree(root) or data.is_symlink()
+                or data.resolve() != data or not marker.is_file()
+                or STORE != data / "reminder-stickies.json"):
+            return False
+        for path in (marker, STORE, STORE.with_name(STORE.name + ".lock"),
+                     STORE.with_name(STORE.name + ".tmp")):
+            if path.is_symlink():
+                return False
+            if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
+                return False
+        return True
+    except OSError:
+        return False
+
+
 def layout_blocked():
-    return isolated() and not settings.fixture_mode()
+    return isolated() and not _snapshot_layout()
 
 
 def _id(value):

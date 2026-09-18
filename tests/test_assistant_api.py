@@ -227,6 +227,19 @@ class AssistantAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Reminder is no longer open")
 
+    def test_preview_reminder_actions_refuse_without_reading_or_changing_sources(self):
+        before = self.commitments_path.read_bytes()
+        for mode in (mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}),
+                     mock.patch.object(settings, "sandboxed", return_value=True),
+                     mock.patch.object(settings, "fixture_mode", return_value=True)):
+            with mode, mock.patch.object(executive, "reminders", side_effect=AssertionError("source read")):
+                for action in ("done", "snooze", "date"):
+                    response = self.client.post(self.reminder_url, json={"action": action, "due": "2030-09-20"})
+                    self.assertEqual(response.status_code, 400, response.text)
+                    self.assertIn("disabled in a preview", response.json()["detail"])
+        self.assertEqual(self.commitments_path.read_bytes(), before)
+        self.assertFalse(executive.STATE.exists())
+
     def test_calendar_create_route_uses_explicit_manual_authority(self):
         with mock.patch.object(calendarplan, "create_owner_event", return_value={"id": "draft", "status": "created"}) as create:
             response = self.client.post("/api/assistant/calendar/draft", json={"action": "create", "automatic": True})
