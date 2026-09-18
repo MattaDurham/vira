@@ -65,7 +65,7 @@ EVIDENCE_CHANNELS = 4
 # launch writes the prompt VERBATIM into three places: data/jobs/<id>/job.json,
 # the SDK's stdio transport, and - the binding one - joblog.record_launch's
 # ledger row. `data/jobs-log.json` carries the full initial prompt of every job
-# ever launched, is NEVER pruned (job DIRS prune at ~400; the ledger does not),
+# ever launched, is NEVER pruned (neither are the durable job directories),
 # and is re-read and re-serialized in full under a lock on every subsequent job
 # write. So an unbounded prompt is a permanent, compounding store cost, not a
 # per-call one.

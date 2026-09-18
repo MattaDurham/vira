@@ -32,9 +32,10 @@ def write_job_dir(root, jid, status="running", heartbeat=None, pid=None):
              "heartbeat": time.time() if heartbeat is None else heartbeat,
              "pid": os.getpid() if pid is None else pid,
              "mode": "interactive", "live": True, "error": ""}
-    (jdir / "job.json").write_text(json.dumps(spec))
-    (jdir / "state.json").write_text(json.dumps(state))
-    (jdir / "output.log").write_text("[vira] test-model working…\n")
+    (jdir / "job.json").write_text(json.dumps(spec), encoding="utf-8")
+    (jdir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (jdir / "output.log").write_text("[vira] test-model working…\n",
+                                    encoding="utf-8")
     return jdir
 
 
@@ -110,6 +111,29 @@ class ReattachTests(unittest.TestCase):
         st = json.loads(
             (self.jobs_root / "done00000001" / "state.json").read_text())
         self.assertEqual(st["status"], "done")   # untouched
+
+    def test_startup_preserves_all_history_beyond_the_old_directory_cap(self):
+        # Exercise the real startup path twice, as on server restarts. A
+        # ledger's final-answer excerpt cannot replace any of these files.
+        for i in range(405):
+            jdir = write_job_dir(self.jobs_root, f"history{i:04}", status="done")
+            (jdir / "control.jsonl").write_text(
+                '{"op":"say","text":"keep this reply"}\n', encoding="utf-8")
+            (jdir / "runner.log").write_text("runner evidence\n", encoding="utf-8")
+        joblog.record_launch({"id": "history0000", "prompt": "p", "cwd": "/tmp"})
+        joblog.record_finish("history0000", "done", "final answer excerpt")
+        before = {p.relative_to(self.jobs_root): p.read_bytes()
+                  for p in self.jobs_root.rglob("*") if p.is_file()}
+
+        with mock.patch.object(session.threading, "Thread"):
+            for _ in range(2):
+                session.Sessions().start_supervisor()
+
+        after = {p.relative_to(self.jobs_root): p.read_bytes()
+                 for p in self.jobs_root.rglob("*") if p.is_file()}
+        self.assertEqual(after, before)
+        from server.main import _job_from_disk
+        self.assertIn("working", _job_from_disk("history0000")["output"])
 
     def test_ledger_records_without_a_live_runner_are_swept(self):
         # a legacy-era record (no job dir at all) still running -> orphaned

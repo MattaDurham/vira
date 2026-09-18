@@ -84,7 +84,6 @@ LOCATOR_KINDS = ("url", "vault", "plan", "file")
 # the queue views exclude them and the backfill no longer sweeps them in.
 KINDS = ("dossier", "plan", "retro", "brief", "room", "walkthrough")
 
-MAX_ITEMS = 2000
 MAX_TEXT = 300
 
 # A document that predates the Reader was never queued by it, and the owner has
@@ -188,8 +187,8 @@ def register(title, kind, locator, locator_kind="url", *,
             "completed": None,
             "slug": slugify(title, fallback=kind),
         })
-        if len(s["items"]) > MAX_ITEMS:
-            s["items"] = s["items"][-MAX_ITEMS:]
+        # Pointers and completion marks are durable history. View limits
+        # must not evict old entries or let a later sweep resurrect read work.
         return s
 
     jsonstore.mutate(STORE, fn, _blank())

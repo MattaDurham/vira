@@ -390,6 +390,17 @@ must preserve evidence-backed records with `source: "vira-assistant"` and their
 full synthesis can discard incremental findings; see its merge contract before
 enabling background updates against an external pipeline.
 
+## Session and reading history
+
+Vira keeps job directories, rendered transcripts, and the job ledger until you
+explicitly remove them. Server startup does not delete older sessions. History
+views may limit the rows or output they display without deleting the underlying
+files. Provider-owned transcripts remain subject to that provider's settings.
+
+The Reader also keeps registered document pointers and their read marks as the
+library grows. Marking something read changes the view; only an explicit Forget
+removes its pointer. Vira does not delete the source document.
+
 ## Live sessions
 
 Manual prompt and Action launches, plus Resume from Runs or Showroom, open a

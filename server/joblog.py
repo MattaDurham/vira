@@ -573,8 +573,8 @@ def record_launch(job):
         "mode": job.get("mode"),
         "read_only": bool(job.get("read_only")),
         # Where this session was allowed to write, and the tree it was kept
-        # out of. Same reasoning as `provider` above: the job dir is pruned
-        # at 400 and the live registry forgets on restart, so without these
+        # out of. Same reasoning as `provider` above: the live registry
+        # forgets on restart and history reads the ledger, so without these
         # the ledger's only forensic signal is `cwd` — which cannot tell
         # "placement declined by design" from "placement failed". Answering
         # "was that session guarded?" after the fact took a half-day
@@ -713,10 +713,9 @@ def record_finish(jid, status, result_text="", finished_by_owner=False):
     that decides whether that bar still offers to continue the conversation
     (session.resumable). Status cannot answer it: a run killed by a usage
     limit and one the owner deliberately closed both end "not running", and
-    only the second is finished. Job dirs prune at ~400, so deriving it from
-    state.json would silently start answering False on older sessions — the
-    same shape as the provider grade that regraded itself after forty
-    minutes."""
+    only the second is finished. Older installs pruned job directories, so
+    the ledger must answer this without relying on state.json still existing.
+    New sessions retain both records."""
     def fn(s):
         r = next((r for r in s["jobs"] if r["id"] == jid), None)
         if r:

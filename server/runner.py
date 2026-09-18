@@ -1031,7 +1031,7 @@ class Runner:
             # written and nothing ever wrote it, so every surface fell back
             # to the requested alias and showed "Opus" over a 4.8 session.
             # Recording it is what makes a stale alias visible instead of
-            # silent — the ledger keeps it after the job dir is pruned.
+            # silent — the ledger carries it into every history view.
             if model and self.state.get("model_used") != model:
                 self.state["model_used"] = model
                 joblog.record_model_used(self.spec["id"], model)
