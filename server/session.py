@@ -31,7 +31,6 @@ import itertools
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -62,7 +61,6 @@ PLAN_HOOK = LIB / "scripts" / "plan-html-deploy.py"
 
 OUTPUT_CAP = 200_000
 SUPERVISOR_TICK = 0.4        # job-dir poll cadence (SSE pokes ride on this)
-DIRS_KEEP = 400              # finished job dirs retained for History
 
 # Session defaults — overridable per key in data/config.json (see
 # config.example.json). session_auto_allow is the read-only tool set the
@@ -1169,10 +1167,11 @@ class Sessions:
     def start_supervisor(self):
         """Called once from server startup. Re-attaches to runners that
         survived the last server, finalizes the ones that didn't, sweeps
-        the ledger, prunes ancient job dirs, then starts the poll thread."""
+        the ledger, then starts the poll thread. Job directories are durable
+        session evidence: startup never deletes them. Registry and response
+        limits bound the UI, not the history retained on disk."""
         alive = self._boot_reattach()
         joblog.sweep_orphans(alive)
-        self._prune_dirs()
         if self._sup is None:
             self._sup = threading.Thread(target=self._poll_loop,
                                          daemon=True, name="vira-supervisor")
@@ -1206,20 +1205,6 @@ class Sessions:
         state["pending"] = []
         jobfiles.write_json_atomic(Path(jdir) / "state.json", state)
         joblog.mark_orphaned(state.get("id") or Path(jdir).name)
-
-    def _prune_dirs(self):
-        """Cap data/jobs to the newest DIRS_KEEP finished dirs (running jobs
-        are never pruned)."""
-        try:
-            dirs = [d for d in jobfiles.JOBS_DIR.iterdir() if d.is_dir()]
-        except OSError:
-            return
-        dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
-        for d in dirs[DIRS_KEEP:]:
-            state = jobfiles.read_json(d / "state.json") or {}
-            if state.get("status") == "running" and not jobfiles.runner_dead(state):
-                continue
-            shutil.rmtree(d, ignore_errors=True)
 
     def _poll_loop(self):
         while True:

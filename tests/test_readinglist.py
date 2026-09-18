@@ -160,6 +160,33 @@ class RegisterTests(Base):
         with self.assertRaises(ValueError):
             readinglist.register("A", "dossier", "   ")
 
+    def test_new_documents_preserve_more_than_2000_pointers_and_read_marks(self):
+        first = readinglist.register("Doc 0", "dossier", "/d0/")
+        readinglist.complete(first["id"])
+        first = readinglist.get(first["id"])
+        # Seed an existing full registry without 2000 unrelated rewrites.
+        rows = [dict(first, id=first["id"] if i == 0 else f"rl_fixture{i}",
+                     title=f"Doc {i}", slug=f"doc-{i}", locator=f"/d{i}/",
+                     completed=first["completed"] if i % 2 == 0 else None)
+                for i in range(2000)]
+        self.store.write_text(json.dumps({"items": rows}), encoding="utf-8")
+
+        readinglist.register("Doc 2000", "dossier", "/d2000/")
+
+        self.assertEqual(readinglist.get(first["id"]), first)
+        self.assertEqual(readinglist.counts(),
+                         {"queued": 1001, "completed": 1000, "total": 2001})
+        self.assertEqual(len(readinglist.queue()), 1001)
+        self.assertEqual(len(readinglist.completed()), 50)
+        self.assertEqual(len(readinglist.completed(limit=None)), 1000)
+        self.assertEqual(len(readinglist.library()), 2001)
+        # A sweep must find the original row, never recreate it as unread.
+        again = readinglist.register("Doc 0", "dossier", "/d0/")
+        self.assertEqual(again["id"], first["id"])
+        self.assertEqual(again["completed"], first["completed"])
+        readinglist.complete(first["id"], done=False)
+        self.assertIsNone(readinglist.get(first["id"])["completed"])
+
     def test_title_falls_back_to_the_locator(self):
         it = readinglist.register("", "dossier", "/explainer/audit/")
         self.assertEqual(it["title"], "/explainer/audit/")
