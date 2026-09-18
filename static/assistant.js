@@ -179,7 +179,7 @@ window.ViraAssistant = (() => {
   }
   function settingsPanel(data) {
     const details = node("details", "assistant-settings");
-    details.open = settingsOpen == null ? !data.enabled : settingsOpen;
+    details.open = settingsOpen == null ? false : settingsOpen;
     details.addEventListener("toggle", () => { settingsOpen = details.open; });
     details.appendChild(node("summary", "", "Assistant settings"));
     const form = node("form", "assistant-form");
@@ -443,8 +443,9 @@ window.ViraAssistant = (() => {
   function actionResources(card, reminder, data) {
     const resources = (Array.isArray(reminder.resources) ? reminder.resources : [])
       .map((resource) => externalResource(resource) || (emailPath(resource) ? resource : null)).filter(Boolean);
-    const section = node("div", "assistant-resources");
-    section.appendChild(node("h6", "assistant-resource-title", "Take action"));
+    const section = node(resources.length ? "div" : "details", "assistant-resources");
+    section.appendChild(node(resources.length ? "h6" : "summary", "assistant-resource-title",
+      resources.length ? "Take action" : "More details"));
     resourceList(section, resources, reminder.id, (resource) => resource.url
       ? resourceLink(resource) : emailResource(resource, reminder.id, !!(data.passive || data.fixture)));
     notice(section, plain(reminder.resources_note));
@@ -639,7 +640,7 @@ window.ViraAssistant = (() => {
       .map((card) => card.dataset.assistantId));
     body.replaceChildren();
     const head = node("div", "assistant-head");
-    head.appendChild(node("h3", "", "Executive assistant"));
+    head.appendChild(node("h3", "", "Reminders & follow-through"));
     const state = data.passive || data.fixture ? "Preview instance"
       : !data.enabled ? "Paused" : data.last_error || data.contact?.last_error || data.contact?.errors?.length
         || data.calendar?.error || data.calendar?.last_error
@@ -665,9 +666,9 @@ window.ViraAssistant = (() => {
       notice(body, "Reminder texts are enabled, but the owner notification channel is not ready. Configure it in Config.", true);
     if (data.enabled && data.settings?.assistant_contact_updates === false)
       notice(body, "Contact facts and summaries are paused. Vira still checks messages for commitments.");
-    body.appendChild(editing || settingsPanel(data));
     reminders(data, body);
     calendar(data, body);
+    body.appendChild(editing || settingsPanel(data));
     coverage(data, body);
     body.querySelector(".assistant-coverage").open = !!coverageOpen;
     if (body.querySelector(".assistant-more")) body.querySelector(".assistant-more").open = !!moreOpen;

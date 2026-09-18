@@ -24,6 +24,9 @@
 <link rel="stylesheet" href="/research.css">
 <link rel="stylesheet" href="/orbits.css">
 <link rel="stylesheet" href="/assistant.css">
+<link rel="stylesheet" href="/work-results.css">
+<link rel="stylesheet" href="/workspace.css">
+<link rel="stylesheet" href="/reminder-stickies.css">
 </head>
 <body>
 <!-- Left nav drawer (mobile): swipe in from the left edge, or tap the brand.
@@ -78,58 +81,52 @@
       <h2>Attention</h2>
       <button class="fchip sm" id="attn-refresh" style="margin-left:auto">Refresh</button>
     </div>
-    <div class="seg-tabs attention-tabs" id="attention-tabs">
-      <button class="seg-btn on" data-tab="now">Now</button>
-      <button class="seg-btn" data-tab="day">Day</button>
-      <button class="seg-btn" data-tab="decide">Decide</button>
+    <div class="seg-tabs attention-tabs" id="attention-tabs" aria-label="Attention views">
+      <button class="seg-btn on" data-tab="now">Today</button>
+      <button class="seg-btn" data-tab="decide">Review <span id="attention-review-badge"></span></button>
+      <button class="seg-btn" data-tab="inbox">Inbox</button>
     </div>
     <div class="attention-pane" id="attention-now-pane">
-      <div class="attention-hero attention-hero-now" aria-hidden="true">
-        <div class="attention-orbit"><i></i><i></i><i></i><span></span></div>
-        <div class="attention-hero-copy">
-          <span>Live field</span>
-          <strong id="attn-hero-title">Clear</strong>
-          <small id="attn-hero-sub">Vira is watching the edges</small>
-        </div>
-      </div>
-      <div class="radar-sub"><span id="attn-count">Nothing needs you</span>
-        <span class="hint">Vira needs you, or Vira is working</span></div>
+      <header class="workspace-lead">
+        <span class="workspace-eyebrow">Your day, in focus</span>
+        <h3 id="attn-hero-title">Room to move.</h3>
+        <p id="attn-hero-sub">Your commitments, your calendar, and what is moving forward.</p>
+        <div class="workspace-status"><span id="attn-count">Checking activity</span>
+          <button class="fchip sm" data-attention-back="decide">Open review</button></div>
+      </header>
       <div id="attention-body"></div>
     </div>
-    <div class="attention-pane" id="attention-day-pane" style="display:none">
-      <div class="attention-hero attention-hero-day" aria-hidden="true">
-        <div class="attention-day-arc"><i></i><span></span></div>
-        <div class="attention-hero-copy">
-          <span>Time field</span>
-          <strong>Shape of the day</strong>
-          <small>anchors, transitions, money</small>
-        </div>
-      </div>
-      <div class="attention-pane-head">
-        <div><span class="attention-pane-title">Your day</span>
-          <span class="brief-date" id="brief-date"></span></div>
-        <button class="fchip sm" id="brief-refresh">Refresh</button>
-      </div>
-      <section id="assistant-body" aria-label="Executive assistant"></section>
-      <div id="brief-body"></div>
+    <div class="attention-pane" id="attention-day-pane">
+      <section id="assistant-body" aria-label="Reminders and calendar suggestions"></section>
+      <details class="workspace-day-context" open>
+        <summary>Your schedule and context <span class="brief-date" id="brief-date"></span></summary>
+        <button class="fchip sm" id="brief-refresh">Refresh day</button>
+        <div id="brief-body"></div>
+      </details>
     </div>
     <div class="attention-pane" id="attention-decide-pane" style="display:none">
-      <div class="attention-hero attention-hero-decide" aria-hidden="true">
-        <div class="attention-card-stack"><i></i><i></i><i></i></div>
-        <div class="attention-hero-copy">
-          <span>Decision field</span>
-          <strong id="review-hero-title">Nothing waiting</strong>
-          <small>oldest and highest-consequence first</small>
-        </div>
-      </div>
+      <header class="workspace-lead">
+        <span class="workspace-eyebrow">A few good decisions</span>
+        <h3 id="review-hero-title">Ready for your eye.</h3>
+        <p>Review the source, make the call, and keep moving.</p>
+      </header>
+      <div id="attention-live-decisions"></div>
+      <section id="correspondence-review" aria-label="Filing decisions"></section>
       <div class="attention-pane-head">
-        <div><span class="attention-pane-title">Needs a decision</span>
-          <span class="hint" id="review-count">Waiting on you</span></div>
+        <div><span class="attention-pane-title">Other decisions</span>
+          <span class="hint" id="review-count">Checking</span></div>
         <button class="fchip sm" id="review-refresh">Refresh</button>
       </div>
-      <div class="attention-filters" id="review-filters"
-           aria-label="Filter decisions by type"></div>
+      <div class="attention-filters" id="review-filters" aria-label="Filter decisions by type"></div>
       <div id="review-body"></div>
+    </div>
+    <div class="attention-pane" id="attention-inbox-pane" style="display:none">
+      <header class="workspace-lead">
+        <span class="workspace-eyebrow">From conversation to continuity</span>
+        <h3>Keep what matters.</h3>
+        <p>Messages become reminders, reference material, or both, with their original context attached.</p>
+      </header>
+      <div id="correspondence-inbox"></div>
     </div>
     <div class="attention-pane" id="attention-picker-pane" style="display:none">
       <div class="attention-pane-head">
@@ -237,17 +234,15 @@
          owner's ruling: "one clean list of everything that Vira has
          done"). The surviving tab id is `live`; the retired `record` id
          is aliased in setWorkTab so every stored link still lands. -->
+    <div class="section-head"><h2>Work</h2><span class="hint">From the first idea to the finished result</span></div>
     <div class="seg ideas-tabs" id="work-tabs">
-      <button data-tab="queue" class="seg-btn on">Cues</button>
-      <button data-tab="dispatch" class="seg-btn">Flows</button>
-      <button data-tab="live" class="seg-btn">Record</button>
+      <button data-tab="queue" class="seg-btn on">Ideas</button>
+      <button data-tab="live" class="seg-btn">Results</button>
+      <button data-tab="dispatch" class="seg-btn">Automations</button>
     </div>
 
     <div id="work-queue-pane">
-      <p class="hint ideas-hint">Everything waiting on your call: the idea
-        backlog Vira carries across sessions, Vira's own proposals, and
-        journal notes that need a full session. <code>/resume</code> reads
-        this list.</p>
+      <p class="hint ideas-hint">Capture an idea. Decide what deserves a session. Your proposals and open notes stay together here.</p>
       <div class="runbar">
         <input id="idea-input" class="search" type="text"
                placeholder="Add an idea or on-hold item…" autocomplete="off">
@@ -444,6 +439,9 @@
          recency rather than by anything meaningful. See the RUNS block in
          app.js for the whole reasoning. -->
     <div id="work-live-pane" style="display:none">
+      <div id="work-results-root"></div>
+      <details class="workspace-advanced" id="work-advanced">
+        <summary>History tools, rules, and filed ideas</summary>
       <div class="ideas-sortbar runs-bar">
         <!-- The first four chips FILTER the chronology; History and
              Shipped are two more sources of the same stream. Rules and
@@ -474,6 +472,7 @@
       <div id="runs-list" class="runs-list"></div>
       <div id="work-rules-list" class="list" style="display:none"></div>
       <div id="work-filed-list" class="list" style="display:none"></div>
+      </details>
     </div>
   </section>
 
@@ -1255,7 +1254,10 @@
 <script src="/forge-spatial.js"></script>
 <script src="/forge.js"></script>
 <script src="/assistant.js"></script>
+<script src="/work-results.js"></script>
+<script src="/workspace-intake.js"></script>
 <script src="/app.js"></script>
+<script src="/reminder-stickies.js"></script>
 <script src="/research.js"></script>
 <script src="/atlas.js"></script>
 </body>

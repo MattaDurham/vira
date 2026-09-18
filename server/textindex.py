@@ -207,7 +207,7 @@ def backfill_graph(account, since=None, limit=400, log=print):
         path = ("/me/messages?" + (f"$filter={urllib.parse.quote(flt)}&"
                                    if flt else "")
                 + f"$top={GRAPH_PAGE}&$select=id,subject,from,toRecipients,"
-                  "receivedDateTime,body,internetMessageId,webLink")
+                  "receivedDateTime,body,internetMessageId,webLink,hasAttachments")
         while path and n < limit:
             out = msgraph._graph_request(account, path)
             for m in out.get("value", []):
@@ -221,7 +221,9 @@ def backfill_graph(account, since=None, limit=400, log=print):
                     html_body = content
                     content = _strip_html(content)
                 links = extract_links(content, html=html_body)
-                content = re.sub(r"\s+", " ", content).strip()[:MAIL_BODY_MAX]
+                content = re.sub(r"\s+", " ", content).strip()
+                body_complete = len(content) <= MAIL_BODY_MAX
+                content = content[:MAIL_BODY_MAX]
                 if len(content) < MIN_CHARS:
                     continue
                 try:
@@ -244,6 +246,8 @@ def backfill_graph(account, since=None, limit=400, log=print):
                     source_meta={"message_id": m.get("internetMessageId") or "",
                                  "graph_id": m.get("id") or "",
                                  "web_link": m.get("webLink") or "",
+                                 "body_complete": body_complete,
+                                 "has_attachments": bool(m.get("hasAttachments")),
                                  "links": links})
             con.commit()
             nxt = out.get("@odata.nextLink")
@@ -350,6 +354,10 @@ def backfill_imap(acct, limit=400, log=print):
                                      # These UIDs belong to the selected All
                                      # Mail folder, not mailread's INBOX rowid.
                                      "imap_uid": uid, "mailbox": box,
+                                     "body_complete": len(body) < MAIL_BODY_MAX,
+                                     "has_attachments": any(part.get_filename() or
+                                         "attachment" in str(part.get("Content-Disposition") or "").lower()
+                                         for part in msg.walk()),
                                      "links": extract_links(plain, html=html_body)})
                     fails = 0
                     wm = max(wm, uid)
@@ -579,6 +587,9 @@ def _source_row(row):
     except (ValueError, TypeError):
         metadata = {}
     if isinstance(metadata, dict):
+        for key in ("has_attachments", "body_complete"):
+            if type(metadata.get(key)) is bool:
+                item[key] = metadata[key]
         for key in ("message_id", "graph_id", "web_link", "mailbox"):
             value = metadata.get(key)
             if isinstance(value, str) and value.strip():

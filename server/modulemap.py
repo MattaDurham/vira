@@ -246,7 +246,7 @@ DEFAULT_MODULES = [
      "updated": TODAY},
     {"id": "brief-engine", "name": "Brief engine", "layer": "engine",
      "group": "rhythm", "kind": "deterministic composer",
-     "what": "Composes the Attention Day lane: today and tomorrow's "
+     "what": "Composes the Attention Today view: today and tomorrow's "
              "calendar, birthdays, renewals, and queued drafts. Its broad "
              "relationship reads still ground the optional narrative, but "
              "their actionable rows live in People rather than being "
@@ -308,7 +308,7 @@ DEFAULT_MODULES = [
      "keywords": ["session", "runner", "terminal", "permission", "durable",
                   "viratools"],
      "updated": TODAY},
-    {"id": "showroom", "name": "Showroom", "layer": "surface",
+    {"id": "showroom", "name": "Work / Results gallery", "layer": "surface",
      "group": "operate", "kind": "draft-branch gallery",
      "what": "Every draft branch on this machine as a card: what it does "
              "and what state it is in (a Vira-written blurb over the "
@@ -564,18 +564,18 @@ DEFAULT_MODULES = [
      "updated": TODAY},
     {"id": "attention-win", "name": "Attention", "layer": "surface",
      "group": "rhythm", "kind": "visual cockpit / mobile tab",
-     "what": "One visual focus cockpit with three cognitive lanes: Now for "
-             "live owner blocks, Day for temporal orientation, and Decide "
-             "for durable rulings. Cards can carry local images or looping "
-             "video and open the exact source text, session, branch, dossier, "
-             "or specialized workflow.",
-     "links": [{"to": "attention-engine", "how": "renders Now from"},
-               {"to": "brief-engine", "how": "renders Day from"},
-               {"to": "review-engine", "how": "renders Decide from"},
+     "what": "Today combines reminders, the calendar, and a short live "
+             "activity list. Review gathers source-owned decisions, live "
+             "questions, and uncertain correspondence filing. Inbox shows "
+             "filing receipts and configurable routes into governed vaults. "
+             "Reminders can be pinned to the desktop as linked sticky notes.",
+     "links": [{"to": "attention-engine", "how": "renders live activity from"},
+               {"to": "brief-engine", "how": "renders Today from"},
+               {"to": "review-engine", "how": "renders Review from"},
                {"to": "picker-engine", "how": "drills into"}],
      "keywords": ["attention", "daily brief", "needs review", "visual cockpit"],
      "updated": TODAY},
-    {"id": "jobs-win", "name": "The Forge / Runs", "layer": "surface",
+    {"id": "jobs-win", "name": "Work / Results", "layer": "surface",
      "group": "operate", "kind": "Forge tab (legacy window alias)",
      "what": "Live and historical agent runs. Every job opens in its own "
              "floating terminal; history reopens any past run read-only "
@@ -584,7 +584,7 @@ DEFAULT_MODULES = [
                {"to": "job-ledger", "how": "renders history from"}],
      "keywords": ["jobs window", "history", "terminal"],
      "updated": TODAY},
-    {"id": "ideas-win", "name": "The Forge / Cues", "layer": "surface",
+    {"id": "ideas-win", "name": "Work / Ideas", "layer": "surface",
      "group": "operate", "kind": "Forge tab (legacy window alias)",
      "what": "The collaborative cue list: capture, refine, defer, and move "
              "an idea into a Flow or a direct run. Record preserves the "
@@ -603,7 +603,7 @@ DEFAULT_MODULES = [
      "links": [{"to": "radar-engine", "how": "renders"}],
      "keywords": ["radar window", "groupings"],
      "updated": TODAY},
-    {"id": "circuits-win", "name": "The Forge / Flows", "layer": "surface",
+    {"id": "circuits-win", "name": "Work / Automations", "layer": "surface",
      "group": "operate", "kind": "Forge tab (legacy window alias)",
      "what": "Compose, inspect, test, and version visual orchestration "
              "graphs; existing Circuits remain executable Flow sources.",
@@ -686,20 +686,17 @@ DEFAULT_MODULES = [
     # from a real description rather than a blank.
     {
      "id": "work-win",
-     "name": "The Forge",
+     "name": "Work",
      "layer": "surface",
      "group": "operate",
      "kind": "dock window / mobile tab",
-     "what": "The cockpit in one window with three tabs. Cues is the live "
-             "queue of ideas, proposals, and notes that need a session. "
-             "Flows builds and dispatches library skills, free-form agent "
-             "work, and multi-step pipelines; its edit toolbar carries the "
-             "familiar undo, redo, clipboard, and selection actions, and a "
-             "live run can be traced directly on the board. Record is one "
-             "chronological ledger for sessions, flow runs, unlanded work, "
-             "job history, shipped changes, judge grades, rules, and filed "
-             "work. It replaces the separate Actions, Jobs, Ideas, "
-             "Circuits, and Agent Loops windows.",
+     "what": "One workspace with Ideas, Results, and Automations. Ideas "
+             "keeps the proposal queue. Results combines the former Record "
+             "and Showroom into one gallery or timeline, joining branches, "
+             "sessions, flow runs, shipped changes, and filing receipts by "
+             "stable identity. Each result opens the same evidence inspector. "
+             "Automations retains the Forge graph editor and live traces. "
+             "History tools, rules, and filed ideas remain available.",
      "ask": {"label": "Ask Claude anything (Flows)", "corpus": "everything (live agent with native Vira tools)", "engine": "agent runtime (a real session; ~minutes)"},
      "links": [
               {"to": "sessions", "how": "launches jobs through"},

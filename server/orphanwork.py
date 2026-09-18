@@ -574,6 +574,18 @@ def _teardown(slug):
     return "teardown: " + text
 
 
+def require_action_branch(branch):
+    """Fail before a prefix is lost: branch.sh currently acts on claude/*.
+
+    Discovery and read/resume support other branch names, but passing their
+    slug to legacy merge/discard could target a different Claude branch.
+    """
+    if not (branch or "").startswith("claude/"):
+        raise ValueError("Merge, land and discard are unavailable for this branch prefix; "
+                         "the branch tooling currently targets claude/* only. "
+                         "Read its context or resume it instead.")
+
+
 def merge(slug):
     """branch.sh merge <slug>, then the push/restart/teardown epilogue."""
     return _run_action(slug, ["merge", slug], "merge",
@@ -1350,6 +1362,7 @@ def land(item, mode="diagnose"):
     branch = item.get("branch") or ""
     if item.get("kind") == "unpushed" or branch == "main":
         raise ValueError("main needs a push, not a landing")
+    require_action_branch(branch)
     mode = norm_land_mode(mode)
     slug = branch.split("/", 1)[-1]
     _refuse_if_busy(branch)
