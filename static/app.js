@@ -10479,7 +10479,8 @@ function renderAttention() {
   }
   window.ViraIntake?.setLiveCount(need);
   const key = JSON.stringify(rows);
-  if (key === attnKey && body.childElementCount) return;
+  // Reopening an empty activity list can insert a fresh loading indicator.
+  if (key === attnKey && body.childElementCount && !body.querySelector(".mod-wait")) return;
   attnKey = key;
   body.replaceChildren();
   // Canonical reminder cards live once, in the day section below.
