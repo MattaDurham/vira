@@ -37,6 +37,7 @@ import email
 import email.utils
 import hashlib
 import imaplib
+import json
 import mimetypes
 import re
 import sys
@@ -57,6 +58,19 @@ ID_BASE = 1 << 52                 # keeps synthetic ids clear of chat.db ROWIDs
 MIN_IMAGE_BYTES = 4000            # below this an "image" is a signature/pixel
 MAIL_SKIP_EXT = (".ics", ".vcs", ".p7s", ".asc")   # invites / crypto sig noise
 GRAPH_PAGE = 25
+
+
+def _record_sources(con, source_id, account, attachment_ids, complete):
+    """Exact message provenance for local correspondence preservation.
+
+    An incomplete download stays visible; sender/subject similarity is never
+    sufficient evidence that a file belongs to a message.
+    """
+    con.execute("CREATE TABLE IF NOT EXISTS mail_attachment_sources ("
+                "source_id TEXT, account TEXT, attachment_ids TEXT, complete INTEGER, "
+                "PRIMARY KEY(source_id, account))")
+    con.execute("INSERT OR REPLACE INTO mail_attachment_sources VALUES (?,?,?,?)",
+                (source_id, account, json.dumps(attachment_ids), int(complete)))
 
 
 # ---------- helpers ----------
@@ -172,11 +186,59 @@ def _graph_messages(email_addr, since_iso=None, log=print):
 def _graph_attachment_bytes(email_addr, msg_id, att):
     from . import msgraph
     cb = att.get("contentBytes")
-    if cb:
-        return base64.b64decode(cb)
+    if cb is not None:
+        return base64.b64decode(cb, validate=True)
     # large attachments omit contentBytes — fetch the raw stream
     return msgraph.get_bytes(
         email_addr, f"/me/messages/{msg_id}/attachments/{att['id']}/$value")
+
+
+def _graph_attachments(email_addr, message_id, log):
+    """Read every attachment page, confined to this account/message collection.
+
+    A failed, malformed, repeated, or foreign continuation is incomplete
+    coverage. Keep already-read attachments, but never turn that partial list
+    into a complete-preservation claim.
+    """
+    from . import msgraph
+    collection = "/me/messages/" + urllib.parse.quote(str(message_id), safe="") + "/attachments"
+    path, seen, attachments = collection, set(), []
+    base = urllib.parse.urlsplit(msgraph.GRAPH)
+    while path:
+        if path in seen or len(seen) >= 100:
+            return attachments, False
+        seen.add(path)
+        try:
+            page = msgraph._graph_request(email_addr, path)
+        except Exception:  # noqa: BLE001 - retain partial evidence honestly
+            log("  graph attachment page unavailable; coverage remains incomplete")
+            return attachments, False
+        if not isinstance(page, dict) or not isinstance(page.get("value"), list):
+            return attachments, False
+        if any(not isinstance(row, dict) for row in page["value"]):
+            return attachments, False
+        attachments.extend(page["value"])
+        next_link = page.get("@odata.nextLink")
+        if not next_link:
+            return attachments, True
+        if not isinstance(next_link, str):
+            return attachments, False
+        try:
+            parsed = urllib.parse.urlsplit(next_link)
+        except ValueError:
+            return attachments, False
+        if parsed.fragment or parsed.username or parsed.password:
+            return attachments, False
+        expected = collection
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme != base.scheme or parsed.netloc != base.netloc:
+                return attachments, False
+            expected = base.path + collection
+        if urllib.parse.unquote(parsed.path) != urllib.parse.unquote(expected):
+            return attachments, False
+        # Rebuild the known route rather than trusting the supplied URL/path.
+        path = collection + ("?" + parsed.query if parsed.query else "")
+    return attachments, True
 
 
 def _run_graph(email_addr, mode, since, limit, log):
@@ -219,18 +281,22 @@ def _run_graph(email_addr, mode, since, limit, log):
             dt = datetime.now(timezone.utc)
         subject = m.get("subject") or ""
         preview = re.sub(r"\s+", " ", m.get("bodyPreview") or "").strip()
-        atts = msgraph._graph_request(
-            email_addr, f"/me/messages/{m['id']}/attachments").get("value", [])
+        atts, complete = _graph_attachments(email_addr, m["id"], log)
+        attachment_ids = []
         for att in atts:
             if att.get("@odata.type") != "#microsoft.graph.fileAttachment":
+                complete = False
                 continue
             name = att.get("name") or ""
             mime = att.get("contentType") or ""
             size = att.get("size") or 0
             if _skip(_classify(mime, name), name, size, att.get("isInline")):
+                complete = False
                 continue
             synth = _synth_id(email_addr, m.get("internetMessageId") or m["id"],
                               att.get("id") or name)
+            if synth not in attachment_ids:
+                attachment_ids.append(synth)
             if con.execute("SELECT 1 FROM items WHERE id=?",
                            (synth,)).fetchone():
                 continue
@@ -238,12 +304,15 @@ def _run_graph(email_addr, mode, since, limit, log):
                 data = _graph_attachment_bytes(email_addr, m["id"], att)
             except Exception as e:  # noqa: BLE001 — one bad attachment
                 log(f"  graph att fetch failed ({name}): {e}")
+                complete = False
                 continue
             n += _store_and_insert(
                 con, account=email_addr, mime=mime, name=name, data=data,
                 synth_id=synth, date_dt=dt, from_me=from_me,
                 sender_pid=sender_pid, sender_handle=from_addr,
                 chat_pid=chat_pid, subject=subject, preview=preview)
+        _record_sources(con, "mail:" + (m.get("internetMessageId") or m["id"]),
+                        email_addr, attachment_ids, complete)
         con.commit()
         if limit and n >= limit:
             break
@@ -280,21 +349,35 @@ def _imap_search(con, gmail, since_uid, since_date):
     return [int(u) for u in data[0].split()]
 
 
-def _msg_attachments(msg):
-    """Yield (name, mime, bytes, inline) for each real attachment part."""
+def _msg_attachments(msg, coverage=None):
+    """Yield decoded files; optionally report parts that could not be kept.
+
+    Preserve the historical iterator shape for index consumers. A manifest
+    caller supplies a coverage dictionary so decoding failures, including
+    permissively decoded malformed base64, cannot disappear from its receipt.
+    """
+    def incomplete():
+        if coverage is not None:
+            coverage["complete"] = False
+
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
+            if part.get_filename() or "attachment" in str(part.get("Content-Disposition") or "").lower():
+                incomplete()
             continue
         fn = part.get_filename()
         cd = str(part.get("Content-Disposition") or "")
         if not fn and "attachment" not in cd.lower():
+            if "inline" in cd.lower() or part.get("Content-ID"):
+                incomplete()
             continue
         inline = "inline" in cd.lower() and "attachment" not in cd.lower()
         try:
             data = part.get_payload(decode=True)
         except Exception:  # noqa: BLE001
             data = None
-        if not data:
+        if not isinstance(data, bytes) or part.defects:
+            incomplete()
             continue
         name = mailmod._decode_header(fn) if fn else "attachment"
         yield name, (part.get_content_type() or ""), data, inline
@@ -350,11 +433,14 @@ def _run_imap(acct, mode, since, limit, log):
                 dt = datetime.now(timezone.utc)
             subject = mailmod._decode_header(msg.get("Subject", ""))
             preview = mailmod._body_preview(msg)
+            attachment_ids, coverage = [], {"complete": True}
             for idxn, (name, mime, data, inline) in enumerate(
-                    _msg_attachments(msg)):
+                    _msg_attachments(msg, coverage)):
                 if _skip(_classify(mime, name), name, len(data), inline):
+                    coverage["complete"] = False
                     continue
                 synth = _synth_id(addr, msg_id, f"{idxn}:{name}")
+                attachment_ids.append(synth)
                 if idx.execute("SELECT 1 FROM items WHERE id=?",
                                (synth,)).fetchone():
                     continue
@@ -363,6 +449,8 @@ def _run_imap(acct, mode, since, limit, log):
                     synth_id=synth, date_dt=dt, from_me=from_me,
                     sender_pid=sender_pid, sender_handle=from_addr,
                     chat_pid=chat_pid, subject=subject, preview=preview)
+            _record_sources(idx, "mail:" + ((msg.get("Message-ID") or f"{addr}:{uid}").strip()),
+                            addr, attachment_ids, coverage["complete"])
             idx.commit()
             if limit and n >= limit:
                 break

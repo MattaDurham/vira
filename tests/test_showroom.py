@@ -112,6 +112,32 @@ class _RepoCase(unittest.TestCase):
 
 
 class Inventory(_RepoCase):
+    def test_a_missing_git_timestamp_is_not_invented_as_now(self):
+        self.make_worktree("undated", commits=1)
+        with mock.patch.object(showroom, "_ref_facts", return_value={"claude/undated": ("abc", 0)}):
+            item = self.by_branch()["claude/undated"]
+        self.assertEqual(item["last_activity"], 0)
+        self.assertIsNone(item["age_days"])
+
+    def test_codex_branch_is_discovered_with_its_real_date(self):
+        wt = self.make_worktree("codex-feature", commits=1)
+        _git("branch", "-m", "codex/codex-feature", cwd=wt)
+        it = self.by_branch()["codex/codex-feature"]
+        self.assertEqual(it["band"], "unlanded")
+        self.assertEqual(it["ahead"], 1)
+        self.assertGreater(it["last_activity"], 0)
+        self.assertIn("codex/codex-feature", showroom._ref_facts())
+
+    def test_merged_codex_branch_is_in_cleanup_inventory(self):
+        wt = self.make_worktree("codex-done", commits=1)
+        _git("branch", "-m", "codex/codex-done", cwd=wt)
+        _git("merge", "--no-ff", "-q", "-m", "Merge branch 'codex/codex-done'",
+             "codex/codex-done", cwd=self.root)
+        it = self.by_branch()["codex/codex-done"]
+        self.assertEqual(it["band"], "landed")
+        self.assertTrue(it["merged_at"])
+        self.assertIn("codex/codex-done", showroom._merged_set())
+
     def test_an_empty_repo_shows_nothing(self):
         self.assertEqual(showroom.sweep(), [])
         out = showroom.compose()
@@ -388,6 +414,47 @@ class Describing(_RepoCase):
 
 
 class Actions(_RepoCase):
+    def test_codex_preview_uses_its_exact_canonical_worktree(self):
+        wt = self.make_worktree("codex-preview", commits=1)
+        _git("branch", "-m", "codex/codex-preview", cwd=wt)
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
+            showroom.serve("codex/codex-preview")
+        self.branch_sh.assert_any_call(["serve", "codex-preview", "--local"], showroom.SERVE_TIMEOUT)
+        self.assertEqual(showroom._serves["codex/codex-preview"]["status"], "up")
+
+    def test_codex_cannot_launch_or_stop_a_same_slug_claude_worktree(self):
+        self.make_worktree("shared", commits=1)
+        other = self.root.parent / "codex-shared"
+        _git("worktree", "add", "-b", "codex/shared", str(other), "main", cwd=self.root)
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
+            showroom.serve("codex/shared")
+        self.assertEqual(showroom._serves["codex/shared"]["status"], "failed")
+        self.assertIn("different worktree", showroom._serves["codex/shared"]["text"])
+        with self.assertRaisesRegex(ValueError, "different worktree"):
+            showroom.stop("codex/shared")
+        self.branch_sh.assert_not_called()
+
+    def test_bare_codex_ref_never_borrows_claudes_same_slug_directory(self):
+        wt = self.make_worktree("same-slug", commits=1)
+        _git("branch", "codex/same-slug", "main", cwd=self.root)
+        self.assertEqual(showroom._worktree_of("claude/same-slug").resolve(), wt.resolve())
+        self.assertIsNone(showroom._worktree_of("codex/same-slug"))
+        self.assertIsNone(showroom._worktree_of("codex/missing"))
+        with mock.patch.object(showroom, "_spawn", lambda target, name: target()):
+            showroom.serve("codex/same-slug")
+        self.assertEqual(showroom._serves["codex/same-slug"]["status"], "failed")
+        self.branch_sh.assert_not_called()
+
+    def test_codex_cleanup_and_landing_fail_before_legacy_slug_mutation(self):
+        with mock.patch.object(orphanwork, "discard") as discard, \
+                mock.patch.object(orphanwork, "merge") as merge:
+            with self.assertRaisesRegex(ValueError, "branch prefix"):
+                showroom.cleanup("codex/shared")
+            with self.assertRaisesRegex(ValueError, "branch prefix"):
+                orphanwork.land({"branch": "codex/shared", "dirty": 0, "ahead": 1})
+        discard.assert_not_called()
+        merge.assert_not_called()
+
     def test_serve_runs_branch_sh_local_and_records_the_port(self):
         self.make_worktree("s", commits=1)
         showroom.refresh()
@@ -524,6 +591,19 @@ class RouteLayer(_RepoCase):
                           "modules"},
                          set(r.json()))
 
+    def test_orphan_routes_reject_codex_before_losing_its_prefix(self):
+        from server import main
+        item = {"key": "codex/shared:tip:0", "branch": "codex/shared", "kind": "worktree"}
+        with mock.patch.object(main, "_orphan_item", return_value=item), \
+                mock.patch.object(orphanwork, "merge") as merge, \
+                mock.patch.object(orphanwork, "discard") as discard:
+            for name in ("merge", "discard"):
+                response = self.client.post("/api/orphanwork/" + name, json={"key": item["key"]})
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("branch prefix", response.json()["detail"])
+        merge.assert_not_called()
+        discard.assert_not_called()
+
     def test_context_is_read_only_and_answers_on_passive(self):
         self.make_worktree("r", commits=1)
         showroom.refresh()
@@ -604,12 +684,14 @@ class Surface(unittest.TestCase):
         self.assertLess(resume.index("await reviewSessionLaunch"),
                         resume.index('post("/api/orphanwork/resume"'))
 
-    def test_the_window_is_registered_and_loads(self):
+    def test_the_retired_window_routes_to_the_shared_results_inventory(self):
         js = (self.ROOT / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('{ id: "showroom", title: "Showroom"', js)
-        self.assertIn('if (id === "showroom") loadShowroom()', js)
+        self.assertNotIn('{ id: "showroom", title: "Showroom"', js)
+        self.assertIn('showroom: { tab: "live", view: "gallery" }', js)
+        self.assertIn('if (alias.view) ensureWorkResults()?.setView(alias.view)', js)
         html = (self.ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('id="view-showroom"', html)
+        self.assertIn('id="work-results-root"', html)
+        self.assertIn('src="/work-results.js"', html)
 
 
 if __name__ == "__main__":

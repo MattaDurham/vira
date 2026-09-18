@@ -234,6 +234,8 @@ def reminders(now=None, include_snoozed=False):
 
 
 def reminder_action(rid, action, hours=24, due=None):
+    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
+        raise ValueError("Reminder changes are disabled in a preview instance")
     row = next((r for r in reminders(include_snoozed=True) if r["id"] == rid), None)
     if row is None:
         raise KeyError(rid)

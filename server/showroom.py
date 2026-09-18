@@ -9,7 +9,7 @@ that mattered most - the one some OTHER session had already built and left
 of worktrees, and no surface that put them side by side. This module is
 the viewer for ALL of it, and it builds nothing.
 
-WHAT A CARD IS. Every `claude/*` branch git knows about (a linked worktree
+WHAT A CARD IS. Every `claude/*` or `codex/*` branch git knows about (a linked worktree
 or a bare local ref), banded by the one fact that decides what you can do
 with it:
 
@@ -69,6 +69,7 @@ ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "showroom.json"
 
 BANDS = ("session", "unlanded", "landed")
+DRAFT_PREFIXES = ("claude/", "codex/")
 SERVE_TIMEOUT = 600          # clone + provision + boot can take a minute or more
 QUICK_TIMEOUT = 120
 GH_TIMEOUT = 30
@@ -205,7 +206,7 @@ def _prs(force=False):
 # ---------------------------------------------------------------- git facts
 
 def _local_branches():
-    out = gitutil.git(ROOT, "branch", "--list", "claude/*",
+    out = gitutil.git(ROOT, "branch", "--list", "claude/*", "codex/*",
                       "--format=%(refname:short)", timeout=20)
     if out.returncode != 0:
         return []
@@ -213,13 +214,13 @@ def _local_branches():
 
 
 def _ref_facts():
-    """{branch: (tip sha, commit epoch)} for every claude/* ref in ONE git
+    """{branch: (tip sha, commit epoch)} for every draft ref in ONE git
     call. The first live sweep spent ~260 subprocess spawns - two of them
     per branch just for the tip and its date - and a spawn out of the
     multi-gigabyte server process costs ~10x what it costs a bare python
     (measured 2026-09-03: 71s over HTTP against 8s in-process for the
     same sweep). Batch what git can batch."""
-    out = gitutil.git(ROOT, "for-each-ref", "refs/heads/claude/",
+    out = gitutil.git(ROOT, "for-each-ref", "refs/heads/claude/", "refs/heads/codex/",
                       "--format=%(refname:short)%09%(objectname)%09%(committerdate:unix)",
                       timeout=30)
     facts = {}
@@ -237,10 +238,10 @@ def _ref_facts():
 
 
 def _merged_set():
-    """The claude/* branches whose tip is reachable from main - one call.
+    """The draft branches whose tip is reachable from main - one call.
     A branch here has ahead == 0 by definition, so its ahead/behind read
     is skipped; only unmerged branches pay for rev-list."""
-    out = gitutil.git(ROOT, "branch", "--merged", "main", "--list", "claude/*",
+    out = gitutil.git(ROOT, "branch", "--merged", "main", "--list", "claude/*", "codex/*",
                       "--format=%(refname:short)", timeout=30)
     if out.returncode != 0:
         return set()
@@ -376,7 +377,7 @@ def _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
     else:
         tip = orphanwork._tip_sha(wt or ROOT, branch)
         ts = orphanwork._commit_time(branch)
-    ts = ts or time.time()
+    ts = ts or 0.0                    # unknown never means just happened
     job = orphanwork._job_for_branch(branch, ledger_by_branch)
     pr = prs.get(branch)
     if dirty and wt and dirty_lines:
@@ -417,7 +418,7 @@ def _make_item(branch, wt, ledger_by_branch, orphan_by_branch, prs,
         "orphan_read": orphan.get("read"),
         "failure": orphan.get("failure"),
         "last_activity": ts,
-        "age_days": round((time.time() - ts) / 86400, 1),
+        "age_days": round((time.time() - ts) / 86400, 1) if ts else None,
     }
     item["key"] = (f"{branch}:{item['tip']}:{dirty}:"
                    f"{(pr or {}).get('state', '')}:{band}")
@@ -558,7 +559,7 @@ def _orphan_fresh():
 
 
 def sweep():
-    """Every claude/* branch git knows, as card facts. Runs the orphan
+    """Every supported draft branch git knows, as card facts. Runs the orphan
     sweeper first - when its store is older than ORPHAN_FRESH_S - so the
     join carries fresh verdicts without paying its ~110 git spawns on
     every open; read-only git the whole way, one branch degrading away
@@ -594,9 +595,10 @@ def _sweep_items():
     batch = {"facts": _ref_facts(), "merged": _merged_set(),
              "merges": _merge_index()}
     items, seen = [], set()
-    for ent in _worktrees():
+    entries = _worktrees()
+    for ent in entries:
         wt, branch = ent["path"], ent["branch"]
-        if wt == ROOT or not branch or not branch.startswith("claude/"):
+        if wt == ROOT or not branch or not branch.startswith(DRAFT_PREFIXES):
             continue
         if not wt.is_dir():
             wt = None                  # a registration whose directory is gone
@@ -699,12 +701,22 @@ def _worktree_of(branch):
     canonical .worktrees/<slug> path is the second rung: a directory there
     that is a linked worktree holds this branch's work whatever HEAD says.
     Never a registration whose directory is gone (a prunable entry)."""
-    for ent in _worktrees():
+    entries = _worktrees()
+    for ent in entries:
         if ent["branch"] == branch and ent["path"] != ROOT and ent["path"].is_dir():
             return ent["path"]
     canon = _primary() / ".worktrees" / _slug(branch)
     if canon.is_dir() and (canon / ".git").is_file():
-        return canon
+        occupant = next((ent.get("branch") for ent in entries
+                         if ent["path"].resolve() == canon.resolve()), "")
+        if occupant and occupant != branch:
+            return None
+        # Detached fallback is for a real branch (e.g. mid-rebase), never
+        # permission to borrow another prefix's same-slug directory.
+        ref = gitutil.git(ROOT, "show-ref", "--verify", "--quiet",
+                           "refs/heads/" + branch, timeout=20)
+        if ref.returncode == 0:
+            return canon
     return None
 
 
@@ -742,6 +754,22 @@ def _ensure_worktree(branch):
     return dest
 
 
+def _check_preview_target(branch, wt):
+    """Check the exact path the legacy slug-based serve/stop will address.
+
+    branch.sh looks for claude/<slug> first, then its canonical directory.
+    A Codex branch may use that canonical directory, but must never launch
+    or stop a different same-slug Claude worktree.
+    """
+    slug = _slug(branch)
+    target = next((entry["path"] for entry in _worktrees()
+                   if entry["branch"] == "claude/" + slug),
+                  _primary() / ".worktrees" / slug)
+    if not wt or Path(target).resolve() != Path(wt).resolve():
+        raise ValueError("The preview command would address a different worktree. "
+                         "Preview is unavailable for this branch location.")
+
+
 def serve(branch):
     """Start the branch's test instance (branch.sh serve <slug> --local),
     asynchronously; the outcome lands in `serving` on compose(). Needs no
@@ -751,7 +779,7 @@ def serve(branch):
     An instance already up is reported as up - branch.sh prints "already
     running (pid N, port P)" and exits 0."""
     _refuse_if_passive("launching a test instance")
-    if not (branch or "").startswith("claude/"):
+    if not (branch or "").startswith(DRAFT_PREFIXES):
         raise ValueError(f"not a draft branch: {branch or 'unset'}")
     with _serves_lock:
         cur = _serves.get(branch)
@@ -762,7 +790,8 @@ def serve(branch):
 
     def run():
         try:
-            _ensure_worktree(branch)
+            wt = _ensure_worktree(branch)
+            _check_preview_target(branch, wt)
             ok, text = _branch_sh(["serve", _slug(branch), "--local"],
                                   SERVE_TIMEOUT)
         except ValueError as e:
@@ -788,8 +817,9 @@ def serve(branch):
 
 def stop(branch):
     _refuse_if_passive("stopping a test instance")
-    if not (branch or "").startswith("claude/"):
+    if not (branch or "").startswith(DRAFT_PREFIXES):
         raise ValueError(f"not a draft branch: {branch or 'unset'}")
+    _check_preview_target(branch, _worktree_of(branch))
     ok, text = _branch_sh(["stop", _slug(branch)], QUICK_TIMEOUT)
     with _serves_lock:
         _serves.pop(branch, None)
@@ -807,6 +837,7 @@ def cleanup(branch):
     by branch.sh itself rather than destroyed. Unlanded rows use the
     sweeper's own Discard, which carries the armed confirm."""
     _refuse_if_passive("cleaning up a branch")
+    orphanwork.require_action_branch(branch)
     it = _require(branch)
     if it.get("band") != "landed":
         raise ValueError(f"{branch} is {it.get('band')} - only a landed, "

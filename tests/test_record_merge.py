@@ -86,7 +86,11 @@ class RetiredTabAlias(unittest.TestCase):
     def test_setworktab_normalizes_the_retired_id(self):
         # WORK_TAB_ALIAS is what keeps #work/record deep links, saved
         # values and pre-merge callers landing on the merged pane.
-        self.assertIn('const WORK_TAB_ALIAS = { record: "live" };', APP)
+        aliases = _block(APP, "const WORK_TAB_ALIAS = {", 250).split("}", 1)[0]
+        self.assertIn('record: "live"', aliases)
+        self.assertIn('results: "live"', aliases)
+        self.assertIn('ideas: "queue"', aliases)
+        self.assertIn('automations: "dispatch"', aliases)
         body = _block(APP, "function setWorkTab(tab", 300)
         self.assertIn("tab = WORK_TAB_ALIAS[tab] || tab;", body)
 

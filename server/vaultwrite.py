@@ -426,6 +426,52 @@ def capture(title, text, destination=None, context=None, for_model=False):
     return write_note(spec, rel, body)
 
 
+def write_bytes(spec, rel, data):
+    """Confined, create-only binary preservation; identical retries are harmless.
+
+    Use the same directory anchors and live policy checks as Markdown writes.
+    Existing different bytes are never replaced, including an owner's edits.
+    """
+    if not isinstance(data, bytes) or len(data) > 100_000_000:
+        raise ValueError("attachment must be bytes, at most 100 MB")
+    rel = relative_path(rel)
+    path = safe_path(spec, rel)
+    sha = hashlib.sha256(data).hexdigest()
+    with locked(_lock_path(path)), _parent(spec, rel, create=True) as parent:
+        try:
+            previous = parent.read(path.name)
+        except FileNotFoundError:
+            previous = None
+        if previous is not None:
+            if hashlib.sha256(previous).hexdigest() != sha:
+                raise FileExistsError("attachment destination already contains different bytes")
+            parent.validate()
+        else:
+            tmp = ".vira-" + uuid.uuid4().hex + ".tmp"
+            fd = os.open(parent._name(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=parent.fd)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                parent.validate()
+                committed = _identity(parent.info(tmp))
+                parent.link(tmp, path.name)
+                try:
+                    parent.validate()
+                    if _identity(parent.info(path.name)) != committed:
+                        raise ValueError("attachment changed during the write")
+                except (OSError, ValueError):
+                    parent.rollback(path.name, committed, None)
+                    raise
+            finally:
+                parent.unlink(tmp)
+    from . import vault
+    return {"source_id": spec["id"], "path": vault._public_path(spec, rel),
+            "relative_path": rel, "sha256": sha, "size": len(data)}
+
+
 def delete_text(spec, rel, expected_hash=None):
     rel = relative_path(rel)
     path = safe_path(spec, rel)

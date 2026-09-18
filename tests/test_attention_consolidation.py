@@ -20,6 +20,7 @@ class AttentionConsolidationContracts(unittest.TestCase):
         cls.app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         cls.css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+        cls.results = (ROOT / "static" / "work-results.js").read_text(encoding="utf-8")
 
     def test_one_top_level_surface_replaces_four_peer_windows(self):
         self.assertIn('id="view-attention"', self.html)
@@ -29,8 +30,11 @@ class AttentionConsolidationContracts(unittest.TestCase):
                 rf'\{{\s*id:\s*"{retired}"\s*,\s*title:', self.app))
 
     def test_the_three_cognitive_lanes_and_picker_drill_in_exist(self):
-        for lane in ("now", "day", "decide", "picker"):
+        for lane in ("now", "day", "decide", "inbox", "picker"):
             self.assertIn(f'id="attention-{lane}-pane"', self.html)
+        tabs = self.html.split('id="attention-tabs"', 1)[1].split("</div>", 1)[0]
+        self.assertEqual(re.findall(r'data-tab="([^"]+)"', tabs), ["now", "decide", "inbox"])
+        self.assertIn('name === "day" && tab === "now"', self.app)
         self.assertIn('class="subsviz-frame" id="subsviz-frame"', self.html)
 
     def test_retired_ids_resolve_to_attention_lanes(self):
@@ -42,7 +46,7 @@ class AttentionConsolidationContracts(unittest.TestCase):
             '"attention", "find"]', self.app)
 
     def test_visual_and_full_source_context_are_first_class(self):
-        self.assertIn('class="attention-hero attention-hero-now"', self.html)
+        self.assertIn('id="attention-live-decisions"', self.html)
         self.assertIn('id="attention-source-text"', self.html)
         self.assertIn('/api/review/context?id=', self.app)
         self.assertIn('.review-visual img, .review-visual video', self.css)
@@ -65,12 +69,21 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('.attn-item.card-actionable:hover', self.css)
         self.assertIn('.review-card.card-actionable:hover', self.css)
 
-    def test_now_renders_one_newest_first_chronology(self):
-        self.assertIn('briefSection(body, "Newest activity first")', self.app)
-        self.assertIn('new Map(cards.map((c) => [c.card.req_id, c]))',
-                      self.app)
-        self.assertNotIn('briefSection(body, "Waiting on you")', self.app)
-        self.assertNotIn('briefSection(body, "Working")', self.app)
+    def test_today_keeps_day_context_and_links_counted_activity_to_work(self):
+        self.assertIn('briefSection(body, "In motion"', self.app)
+        self.assertIn('activity.slice(0, 4)', self.app)
+        self.assertIn('"See all work (" + activity.length', self.app)
+        self.assertIn('r.kind !== "assistant" && r.kind !== "review"', self.app)
+        self.assertIn('window.ViraAssistant?.load();', self.app)
+
+    def test_pending_answers_keep_their_nodes_across_unrelated_polls(self):
+        block = self.app.split("function renderAttention()", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn('const id = c.card.req_id;', block)
+        self.assertIn('if (!attentionDecisionNodes.has(id))', block)
+        self.assertIn('if (node.parentNode !== decisions) decisions.appendChild(node)', block)
+        self.assertNotIn('decisions.replaceChildren', block)
+        self.assertNotIn('decisions.innerHTML', block)
+        self.assertIn('if (!active.has(id))', block)
 
     def test_revealed_destinations_hold_a_strong_ten_second_highlight(self):
         self.assertIn('const REVEAL_HIGHLIGHT_MS = 10000;', self.app)
@@ -150,9 +163,14 @@ class AttentionConsolidationContracts(unittest.TestCase):
 
     def test_attention_verbs_reveal_exact_objects(self):
         self.assertIn(
-            'run: (_btn, source) => revealOrphan(\n'
-            '               r.orphan_key, r.orphan_branch, source, r)',
+            'run: () => openWorkResult({ branch: r.orphan_branch })',
             self.app)
+        self.assertIn('run: () => openWorkResult({ job_id: r.job_id })', self.app)
+        self.assertIn('ensureWorkResults()?.open(ref);', self.app)
+        self.assertIn('ref?.branch ? "branch:" + ref.branch', self.results)
+        self.assertIn('ref?.job_id ? "job:" + ref.job_id', self.results)
+        self.assertIn('(row.aliases || [row.id]).includes(identity)', self.results)
+        self.assertIn('/api/work/results/detail?id=', self.results)
         self.assertIn('n.dataset.runBranch === branch', self.app)
         self.assertIn(
             'card.dataset.runBranch = it.src.branch || "";', self.app)

@@ -3,7 +3,7 @@ listed in shared media (flagged, not dropped), thumbnail-cache keys survive
 eviction, and the contact-photo cache refreshes when AddressBook bytes change.
 
 Fixtures are fully synthetic (temp files, fake row tuples); nothing here
-touches chat.db or the real AddressBook stores.
+touches chat.db, the owner's media archive, or the real AddressBook stores.
 
 Run: .venv/bin/python -m unittest tests.test_media_evicted
 """
@@ -30,6 +30,13 @@ class EvictedMediaListing(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        # Attachment IDs are local to this fixture. A configured owner archive
+        # may contain the same IDs and make a missing original look available.
+        archive = mock.patch.object(
+            media.mediaarchive, "root",
+            return_value=Path(self.tmp.name) / "media-archive")
+        archive.start()
+        self.addCleanup(archive.stop)
         self.on_disk = Path(self.tmp.name) / "beach.jpeg"
         self.on_disk.write_bytes(b"jpegdata")
         self.gone = Path(self.tmp.name) / "evicted.heic"      # never written

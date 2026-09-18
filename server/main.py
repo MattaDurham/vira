@@ -29,6 +29,7 @@ from . import (
                circuits,
                companion,
                contactcard,
+               correspondence, reminderstickies, workresults,
                crmindex,
                data as crm,
                define,
@@ -92,6 +93,18 @@ ROOT = Path(__file__).resolve().parent.parent
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 app = FastAPI(title="Vira")
+app.include_router(correspondence.router)
+app.include_router(reminderstickies.router)
+app.include_router(workresults.router)
+
+
+def _work_filing_receipts():
+    return [{**item, "status": item["state"],
+             "path": item.get("receipt", {}).get("path", "")}
+            for item in correspondence.receipts()]
+
+
+workresults.receipt_provider = _work_filing_receipts
 
 
 # Static assets ship with no Cache-Control by default, so browsers cache
@@ -206,6 +219,7 @@ async def _startup():
     # rides the message watcher's tick (server/inbound.py).
     inbound.start()
     executive.start()  # durable contact learning and commitment follow-up
+    correspondence.start()  # opt-in governed message preservation
     # Job boards: fetch-and-diff the registered career boards on a cadence,
     # iMessage the owner when a new eligible role appears (server/jobboards).
     jobboards_poller.start()
@@ -4271,6 +4285,10 @@ def api_orphanwork_merge(req: OrphanKeyReq):
         raise HTTPException(404, "no such orphan-work item")
     if it.get("kind") == "unpushed":
         raise HTTPException(409, "main has nothing to merge — it needs a push")
+    try:
+        orphanwork.require_action_branch(it["branch"])
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     slug = it["branch"].split("/", 1)[-1]
     ok, detail = orphanwork.merge(slug)
     if not ok:
@@ -4288,6 +4306,10 @@ def api_orphanwork_discard(req: OrphanDiscardReq):
         raise HTTPException(404, "no such orphan-work item")
     if it.get("kind") == "unpushed":
         raise HTTPException(409, "main can't be discarded")
+    try:
+        orphanwork.require_action_branch(it["branch"])
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     slug = it["branch"].split("/", 1)[-1]
     ok, detail = orphanwork.discard(slug, force=req.force)
     if not ok:

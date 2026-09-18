@@ -215,6 +215,16 @@ section is the portable minimum that holds for any agent, any harness:
   agent harnesses block the numeric loopback form. Live owns 8377; test
   instances (`scripts/branch.sh serve <slug>`) take 8378–8399 and run
   passive: background workers off, outbound messaging hard-blocked.
+- **Owner review uses the full current app.** Before handing over a preview,
+  update the feature worktree onto the latest local `main` and refresh its
+  private snapshot with `scripts/branch.sh serve <slug> --fresh --local`.
+  Use the owner's actual data, configuration, and saved layout. Preserve the
+  desktop arrangement and open the changed features so they are immediately
+  visible. Verify the fresh snapshot is actually running: `serve` does not
+  refresh an already-running instance. Rebuilding a requested test instance
+  never authorizes restarting live. Synthetic `--fixture` previews are for
+  isolated testing or an explicit sample-data request, not the owner-review
+  handoff. Keep snapshots git-ignored and never replace live state.
 - **Text IO carries `encoding="utf-8"` on both ends** — Windows defaults
   to cp1252 and CI runs there. No emojis in any output, code, or commit
   message. `scripts/preflight.sh --list` names every mechanically

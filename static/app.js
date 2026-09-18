@@ -637,6 +637,14 @@ function feedCard(it) {
     });
     right.appendChild(hide);
   }
+  const sourceId = it.channel === "email" && it.message_id ? "mail:" + it.message_id
+    : it.channel === "imessage" && /^\d+$/.test(String(it.rowid)) ? "imsg:" + it.rowid : "";
+  if (sourceId) {
+    const keep = el("button", "feed-hide", "keep");
+    keep.title = "Choose a vault and preserve this message";
+    keep.addEventListener("click", (e) => { e.stopPropagation(); window.ViraIntake?.captureSource(sourceId); });
+    right.prepend(keep);
+  }
   top.appendChild(right);
   main.appendChild(top);
   main.appendChild(el("div", "feed-text", it.text));
@@ -7332,7 +7340,7 @@ $("#free-run").addEventListener("click", () => {
     post(`/api/circuits/${cid}/run`, { input: v, cwd: null })
       .then(() => {
         $("#free-prompt").value = "";
-        toast("Flow running — see The Forge · Record");
+        toast("Flow running — see Work · Results");
         setWorkSub("recipes");
         setCircuitsTab("runs");
       })
@@ -7927,6 +7935,7 @@ function beginOrphanTrace(sourceNode, branch = "", summary = {}) {
 async function revealOrphan(key, branch = "", sourceNode = null, summary = {}) {
   const trace = beginOrphanTrace(sourceNode, branch, summary);
   setWorkTab("live", { defer: true });
+  if ($("#work-advanced")) $("#work-advanced").open = true;
   setRunsFilter("unlanded");
   openApp("work");
   trace.stage("forge");
@@ -8637,6 +8646,11 @@ function orphanBody(card, it, opts = {}) {
       resume.addEventListener("click", () => armOrphanAction(foot, it, "resume"));
       const disc = el("button", "fchip sm" + (rec === "discard" ? " rec" : ""), "Discard");
       disc.addEventListener("click", () => armOrphanAction(foot, it, "discard"));
+      if (!String(it.branch || "").startsWith("claude/")) {
+        land.disabled = disc.disabled = true;
+        land.title = disc.title = "This branch needs manual Git review; automatic branch actions do not support this prefix yet.";
+        foot.appendChild(el("span", "hint", "Manual Git review required for this branch. Resume is available."));
+      }
       foot.append(land, resume, disc);
     }
     card.appendChild(foot);
@@ -10352,8 +10366,7 @@ function attnVerb(r) {
   if (r.kind === "orphan")
     return { label: "review",
              title: "Open this exact unlanded branch with its full context",
-             run: (_btn, source) => revealOrphan(
-               r.orphan_key, r.orphan_branch, source, r) };
+             run: () => openWorkResult({ branch: r.orphan_branch }) };
   if (r.id === "health:ai")
     return { label: "recheck",
              title: "Probe the AI backend again right now",
@@ -10372,7 +10385,7 @@ function attnVerb(r) {
              run: () => openApp("review") };
   if (r.job_id)
     return { label: r.verb || "open", title: "Open this session's terminal",
-             run: () => openSession(r.job_id) };
+             run: () => openWorkResult({ job_id: r.job_id }) };
   return null;
 }
 
@@ -10435,56 +10448,63 @@ function attnRow(sec, r) {
   return row;
 }
 
+const attentionDecisionNodes = new Map();
 function renderAttention() {
-  const body = $("#attention-body");
+  const body = $("#attention-body"), decisions = $("#attention-live-decisions");
   if (!body || !attnData) return;
-  const rows = attnData.rows || [];
-  const cards = attnData.cards || [];
-  // Keyed rebuild — the cards hold half-typed answers, so a blind repaint
-  // every poll would wipe them (the cascade's own rule, inherited).
-  // Flow stage states join the key but NEVER the tokens: a stage
-  // transition must repaint the strip without re-popping a window the
-  // owner just closed (the edge-trigger contract is membership-only).
-  const key = (attnData.tokens || []).join("|") + "#"
-    + cards.map((c) => c.card.req_id).join(",") + "#"
-    + JSON.stringify(rows.filter((r) => r.kind === "assistant"
-        || r.id === "health:assistant")) + "#"
-    + rows.filter((r) => r.kind === "flow")
-      .map((r) => (r.stages || [])
-        .map((s) => s.status + (s.grade || "")).join(""))
-      .join("|");
-  if (key === attnKey && body.childElementCount) return;
-  attnKey = key;
-  body.innerHTML = "";
-
-  const count = $("#attn-count");
-  const need = attnData.counts?.needs_you || 0;
-  const working = attnData.counts?.working || 0;
-  if (count) count.textContent = !rows.length ? "Nothing needs you"
-    : [need ? need + " waiting on you" : "",
-       working ? working + " working" : ""].filter(Boolean).join(" · ");
-  const heroTitle = $("#attn-hero-title");
-  const heroSub = $("#attn-hero-sub");
-  if (heroTitle) heroTitle.textContent = need ? need + " need you"
-    : (working ? working + " in motion" : "Clear");
-  if (heroSub) heroSub.textContent = need
-    ? "owner input is the bottleneck"
-    : (working ? "progress without interruption"
-      : "Vira is watching the edges");
-
-  if (rows.length) {
-    const sec = briefSection(body, "Newest activity first");
-    sec.classList.add("attn-shelf", "attn-shelf-chronology");
-    const cardsByRequest = new Map(cards.map((c) => [c.card.req_id, c]));
-    rows.forEach((r) => {
-      const pending = r.req_id ? cardsByRequest.get(r.req_id) : null;
-      if (pending) sec.appendChild(attnCardBlock(pending));
-      else attnRow(sec, r);
-    });
+  const rows = attnData.rows || [], cards = attnData.cards || [];
+  const need = attnData.counts?.needs_you || 0, working = attnData.counts?.working || 0;
+  $("#attn-count").textContent = [need ? need + " waiting on you" : "No urgent decisions",
+    working ? working + " in progress" : ""].filter(Boolean).join(" · ");
+  $("#attn-hero-title").textContent = need ? "A little focus goes a long way." : "Room to move.";
+  $("#attn-hero-sub").textContent = need ? "Your day below. Decisions are gathered in Review."
+    : "Your commitments, your calendar, and what is moving forward.";
+  // Keep each answer form alive across unrelated incoming activity.
+  const active = new Set();
+  cards.forEach((c) => {
+    const id = c.card.req_id;
+    active.add(id);
+    if (!attentionDecisionNodes.has(id)) attentionDecisionNodes.set(id, attnCardBlock(c));
+  });
+  for (const [id, node] of attentionDecisionNodes) if (!active.has(id)) {
+    node.remove(); attentionDecisionNodes.delete(id);
   }
-  if (!rows.length)
-    body.appendChild(el("div", "brief-empty",
-      "Nothing is running and nothing is waiting on you."));
+  if (decisions) {
+    if (!decisions.querySelector("h3")) decisions.prepend(el("h3", "workspace-section-title", "Live decisions"));
+    cards.forEach((c) => {
+      const node = attentionDecisionNodes.get(c.card.req_id);
+      if (node.parentNode !== decisions) decisions.appendChild(node);
+    });
+    decisions.hidden = !cards.length;
+  }
+  window.ViraIntake?.setLiveCount(need);
+  const key = JSON.stringify(rows);
+  // Reopening an empty activity list can insert a fresh loading indicator.
+  if (key === attnKey && body.childElementCount && !body.querySelector(".mod-wait")) return;
+  attnKey = key;
+  body.replaceChildren();
+  // Canonical reminder cards live once, in the day section below.
+  const activity = rows.filter((r) => r.kind !== "assistant" && r.kind !== "review");
+  if (activity.length) {
+    const sec = briefSection(body, "In motion", "Open an item for its full context");
+    sec.classList.add("attn-shelf", "attn-shelf-chronology");
+    activity.slice(0, 4).forEach((r) => {
+      if (r.req_id) {
+        const row = el("button", "workspace-decision-jump", r.title || "A session needs your answer");
+        row.appendChild(el("span", "", "Review decision"));
+        row.addEventListener("click", () => {
+          setAttentionTab("decide");
+          attentionDecisionNodes.get(r.req_id)?.scrollIntoView({ block: "center" });
+        });
+        sec.appendChild(row);
+      } else attnRow(sec, r);
+    });
+    if (activity.length > 4) {
+      const more = el("button", "fchip", "See all work (" + activity.length + ")");
+      more.addEventListener("click", () => { setWorkTab("live", { defer: true }); openApp("work"); });
+      body.appendChild(more);
+    }
+  }
 }
 
 // ----- the durable job ledger's row + the two swap views -----
@@ -15474,12 +15494,13 @@ let workSub = "library";      // dispatch sub-panel: library | recipes | schedul
 // Runs + Record merged 2026-08-27: `live` is the surviving pane, retitled
 // "Record". The retired tab id normalizes here so no stored value — a deep
 // link, a palette entry, a caller written before the merge — can dead-end.
-const WORK_TAB_ALIAS = { record: "live" };
+const WORK_TAB_ALIAS = { record: "live", results: "live", ideas: "queue", automations: "dispatch" };
 
 // Anything that still opens a folded window by id (context menus, saved
 // links, cross-module jumps) lands on the right Work tab.
 const WORK_ALIAS = {
   ideas: { tab: "queue" },
+  showroom: { tab: "live", view: "gallery" },
   actions: { tab: "dispatch", sub: "library" },
   jobs: { tab: "live" },
   circuits: { tab: "dispatch", sub: "recipes" },
@@ -15512,28 +15533,33 @@ let attentionTab = "now";      // now | day | decide | picker
 
 function attentionTabLoad(tab) {
   moduleWait("attention:" + tab);
-  if (tab === "day") window.ViraAssistant?.load();
-  if (tab === "now") { renderAttention(); refreshAlerts(); }
-  if (tab === "day" && Date.now() - briefLoadedAt > 300000)
-    loadBrief().catch(() => {});
-  if (tab === "decide") loadReview().catch(() => {});
+  if (tab === "now") {
+    window.ViraAssistant?.load();
+    renderAttention(); refreshAlerts();
+    if (Date.now() - briefLoadedAt > 300000) loadBrief().catch(() => {});
+  }
+  if (tab === "decide") {
+    renderAttention(); refreshAlerts(); loadReview().catch(() => {});
+  }
+  if (tab === "inbox" || tab === "decide") window.ViraIntake?.load();
   if (tab === "picker") loadSubsViz().catch(() => {});
 }
 
 function setAttentionTab(tab, opts = {}) {
-  if (!["now", "day", "decide", "picker"].includes(tab)) tab = "now";
-  if (tab !== attentionTab && !$("#attention-source")?.hidden)
-    closeReviewContext();
+  tab = { day: "now", today: "now", review: "decide" }[tab] || tab;
+  if (!["now", "decide", "inbox", "picker"].includes(tab)) tab = "now";
+  if (tab !== attentionTab && !$("#attention-source")?.hidden) closeReviewContext();
   attentionTab = tab;
   const selected = tab === "picker" ? "decide" : tab;
-  $("#attention-tabs")?.querySelectorAll(".seg-btn").forEach((b) =>
-    b.classList.toggle("on", b.dataset.tab === selected));
-  ["now", "day", "decide", "picker"].forEach((name) => {
-    const pane = $("#attention-" + name + "-pane");
-    if (pane) pane.style.display = name === tab ? "" : "none";
+  $("#attention-tabs")?.querySelectorAll(".seg-btn").forEach((b) => {
+    b.classList.toggle("on", b.dataset.tab === selected);
+    b.setAttribute("aria-pressed", String(b.dataset.tab === selected));
   });
-  $("#win-attention")?.classList.toggle("attention-picker-active",
-                                          tab === "picker");
+  ["now", "day", "decide", "inbox", "picker"].forEach((name) => {
+    const pane = $("#attention-" + name + "-pane");
+    if (pane) pane.style.display = name === tab || (name === "day" && tab === "now") ? "" : "none";
+  });
+  $("#win-attention")?.classList.toggle("attention-picker-active", tab === "picker");
   if (!opts.defer) attentionTabLoad(tab);
 }
 
@@ -15624,6 +15650,29 @@ function setWorkSub(sub, opts = {}) {
   window.loadForge?.().catch(() => {});
 }
 
+let workResultsController = null;
+function ensureWorkResults() {
+  if (!workResultsController && window.ViraWorkResults && $("#work-results-root"))
+    workResultsController = window.ViraWorkResults.mount($("#work-results-root"), {
+      view: "gallery", startPoll: (fn, ms) => startPoll(fn, ms),
+      onOpenReceipt: (id) => window.ViraIntake?.open(id),
+      onOpenNote: (path, title) => openNote(path, title),
+      onOpenSession: (id) => openSession(id),
+      onOpenFlow: (id) => traceFlowRun(id),
+      onReviewBranch: (item) => item?.key ? openOrphanFocus(item)
+        : revealOrphan(item?.orphan_key || "", item?.branch || ""),
+    });
+  return workResultsController;
+}
+function openWorkResult(ref) {
+  setWorkTab("live", { defer: true });
+  openApp("work");
+  ensureWorkResults()?.open(ref);
+}
+$("#work-advanced")?.addEventListener("toggle", () => {
+  if ($("#work-advanced").open) { applyRunsView(); loadRuns().catch(() => {}); }
+});
+
 function workTabLoad(tab) {
   if (tab === "queue") {
     loadIdeas().catch(() => {});
@@ -15633,8 +15682,8 @@ function workTabLoad(tab) {
     window.loadForge?.().catch(() => {});
   }
   if (tab === "live") {
-    applyRunsView();          // a persisted Rules/Filed chip comes back
-    loadRuns().catch(() => {});
+    ensureWorkResults()?.refresh();
+    if ($("#work-advanced")?.open) { applyRunsView(); loadRuns().catch(() => {}); }
   }
 }
 
@@ -15757,6 +15806,7 @@ function openApp(id) {
   if (alias) {
     setWorkTab(alias.tab, { defer: true });
     if (alias.sub) setWorkSub(alias.sub, { defer: true });
+    if (alias.view) ensureWorkResults()?.setView(alias.view);
     id = "work";
   }
   if (FIND_ALIAS[id]) {
@@ -17620,7 +17670,7 @@ function circuitCard(c, models) {
       await post(`/api/circuits/${c.id}/run`, {
         input, cwd: cwd.value.trim() || null, stages: edits });
       inp.value = "";
-      toast("Flow running — see The Forge · Record");
+      toast("Flow running — see Work · Results");
       setCircuitsTab("runs");
     } catch (e) { alert("Run failed: " + e.message); }
     go.disabled = false;
@@ -21202,12 +21252,10 @@ const WINDOWS = [
   // than the old contacts-only 440 to give the scored rows room.
   { id: "people", title: "People", w: 560, defaultOpen: true,
     icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3.5 19c.5-3.4 2.7-5 5.5-5s5 1.6 5.5 5M15.5 11.4a2.7 2.7 0 1 0-1.2-5.2M15.8 14.2c2.4.3 4.2 1.8 4.7 4.8" },
-  { id: "work", title: "The Forge", w: 1180,
+  { id: "work", title: "Work", w: 1180,
     icon: "M5 5h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 7.5h2.5c1 0 1.5-.5 1.5-1M10 7.5h1.5c2.5 0 2.5 10 2.5 10" },
   { id: "attention", title: "Attention", w: 720,
     icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
-  { id: "showroom", title: "Showroom", w: 900,
-    icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
   { id: "applications", title: "Applications", w: 780,
@@ -21270,7 +21318,9 @@ let zTop = 10;
 const winState = {}; // id -> { el, open }
 
 function desktopStore() {
-  return lsGet("vira-desktop", {});
+  const saved = lsGet("vira-desktop", {});
+  if (saved.showroom && !saved.work) saved.work = { ...saved.showroom };
+  return saved;
 }
 function saveWinState(id, patch) {
   const s = desktopStore();
@@ -21614,7 +21664,7 @@ function ctxIdeaComposer(x, y, ctx) {
         { text: text + " [context: " + bits.join(" · ") + "]", source: "right-click" });
       ideasCache.unshift(it);
       renderIdeas();
-      toast("Idea added" + (winState.work?.open ? "" : " — see The Forge · Cues"));
+      toast("Idea added" + (winState.work?.open ? "" : " — see Work · Ideas"));
     },
   });
 }
@@ -23275,7 +23325,7 @@ function buildWindow(spec, st, ci) {
   win._zoom = addZoomControls(bar, () => body, st.z,
     (z) => persistZoom(spec.id, z), spec.id !== "work");
   if (spec.id === "work") {
-    bar.title = "Drag to move. Double-click to fit or restore The Forge.";
+    bar.title = "Drag to move. Double-click to fit or restore Work.";
     bar.addEventListener("dblclick", (e) => {
       if (e.target.closest("button") || win.classList.contains("fwin-locked")) return;
       e.preventDefault();
@@ -23528,7 +23578,7 @@ function dockOrder() {
                "palette"];
   const stored = lsGet("vira-dock-order", null);
   if (!Array.isArray(stored)) return def;
-  const out = stored.filter((id) => def.includes(id));
+  const out = [...new Set(stored.map((id) => id === "showroom" ? "work" : id).filter((id) => def.includes(id)))];
   def.forEach((id, i) => {
     if (!out.includes(id)) out.splice(Math.min(i, out.length), 0, id);
   });
@@ -24098,7 +24148,7 @@ function mdockIds() {
     // and the slot silently disappears; and a bar that held BOTH old
     // windows collapses to one, so the freed slot is refilled below
     // rather than leaving the owner with a four-app bar.
-    const id = FIND_ALIAS[raw] ? "find"
+    const id = WORK_ALIAS[raw] ? "work" : FIND_ALIAS[raw] ? "find"
       : (PEOPLE_ALIAS[raw] ? "people"
         : (ATTENTION_ALIAS[raw] ? "attention" : (READER_ALIAS[raw] || raw)));
     if (appLive(id) && !out.includes(id) && out.length < MDOCK_MAX) out.push(id);
@@ -24663,7 +24713,7 @@ const OMNI_ROUTES = {
       .then((it) => {
         ideasCache.unshift(it);
         renderIdeas();
-        toast("Idea added — see The Forge · Cues");
+        toast("Idea added — see Work · Ideas");
       })
       .catch(() => toast("Couldn't file the idea — is the server up?")),
   },
@@ -24947,11 +24997,12 @@ function paletteMatches(q) {
     },
   });
   cmds.push(
-    workCmd("Ideas & proposals — The Forge · Cues", "queue"),
-    workCmd("Kit — The Forge · Flows", "dispatch", "library"),
-    workCmd("Jobs — The Forge · Record", "live"),
-    workCmd("Circuits — The Forge · Flows", "dispatch", "recipes"),
-    workCmd("Agent Loops — The Forge · Flows", "dispatch", "schedules"),
+    { label: "Showroom — Work · Results gallery", kind: "work", run: () => openApp("showroom") },
+    workCmd("Ideas & proposals — Work · Ideas", "queue"),
+    workCmd("Kit — Work · Automations", "dispatch", "library"),
+    workCmd("Jobs — Work · Results", "live"),
+    workCmd("Circuits — Work · Automations", "dispatch", "recipes"),
+    workCmd("Agent Loops — Work · Automations", "dispatch", "schedules"),
     // the two folded retrieval windows stay findable by their old names
     { label: "Search — Find · Media", kind: "find",
       run: () => { setFindTab("media"); openWindow("find"); } },
@@ -25383,7 +25434,8 @@ const HASH_ROUTES = {
   "subs-visuals": "subsviz",
   "brief": "brief",
   "review": "review",
-  "attention": () => { setAttentionTab("now", { defer: true }); openApp("attention"); },
+  "attention": (rest) => { setAttentionTab(rest[0] || "now", { defer: true }); openApp("attention"); },
+  "showroom": "showroom",
   "triage": (rest) => revealTriage(decodeURIComponent(rest.join("/"))),
   "subscriptions": (rest) => {
     if (rest[0]) revealSubscription(decodeURIComponent(rest.join("/"))).catch(() => {});
@@ -25411,7 +25463,7 @@ const HASH_ROUTES = {
     // "record" stays accepted: setWorkTab's WORK_TAB_ALIAS lands it on
     // the merged Record pane (tab id `live`).
     const t = rest[0];
-    if (["queue", "dispatch", "live", "record"].includes(t))
+    if (["queue", "dispatch", "live", "record", "ideas", "results", "automations"].includes(t))
       setWorkTab(t, { defer: true });
     openApp("work");
   },
@@ -30028,6 +30080,7 @@ async function boot() {
   renderPeopleSort();
   loadBrief().catch(() => {});
   loadFeed().catch(() => {});
+  window.ViraIntake?.load();
   waPassiveInit();   // test instances: browser-driven WhatsApp ingest
   loadPeople().catch(() => {});
   loadActions().catch(() => {});
@@ -30047,7 +30100,7 @@ async function boot() {
       setAttentionTab("now", { defer: true });
       openApp("attention");
     });
-  $("#attn-refresh")?.addEventListener("click", () => refreshAlerts());
+  $("#attn-refresh")?.addEventListener("click", () => { attentionTabLoad(attentionTab); window.ViraIntake?.load(); });
   startPoll(() => {
     // the sent log lives in Setup's Notifications card now; the node
     // exists only while that card is on screen

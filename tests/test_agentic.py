@@ -275,7 +275,10 @@ class CircuitTests(unittest.TestCase):
         self.assertIn("council", names)
         self.assertIn("watch-build", names)
 
-    def test_watch_build_template_shape_and_handoff(self):
+    @mock.patch("server.plans.destination_spec", return_value={"id": "test-vault"})
+    def test_watch_build_template_shape_and_handoff(self, destination):
+        # This tests circuit handoff, not vault onboarding. Never create or
+        # connect an owner vault while exercising the built-in template.
         circ = circuits.get_circuit("watch-build")
         order = circuits.validate_stages(circ["stages"])
         self.assertEqual(order, ["watch", "plan", "build", "dossier", "judge"])

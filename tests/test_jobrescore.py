@@ -15,7 +15,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from server import jobboards, jobrescore, jobscores
+from server import jobboards, jobrescore, jobscores, settings
 
 JD = {"text": "We need someone to deploy models with customers.",
       "source": "snapshot", "as_of": "2026-08-01T00:00:00+00:00",
@@ -56,6 +56,13 @@ class Base(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.record = Path(self._tmp.name) / "record"
         (self.record / "canon").mkdir(parents=True)
+        # Switches and model selection are part of the fixture too. Reading
+        # the installed config made these tests change with owner preferences.
+        self.config = Path(self._tmp.name) / "config.json"
+        self.config.write_text("{}", encoding="utf-8")
+        p = mock.patch.object(settings, "CONFIG_PATH", self.config)
+        p.start()
+        self.addCleanup(p.stop)
         for target, value in (
                 ("server.applications.self_record", self.record),
                 ("server.applications.universe_dir", self.udir),
@@ -64,6 +71,9 @@ class Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         # A rescore must never be able to act on the world from a test.
+        p = mock.patch.dict(os.environ, {}, clear=False)
+        p.start()
+        self.addCleanup(p.stop)
         os.environ.pop("VIRA_PASSIVE", None)
         p = mock.patch("server.settings.fixture_mode", return_value=False)
         p.start()
@@ -110,6 +120,15 @@ class Isolation(Base):
         self.assertEqual(jobrescore.queue(), [])
         self.assertEqual(jobrescore.batch_prompt(), ("", 0))
         self.assertEqual(jobrescore.status()["rescore_queue"], 0)
+
+    def test_configuration_switches_belong_to_the_fixture(self):
+        self.assertTrue(jobboards.auto_score_enabled())
+        self.assertTrue(jobrescore.auto_rescore_enabled())
+        self.config.write_text(json.dumps({"boards_auto_score": False,
+                                           "boards_auto_rescore": False}), encoding="utf-8")
+        self.assertFalse(jobboards.auto_score_enabled())
+        self.assertFalse(jobrescore.auto_rescore_enabled())
+        self.assertEqual(settings.CONFIG_PATH, self.config)
 
 
 class CleanTests(Base):
