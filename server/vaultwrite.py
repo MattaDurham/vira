@@ -23,6 +23,10 @@ POLICY_FIELDS = ("read_enabled", "write_enabled", "model_exposure", "purpose",
 LOCK_ROOT = Path(__file__).resolve().parent.parent / "data" / "vault-locks"
 
 
+class VaultRoutingRequired(ValueError):
+    """No unique implicit route exists; the owner must resolve the choice."""
+
+
 def policy(row=None, primary=False):
     row = row or {}
     return {
@@ -78,7 +82,7 @@ def resolve_destination(destination=None, context=None, operation="capture",
         matches = [s for s in specs if key in
                    {str(c).casefold() for c in s.get("contexts", [])}]
         if len(matches) != 1:
-            raise ValueError("no unique vault for this context; choose a destination")
+            raise VaultRoutingRequired("no unique vault for this context; choose a destination")
         chosen = matches[0]
     else:
         default = str(settings.get("vault_default_destination") or "").strip()
@@ -87,7 +91,7 @@ def resolve_destination(destination=None, context=None, operation="capture",
                                        for_model=for_model)
         writers = [s for s in specs if s.get("write_enabled")]
         if len(writers) != 1:
-            raise ValueError("choose a vault destination; no unambiguous default is configured")
+            raise VaultRoutingRequired("choose a vault destination; no unambiguous default is configured")
         chosen = writers[0]
     if not chosen["root"].is_dir():
         raise ValueError("vault destination is disconnected")
