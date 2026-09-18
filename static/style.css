@@ -6907,6 +6907,41 @@ a.rm-name:hover { color: var(--accent); }
 }
 .setup-prov.on .setup-prov-state { color: var(--green); }
 
+/* Per-vault capabilities stay independent, with one explicit save per source. */
+.vault-config { min-width: 0; container-type: inline-size; }
+.vault-config > summary { cursor: pointer; flex-wrap: wrap; padding: 3px 0; }
+.vault-config > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+.vault-config > summary::marker { color: var(--text-dim); }
+.vault-config-edit { margin-left: auto; color: var(--accent-bright); font-size: 12px; }
+.vault-config-path { overflow-wrap: anywhere; }
+.vault-config-form { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 14px; }
+.vault-config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.vault-config-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.vault-config-field.wide { grid-column: 1 / -1; }
+.vault-config-label { font-size: 12px; font-weight: 600; color: var(--text-head); }
+.vault-config-field .search { width: 100%; min-width: 0; box-sizing: border-box; }
+.vault-config-field .hint { line-height: 1.5; }
+.vault-config-capabilities { display: grid; gap: 12px; margin: 18px 0; }
+.vault-config-toggle { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; font-size: 13px; }
+.vault-config-toggle input { flex: 0 0 auto; margin: 3px 0 0; accent-color: var(--accent); }
+.vault-config-toggle strong { display: block; font-size: 13px; font-weight: 600; }
+.vault-config-toggle .hint { display: block; margin-top: 3px; line-height: 1.5; }
+.vault-config-default { margin-top: 16px; line-height: 1.5; }
+.vault-config-actions { margin-top: 12px; flex-wrap: wrap; }
+.vault-config-error { color: var(--red); font-size: 13px; overflow-wrap: anywhere; }
+.vault-config-error:empty { display: none; }
+.vault-config-add { flex-wrap: wrap; }
+.vault-config-add .search { min-width: 0; }
+@container (max-width: 520px) {
+  .vault-config-fields { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .vault-config-fields { grid-template-columns: minmax(0, 1fr); }
+  .vault-config > summary .setup-prov-state { width: 100%; order: 3; line-height: 1.6; }
+  .vault-config-add { flex-direction: column; align-items: stretch; }
+  .vault-config-add .search { width: 100%; box-sizing: border-box; }
+}
+
 /* Manage-flavored rows (channels, notifications, updates, welcome): state
    is "configured elsewhere", so the dot stays neutral-dotted. */
 .setup-step.s-manage .setup-dot { border-style: dotted; opacity: .75; }

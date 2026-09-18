@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import settings
+from . import settings, vault, vaultwrite
 from .filelock import locked
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -61,7 +61,7 @@ _lock = threading.Lock()
 SHAPE = "\n".join([
     "Output ONLY the plan as markdown — no preamble, no closing remarks, no",
     "code fence around the whole thing. Vira saves it to the vault as an",
-    "editable note and renders it as a hosted dossier. Follow this plan",
+    "editable note. Rendering a hosted dossier is a separate opt-in. Follow this plan",
     "format exactly:",
     '- First line: "# Title" (a short noun phrase, max ~8 words).',
     '- Then "## Executive Summary" (2-3 sentences: what is built, the',
@@ -123,7 +123,8 @@ def ensure_vault() -> Path:
     raw = str(settings.get("vault_root") or "").strip()
     if raw:
         root = Path(raw).expanduser()
-        root.mkdir(parents=True, exist_ok=True)
+        if not root.is_dir():
+            raise ValueError("the configured vault is disconnected")
         return root
     from . import onboard
     try:
@@ -137,39 +138,67 @@ def ensure_vault() -> Path:
     return DEFAULT_VAULT
 
 
-def save_plan(md, idea_id=None, job_id=None, lab_url=None):
-    """Write plan markdown to <vault>/plans/<date>-<slug>.md and register it.
-    Returns the registry entry. Raises ValueError on empty input."""
+def destination_spec(destination=None, context=None):
+    """Resolve once before work starts; only a first-ever plan creates a vault.
+
+    An explicit unavailable destination, or a disconnected configured vault,
+    never creates or redirects anything. Subsequent saves use the stable id.
+    """
+    if (not destination and not context
+            and not settings.get("vault_root")
+            and not settings.get("vault_sources")
+            and not settings.get("vault_dirs")):
+        vaultwrite.assert_mutation_allowed()
+        ensure_vault()
+    return vaultwrite.resolve_destination(destination, context, operation="plan")
+
+
+def save_plan(md, idea_id=None, job_id=None, lab_url=None, destination=None,
+              context=None):
+    """Save a plan in its destination's allowed capture area and register it.
+
+    Legacy primary vaults keep plans/. Explicit policies use capture_dir/plans
+    so connecting an arbitrary folder does not impose the primary layout.
+    The receipt preserves the source id even when two vaults use the same name.
+    """
     md = (md or "").strip()
     if not md:
         raise ValueError("empty plan")
+    spec = destination_spec(destination, context)
+    if spec.get("primary") and not spec.get("policy_explicit"):
+        folder = PLANS_SUBDIR
+    else:
+        folder = str(Path(spec["capture_dir"]) / PLANS_SUBDIR)
     title = _extract_title(md)
-    pdir = ensure_vault() / PLANS_SUBDIR
-    pdir.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
     stamp = now.strftime("%Y-%m-%d-%H%M")
     slug = _slugify(title)
-    # Filename allocation, the file write, and the registry append all happen
-    # under one lock so two concurrent runners finishing same-title plans in
-    # the same minute can't pick the same path and clobber each other (the
-    # ideas.py discipline: nothing shared touched outside the lock).
+    # The registry lock covers name allocation AND registration. The shared
+    # write seam also locks the destination and atomically creates the file.
     with _lock, locked(REG_PATH):
-        fpath = pdir / f"{stamp}-{slug}.md"
-        n = 2
-        while fpath.exists():                 # two plans, same stamp+slug
-            fpath = pdir / f"{stamp}-{slug}-{n}.md"
-            n += 1
-        tmp = fpath.with_name(fpath.name + ".tmp")
-        tmp.write_text(md + "\n", encoding="utf-8")
-        tmp.replace(fpath)
+        n = 1
+        while True:
+            suffix = "" if n == 1 else f"-{n}"
+            relative = (Path(folder) / f"{stamp}-{slug}{suffix}.md").as_posix()
+            try:
+                receipt = vaultwrite.write_note(spec, relative, md + "\n")
+                break
+            except FileExistsError:
+                n += 1
         entry = {
             "id": "pl_" + uuid.uuid4().hex[:10],
             "title": title,
-            "path": str(fpath),
+            "path": receipt["absolute_path"],
+            "source_id": receipt["source_id"],
+            "source_name": receipt["source_name"],
+            "relative_path": receipt["relative_path"],
+            "citation": receipt["path"],
+            "sha256": receipt["sha256"],
             "created": now.isoformat(timespec="seconds"),
             "idea_id": idea_id,
             "job_id": job_id,
-            "lab_url": (lab_url or "").strip(),
+            "lab_url": ((lab_url or "").strip() if spec.get("allow_publish")
+                        else ""),
         }
         s = _load()
         s["plans"].insert(0, entry)
@@ -188,40 +217,90 @@ def save_plan(md, idea_id=None, job_id=None, lab_url=None):
     return entry
 
 
+def _entry_target(entry, operation="read"):
+    """Resolve current policy, never trust an absolute path from the registry."""
+    source_id = entry.get("source_id")
+    relative = entry.get("relative_path")
+    specs = vault.source_specs()
+    if source_id:
+        spec = next((s for s in specs if s["id"] == source_id), None)
+        if spec is None or not relative:
+            raise ValueError("the plan's vault is disconnected")
+    else:
+        # Pre-multivault registry rows carry only an absolute filename. They
+        # remain readable only inside a currently connected source.
+        saved = Path(entry.get("path") or "").expanduser().resolve()
+        matches = []
+        for candidate in specs:
+            try:
+                rel = saved.relative_to(Path(candidate["root"]).resolve())
+            except ValueError:
+                continue
+            matches.append((candidate, rel.as_posix()))
+        if len(matches) != 1:
+            raise ValueError("the plan's vault is disconnected")
+        spec, relative = matches[0]
+    if operation != "read":
+        spec = vaultwrite.resolve_destination(spec["id"], operation=operation)
+    return vaultwrite.safe_path(spec, relative, operation=operation)
+
+
+def set_publication(pid, url):
+    """Attach an opt-in hook result only after the plan has been saved."""
+    with _lock, locked(REG_PATH):
+        s = _load()
+        entry = next((p for p in s["plans"] if p["id"] == pid), None)
+        if entry is None:
+            raise KeyError(pid)
+        spec = vaultwrite.resolve_destination(entry["source_id"], operation="plan")
+        if not spec.get("allow_publish"):
+            raise ValueError("this vault does not allow publication")
+        entry["lab_url"] = (url or "").strip()
+        _save(s)
+
+
 def list_plans():
-    """Every saved plan, newest first (annotated with `missing` when the
-    backing file has been moved or deleted out from under the registry)."""
+    """Saved plans with current availability, including disconnected sources."""
     out = []
     for p in _load()["plans"]:
-        out.append({**p, "missing": not Path(p["path"]).is_file()})
+        try:
+            missing = not _entry_target(p).is_file()
+            error = ""
+        except (OSError, ValueError) as exc:
+            missing, error = True, str(exc)
+        out.append({**p, "missing": missing, "unavailable": error})
     return out
 
 
 def get_plan(pid):
-    """One plan's registry entry + its markdown body. Raises KeyError."""
+    """One plan and its body, read only through its current source policy."""
     for p in _load()["plans"]:
         if p["id"] == pid:
+            error = ""
             try:
-                md = Path(p["path"]).read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                # a plan file written in cp1252 reads as MISSING rather than
-                # taking the viewer down — the note is still on disk to repair
-                md = ""
-            return {**p, "markdown": md, "missing": not md}
+                md = _entry_target(p).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                md, error = "", str(exc)
+            return {**p, "markdown": md, "missing": not md,
+                    "unavailable": error}
     raise KeyError(pid)
 
 
 def delete_plan(pid):
-    """Deregister a plan and remove its vault file. Raises KeyError."""
+    """Remove a plan only while its connected source still permits that write."""
+    vaultwrite.assert_mutation_allowed()
     with _lock, locked(REG_PATH):
         s = _load()
         gone = next((p for p in s["plans"] if p["id"] == pid), None)
         if gone is None:
             raise KeyError(pid)
+        path = _entry_target(gone, operation="delete")
+        # Legacy rows acquire their source id from the same confined path
+        # resolution used for reading; no untrusted absolute path is unlinked.
+        spec = next(s for s in vault.source_specs()
+                    if path.is_relative_to(Path(s["root"]).resolve()))
+        relative = path.relative_to(Path(spec["root"]).resolve()).as_posix()
+        vaultwrite.delete_text(spec, relative)
         s["plans"] = [p for p in s["plans"] if p["id"] != pid]
         _save(s)
-    try:
-        Path(gone["path"]).unlink()
-    except OSError:
-        pass
     return {"removed": pid}

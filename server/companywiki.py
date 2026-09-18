@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import atlasvault, vault
+from . import atlasvault, vault, vaultwrite
 
 WIKI_SUBDIR = "wiki"
 
@@ -258,7 +258,7 @@ def _find(company, entities):
     return None, "none"
 
 
-def resolve(company, root=None):
+def resolve(company, root=None, for_model=False):
     """Everything a dispatch needs to know about this employer's vault page.
 
     Read-only. Dormant (available False) when no vault is connected, with the
@@ -300,6 +300,20 @@ def resolve(company, root=None):
         out["reason"] = ("no vault is connected, so there is no company page "
                          "to read or expand")
         return out
+    spec = None
+    if for_model:
+        matches = [s for s in vault.source_specs()
+                   if Path(s["root"]).resolve() == root.resolve()]
+        if len(matches) != 1:
+            out["reason"] = "company research is not in a connected vault"
+            return out
+        try:
+            spec = vaultwrite.resolve_destination(matches[0]["id"],
+                                                   operation="read", for_model=True)
+        except (ValueError, PermissionError, OSError):
+            out["reason"] = "company research is unavailable under this vault's model-access policy"
+            return out
+        out["source_id"] = spec["id"]
     out["available"] = True
     out["suggested_path"] = str(wiki / f"{slugify(company)}.md")
 
@@ -312,6 +326,17 @@ def resolve(company, root=None):
 
     rec = entities[slug]
     path = wiki / f"{slug}.md"
+    if spec:
+        if not vault.model_path_allowed(vault._public_path(spec, f"wiki/{path.name}")):
+            out["available"] = False
+            out["reason"] = "company page is excluded from model access"
+            return out
+        try:
+            vaultwrite.safe_path(spec, f"wiki/{path.name}", operation="read")
+        except (ValueError, PermissionError, OSError):
+            out["available"] = False
+            out["reason"] = "company page is outside the permitted vault paths"
+            return out
     out.update(path=str(path), ref=f"{WIKI_SUBDIR}/{path.name}",
                title=rec.get("title") or slug, match=rung,
                exact=(rung == "exact"))
@@ -334,6 +359,19 @@ def resolve(company, root=None):
     # organisation's claim graph is still the closest published account of how
     # that family hires, and the payload already says the page is the parent.
     claims = claim_pages(slug, wiki)
+    if spec:
+        for category, rows in claims.items():
+            permitted = []
+            for row in rows:
+                if not vault.model_path_allowed(vault._public_path(spec, row["ref"])):
+                    continue
+                try:
+                    vaultwrite.safe_path(spec, row["ref"], operation="read")
+                except (ValueError, PermissionError, OSError):
+                    continue
+                permitted.append(dict(row, ref=vault._public_path(spec, row["ref"])))
+            claims[category] = permitted
+        out["ref"] = vault._public_path(spec, out["ref"])
     letter = [row for cat in LETTER_CLAIM_CATEGORIES
               for row in claims.get(cat, ())]
     out["hiring"] = {
@@ -392,7 +430,7 @@ def _hiring_lines(info, name):
             f"- The vault holds a sourced CLAIM GRAPH for {name}: "
             f"{hire.get('claim_count', 0)} pages ({named}), each carrying the "
             "speaker, venue and date behind every phrasing.",
-            "- READ these before drafting the letter and the essay answer — "
+            "- READ these through vault_note before drafting the letter and the essay answer — "
             "they are the employer describing the candidate it wants, in its "
             "own words: " + "; ".join(r["ref"] for r in rows[:14])
             + (f" (+{len(rows) - 14} more)" if len(rows) > 14 else ""),
@@ -406,9 +444,9 @@ def _hiring_lines(info, name):
             "how-we-hire or interview-process content, any stated AI-use "
             "policy for applicants, the posting's own encouragement lines, "
             "and anything a leader has said publicly about who they hire. "
-            f"Write it into the entity page under `## {HIRING_SECTION}`, "
+            f"Draft it under `## {HIRING_SECTION}`, "
             "cited by speaker, venue and date, so the next application to "
-            "this company starts from it.",
+            "this company can build on it if the owner chooses to save it.",
         ]
     lines += [
         "- THE BOUND: hiring guidance is a SELECTION input, never a claim "
@@ -425,7 +463,7 @@ def _hiring_lines(info, name):
 
 def prompt_block(company, root=None):
     """The COMPANY RESEARCH lines an Apply dispatch carries, or []."""
-    info = resolve(company, root=root)
+    info = resolve(company, root=root, for_model=True)
     name = info["company"] or "this employer"
     if not info["available"]:
         if not info["reason"]:
@@ -445,14 +483,14 @@ def prompt_block(company, root=None):
     if info["verdict"] == "missing":
         lines += [
             f"- {info['why']}.",
-            f"- WRITE ONE at {info['suggested_path']} BEFORE drafting the "
+            "- GATHER THE RESEARCH BEFORE drafting the "
             "letter, from the posting, the company's own site and current "
             "reporting. Follow the vault's house shape for a company page: "
             + "; ".join(SKELETON) + ".",
         ]
     else:
         lines += [
-            f"- READ {info['path']} FIRST. {info['why']}.",
+            f"- READ {info['ref']} through vault_note FIRST. {info['why']}.",
         ]
         if info["match"] == "parent":
             lines += ["- That page is the PARENT organisation, not this "
@@ -460,8 +498,7 @@ def prompt_block(company, root=None):
                       "as though it were the team hiring."]
         if info["verdict"] == "thin":
             lines += [
-                "- EXPAND IT BEFORE DRAFTING, in the vault, at "
-                f"{info['suggested_path']} — this is part of the job, not "
+                "- EXPAND THE RESEARCH BEFORE DRAFTING — this is part of the job, not "
                 "optional. It is missing "
                 + "; ".join(info["missing_sections"])
                 + ". Reach the house shape: " + "; ".join(SKELETON) + ".",
@@ -470,8 +507,8 @@ def prompt_block(company, root=None):
             lines += [
                 "- If it still cannot ground a SPECIFIC observation for this "
                 "role — the team's actual work, a stated position the owner "
-                "genuinely shares, something they shipped — expand the page "
-                "in the vault before drafting rather than falling back on "
+                "genuinely shares, something they shipped — expand the research "
+                "in the draft before drafting the letter rather than falling back on "
                 "generic praise.",
             ]
         if info["sections"]:
@@ -479,6 +516,12 @@ def prompt_block(company, root=None):
                       + "; ".join(info["sections"][:14])]
     lines += _hiring_lines(info, name)
     lines += [
+        "- Keep new research in the draft unless saving is authorized. "
+        "Save new notes only through vault_capture using the job's selected "
+        "destination; update an existing note only through vault_update with "
+        "its source-aware path, destination and sha256 from vault_note. "
+        "Never use shell or filesystem writes, switch vaults on a refusal, "
+        "or treat this research instruction as permission to change a protected page.",
         "- Expansion rules: the vault's conventions bind (frontmatter with "
         "`type: entity`, `[[wikilinks]]`, `updated:` stamped, sources "
         "listed). Company research describes the EMPLOYER, never the owner — "

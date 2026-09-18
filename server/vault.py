@@ -23,6 +23,8 @@ import hashlib
 import re
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime
 from datetime import time as dtime
 from pathlib import Path
@@ -39,6 +41,47 @@ DB_PATH = ROOT / "data" / "vault-index.sqlite"
 VAULT_RESCAN_S = 300
 DEFAULT_DIRS = ["wiki", "Briefs", "Sessions", "retros", "brain-retros"]
 SOURCE_PREFIX = "@"
+_MODEL_ACCESS = ContextVar("vault_model_access", default=False)
+
+
+@contextmanager
+def model_access():
+    """Apply model exposure restrictions to an entire retrieval call chain."""
+    token = _MODEL_ACCESS.set(True)
+    try:
+        yield
+    finally:
+        _MODEL_ACCESS.reset(token)
+
+
+def model_path_allowed(path):
+    """Path-level model permission, including aliases of excluded folders."""
+    from . import vaultwrite
+    raw = str(path or "")
+    if raw.startswith("@"):
+        sid, sep, rel = raw[1:].partition("/")
+        if not sep:
+            return False
+    else:
+        sid, rel = "primary", raw
+    spec = next((s for s in source_specs() if s["id"] == sid), None)
+    if not spec or not spec.get("read_enabled") or not spec.get("model_exposure"):
+        return False
+    if not spec["root"].is_dir():
+        return False
+    try:
+        rel = vaultwrite.relative_path(rel)
+        actual = (spec["root"] / rel).resolve().relative_to(spec["root"].resolve()).as_posix()
+    except (OSError, ValueError):
+        return False
+    return not any(vaultwrite._under(value, folder, protected=True)
+                   for value in (rel, actual)
+                   for folder in spec.get("model_exclude_dirs", []))
+
+
+def _model_hits(hits):
+    return [h for h in hits if model_path_allowed(h.get("path"))]
+
 SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 
 # shared with the active qocha.Vault so tests can reset the cache in place
@@ -81,9 +124,31 @@ def _source_id(value, root):
     return f"{base}-{digest}"
 
 
+def _relative_inside(path, root):
+    """Return the confined relative path, recognizing filesystem aliases.
+
+    resolve() follows links but does not canonicalize capitalization on a
+    case-insensitive volume, and Windows can retain its extended-path prefix
+    while resolving a concurrently created child. Compare ancestor identities
+    after the lexical fast path so aliases retain the same confinement policy.
+    Missing child folders remain valid when their existing ancestor is root.
+    """
+    path, root = Path(path).resolve(), Path(root).resolve()
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        for ancestor in (path, *path.parents):
+            try:
+                if ancestor.samefile(root):
+                    return path.relative_to(ancestor)
+            except OSError:
+                continue
+        raise ValueError("path is outside the vault") from None
+
+
 def _inside(path, root):
     try:
-        path.resolve().relative_to(root.resolve())
+        _relative_inside(path, root)
         return True
     except (OSError, ValueError):
         return False
@@ -96,19 +161,21 @@ def _overlaps(a, b):
 def source_specs():
     """Every connected markdown source, primary first.
 
-    `vault_root` remains the one WRITE target used by plans, definitions and
-    ingestion. `vault_sources` adds read-only roots for Find and vault chat.
+    Each source carries independent local-read, write and model policies.
+    `vault_root` retains its stable primary identity and unprefixed citations.
     An old `vault_dirs` entry that points outside the primary root is promoted
     in memory to an extra source; this migrates the pre-feature workaround
     without indexing the same files twice or requiring a config rewrite.
     """
+    from .vaultwrite import policy
+    primary_policy = settings.get("vault_primary") or {}
     primary_root = Path(vault_root()).expanduser()
     raw_dirs = vault_dirs()
     primary_dirs, legacy = [], []
     for item in raw_dirs:
         candidate = (primary_root / str(item)).expanduser()
         if _inside(candidate, primary_root):
-            rel = candidate.resolve().relative_to(primary_root.resolve())
+            rel = _relative_inside(candidate, primary_root)
             primary_dirs.append(rel.as_posix())
         else:
             legacy.append(candidate.resolve())
@@ -117,7 +184,10 @@ def source_specs():
         "id": "primary", "name": primary_root.name or "Primary vault",
         "root": primary_root, "dirs": primary_dirs, "primary": True,
         "db": Path(DB_PATH),
+        **policy(primary_policy, primary=True),
     }]
+    specs[0]["name"] = str(primary_policy.get("name") or specs[0]["name"])
+
     configured = settings.get("vault_sources") or []
     rows = list(configured) if isinstance(configured, list) else []
     rows += [{"name": p.name, "root": str(p), "legacy": True}
@@ -146,7 +216,7 @@ def source_specs():
             for item in configured_dirs:
                 candidate = (root / str(item)).expanduser()
                 if _inside(candidate, root):
-                    rel = candidate.resolve().relative_to(root.resolve())
+                    rel = _relative_inside(candidate, root)
                     dirs.append(rel.as_posix())
         else:
             dirs = None
@@ -154,8 +224,17 @@ def source_specs():
             "id": sid, "name": str(row.get("name") or root.name or sid),
             "root": root, "dirs": dirs, "primary": False,
             "legacy": bool(row.get("legacy")),
+            **policy(row),
             "db": Path(DB_PATH).parent / "vault-indexes" / f"{sid}.sqlite",
         })
+    # A configured capture folder must be discoverable even when the older
+    # index scope covered only the wiki. Never widen a read-only source.
+    for spec in specs:
+        if spec["write_enabled"] and spec["dirs"] is not None:
+            capture_dirs = [spec["capture_dir"]]
+            if spec["primary"] and not spec["policy_explicit"]:
+                capture_dirs.append("plans")
+            spec["dirs"] = list(dict.fromkeys(spec["dirs"] + capture_dirs))
     return specs
 
 
@@ -184,9 +263,10 @@ _build_lock = threading.Lock()
 
 def _vault_rows():
     """[{spec, vault}], rebuilt when any connected source changes."""
-    specs = source_specs()
+    specs = [s for s in source_specs() if s.get("read_enabled")]
     key = (tuple((s["id"], str(s["root"]), tuple(s["dirs"] or ()),
-                  str(s["db"])) for s in specs),
+                  str(s["db"]), s["name"], s["model_exposure"],
+                  tuple(s["protected_dirs"]), tuple(s["model_exclude_dirs"])) for s in specs),
            str(settings.get("owner_name") or ""))
     with _build_lock:
         if _active["key"] != key:
@@ -242,7 +322,10 @@ def _source_path(path):
         return row, rel
     if not rows:
         raise ValueError("no vault configured")
-    return rows[0], raw
+    primary = next((r for r in rows if r["spec"]["primary"]), None)
+    if primary is None:
+        raise ValueError("primary vault reading is disabled")
+    return primary, raw
 
 
 def _hit(row, hit):
@@ -283,9 +366,11 @@ def embed_pending(limit=2000):
     return total
 
 
-def search(q, limit=10):
+def search(q, limit=10, for_model=False):
     hits = []
     for row in _vault_rows():
+        if (for_model or _MODEL_ACCESS.get()) and not row["spec"]["model_exposure"]:
+            continue
         if not row["spec"]["root"].is_dir():
             continue
         try:
@@ -293,11 +378,14 @@ def search(q, limit=10):
                         row["vault"].search(q, limit=max(limit * 2, 20)))
         except Exception:  # a missing/unmounted source is an honest partial
             continue
+    if for_model or _MODEL_ACCESS.get():
+        hits = _model_hits(hits)
     hits.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
     return hits[:limit]
 
 
-def search_filtered(q, limit=10, since=None, until=None, order="relevance"):
+def search_filtered(q, limit=10, since=None, until=None, order="relevance",
+                    for_model=False):
     """Hybrid hits narrowed to a date window and optionally re-ordered by
     note age. qocha ranks by similarity alone; `notes.mtime` has been in
     the schema since the start but nothing ever queried it, which is why
@@ -311,6 +399,8 @@ def search_filtered(q, limit=10, since=None, until=None, order="relevance"):
     q = (q or "").strip()
     out = []
     for row in _vault_rows():
+        if (for_model or _MODEL_ACCESS.get()) and not row["spec"]["model_exposure"]:
+            continue
         if not row["spec"]["root"].is_dir():
             continue
         try:
@@ -318,6 +408,8 @@ def search_filtered(q, limit=10, since=None, until=None, order="relevance"):
                                             order))
         except Exception:  # a disconnected source must not hide the others
             continue
+    if for_model or _MODEL_ACCESS.get():
+        out = _model_hits(out)
     if order in ("recent", "oldest"):
         out.sort(key=lambda h: h["mtime"] or 0, reverse=order == "recent")
     elif q:
@@ -376,7 +468,8 @@ def _search_filtered_one(row, q, limit, lo, hi, order):
     return out
 
 
-def grep_notes(text, limit=None, since=None, until=None, order="recent"):
+def grep_notes(text, limit=None, since=None, until=None, order="recent",
+               for_model=False):
     """Literal, exhaustive substring match over every indexed chunk.
 
     Nothing here ranks and nothing here truncates by relevance. This is the
@@ -395,12 +488,16 @@ def grep_notes(text, limit=None, since=None, until=None, order="recent"):
     lo, hi = _epoch(since), _epoch(until)
     out = []
     for row in _vault_rows():
+        if (for_model or _MODEL_ACCESS.get()) and not row["spec"]["model_exposure"]:
+            continue
         if not row["spec"]["root"].is_dir():
             continue
         try:
             out.extend(_grep_one(row, text, lo, hi))
         except Exception:
             continue
+    if for_model or _MODEL_ACCESS.get():
+        out = _model_hits(out)
     out.sort(key=lambda h: h["mtime"] or 0, reverse=order != "oldest")
     return out[:limit] if limit else out
 
@@ -506,17 +603,20 @@ def ask(question, k=None, hits=None):
     """
     if k is None:
         k = ask_hits()
-    merged = search(question, limit=k) if hits is None else hits
+    merged = search(question, limit=k, for_model=True) if hits is None else hits
+    merged = [hit for hit in merged if model_path_allowed(hit.get("path"))]
     return _vault().ask(question, k=k, hits=merged)
 
 
-def note_text(path, cap=None):
+def note_text(path, cap=None, for_model=False):
     """Uncapped by default -- the Reader serves a note whole.
 
     `cap` is for context-window callers and truncates HONESTLY (the
     engine appends an in-band marker). See qocha's note_text docstring.
     """
     row, rel = _source_path(path)
+    if (for_model or _MODEL_ACCESS.get()) and not model_path_allowed(path):
+        raise ValueError("model access is disabled for this vault or folder")
     return row["vault"].note_text(rel, cap=cap)
 
 
@@ -764,18 +864,20 @@ def resolve_ref(ref, from_path=None):
     """
     if not _clean_ref(ref):
         return None
-    rows = list(_vault_rows())
+    rows = [r for r in _vault_rows() if not _MODEL_ACCESS.get()
+            or r["spec"]["model_exposure"]]
     if from_path:
         try:
             context, _ = _source_path(from_path)
-            rows = [context] + [r for r in rows if r is not context]
+            if context in rows:
+                rows = [context] + [r for r in rows if r is not context]
         except ValueError:
             pass
     for row in rows:
         if not row["spec"]["root"].is_dir():
             continue
         hit = _resolve_ref_one(row, ref)
-        if hit is not None:
+        if hit is not None and (not _MODEL_ACCESS.get() or model_path_allowed(hit["path"])):
             return hit
     found = search(_clean_ref(ref), limit=1) or []
     if found:

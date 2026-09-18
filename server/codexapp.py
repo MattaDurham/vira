@@ -358,7 +358,9 @@ class CodexSession:
             self.runner.record_tool(fqname, args)
             result = await viratools.invoke(
                 tool, args, read_only=bool(self.spec.get("read_only")),
-                ask_owner=self.runner.ask_owner)
+                ask_owner=self.runner.ask_owner,
+                vault_destination=self.spec.get("vault_destination"),
+                vault_context=self.spec.get("vault_context"))
             text = _result_text(result)
             return {"success": not text.startswith("error:"),
                     "contentItems": [{"type": "inputText", "text": text}]}
@@ -450,7 +452,9 @@ class CodexSession:
                 worktree_path=spec.get("worktree") or "",
                 branch=spec.get("branch") or "",
                 live_root=spec.get("live_root") or "",
-                tool_prefix="vira."),
+                tool_prefix="vira.",
+                vault_destination=spec.get("vault_destination"),
+                vault_context=spec.get("vault_context")),
         }
         model = spec.get("model_resolved") or spec.get("model")
         if model:

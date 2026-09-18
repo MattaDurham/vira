@@ -6,6 +6,7 @@ Every detached job owns a directory under data/jobs/<job-id>/ :
   job.json      — immutable launch spec, written once by the server:
                   { id, prompt, cwd, model (raw request), model_resolved,
                     permission_mode, publish_plan, idea_id, mode,
+                    vault_destination (stable source id), vault_context,
                     auto_allow: [tool names], permission_timeout: float }
   state.json    — runner-owned, atomic tmp+rename on every change plus a
                   ~2s heartbeat: { id, status, started, finished,

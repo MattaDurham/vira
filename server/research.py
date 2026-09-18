@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from . import applications, fullingest, readingroom, roomvault, settings
+from . import applications, fullingest, readingroom, roomvault, settings, vault
 
 
 class ResearchGraphError(RuntimeError):
@@ -370,10 +370,15 @@ def _freshness(graph):
     except (AttributeError, OSError):
         return {"status": "unknown", "newer_source_count": 0,
                 "newer_sources": []}
-    root = Path(str(settings.get("vault_root") or "")).expanduser()
     room = readingroom.load_room(graph.get("room"))
+    spec = None
+    try:
+        spec = fullingest._destination(room=room, operation="read")
+        root = Path(spec["root"])
+    except fullingest.StageError:
+        root = None
     newer_by_path = {}
-    if root.is_dir() and room:
+    if root is not None and root.is_dir() and room:
         for item in room.get("items", []):
             try:
                 path = fullingest.raw_path(root, item)
@@ -382,7 +387,7 @@ def _freshness(graph):
                 continue
             if stamp <= built_mtime:
                 continue
-            rel = path.relative_to(root).as_posix()
+            rel = vault._public_path(spec, path.relative_to(root).as_posix())
             row = newer_by_path.setdefault(rel, {
                 "item_id": item.get("id"),
                 "item_ids": [],
@@ -846,10 +851,14 @@ def _source_vault_notes(graph, source, room_matches=None, captures=None):
         if not path:
             item = match.get("item") or {}
             try:
-                raw = fullingest.raw_path(root, item)
-            except (KeyError, TypeError, ValueError):
-                raw = None
-            path = _vault_path(root, raw) if raw and root.is_dir() else ""
+                room = readingroom.load_room((match.get("room") or {}).get("slug"))
+                spec = fullingest._destination(room=room, operation="read")
+                source_root = Path(spec["root"])
+                raw = fullingest.raw_path(source_root, item, spec)
+                rel = _vault_path(source_root, raw)
+                path = vault._public_path(spec, rel) if rel else ""
+            except (KeyError, TypeError, ValueError, fullingest.StageError):
+                path = ""
             kind = "raw_capture" if path else kind
         if not path:
             continue

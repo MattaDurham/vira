@@ -869,7 +869,12 @@ def _answer_rows(question, rows, relaxed, groups=None, primary=None):
         if db == primary or not g.get("rows"):
             continue
         lines.append(f"Also retrieved from {db}:")
-        for r in g["rows"][:SIBLING_ROWS]:
+        sibling_rows = g["rows"]
+        if db == "notes":
+            from . import vault
+            sibling_rows = [r for r in sibling_rows
+                            if vault.model_path_allowed(r.get("path"))]
+        for r in sibling_rows[:SIBLING_ROWS]:
             n += 1
             lines.append(_row_line(n, r))
     return (complete(ROWS_PROMPT.format(question=question,

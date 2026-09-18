@@ -295,28 +295,41 @@ def _publish_plan(md):
     return m.group(0) if m else None
 
 
-def _finalize_plan(md, idea_id=None, job_id=None):
-    """Finish a Plan-mode job: save the plan to the vault (universal — creates
-    a Vira vault if none is connected) and, when the owner's private lab hook
-    is present, ALSO publish the hosted page. Returns
-    {plan_id, title, url} — url is None off the owner's machine, plan_id is
-    None only if the vault save itself failed. Best-effort; never raises."""
+def _finalize_plan(md, idea_id=None, job_id=None, destination=None, context=None):
+    """Save first in a resolved destination; publication is separately opt-in.
+
+    A policy or save failure never sends content to the optional rendering
+    hook. The source receipt stays on the job so reopening cannot drift with
+    a changed default. Failures are reported to the terminal without losing
+    the model's output.
+    """
+    result = {"plan_id": None, "title": None, "url": None}
     if os.environ.get("VIRA_PASSIVE"):
-        # A test clone must never act on the world (send.py precedent): no lab
-        # publish, and no write into the owner's REAL vault — vault_root lives
-        # outside the cloned data/, so a save here would land in the live
-        # Obsidian vault. The plan markdown stays in the terminal.
-        return {"plan_id": None, "title": None, "url": None}
-    url = _publish_plan(md)          # private hook; None where absent
-    entry = None
+        return {**result, "error": "passive instance cannot save plans"}
     try:
+        spec = plans.destination_spec(destination, context)
         entry = plans.save_plan(md, idea_id=idea_id, job_id=job_id,
-                                lab_url=url)
-    except Exception:  # noqa: BLE001 — saving is best-effort, never fatal
-        entry = None
-    return {"plan_id": entry["id"] if entry else None,
-            "title": entry["title"] if entry else None,
-            "url": url}
+                                destination=spec["id"])
+    except Exception as exc:  # noqa: BLE001 — preserve the terminal output
+        return {**result, "error": str(exc)}
+    result.update({"plan_id": entry["id"], "title": entry["title"],
+                   "source_id": entry["source_id"],
+                   "source_name": entry["source_name"],
+                   "path": entry["citation"],
+                   "relative_path": entry["relative_path"]})
+    if spec.get("allow_publish"):
+        # Recheck current consent after saving, before the external hook sees
+        # the body. Its own optional copy must never precede an authorized save.
+        try:
+            current = plans.destination_spec(spec["id"])
+            if current.get("allow_publish"):
+                url = _publish_plan(md)
+                if url:
+                    plans.set_publication(entry["id"], url)
+                    result["url"] = url
+        except Exception as exc:  # noqa: BLE001 — the vault save succeeded
+            result["publication_error"] = str(exc)
+    return result
 
 
 def _plan_ref(res):
@@ -601,7 +614,8 @@ class Sessions:
                publish_plan=False, idea_id=None, mode=None,
                read_only=False, meta=None, provider=None,
                resume_session=None, resumed_from=None,
-               subject=None, about=None, kind_label=None, pr=None):
+               subject=None, about=None, kind_label=None, pr=None,
+               vault_destination=None, vault_context=None):
         """Start a run; returns the job id. `subject` / `about` /
         `kind_label` / `pr` are the three-part name's inputs (joblog): what
         the work is about, its long-form explanation, what this run IS,
@@ -615,6 +629,14 @@ class Sessions:
         (judge sessions, circuit read stages). `meta` is a small dict
         recorded on the ledger row (circuit_run/stage/judge_of/routine_id).
         Raises ValueError when the live-session cap is hit."""
+        # Resolve an explicitly selected route before spawning work, and pin
+        # automatic plan routing at launch so later default changes cannot
+        # move a running or resumed job's output to another vault.
+        vault_context = str(vault_context or "").strip()
+        vault_destination = str(vault_destination or "").strip()
+        if publish_plan or vault_destination or vault_context:
+            spec = plans.destination_spec(vault_destination, vault_context)
+            vault_destination = spec["id"]
         mode = norm_mode(mode)
         if mode is None:
             mode = ("bypassPermissions"
@@ -729,6 +751,8 @@ class Sessions:
                           else (model or "").strip() or None),
                 "provider": prov,
                 "publish_plan": publish_plan,
+                "vault_destination": vault_destination,
+                "vault_context": vault_context,
                 "idea_id": idea_id, "session_id": "",
                 "mode": mode, "awaiting": None, "live": live,
                 "read_only": bool(read_only), "meta": meta or {},
@@ -875,6 +899,9 @@ class Sessions:
             "model_used": st.get("model_used", ""),
             "provider": spec.get("provider", "anthropic"),
             "publish_plan": spec.get("publish_plan"),
+            "vault_destination": spec.get("vault_destination") or "",
+            "vault_context": spec.get("vault_context") or "",
+            "plan": st.get("plan"),
             "idea_id": spec.get("idea_id"),
             "session_id": st.get("session_id", ""),
             "mode": spec.get("mode"),
@@ -1068,6 +1095,8 @@ class Sessions:
             permission_mode=row.get("permission_mode") or None,
             read_only=bool(row.get("read_only")),
             publish_plan=bool(row.get("publish_plan")),
+            vault_destination=row.get("vault_destination") or None,
+            vault_context=row.get("vault_context") or None,
             idea_id=row.get("idea_id") or None,
             meta=_resume_meta(row, jid),
             resume_session=sid,
@@ -1311,7 +1340,9 @@ class Sessions:
             cmd += ["--permission-mode", d["permission_mode"]]
         # No SDK here, so no system-prompt append and no native tools — the
         # Vira preamble (HTTP-API flavor) rides the prompt instead.
-        cmd.append(viratools.preamble(native=False) + "\n\n---\n\n"
+        cmd.append(viratools.preamble(
+            native=False, vault_destination=d.get("vault_destination"),
+            vault_context=d.get("vault_context")) + "\n\n---\n\n"
                    + d["prompt"])
         result_text = ""
         joblog.record_launch(d)
@@ -1338,11 +1369,15 @@ class Sessions:
         if ok and d.get("publish_plan"):
             md = _extract_plan_md(result_text or d["output"])
             self._append(s, "\n\n[vira] saving the plan…\n")
-            res = _finalize_plan(md, d.get("idea_id"), d["id"])
+            res = _finalize_plan(
+                md, d.get("idea_id"), d["id"],
+                destination=d.get("vault_destination"),
+                context=d.get("vault_context"))
             d["plan"] = res
+            joblog.record_plan(d["id"], res)
             self._append(s, (
                 f"[vira] plan saved: {_plan_ref(res)}\n" if res.get("plan_id")
-                else "[vira] plan could not be saved — see runner.log\n"))
+                else f"[vira] plan could not be saved: {res.get('error', 'unknown error')}\n"))
             if res.get("url"):
                 self._append(s, f"[vira] plan published: {res['url']}\n")
         d["status"] = "done" if ok else "error"

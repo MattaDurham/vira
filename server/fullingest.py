@@ -54,7 +54,7 @@ import threading
 from datetime import date
 from pathlib import Path
 
-from . import readingroom, settings, vault
+from . import readingroom, settings, vault, vaultwrite
 
 RAW_SUBDIR = "raw/reading-room"
 RETIRE_SUBDIR = "pending-user-deletion/rooms"
@@ -237,7 +237,7 @@ def _oneline(text, cap=300):
     return s[:cap]
 
 
-def _author_link(author):
+def _author_link(author, source_id=None):
     """`[[wiki/x|Author]]` when the note exists, plain `[[Author]]` when it
     does not.
 
@@ -253,22 +253,26 @@ def _author_link(author):
     vault's seed-link convention, and there is no path to qualify it with.
     """
     from . import vault
-    hit = vault.resolve_ref(author)
+    hit = vault.resolve_ref(author, from_path=f"@{source_id}/wiki/_context.md") if source_id else vault.resolve_ref(author)
     if hit and hit.get("exact"):
         path = hit["path"]
+        if source_id and (hit.get("vault_id") or "primary") != source_id:
+            return f"[[{author}]]"
+        if path.startswith(f"@{source_id}/"):
+            path = path.split("/", 1)[1]
         path = path[:-3] if path.lower().endswith(".md") else path
         return f"[[{path}|{author}]]"
     return f"[[{author}]]"
 
 
 def raw_note(item, room_slug, author, published, description, body,
-             body_label):
+             body_label, source_id=None):
     today = date.today().isoformat()
     fm = ["---",
           f"title: {_yaml(item['title'])}",
           f"source: {_yaml(item.get('url', ''))}",
           "author:",
-          f"  - {_yaml(_author_link(author))}" if author
+          f"  - {_yaml(_author_link(author, source_id))}" if author
           else f"  - {_yaml('unknown')}",
           f"published: {published}" if published else "published:",
           f"room_item_id: {item['id']}",
@@ -293,20 +297,76 @@ def raw_note(item, room_slug, author, published, description, body,
     return "\n".join(fm + b)
 
 
-def raw_path(root, item):
-    return root / RAW_SUBDIR / f"{raw_name(item.get('title') or item['id'])}.md"
+def _destination(destination=None, root=None, room=None, operation="ingest"):
+    if root is not None:
+        matches = [s for s in vault.source_specs()
+                   if Path(s["root"]).resolve() == Path(root).resolve()]
+        if len(matches) != 1:
+            raise StageError("ingest root must be a connected vault destination")
+        if destination and destination != matches[0]["id"]:
+            raise StageError("ingest root and destination disagree")
+        destination = matches[0]["id"]
+    try:
+        spec = vaultwrite.resolve_destination(
+            destination or (room or {}).get("vault_destination"), operation=operation)
+        return dict(spec, root=Path(spec["root"]).resolve())
+    except (ValueError, PermissionError, OSError) as exc:
+        raise StageError(str(exc)) from exc
+
+
+def set_destination(slug, destination):
+    """Persist an explicit route before any asynchronous ingest starts."""
+    if not readingroom.SLUG_RE.fullmatch(str(slug or "")):
+        raise StageError("invalid room slug")
+    spec = _destination(destination)
+    with readingroom.locked(readingroom.ROOT / "data" / "reading" / f"{slug}.build"):
+        room = readingroom.load_room(slug)
+        if room is None:
+            raise StageError(f"no such room: {slug}")
+        old = room.get("vault_destination")
+        if old and old != spec["id"]:
+            raise StageError("this room already has a destination; create a new room to change its ingest destination")
+        if old != spec["id"]:
+            room["vault_destination"] = spec["id"]
+            path = readingroom.ROOMS_DIR / f"{slug}.json"
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(room, ensure_ascii=False, indent=1), encoding="utf-8")
+            tmp.replace(path)
+    return {"source_id": spec["id"], "source_name": spec["name"]}
+
+
+def _raw_subdir(spec):
+    return RAW_SUBDIR if spec["primary"] else f"{spec['capture_dir'].rstrip('/')}/reading-room"
+
+
+def raw_path(root, item, spec=None):
+    if spec is None:
+        spec = next((s for s in vault.source_specs()
+                     if Path(s["root"]).resolve() == Path(root).resolve()), None)
+    subdir = _raw_subdir(spec) if spec else RAW_SUBDIR
+    return Path(root) / subdir / f"{raw_name(item.get('title') or item['id'])}.md"
 
 
 # ------------------------------------------------------------------ staging
 
-def stage_item(item, room_slug, root, binary=""):
+def stage_item(item, room_slug, root, binary="", destination=None):
     """Stage ONE item's material. Returns a state string:
     staged | already | needs_transcription | no_url | failed:<why>."""
+    room = readingroom.load_room(room_slug)
+    spec = _destination(destination, root=root, room=room)
+    if room is not None:
+        set_destination(room_slug, spec["id"])
     url = (item.get("url") or "").strip()
     kind = classify(url)
     if not kind:
         return "no_url"
-    out = raw_path(root, item)
+    root = Path(spec["root"])
+    out = raw_path(root, item, spec)
+    rel = out.relative_to(spec["root"]).as_posix()
+    try:
+        out = vaultwrite.safe_path(spec, rel)
+    except (ValueError, PermissionError, OSError) as exc:
+        raise StageError(str(exc)) from exc
     if out.exists():
         return "already"
     if kind == "youtube":
@@ -326,7 +386,7 @@ def stage_item(item, room_slug, root, binary=""):
             published=_fmt_upload(meta.get("upload_date")) or item.get("date") or "",
             description=meta.get("description") or "",
             body=f"_Source: {label}._\n\n{transcript}",
-            body_label="Transcript")
+            body_label="Transcript", source_id=spec["id"])
     else:
         try:
             title, body = fetch_article(url)
@@ -339,15 +399,18 @@ def stage_item(item, room_slug, root, binary=""):
             author=item.get("venue") or "",
             published=item.get("date") or "",
             description=item.get("why") or "",
-            body=body, body_label="Content")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_name(out.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(out)
+            body=body, body_label="Content", source_id=spec["id"])
+    try:
+        vaultwrite.write_note(spec, rel, text)
+    except (ValueError, PermissionError, OSError) as exc:
+        # A concurrent ingest must never replace immutable raw material.
+        if out.is_file() and "already exists" in str(exc):
+            return "already"
+        raise StageError(str(exc)) from exc
     return "staged"
 
 
-def stage_items(items, room_slug, root=None, binary=None):
+def stage_items(items, room_slug, root=None, binary=None, destination=None):
     """Stage an explicit, validated selection rather than an entire room.
 
     This is the bounded ingestion seam for audited deltas: callers select
@@ -368,7 +431,11 @@ def stage_items(items, room_slug, root=None, binary=None):
         clean = readingroom.clean_items(items)
     except readingroom.BuildError as exc:
         raise StageError(f"invalid selection: {exc}") from exc
-    root = Path(root) if root is not None else vault.vault_root()
+    room = readingroom.load_room(room_slug)
+    spec = _destination(destination, root=root, room=room)
+    if room is not None:
+        set_destination(room_slug, spec["id"])
+    root = Path(spec["root"])
     if not root.exists():
         raise StageError(f"vault root does not exist: {root}")
     if binary is None:
@@ -384,6 +451,8 @@ def stage_items(items, room_slug, root=None, binary=None):
             "research_source_id": it.get("research_source_id", ""),
             "title": it.get("title", ""),
             "state": state,
+            "path": vault._public_path(spec, raw_path(root, it, spec).relative_to(root).as_posix())
+                    if key in {"staged", "already"} else "",
         })
         if key == "failed":
             failures.append({
@@ -394,6 +463,7 @@ def stage_items(items, room_slug, root=None, binary=None):
             })
     return {
         "room": room_slug,
+        "source_id": spec["id"], "source_name": spec["name"],
         "selected": len(clean),
         "counts": counts,
         "outcomes": outcomes,
@@ -401,7 +471,7 @@ def stage_items(items, room_slug, root=None, binary=None):
     }
 
 
-def stage(slug, limit=None):
+def stage(slug, limit=None, destination=None):
     """Stage every un-staged, un-consumed item in a room. Deterministic,
     resumable, forward-only — an item with a raw on disk or a vault note
     on file is never touched."""
@@ -410,7 +480,9 @@ def stage(slug, limit=None):
     room = readingroom.load_room(slug)
     if room is None:
         raise StageError(f"no such room: {slug}")
-    root = vault.vault_root()
+    spec = _destination(destination, room=room)
+    set_destination(slug, spec["id"])
+    root = Path(spec["root"])
     if not root.exists():
         raise StageError(f"vault root does not exist: {root}")
     binary = ytdlp_path()
@@ -431,7 +503,8 @@ def stage(slug, limit=None):
                              "why": state.split(":", 1)[1].strip()})
         if state == "staged":
             done += 1
-    return {"room": slug, "counts": counts, "failures": failures[:40]}
+    return {"room": slug, "source_id": spec["id"], "source_name": spec["name"],
+            "counts": counts, "failures": failures[:40]}
 
 
 def _fmt_upload(yyyymmdd):
@@ -478,14 +551,19 @@ def summaries_by_item(root):
     return out
 
 
-def reconcile(slug):
+def reconcile(slug, destination=None):
     """Link every synthesized item back into the room store and retire its
     pointer note. Idempotent; the store write happens under the room's own
     build lock so a concurrent refresh cannot interleave."""
     if _passive():
         raise StageError("passive instance: reconcile moves real vault notes "
                          "and writes the room store. Refusing.")
-    root = vault.vault_root()
+    room = readingroom.load_room(slug)
+    if room is None:
+        raise StageError(f"no such room: {slug}")
+    spec = _destination(destination, room=room)
+    set_destination(slug, spec["id"])
+    root = Path(spec["root"])
     if not root.exists():
         raise StageError(f"vault root does not exist: {root}")
     summaries = summaries_by_item(root)
@@ -505,6 +583,11 @@ def reconcile(slug):
             if note is None:
                 continue
             rel = note.relative_to(root).as_posix()
+            try:
+                vaultwrite.safe_path(spec, rel, operation="read")
+            except (ValueError, PermissionError, OSError):
+                continue
+            rel = vault._public_path(spec, rel)
             if (it.get("vault") or "").strip() != rel:
                 it["vault"] = rel
                 it["status"] = "HAVE"
@@ -516,27 +599,46 @@ def reconcile(slug):
                            encoding="utf-8")
             tmp.replace(path)
 
-    retire_dir = root / RETIRE_SUBDIR
+    skipped = 0
     for iid, pointer in pointers.items():
         if iid in summaries and pointer.exists():
-            retire_dir.mkdir(parents=True, exist_ok=True)
-            target = retire_dir / pointer.name
-            n = 2
-            while target.exists():
-                target = retire_dir / f"{pointer.stem}-{n}.md"
-                n += 1
-            pointer.rename(target)
-            retired += 1
+            rel = pointer.relative_to(root).as_posix()
+            try:
+                pointer = vaultwrite.safe_path(spec, rel)
+                if not pointer.is_file():
+                    continue
+                text = pointer.read_text(encoding="utf-8")
+                expected_hash = vaultwrite.digest(text)
+                target_rel = RETIRE_SUBDIR + "/" + pointer.name
+                n = 2
+                while True:
+                    try:
+                        vaultwrite.write_note(spec, target_rel, text)
+                        break
+                    except (ValueError, FileExistsError) as exc:
+                        if "already exists" not in str(exc):
+                            raise
+                        target_rel = f"{RETIRE_SUBDIR}/{pointer.stem}-{n}.md"
+                        n += 1
+                # An edit after the copy leaves both files and reports the
+                # skipped retirement, preserving every owner's revision.
+                vaultwrite.delete_text(spec, rel, expected_hash=expected_hash)
+                retired += 1
+            except (ValueError, PermissionError, OSError):
+                skipped += 1
     return {"room": slug, "linked": linked, "retired": retired,
+            "retirement_skipped": skipped, "source_id": spec["id"],
             "summaries": len(summaries)}
 
 
-def sync(slug):
+def sync(slug, destination=None):
     """Best-effort stage+reconcile for entry points (a room refresh, the
     merge tool). Never raises, never blocks the caller — the work runs on a
     daemon thread; a room is never worth losing over its ingest."""
     if _passive():
         return None
+    if destination:
+        set_destination(slug, destination)
 
     def _run():
         try:
@@ -575,11 +677,12 @@ def run_all():
     return out
 
 
-def status(slug):
+def status(slug, destination=None):
     room = readingroom.load_room(slug)
     if room is None:
         return {"room": slug, "exists": False}
-    root = vault.vault_root()
+    spec = _destination(destination, room=room, operation="read")
+    root = Path(spec["root"])
     summaries = summaries_by_item(root) if root.exists() else {}
     counts = {"items": len(room["items"]), "consumed": 0, "staged": 0,
               "synthesized_unlinked": 0, "pending": 0, "no_url": 0}
@@ -595,6 +698,7 @@ def status(slug):
         else:
             counts["pending"] += 1
     counts["ytdlp"] = bool(ytdlp_path())
+    counts["source_id"] = spec["id"]
     return counts
 
 

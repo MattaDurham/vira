@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import vaultpeople
+from tests.vault_fixture import isolate
 
 PERSON = """---
 title: "Cat Wu"
@@ -54,6 +55,7 @@ class Base(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.wiki = self.root / "wiki"
         self.wiki.mkdir()
+        self.config = isolate(self, self.root)
         (self.wiki / "cat-wu.md").write_text(PERSON, encoding="utf-8")
         (self.wiki / "dianne-penn.md").write_text(PERSON2, encoding="utf-8")
         (self.wiki / "claude-code.md").write_text(NOT_PERSON,

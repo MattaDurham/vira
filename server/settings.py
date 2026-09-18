@@ -103,10 +103,10 @@ DEFAULTS = {
                                          # depth, in any connected vault. Use it to
                                          # take a tree while skipping one branch of
                                          # it (raw/ minus raw/instagram).
-    "vault_sources": [],                 # additional read-only markdown vaults:
-                                         # [{id, name, root, dirs?}]; the
-                                         # primary vault_root remains the
-                                         # write target
+    "vault_sources": [],                 # connected markdown vaults with stable ids
+                                         # and independent read/write/model policy
+    "vault_primary": {},                # policy overrides for the primary source
+    "vault_default_destination": "",    # stable source id; empty asks when ambiguous
     "reader_sources": [],                # folders connected to the Reader; empty = only
                                          # the places Vira writes itself
     "judge_model": "opus",               # fresh-eyes judge sessions (circuits + Jobs history)

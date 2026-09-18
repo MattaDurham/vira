@@ -119,14 +119,18 @@ class FunctionSession:
         self.runner.record_tool(fqname, args)
         result = await viratools.invoke(
             name, args, read_only=bool(self.spec.get("read_only")),
-            ask_owner=self.runner.ask_owner)
+            ask_owner=self.runner.ask_owner,
+            vault_destination=self.spec.get("vault_destination"),
+            vault_context=self.spec.get("vault_context"))
         return _text(result)
 
     def _preamble(self):
         return viratools.preamble(
             native=True, worktree_path=self.spec.get("worktree") or "",
             branch=self.spec.get("branch") or "",
-            live_root=self.spec.get("live_root") or "", tool_prefix="")
+            live_root=self.spec.get("live_root") or "", tool_prefix="",
+            vault_destination=self.spec.get("vault_destination"),
+            vault_context=self.spec.get("vault_context"))
 
     async def _google(self, prompt):
         contents = list(self.data.get("contents") or [])

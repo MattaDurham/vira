@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import fullingest, readingroom, roomvault, vault
+from tests.vault_fixture import isolate
 
 
 def item(**kw):
@@ -30,9 +31,13 @@ class Base(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.vault = self.tmp / "vault"
         (self.vault / "wiki").mkdir(parents=True)
+        self.config = isolate(self, self.vault)
         self.rooms = self.tmp / "rooms"
         self.rooms.mkdir()
         self.p_rooms = mock.patch.object(readingroom, "ROOMS_DIR", self.rooms)
+        self.p_root = mock.patch.object(readingroom, "ROOT", self.tmp)
+        self.p_root.start()
+        self.addCleanup(self.p_root.stop)
         self.p_vault = mock.patch.object(vault, "vault_root",
                                          lambda: self.vault)
         self.p_rooms.start()

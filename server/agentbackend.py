@@ -451,7 +451,9 @@ async def run_cliexec(runner):
         native=False,
         worktree_path=spec.get("worktree") or "",
         branch=spec.get("branch") or "",
-        live_root=spec.get("live_root") or "")
+        live_root=spec.get("live_root") or "",
+        vault_destination=spec.get("vault_destination"),
+        vault_context=spec.get("vault_context"))
     # Resuming an EARLIER run's thread: the preamble is already in that
     # conversation, so it is not re-carried — the same rule the reply turn
     # below follows (`reply if thread_id else pre + reply`). The prompt is

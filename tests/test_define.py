@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from server import define
+from tests.vault_fixture import isolate
 
 
 CARD = {
@@ -40,6 +41,7 @@ class _DefineCase(unittest.TestCase):
         (self.root / "wiki").mkdir(parents=True)
         self.data = Path(self.tmp.name) / "data"
         self.data.mkdir()
+        self.config = isolate(self, self.root)
         for p in (
             mock.patch.object(define.vault, "vault_root",
                               return_value=self.root),

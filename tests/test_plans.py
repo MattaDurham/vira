@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import plans, readinglist, session
+from server import plans, readinglist, session, vault, vaultwrite
 
 
 class TitleSlugTests(unittest.TestCase):
@@ -46,12 +46,15 @@ class _VaultCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
-        self.vault = root / "vault"
+        self.vault = (root / "vault").resolve()
+        self.vault.mkdir()
         self.reg = root / "plans.json"
         self.rlist = root / "reading-list.json"
         for p in (
             mock.patch.object(plans, "REG_PATH", self.reg),
             mock.patch.object(readinglist, "STORE", self.rlist),
+            mock.patch.object(vault, "DB_PATH", root / "index.sqlite"),
+            mock.patch.object(vaultwrite, "LOCK_ROOT", root / "locks"),
             mock.patch.object(
                 plans.settings, "get",
                 side_effect=lambda k: (str(self.vault) if k == "vault_root"
@@ -177,7 +180,11 @@ class FinalizeTests(_VaultCase):
         self.assertEqual(len(plans.list_plans()), 1)
 
     def test_finalize_records_lab_url_when_hook_publishes(self):
-        with mock.patch.object(session, "_publish_plan",
+        original_get = plans.settings.get
+        with mock.patch.object(plans.settings, "get",
+                               side_effect=lambda key: ({"allow_publish": True}
+                                   if key == "vault_primary" else original_get(key))), \
+             mock.patch.object(session, "_publish_plan",
                                return_value="https://x/plans/y.html"):
             res = session._finalize_plan("# Plan B\n\nbody")
         self.assertEqual(res["url"], "https://x/plans/y.html")

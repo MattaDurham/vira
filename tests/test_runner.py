@@ -90,7 +90,7 @@ class ResumeWiring(RunnerCase):
                                fake_options), \
              mock.patch.object(runner_mod, "SDK_IMPORT_ERROR", None), \
              mock.patch.object(runner_mod.viratools, "sdk_server",
-                               lambda: None), \
+                               lambda **kw: None), \
              mock.patch.object(runner_mod.joblog, "record_finish",
                                lambda *a, **k: None):
             asyncio.run(r.run_session())

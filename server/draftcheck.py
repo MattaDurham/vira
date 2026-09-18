@@ -634,7 +634,7 @@ def review(role, data, filename="", kind=""):
     hiring = ""
     try:
         from . import companywiki
-        info = companywiki.resolve(role.get("company"))
+        info = companywiki.resolve(role.get("company"), for_model=True)
         rows = (info.get("hiring") or {}).get("letter_claims") or []
         hiring = "; ".join(r["title"] for r in rows[:14])
     except Exception:  # noqa: BLE001

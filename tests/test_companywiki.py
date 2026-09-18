@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from server import atlasvault, companywiki
+from tests.vault_fixture import isolate
 
 
 def page(kind, title, sections=(), filler=0, updated="2026-08-01"):
@@ -27,6 +28,7 @@ class _VaultCase(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="cwiki-"))
         self.wiki = self.root / "wiki"
         self.wiki.mkdir(parents=True)
+        self.config = isolate(self, self.root)
         atlasvault._cache["fp"] = None
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.addCleanup(lambda: atlasvault._cache.update({"fp": None}))
@@ -171,10 +173,11 @@ class PromptBlock(_VaultCase):
     def block(self, company):
         return "\n".join(companywiki.prompt_block(company, root=self.root))
 
-    def test_missing_orders_the_page_written(self):
+    def test_missing_orders_research_and_governed_optional_capture(self):
         text = self.block("Hebbia")
-        self.assertIn("WRITE ONE", text)
-        self.assertIn("hebbia.md", text)
+        self.assertIn("GATHER THE RESEARCH", text)
+        self.assertIn("vault_capture", text)
+        self.assertNotIn(str(self.root), text)
         for section in companywiki.SKELETON:
             self.assertIn(section, text)
 
@@ -182,7 +185,7 @@ class PromptBlock(_VaultCase):
         self.write("cohere", page("entity", "Cohere",
                                   sections=("What they do",)))
         text = self.block("Cohere")
-        self.assertIn("EXPAND IT BEFORE DRAFTING", text)
+        self.assertIn("EXPAND THE RESEARCH BEFORE DRAFTING", text)
         self.assertIn("not\noptional", text.replace(" ", "\n"))
 
     def test_usable_still_names_the_page_and_the_fallback(self):
@@ -190,14 +193,35 @@ class PromptBlock(_VaultCase):
         text = self.block("Anthropic")
         self.assertIn("READ ", text)
         self.assertIn("anthropic.md", text)
-        self.assertNotIn("EXPAND IT BEFORE DRAFTING", text)
-        self.assertIn("expand the page", text)
+        self.assertNotIn("EXPAND THE RESEARCH BEFORE DRAFTING", text)
+        self.assertIn("expand the research", text)
 
     def test_the_parent_substitution_is_stated_in_the_prompt(self):
         self.rich("microsoft", "Microsoft")
         text = self.block("Microsoft AI")
         self.assertIn("PARENT organisation", text)
-        self.assertIn("microsoft-ai.md", text)
+        self.assertIn("wiki/microsoft.md", text)
+        self.assertIn("vault_update", text)
+
+    def test_model_access_off_hides_note_paths_sections_and_hiring_claims(self):
+        self.rich("acme", "Acme")
+        self.config["vault_primary"]["model_exposure"] = False
+        info = companywiki.resolve("Acme", root=self.root, for_model=True)
+        self.assertFalse(info["available"])
+        self.assertEqual(info["path"], "")
+        self.assertEqual(info["sections"], [])
+        self.assertEqual(info["hiring"]["letter_claims"], [])
+        text = self.block("Acme")
+        self.assertIn("model-access policy", text)
+        self.assertNotIn("acme.md", text)
+        self.assertNotIn(str(self.root), text)
+
+    def test_a_model_excluded_company_page_is_not_suggested_to_the_agent(self):
+        self.rich("acme", "Acme")
+        self.config["vault_primary"]["model_exclude_dirs"] = ["wiki/acme.md"]
+        text = self.block("Acme")
+        self.assertIn("excluded from model access", text)
+        self.assertNotIn("wiki/acme.md", text)
 
     def test_every_block_carries_the_conviction_and_no_fabrication_rules(self):
         self.rich("anthropic", "Anthropic")

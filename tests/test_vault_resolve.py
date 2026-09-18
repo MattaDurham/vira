@@ -229,7 +229,8 @@ class HonestyTests(ResolveCase):
 
 class DormancyTests(unittest.TestCase):
     def test_a_missing_vault_root_is_dormant(self):
-        with mock.patch.object(vault, "vault_root",
+        with mock.patch.object(vault.settings, "CONFIG_PATH", Path("/nope/no-config.json")), \
+             mock.patch.object(vault, "vault_root",
                                return_value=Path("/nope/not/here")), \
              mock.patch.object(vault, "search", return_value=[]):
             vault._stem_cache["key"] = None

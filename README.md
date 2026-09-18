@@ -60,8 +60,8 @@ Local-first by design, with every egress path named and opt-in:
   [qocha](https://github.com/MattaDurham/qocha) (the vault engine
   extracted from this module): hybrid FTS + local-embedding retrieval,
   answers that cite the notes they came from, citation chips that open
-  the note in place. One primary vault remains the write target; additional
-  named vaults are indexed and read without being modified. Vault knowledge
+  the note in place. Each named vault has its own read, write, and model-access
+  policy, with explicit destinations for saved work. Vault knowledge
   also surfaces on person pages and inside every agent session as native
   tools.
 - **Radar** - who to talk to next, scored live with the reasons attached
@@ -233,8 +233,9 @@ PC the wizard skips what does not exist there - see **Windows** above):
    indexing wants [Ollama](https://ollama.com) with `nomic-embed-text`
    pulled; without it the Brain still answers from full-text search. Add
    more named vaults in the same card when your notes live in separate
-   folders. Search and chat span all of them; only the primary vault receives
-   plans, definitions, and ingested notes.
+   folders. Configure local reading, assistant access, and writable folders
+   separately for each vault. Captures, plans, definitions, and ingested notes
+   keep their selected destination.
 5. **Mail** - Gmail/IMAP: app password in the Keychain (service
    `vira-mail`, account = the address), then add the account to
    `data/mail-accounts.json`. Microsoft 365: IMAP basic auth is dead, so
@@ -251,6 +252,63 @@ PC the wizard skips what does not exist there - see **Windows** above):
 8. **Run at login** - a launchd agent keeps it alive; set `launchd_label`
    in the config so the in-app updater can restart the service cleanly.
    (Windows: `scripts\run.ps1 -Register` does both - see **Windows**.)
+
+## Working across vaults
+
+In **Config > Brain**, open **Configure** on any vault to rename it, describe
+its purpose, assign context keys, and choose its capture folder. Enable writing
+only for folders that may receive assistant output. Protect canonical records,
+immutable evidence, and confidential folders explicitly. The capture folder
+must be inside a writable folder and outside protected folders. Disconnecting
+a vault removes its connection, never its files. Existing secondary and legacy
+connections remain read-only until configured otherwise; their source IDs and
+`@source/path.md` links stay stable.
+
+**Read and search** and **Share with the answering model** are separate controls.
+Find can index and
+display a locally readable vault while native assistant retrieval and Ask omit
+it from model context. **Folders hidden from models** excludes confidential
+subtrees while leaving the rest of the vault available. Native assistant
+capture/update also requires model access. These
+controls govern Find, vault note access, native retrieval, and Vira's writers;
+separate local Reader/atlas views and independently connected stores retain their
+own settings. They do not revoke a separately authorized coding agent's
+operating-system access. Read the vault's own
+`AGENTS.md` or `CLAUDE.md` before granting folders: purpose text describes a
+route, while folder permissions enforce writes.
+
+An explicit destination wins. Otherwise an exact configured context key wins,
+then the default destination applies. With several writable vaults and no
+default, choose a destination; an unknown, disconnected, or read-only selection
+never falls back to another vault. A single writable vault preserves the
+existing single-vault workflow. A saved job or reading room retains its source
+ID across resumes even if the default changes later.
+
+Native assistant operations are `vault_destinations`, `vault_capture`, and
+`vault_update`. For example, a source with context `family`, capture folder
+`inbox/notes`, and writable folder `inbox/notes` receives a family capture there.
+The receipt identifies the actual source and reopenable path. An update needs
+the SHA-256 from a complete `vault_note` read, and refuses a stale hash. Creates
+never overwrite existing notes. Read-only sessions and passive previews cannot
+use these mutation tools. Equivalent local APIs are `GET /api/vault/destinations`,
+`POST /api/vault/capture`, and `POST /api/vault/update`.
+
+Plans in explicitly configured sources use the capture folder. Definitions
+use an authorized wiki folder when available, otherwise a definitions folder
+under capture. Secondary reading-room captures and hubs use the capture folder;
+legacy primary layouts remain available. An inbox-only source therefore needs
+no wiki or raw layout. A plan's optional rendering
+hook runs only after a successful save and an explicit per-vault opt-in;
+connecting or writing a vault does not enable that hook. Definition context and
+caches are scoped to the destination, so the same term in two vaults stays
+separate. Reading-room destination endpoints can configure and inspect a
+persisted route without changing the global primary vault. Ingest reports
+`retirement_skipped` when a legacy pointer cannot be moved into its archive
+under the configured write policy; protected evidence is left in place.
+
+Image Atlas moves and undo also check these write policies when a file belongs
+to a connected text vault. Image-only roots retain the Atlas's separate
+plan-and-approve workflow.
 
 ## Modules that set themselves up
 
