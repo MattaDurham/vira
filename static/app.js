@@ -14260,6 +14260,51 @@ function brainNoteCount(source) {
   return `${source.notes_capped ? "at least " : ""}${fmtNum(source.notes || 0)} Markdown ${source.notes === 1 ? "file" : "files"}`;
 }
 
+function brainPolicySupported(vault) {
+  // Static assets can update while an older server is still running. Missing
+  // policy fields must never become unchecked controls that can be saved.
+  if (!vault || !Array.isArray(vault.sources) || typeof vault.default_destination !== "string") return false;
+  if (vault.policy_version !== undefined &&
+      (!Number.isInteger(vault.policy_version) || vault.policy_version < 1)) return false;
+  return vault.sources.every((source) => source &&
+    ["read_enabled", "write_enabled", "model_exposure", "allow_publish", "default_destination"]
+      .every((key) => typeof source[key] === "boolean") &&
+    ["contexts", "write_dirs", "protected_dirs", "model_exclude_dirs"]
+      .every((key) => Array.isArray(source[key]) && source[key].every((item) => typeof item === "string")) &&
+    ["id", "name", "root", "purpose", "capture_dir"]
+      .every((key) => typeof source[key] === "string"));
+}
+
+function brainServerUpdateNotice(card, sources) {
+  const notice = el("div", "vault-config-error");
+  notice.setAttribute("role", "alert");
+  notice.appendChild(el("strong", "", "Restart Vira to finish updating vault settings."));
+  notice.appendChild(el("p", "hint",
+    "This page needs vault settings that the running server does not provide. " +
+    "After active sessions finish, restart Vira and choose Check again. " +
+    "Editing is paused so missing settings cannot overwrite your configuration."));
+  card.appendChild(notice);
+  card.appendChild(el("div", "setup-sub", "Connected vaults"));
+  if (!sources.length) card.appendChild(el("p", "hint", "No vaults connected yet."));
+  sources.forEach((source) => {
+    const tile = el("div", "setup-prov" + (source.connected ? " on" : ""));
+    const head = el("div", "setup-prov-head");
+    head.appendChild(el("span", "setup-prov-name", source.name));
+    const states = [source.connected ? "connected" : "folder unavailable"];
+    if (typeof source.read_only === "boolean") states.push(source.read_only ? "read only" : "writable");
+    head.appendChild(el("span", "setup-prov-state", states.join(" · ")));
+    tile.appendChild(head);
+    tile.appendChild(el("p", "hint vault-config-path", source.root));
+    tile.appendChild(el("p", "hint", brainNoteCount(source)));
+    card.appendChild(tile);
+  });
+  card.appendChild(el("p", "hint", "Detailed read, model-access, and routing settings are unavailable from this server."));
+  const check = el("button", "btn", "Check again");
+  check.type = "button";
+  check.onclick = () => setupAct(check, async () => {});
+  card.appendChild(check);
+}
+
 function brainSourceEditor(card, source) {
   const tile = el("details", "setup-prov vault-config" + (source.connected ? " on" : ""));
   tile.dataset.sourceId = source.id;
@@ -14300,9 +14345,9 @@ function brainSourceEditor(card, source) {
   field("name", "Vault name", source.name);
   field("path", "Folder on this machine", source.root);
   field("purpose", "What belongs here", source.purpose,
-    "Describe this vault's purpose so the assistant can choose appropriately.", true);
+    "Describe this vault for the assistant. Automatic context routing uses the names below.", true);
   field("contexts", "Route these contexts here", (source.contexts || []).join(", "),
-    "Comma-separated context names. Matching contexts route to this vault.", true);
+    "Comma-separated context names, matched exactly (ignoring case). Each context should identify one vault.", true);
   form.appendChild(fields);
 
   const capabilities = el("div", "vault-config-capabilities");
@@ -14330,7 +14375,7 @@ function brainSourceEditor(card, source) {
   field("capture_dir", "Capture inbox", source.capture_dir || "inbox",
     "New ideas go here; use a relative folder such as inbox/notes.");
   field("write_dirs", "Writable folders", (source.write_dirs || []).join(", "),
-    "Comma-separated relative folders. Include the capture inbox.");
+    "Required when writing is on. Use comma-separated relative folders and include the capture inbox.");
   field("protected_dirs", "Protected folders", (source.protected_dirs || []).join(", "),
     "These folders and their contents cannot be changed, even inside a writable folder.", true);
   field("model_exclude_dirs", "Folders hidden from models", (source.model_exclude_dirs || []).join(", "),
@@ -14346,7 +14391,12 @@ function brainSourceEditor(card, source) {
     useDefault.disabled = !useDefault.checked && (!writable.checked || !source.connected);
   };
   defaultWrap.appendChild(useDefault);
-  defaultWrap.appendChild(el("span", "", "Use as the default destination when no vault or context is selected"));
+  const defaultWords = el("span");
+  defaultWords.appendChild(el("strong", "", "Use as an optional fallback destination"));
+  defaultWords.appendChild(el("span", "hint",
+    "Used only when a save has no selected vault or context. Leave this off in every vault to require a choice " +
+    "when several vaults allow writing; a single writable vault is still used automatically."));
+  defaultWrap.appendChild(defaultWords);
   form.appendChild(defaultWrap);
   const error = el("p", "vault-config-error"); error.setAttribute("role", "alert");
   form.appendChild(error);
@@ -14394,11 +14444,17 @@ function brainSourceEditor(card, source) {
 }
 
 function cardBrain(card, step, st) {
+  const vault = st.vault || {};
+  const sources = (Array.isArray(vault.sources) ? vault.sources : [])
+    .filter((source) => source && (!source.primary || vault.root));
+  if (!brainPolicySupported(vault)) {
+    brainServerUpdateNotice(card, sources);
+    return;
+  }
   card.appendChild(el("p", "hint",
     "Choose what Vira can read, write, and share with its answering model in each vault. " +
-    "Explicit destinations take priority over matching contexts and your default. " +
-    "When several destinations fit, Vira asks which one to use."));
-  const sources = (st.vault.sources || []).filter((source) => !source.primary || st.vault.root);
+    "A selected vault takes priority over an exact context match. " +
+    "The optional fallback applies only when neither is supplied."));
   card.appendChild(el("div", "setup-sub", "Connected vaults"));
   if (!sources.length) card.appendChild(el("p", "hint", "No vaults connected yet."));
   sources.forEach((source) => brainSourceEditor(card, source));
@@ -14413,7 +14469,8 @@ function cardBrain(card, step, st) {
     card.appendChild(clear);
   }
   if (!st.vault.default_destination) card.appendChild(el("p", "hint",
-    "No default selected. A single writable destination is used automatically; with several, choose a vault or configure a context."));
+    "No fallback selected. With several writable vaults, saves need a selected vault or a context that identifies one vault. " +
+    "A single writable vault is used automatically."));
 
   if (!st.vault.root) {
     card.appendChild(el("div", "setup-sub", "Primary vault"));

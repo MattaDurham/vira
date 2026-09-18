@@ -58,6 +58,7 @@ def _text_cap():
     except Exception:      # noqa: BLE001 -- a tool result must still return
         return 12_000
 _VAULT_ROUTE = ContextVar("native_vault_route", default=(None, None))
+_OWNER_CHANNEL = ContextVar("native_owner_channel", default=None)
 PREVIEW = 160            # per-line body/context preview
 
 
@@ -156,8 +157,21 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
     vault_para = (
         "VAULT DESTINATIONS. Use vault_destinations to inspect configured purposes, "
         "context keys, capture folders and writable scopes. Honor an explicitly "
-        "named/selected vault. Otherwise use an exact configured context or default. "
-        "If routing is ambiguous, ask_owner for a destination; never guess a vault. "
+        "named/selected vault and an exact, unique configured context. Otherwise "
+        "compare the task with the vault purposes and contexts, and pass an explicit "
+        "destination only when the fit is clear. A default is an optional fallback "
+        "for material with no clear destination; it does not decide whether material "
+        "belongs in several vaults. If the fit is unclear or purposes overlap, use "
+        "ask_owner before any write. Offer one-vault choices, split by topic, one "
+        "main note with references in both vaults, duplicate copies in both vaults, "
+        "and leave unsaved. Explain the proposed destinations and contents. Only "
+        "offer writes allowed by each vault's current permissions. A choice to "
+        "split, reference, or duplicate authorizes only the current requested "
+        "material; ask again if the destinations or content split remain unclear. "
+        "An ambiguous vault_capture can raise this decision card and return the "
+        "answer without saving: follow through with explicit scoped saves only "
+        "after the decision is resolved. A skipped or unanswered card means leave "
+        "the material unsaved, never select a default. "
         "Use vault_capture for new ideas and context notes, and vault_update with "
         "the current sha256 for authorized edits. A capture belongs in its inbox; "
         "do not rewrite canonical records or raw evidence. Read the destination's "
@@ -633,6 +647,74 @@ async def _t_vault_destinations(args):
     return _txt(json.dumps(vaultwrite.destinations(for_model=True), ensure_ascii=False))
 
 
+async def _vault_routing_decision(args, reason):
+    """Surface an unresolved capture through the existing decision channel.
+
+    The answer is a plan, never a multi-vault write operation. Returning it to
+    the agent keeps all subsequent writes on the normal policy-checked path.
+    """
+    from . import vaultwrite
+    visible = vaultwrite.destinations(for_model=True)
+    connected = [s for s in visible if s.get("connected")]
+    candidates = [s for s in connected if s.get("write_enabled")]
+    options = []
+    if len(candidates) <= 2:
+        for spec in candidates:
+            options.append({
+                "label": f"Save only in {spec['name']}",
+                "description": f"Keep this material in {spec['name']} ({spec['id']}) only.",
+            })
+    else:
+        options.append({
+            "label": "Choose one vault",
+            "description": "Keep one copy. Use Other to name a vault from the list, "
+                           "or choose this option to review that choice before saving.",
+        })
+    if len(candidates) > 1:
+        options.extend([
+            {"label": "Split by topic", "description":
+             "Put each part in its appropriate vault; confirm the content split and destinations before saving."},
+            {"label": "Keep references in both", "description":
+             "Keep one main note and references in the other vault; confirm where the main note and references belong."},
+            {"label": "Duplicate in both", "description":
+             "Save copies of this requested material in both chosen vaults; confirm the pair if it is not already clear."},
+        ])
+    options.append({"label": "Leave unsaved", "description":
+                    "Do not save this material or change any vault settings."})
+    inventory = []
+    for spec in connected:
+        scope = "writable" if spec.get("write_enabled") else "read only"
+        purpose = str(spec.get("purpose") or "").strip()
+        inventory.append(f"- {spec['name']} ({spec['id']}; {scope})"
+                         + (f": {purpose}" if purpose else ""))
+    question = (f"Where should I save {str(args.get('title') or 'this note').strip()!r}? "
+                f"{reason}. Nothing has been saved.\n\n"
+                + ("Connected vaults available to this assistant:\n" + "\n".join(inventory)
+                   if inventory else "No connected vault is available to this assistant.")
+                + "\n\nChoose how to file this material. Use Other to name destinations "
+                  "and explain the split or references when needed.")
+    result = {
+        "status": "needs_vault_choice", "saved": False,
+        "question": question, "options": options,
+        "destinations": candidates,
+        "instructions": "Do not write after cancellation, a skipped question, or an unanswered question. "
+                        "A split, reference, or duplicate choice authorizes only the current requested material. "
+                        "If destinations or contents remain unclear, show the proposed filing plan with ask_owner "
+                        "before writing. Otherwise use explicit destinations on the normal capture/update tools, "
+                        "respect every vault's permissions, and report the actual saved paths. "
+                        "This response itself has not saved any files.",
+    }
+    channel = _OWNER_CHANNEL.get() or _ASK
+    if channel is not None:
+        result["owner_decision"] = await channel(question, options, True)
+        result["status"] = "vault_choice_received"
+    else:
+        result["instructions"] = ("No owner question channel is available. Ask the owner "
+                                  "to resolve the filing choice and leave this material unsaved. "
+                                  + result["instructions"])
+    return _txt(json.dumps(result, ensure_ascii=False))
+
+
 async def _t_vault_capture(args):
     from . import vaultwrite
     route, context = _VAULT_ROUTE.get()
@@ -642,6 +724,8 @@ async def _t_vault_capture(args):
             args.get("destination") or (None if args.get("context") else route),
             args.get("context") or context, for_model=True)
         return _txt(json.dumps(receipt, ensure_ascii=False))
+    except vaultwrite.VaultRoutingRequired as exc:
+        return await _vault_routing_decision(args, str(exc))
     except (ValueError, OSError) as exc:
         return _txt(f"error: {exc}")
 
@@ -826,13 +910,14 @@ def parse_options(raw):
 
 
 async def _t_ask_owner(args):
-    if _ASK is None:
+    channel = _OWNER_CHANNEL.get() or _ASK
+    if channel is None:
         return _txt("No owner channel is available in this session. Do not "
                     "guess: stop and put the question in your final report.")
-    return _txt(await _ASK(args.get("question"),
-                           parse_options(args.get("options")),
-                           str(args.get("allow_text", "true")).lower()
-                           != "false"))
+    return _txt(await channel(args.get("question"),
+                             parse_options(args.get("options")),
+                             str(args.get("allow_text", "true")).lower()
+                             != "false"))
 
 
 def _update_module_map_text(modules_json):
@@ -1049,12 +1134,16 @@ TOOL_SPECS = [
      {"query": str, "person": str, "limit": int}, _t_media_search),
     ("vault_destinations",
      "Inspect connected vault IDs, purpose/context routes, capture folders and writable scopes. "
-     "Use before saving. If there is no unique route, ask the owner to choose a destination.",
+     "Use before saving; match the requested material to these purposes and choose an explicit "
+     "destination only when clear. For unclear or overlapping purposes use ask_owner before writing, "
+     "with options for one vault, splitting by topic, references in both, duplicates in both, and leaving unsaved.",
      {}, _t_vault_destinations),
     ("vault_capture",
      "Save an authorized new idea/context note in a vault's configured capture inbox. "
      "Pass an explicit destination ID/name or configured context key; otherwise the configured "
-     "default applies. Returns the actual source-aware note path and sha256. No publication.",
+     "fallback applies. An unresolved implicit route asks the owner when the session supports "
+     "questions and returns a filing decision without writing. Resolve that decision before "
+     "explicit scoped saves. Successful saves return the actual source-aware note path and sha256. No publication.",
      {"title": str, "text": str, "destination": str, "context": str}, _t_vault_capture),
     ("vault_update",
      "Update an authorized existing Markdown note within configured writable folders. "
@@ -1244,16 +1333,14 @@ async def invoke(name, arguments=None, read_only=False, ask_owner=None,
         if read_only and fqname in WRITE_TOOLS:
             return _txt(f"error: {fqname} is unavailable in a read-only session")
         args = arguments if isinstance(arguments, dict) else {}
-        if tool_name == "ask_owner" and ask_owner is not None:
-            return _txt(await ask_owner(
-                args.get("question"), parse_options(args.get("options")),
-                str(args.get("allow_text", "true")).lower() != "false"))
         token = _VAULT_ROUTE.set((vault_destination, vault_context))
+        owner_token = _OWNER_CHANNEL.set(ask_owner)
         try:
             from . import vault
             with vault.model_access():
                 return await handler(args)
         finally:
+            _OWNER_CHANNEL.reset(owner_token)
             _VAULT_ROUTE.reset(token)
     return _txt(f"error: unknown Vira tool {plain or '(blank)'}")
 
