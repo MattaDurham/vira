@@ -23,6 +23,8 @@ sidecar, deterministic filters in SQL before ranking, the shared
 retrieval primitives for bm25 and fusion.
 """
 import email
+import hashlib
+import base64
 import email.utils
 import imaplib
 import json
@@ -458,8 +460,9 @@ def _candidates(con, person=None, sender=None, direction=None, source=None,
     elif direction == "received":
         where.append("from_me=0")
     if source:
-        where.append("source=?")
-        params.append(source)
+        sources = source if isinstance(source, (tuple, list)) else (source,)
+        where.append("source IN (%s)" % ",".join("?" for _ in sources))
+        params.extend(sources)
     if since is not None:
         where.append("date_ns >= ?")
         params.append(since)
@@ -473,45 +476,90 @@ def _candidates(con, person=None, sender=None, direction=None, source=None,
     return {r["seq"] for r in rows}
 
 
-def search(q=None, limit=20, person=None, sender=None, direction=None,
-           source=None, since=None, until=None, order="relevance",
-           exact=False, phrases=()):
-    """bm25 over message and mail text, inside the deterministic filters.
-    No vector layer yet (see the module docstring) — the group reports
-    `mode` so the UI can say so rather than implying semantic recall."""
+def query_messages(q=None, limit=20, person=None, sender=None, direction=None,
+                   source=None, since=None, until=None, order="relevance",
+                   exact=False, phrases=(), cursor=None, mode="search", deadline=None):
+    """Exact filtered lexical match count and stable indexed-message paging."""
+    since, until = retrieval.validate_date_window(since, until)
+    if mode not in ("search", "enumerate", "count") or order not in ("relevance", "recent", "oldest"):
+        raise ValueError("invalid message query mode or order")
     if not DB.exists():
-        return []
-    con = _db()
+        return {"rows": [], "total": 0, "total_exact": False, "next_cursor": None,
+                "complete": False, "coverage": [{"source_id": "messages", "status": "unavailable", "error": "not indexed yet"}]}
+    request = retrieval.request_for(deadline=deadline)
+    if request.deadline is None:
+        request = retrieval.Request(request.policy, time.monotonic() + retrieval.DEFAULT_BUDGET_S)
+    started = time.monotonic()
+    con = _source_db()
     try:
-        lo, hi = _ns(since), _ns(until)
-        cand = _candidates(con, person, sender, direction, source, lo, hi)
-        q = (q or "").strip()
-        if not q:
-            where = "" if cand is None else (
-                "WHERE seq IN (%s)" % ",".join(map(str, cand))
-                if cand else "WHERE 0")
-            rows = con.execute(
-                f"SELECT * FROM items {where} ORDER BY date_ns "
-                + ("ASC" if order == "oldest" else "DESC")
-                + " LIMIT ?", (limit,)).fetchall()
-            return [_row(r) for r in rows]
-
-        # a recency sort has to see every match, not the bm25 head: the
-        # newest message about X is rarely the best-scoring one
-        deep = max(limit * 4, 500 if order != "relevance" else 100)
-        seqs = retrieval.rank_fts(con, q, cand, limit=deep, phrases=phrases)
-        if not seqs:
-            return []
-        got = {r["seq"]: r for r in con.execute(
-            "SELECT * FROM items WHERE seq IN (%s)"
-            % ",".join("?" * len(seqs)), seqs)}
-        rows = [got[s] for s in seqs if s in got]
-        if order in ("recent", "oldest"):
-            rows.sort(key=lambda r: r["date_ns"] or 0,
-                      reverse=order == "recent")
-        return [_row(r) for r in rows[:limit]]
+        with retrieval.request_scope(request):
+            retrieval.configure_connection(con)
+            permitted = request.policy.message_sources
+            if request.policy.corpus_ids is not None and "messages" not in request.policy.corpus_ids:
+                permitted = ()
+            if permitted is not None:
+                permitted = tuple(x for x in permitted if not source or x == source)
+                if not permitted:
+                    return {"rows": [], "total": 0, "total_exact": True, "next_cursor": None,
+                            "complete": True, "coverage": [], "date_field": "message_sent"}
+                source = permitted
+            lo, hi = _ns(since), _ns(until)
+            cand = _candidates(con, person, sender, direction, source, lo, hi)
+            q = (q or "").strip()
+            ids = retrieval.matching_fts(con, q, cand, phrases=phrases) if q else cand
+            clause = retrieval.candidate_clause(con, ids, "seq")
+            total = con.execute("SELECT COUNT(*) FROM items WHERE 1" + clause).fetchone()[0]
+            stamp = [DB.stat().st_mtime_ns, DB.stat().st_size]
+            wal = Path(str(DB) + "-wal")
+            if wal.exists():
+                stamp.extend([wal.stat().st_mtime_ns, wal.stat().st_size])
+            signature = hashlib.sha256(json.dumps([q, person, sender, direction, source,
+                since, until, order, list(phrases), mode], sort_keys=True).encode("utf-8")).hexdigest()
+            generation = hashlib.sha256(json.dumps(stamp).encode("utf-8")).hexdigest()
+            offset = 0
+            if cursor:
+                try:
+                    token = json.loads(base64.urlsafe_b64decode(cursor).decode("utf-8"))
+                    if token["q"] != signature or token["g"] != generation or int(token["o"]) < 0:
+                        raise ValueError("stale cursor")
+                    offset = int(token["o"])
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ValueError("invalid or stale cursor; restart pagination") from exc
+            limit = max(1, min(int(limit), 2000))
+            if mode == "count":
+                rows = []
+            elif q and order == "relevance":
+                ranked = retrieval.rank_fts(con, q, ids, offset + limit, phrases=phrases)
+                selected = ranked[offset:offset + limit]
+                where = retrieval.candidate_clause(con, selected, "seq")
+                found = {r["seq"]: r for r in con.execute("SELECT * FROM items WHERE 1" + where)}
+                rows = [_row(found[n]) for n in selected if n in found]
+            else:
+                raw = con.execute("SELECT * FROM items WHERE 1" + clause +
+                    " ORDER BY date_ns " + ("ASC" if order == "oldest" else "DESC") +
+                    ",seq " + ("ASC" if order == "oldest" else "DESC") + " LIMIT ? OFFSET ?",
+                    (limit, offset)).fetchall()
+                rows = [_row(r) for r in raw]
+            next_cursor = None
+            if mode != "count" and offset + limit < total:
+                next_cursor = base64.urlsafe_b64encode(json.dumps(
+                    {"q": signature, "g": generation, "o": offset + limit}).encode("utf-8")).decode("ascii")
+            state = {"source_id": "messages", "status": "complete", "mode": "fts",
+                     "date_field": "message_sent", "watermark": get_state(con, "wm_message", 0),
+                     "elapsed_ms": round((time.monotonic() - started) * 1000)}
+            return {"rows": rows, "total": total, "total_exact": True, "next_cursor": next_cursor,
+                    "complete": True, "coverage": [state], "date_field": "message_sent"}
     finally:
         con.close()
+
+
+def search(q=None, limit=20, person=None, sender=None, direction=None,
+           source=None, since=None, until=None, order="relevance", exact=False,
+           phrases=(), *, deadline=None):
+    out = query_messages(q, limit=limit, person=person, sender=sender,
+        direction=direction, source=source, since=since, until=until,
+        order=order, exact=exact, phrases=phrases, deadline=deadline)
+    return retrieval.Hits(out["rows"], coverage=out["coverage"], total=out["total"], next_cursor=out["next_cursor"])
 
 
 def _ns(iso):
@@ -529,7 +577,7 @@ def _ns(iso):
 
 
 def _row(r):
-    c = crm._load()["by_id"]
+    c = crm._load()["by_id"] if retrieval.allows_corpus("people") else {}
     sender = "you" if r["from_me"] else None
     sp = c.get(r["sender_pid"] or "")
     if sp:
@@ -539,10 +587,10 @@ def _row(r):
     owner = c.get(r["chat_pid"] or "")
     when = mediaindex.apple_dt(r["date_ns"])
     return {
-        "seq": r["seq"], "source": r["source"], "account": r["account"],
+        "seq": r["seq"], "source_id": r["uid"], "source": r["source"], "account": r["account"],
         "text": (r["text"] or "")[:600], "subject": r["subject"],
         "sender": sender, "person": owner["name"] if owner else None,
-        "person_id": r["chat_pid"], "chat_id": r["chat_id"],
+        "person_id": r["chat_pid"] if retrieval.allows_corpus("people") else None, "chat_id": r["chat_id"],
         "is_group": bool(r["is_group"]), "from_me": bool(r["from_me"]),
         "when": when.isoformat() if when else None,
     }
@@ -619,7 +667,7 @@ def _source_db():
     # as_uri quotes ?/# and works with Windows drive letters. mode=ro is
     # essential: opening an absent sidecar must never create an empty one.
     con = sqlite3.connect(DB.resolve().as_uri() + "?mode=ro", uri=True,
-                          timeout=10)
+                          timeout=min(0.2, retrieval.remaining(maximum=0.2)))
     con.row_factory = sqlite3.Row
     return con
 

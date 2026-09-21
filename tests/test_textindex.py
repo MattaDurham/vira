@@ -149,12 +149,12 @@ class TextIndexTests(unittest.TestCase):
         rows = textindex.search("", limit=10, order="oldest")
         self.assertLess(rows[0]["when"], rows[-1]["when"])
 
-    def test_a_quoted_phrase_outranks_a_bag_of_the_same_words(self):
+    def test_a_quoted_phrase_excludes_a_bag_of_the_same_words(self):
         # both rows carry "lease" and "renewal"; only one has them in the
         # order the user typed inside quotes
         self.index()
         hits = textindex.search("lease renewal", phrases=["lease renewal"])
-        self.assertEqual(len(hits), 2)
+        self.assertEqual(len(hits), 1)
         self.assertIn("lease renewal", hits[0]["text"])
 
     def test_available_is_false_until_something_is_indexed(self):

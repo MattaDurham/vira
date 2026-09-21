@@ -2394,7 +2394,7 @@ const FIND_COMPANIONS = [
 const findCompanion = (id) => FIND_COMPANIONS.find((c) => c.id === id);
 
 function findChatSessionLabel() {
-  const n = findChatSession?.turns?.length || 0;
+  const n = findChatSession?.history?.total ?? findChatSession?.turns?.length ?? 0;
   return n ? `Chat · ${n} turn${n === 1 ? "" : "s"}` : "Chat";
 }
 
@@ -2532,14 +2532,19 @@ function readerSizeToggle() {
 
 function openFindCompanions() {
   if (!isDesktop) return;
-  FIND_COMPANIONS.forEach((c) => {
-    findChatReleaseCompanion(c.id);
-    openWindow(c.id);
-  });
-  findChatTileWorkspace();
+  // Reopen only windows already selected by the owner. Empty optional panels
+  // never take over a new conversation, and saved geometry stays untouched.
   raiseFindCluster();
-  setFindWorkspaceLit(true);      // entering vault chat IS entering the cluster
+  setFindWorkspaceLit(true);
   requestAnimationFrame(renderFindCompanions);
+}
+
+function toggleFindAnswerFocus() {
+  const frame = winState.find?.el;
+  if (!frame) return;
+  const focused = frame.classList.toggle("find-answer-focus");
+  findChatRefs?.focus?.setAttribute("aria-pressed", String(focused));
+  if (focused) focusWin(frame);
 }
 
 // The rest of the desk is dimmed and blurred while the cluster is up, so a
@@ -2829,9 +2834,74 @@ async function defineSource(term, btn, destination = "") {
 // the vault alone. The client's job is to render a session as a
 // conversation: send a turn, poll while it is pending, show what the
 // session looked at beside its answer.
+function mergeFindChatHistory(incoming) {
+  if (!incoming || incoming.id !== findChatSession?.id) return incoming;
+  const older = (findChatSession.turns || []).filter((t) =>
+    !(incoming.turns || []).some((n) => (n.id || n.sent_t) === (t.id || t.sent_t))
+    && Number(t.sent_t || 0) < Number(incoming.turns?.[0]?.sent_t || 0));
+  if (!older.length) return incoming;
+  const start = Math.min(findChatSession.history?.start ?? 0, incoming.history?.start ?? 0);
+  return {...incoming, turns: [...older, ...(incoming.turns || [])],
+    history: {...incoming.history, start, before: start || null}};
+}
+
+async function loadEarlierFindChat() {
+  const session = findChatSession;
+  if (!session?.history?.before) return;
+  try {
+    const d = await api("/api/vira/chat?" + new URLSearchParams({
+      session_id: session.id, before: session.history.before, limit: 30}));
+    if (session.id !== findChatSession?.id || !d.session) return;
+    const existing = findChatSession.turns || [];
+    const earlier = (d.session.turns || []).filter((t) =>
+      !existing.some((n) => (n.id || n.sent_t) === (t.id || t.sent_t)));
+    findChatSession = {...findChatSession, turns: [...earlier, ...existing],
+      history: {...findChatSession.history, start: d.session.history.start,
+                before: d.session.history.before}};
+    renderFindChat();
+  } catch (e) { toast("Could not load earlier messages: " + errText(e)); }
+}
+
+async function controlFindChat(action) {
+  if (!findChatSession?.id) return;
+  if (findChatSession.turns?.at(-1)?.stop_requested_t) return;
+  const text = findChatRefs?.input.value.trim() || "";
+  if (action === "steer" && !text) return;
+  try {
+    const d = await post("/api/vira/chat/" + findChatSession.id + "/control", {action, text});
+    if (action === "steer") findChatRefs.input.value = "";
+    findChatAdopt(d);
+  } catch (e) { toast("Could not " + action + ": " + errText(e)); }
+}
+
+const findChatVisible = new Set();
+let findChatEventTimer = null;
+function refreshFindChatFromEvent(ev) {
+  if (ev.id !== findChatSession?.job_id || findChatEventTimer || findChatSending) return;
+  findChatEventTimer = setTimeout(async () => {
+    findChatEventTimer = null;
+    if (findChatSending) return;
+    const before = findChatSession;
+    try {
+      const d = await api("/api/vira/chat?session_id=" + encodeURIComponent(before.id));
+      if (!findChatSending && before === findChatSession && d.session?.id === before.id)
+        findChatAdopt(d);
+    } catch { /* the regular poll remains the recovery path */ }
+  }, 250);
+}
+function acknowledgeFindChat(turn, stage) {
+  const sid = findChatSession?.id;
+  if (!sid || !turn.id || findChatRefs?.chatPane.hidden || document.visibilityState === "hidden") return;
+  const key = sid + ":" + turn.id + ":" + stage;
+  if (findChatVisible.has(key)) return;
+  findChatVisible.add(key);
+  post("/api/vira/chat/" + sid + "/visible/" + turn.id + "?stage=" + stage, {})
+    .catch(() => findChatVisible.delete(key));
+}
+
 function findChatAdopt(d) {
   findChatLoaded = true;
-  findChatSession = d.session || null;
+  findChatSession = mergeFindChatHistory(d.session || null);
   if (Array.isArray(d.sessions)) findChatList = d.sessions;
   if (findChatRefs) findChatRefs.input.disabled = false;
   renderFindChat();
@@ -2853,30 +2923,48 @@ async function loadFindChat(force = false) {
   return findChatSession;
 }
 
-// A pending turn settles on the server (the session answers at its turn
-// boundary); the client follows it here, repainting the progress line as
-// the session's tool calls land and the answer when it does.
+function findChatEnriching(turn) {
+  return ["pending", "running"].includes(turn.enrichment?.status);
+}
+
+let findChatSending = false;
+
+// Answer delivery unlocks the composer. Keep following separately while
+// source cards and related panels finish, without withholding that answer.
 function findChatWatch() {
-  const pending = (findChatSession?.turns || []).some((t) => t.status === "pending");
+  const turns = findChatSession?.turns || [];
+  const pending = turns.some((t) => t.status === "pending");
   findChatPending = pending;
   if (findChatRefs) findChatRefs.send.disabled = pending || !findChatRefs.input.value.trim();
-  if (!pending) { findChatPollStop?.(); findChatPollStop = null; return; }
+  if (!pending && !turns.some(findChatEnriching)) {
+    findChatPollStop?.(); findChatPollStop = null; return;
+  }
   if (findChatPollStop) return;
+  let reading = false;
   findChatPollStop = startPoll(async (h) => {
+    if (reading || findChatSending) return;
+    reading = true;
+    const before = findChatSession;
     try {
-      const d = await api("/api/vira/chat");
-      if (!d.session || d.session.id !== findChatSession?.id) return;
+      const d = await api("/api/vira/chat?session_id=" + encodeURIComponent(before.id));
+      // A send or chat switch may have overtaken this request.
+      if (findChatSending || before !== findChatSession || !d.session || d.session.id !== before?.id) return;
       const still = (d.session.turns || []).some((t) => t.status === "pending");
-      findChatSession = d.session;
+      const wasPending = findChatPending;
+      findChatSession = mergeFindChatHistory(d.session);
+      findChatPending = still;
       if (Array.isArray(d.sessions)) findChatList = d.sessions;
       renderFindChat();
-      if (!still) { h.stop(); findChatPollStop = null; findChatPending = false;
-        if (findChatRefs) {
-          findChatRefs.send.disabled = !findChatRefs.input.value.trim();
-          findChatRefs.input.focus();
-        } }
+      if (findChatRefs) {
+        findChatRefs.send.disabled = still || !findChatRefs.input.value.trim();
+        if (wasPending && !still) findChatRefs.input.focus();
+      }
+      if (!still && !(d.session.turns || []).some(findChatEnriching)) {
+        h.stop(); findChatPollStop = null;
+      }
     } catch { /* keep polling */ }
-  }, 1500, 700000).stop;
+    finally { reading = false; }
+  }, 1500).stop;
 }
 
 function findChatRestartRequired(e) {
@@ -2899,9 +2987,8 @@ function renderFindChatFailure(e) {
 }
 
 async function startNewFindChat() {
-  if (findChatPending) return;
+  if (findChatSending) return;
   const prior = findChatSession?.turns?.length || 0;
-  if (prior && !confirm("Start a new chat? The current chat stays saved.")) return;
   try {
     const d = await post("/api/vira/chat/new", {});
     findChatAdopt(d);
@@ -2915,6 +3002,7 @@ async function sendFindChat(question) {
   const q = (question ?? findChatRefs?.input.value ?? "").trim();
   if (!q || findChatPending || !findChatRefs) return;
   findChatPending = true;
+  findChatSending = true;
   findChatRefs.input.value = "";
   findChatRefs.send.disabled = true;
   renderFindChat();
@@ -2926,9 +3014,14 @@ async function sendFindChat(question) {
   try {
     const d = await post("/api/vira/chat", {
       question: q, session_id: findChatSession?.id || null,
+      mode: findChatRefs.mode?.value || "auto",
+      sources: findChatSession?.turns?.length ? null
+        : (findChatRefs.scope?.value ? [findChatRefs.scope.value] : []),
     });
+    findChatSending = false;
     findChatAdopt(d);     // the turn is pending; findChatWatch follows it
   } catch (e) {
+    findChatSending = false;
     findChatPending = false;
     if (findChatRestartRequired(e)) renderFindChatFailure(e);
     else {
@@ -3028,7 +3121,26 @@ function initFindChatShell(root, searchPane, searchInput) {
   // fresh BEFORE the toggle row in the DOM: compRow claims a whole line, so
   // appending New chat after it would strand that one button on a third.
   toolbar.appendChild(fresh);
+  const focus = el("button", "fchip sm", "Focus answer");
+  focus.setAttribute("aria-pressed", "false");
+  focus.addEventListener("click", toggleFindAnswerFocus);
+  compRow.appendChild(focus);
   toolbar.appendChild(compRow);
+  const mode = el("select", "find-chat-picker");
+  mode.setAttribute("aria-label", "Answer depth");
+  [["auto", "Automatic depth"], ["lookup", "Quick lookup"], ["synthesis", "Compare sources"],
+   ["count", "Count records"], ["deep", "Deep research"]].forEach(([v, label]) =>
+    mode.appendChild(new Option(label, v)));
+  const scope = el("select", "find-chat-picker");
+  scope.setAttribute("aria-label", "Sources for this chat");
+  scope.appendChild(new Option("All enabled sources", ""));
+  scope.title = "Only sources enabled for model answers. Start a new chat to change sources.";
+  api("/api/answer/sources").then((d) => {
+    (d.sources || []).filter((r) => r.allowed).forEach((r) =>
+      scope.appendChild(new Option(r.name || r.id, r.id || r.source_handle)));
+    if (findChatSession?.sources?.length === 1) scope.value = findChatSession.sources[0];
+  }).catch(() => { scope.title = "Source inventory unavailable; configured model permissions still apply."; });
+  toolbar.append(mode, scope);
 
   const chatBody = el("div", "find-chat-body");
   const log = el("div", "brain-log find-chat-log");
@@ -3053,20 +3165,27 @@ function initFindChatShell(root, searchPane, searchInput) {
   input.rows = 2;
   input.placeholder = "Ask Vira anything, or follow up…";
   const send = el("button", "btn primary", "Send");
+  const stop = el("button", "btn", "Stop");
+  const steer = el("button", "btn", "Send guidance");
+  stop.hidden = steer.hidden = true;
+  stop.addEventListener("click", () => controlFindChat("stop"));
+  steer.addEventListener("click", () => controlFindChat("steer"));
   send.disabled = true;
   input.addEventListener("input", () => {
     send.disabled = findChatPending || !input.value.trim();
+    steer.disabled = !!findChatSession?.turns?.at(-1)?.stop_requested_t || !input.value.trim();
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      sendFindChat();
+      if (findChatPending) controlFindChat("steer"); else sendFindChat();
     }
   });
   send.addEventListener("click", () => sendFindChat());
   composer.appendChild(input);
   composer.appendChild(send);
-  composer.appendChild(el("span", "hint", "⌘ Enter to send"));
+  composer.append(stop, steer);
+  composer.appendChild(el("span", "hint", "⌘ Enter to send or guide the current answer"));
   chatBody.appendChild(log);
   chatBody.appendChild(empty);
   chatBody.appendChild(composer);
@@ -3089,7 +3208,7 @@ function initFindChatShell(root, searchPane, searchInput) {
   root.appendChild(mobileTabs);
   root.appendChild(chatPane);
   findChatRefs = {searchPane, searchInput, mobileTabs, chatPane, toolbar,
-                  status, picker, chatBody, log, empty, input, send, compBtns,
+                  status, picker, chatBody, log, empty, input, send, stop, steer, mode, scope, focus, compBtns,
                   mobileCloud, mobileRelated, mobileDefine};
   syncFindCompanionToggles();
 }
@@ -3101,7 +3220,25 @@ function renderFindChat() {
   document.querySelectorAll(".find-chat-session").forEach((n) => {
     n.textContent = findChatSessionLabel();
   });
+  const previousScroll = findChatRefs.log.scrollTop;
+  const nearBottom = findChatRefs.log.scrollHeight - previousScroll - findChatRefs.log.clientHeight < 80;
+  const pending = turns.some((t) => t.status === "pending");
+  findChatRefs.stop.hidden = findChatRefs.steer.hidden = !pending;
+  findChatRefs.steer.disabled = !!turns.at(-1)?.stop_requested_t || !findChatRefs.input.value.trim();
+  findChatRefs.stop.disabled = !!turns.at(-1)?.stop_requested_t;
+  findChatRefs.scope.disabled = turns.length > 0;
+  if (findChatSession?.sources?.length === 1) findChatRefs.scope.value = findChatSession.sources[0];
+  else if (!turns.length) findChatRefs.scope.value = "";
+  findChatRefs.mode.disabled = turns.length > 0;
+  findChatRefs.mode.value = findChatSession?.answer_mode || "auto";
+  const native = findChatSession?.runtime?.effective || turns.at(-1)?.runtime?.effective;
+  if (native?.model) findChatRefs.status.textContent += " · " + native.model + (native.effort ? " · " + native.effort : "");
   findChatRefs.log.innerHTML = "";
+  if (findChatSession?.history?.before) {
+    const earlier = el("button", "fchip sm", "Load earlier messages");
+    earlier.addEventListener("click", loadEarlierFindChat);
+    findChatRefs.log.appendChild(earlier);
+  }
   turns.forEach((turn) => {
     if (turn.model_changed) {
       const model = [turn.provider, turn.model].filter(Boolean).join(" · ");
@@ -3112,6 +3249,8 @@ function renderFindChat() {
     }
     findChatRefs.log.appendChild(el("div", "brain-msg you", turn.question || ""));
     findChatRefs.log.appendChild(chatAnswer(turn, findChatSession));
+    if (turn.status === "done" || turn.messages?.length) requestAnimationFrame(() =>
+      acknowledgeFindChat(turn, turn.status === "done" ? "answer" : "useful"));
   });
   // the picker names every saved chat; the active one is selected
   if (findChatRefs.picker) {
@@ -3128,7 +3267,7 @@ function renderFindChat() {
   }
   findChatRefs.empty.style.display = turns.length ? "none" : "";
   requestAnimationFrame(() => {
-    findChatRefs.log.scrollTop = findChatRefs.log.scrollHeight;
+    findChatRefs.log.scrollTop = nearBottom ? findChatRefs.log.scrollHeight : previousScroll;
   });
   renderFindClouds();
   renderFindRelated();
@@ -3143,14 +3282,37 @@ function renderFindChat() {
 // shows the same thing the session saw.
 function chatAnswer(turn, session) {
   const box = el("div", "brain-msg vira");
-  if (turn.status === "pending") {
-    box.classList.add("thinking");
+  if (turn.status === "pending" || turn.status === "stopped") {
+    const messages = turn.messages || [];
+    messages.forEach((m) => {
+      const body = el("div", "chat-md chat-stream");
+      body.innerHTML = mdToHtml(m.text || "");
+      box.appendChild(body);
+    });
+    const elapsed = Math.floor(session?.elapsed_s || 0);
+    const queue = session?.admission;
+    const execution = session?.execution || {};
+    let phase = turn.status === "stopped" ? "Stopped. You can send a follow-up."
+      : turn.stop_requested_t ? "Stopping the model… Your follow-up will be available when it acknowledges."
+      : queue?.status === "queued" ? "Waiting for a model slot" + (queue.queue_position ? " · position " + queue.queue_position : "")
+      : execution.status === "awaiting_input" ? "Waiting for your input in the session"
+      : messages.length ? "Checking the remaining evidence…"
+      : execution.phase === "tool" ? "Reading sources…" : "Preparing an answer…";
+    if (turn.status !== "stopped" && elapsed) phase += " · " + elapsed + "s";
+    box.appendChild(el("div", "hint", phase));
+    if (session?.job_id) {
+      const details = el("button", "fchip sm", "Open session");
+      details.addEventListener("click", () => openSession(session.job_id));
+      box.appendChild(details);
+    }
+    if (turn.status !== "stopped" && session?.activity_age_s > 30)
+      box.appendChild(el("div", "hint", "No new activity for " + Math.floor(session.activity_age_s) + "s. You can stop or send guidance."));
     const steps = session?.progress || [];
-    box.appendChild(el("div", null, steps.length ? "Vira is looking…" : "Vira is thinking…"));
     if (steps.length) {
-      const ul = el("div", "chat-progress");
-      steps.forEach((t) => ul.appendChild(el("div", "chat-step", "→ " + t)));
-      box.appendChild(ul);
+      const details = el("details", "chat-progress");
+      details.appendChild(el("summary", "hint", "Source activity"));
+      steps.forEach((t) => details.appendChild(el("div", "chat-step", t)));
+      box.appendChild(details);
     }
     return box;
   }
@@ -3165,11 +3327,21 @@ function chatAnswer(turn, session) {
   (turn.citations || []).forEach((c) => { byRef[c.ref.toLowerCase()] = c; });
   body.querySelectorAll(".note-link").forEach((a) => {
     const c = byRef[(a.dataset.ref || "").trim().toLowerCase()];
+    if (c?.evidence_handle) {
+      a.title = "Open the exact passage read";
+      a.addEventListener("click", () => openAnswerEvidence(c.evidence_handle));
+      return;
+    }
     if (!c || !c.path) { a.classList.add("dead"); return; }
     if (!c.exact) a.title = "closest match: " + c.path;
     a.addEventListener("click", () => openNote(c.path, c.title));
   });
   box.appendChild(body);
+  if (findChatEnriching(turn)) {
+    box.appendChild(el("div", "hint", "Updating sources and related panels…"));
+  } else if (turn.enrichment?.status === "failed") {
+    box.appendChild(el("div", "hint", "Some sources or related panels could not finish loading. The answer is available."));
+  }
   const looked = turn.looked_at || [];
   if (looked.length) {
     const rail = el("div", "cite-rail chat-looked");
@@ -3187,12 +3359,38 @@ function chatAnswer(turn, session) {
 // Where a "looked at" card goes: the surface that shows what the session
 // read. Never a second implementation - each is an existing opener.
 function openLookedAt(c) {
+  if (c.evidence_handle) return openAnswerEvidence(c.evidence_handle);
   if (c.kind === "find") return openFindQuery(c.query || c.label, c.tab ? { tab: c.tab } : {});
   if (c.kind === "note") return openNote(c.path, c.label);
   if (c.kind === "person") return c.pid ? openPerson(c.pid)
     : openFindQuery(c.label, { tab: "people" });
   if (c.kind === "brief") return openApp("brief");
   if (c.kind === "queue") { openApp("work"); return setWorkTab("queue"); }
+}
+
+async function openAnswerEvidence(handle) {
+  const dialog = el("dialog", "answer-evidence");
+  const close = el("button", "btn", "Close");
+  close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove());
+  const title = el("h2", null, "Evidence passage");
+  const meta = el("p", "hint", "Loading the saved source version…");
+  const passage = el("pre", "answer-evidence-text");
+  dialog.append(close, title, meta, passage);
+  document.body.appendChild(dialog);
+  dialog.showModal();
+  try {
+    const d = await api("/api/answer/evidence/" + encodeURIComponent(handle)
+      + (findChatSession?.id ? "?session_id=" + encodeURIComponent(findChatSession.id) : ""));
+    title.textContent = d.title || d.source_handle || "Evidence passage";
+    const span = d.span || {};
+    meta.textContent = [d.source_date ? "Source date " + d.source_date : "Source date unknown",
+      d.version ? "Version " + d.version.slice(0, 12) : "",
+      span.start != null ? "Characters " + span.start + "–" + span.end + " of " + d.full_length : "",
+      d.provenance?.kind || "", d.truncated ? "Excerpt; additional text exists in this version" : ""]
+      .filter(Boolean).join(" · ");
+    passage.textContent = d.text || d.content || "No passage text available.";
+  } catch (e) { meta.textContent = "This evidence is unavailable: " + errText(e); }
 }
 
 const FIND_CLOUD_CTX = document.createElement("canvas").getContext("2d");
@@ -3496,6 +3694,7 @@ function initFindView() {
       why.innerHTML = "";
       return;
     }
+    if (ask) { clearTimeout(timer); return showFindChat(q); }
     const mine = ++seq;
     const params = new URLSearchParams({q, limit: tab === "all" ? 24 : 60});
     if (tab !== "all") params.set("db", tab);
@@ -3503,9 +3702,7 @@ function initFindView() {
     if (opts.plain) params.set("db", tab === "all" ? "media" : tab);
     status.textContent = ask ? "Thinking…" : "Searching…";
     try {
-      const d = ask
-        ? await post("/api/find/ask", {question: q})
-        : await api("/api/find?" + params.toString());
+      const d = await api("/api/find?" + params.toString());
       if (mine !== seq) return;            // a newer keystroke won
       last = d;
       renderTabs();
@@ -3531,7 +3728,7 @@ function initFindView() {
     // searches now instead of waiting out the debounce.
     run(last?.plan?.shape === "answer" || looksLikeQuestion(input.value));
   });
-  searchBtn.addEventListener("click", () => { clearTimeout(timer); run(true); });
+  searchBtn.addEventListener("click", () => { clearTimeout(timer); run(false); });
   chatBtn.addEventListener("click", () => {
     clearTimeout(timer);
     showFindChat(input.value.trim());
@@ -3589,6 +3786,10 @@ async function loadFindStatus() {
 function renderFind(box, d, tab, goTab) {
   box.innerHTML = "";
   if (d.answer) box.appendChild(findAnswer(d));
+  if (d.complete === false) {
+    box.appendChild(el("div", "search-hint",
+      "Partial results. Some sources are unavailable, timed out, or have more matches than this page shows."));
+  }
   const order = tab === "all"
     ? (d.plan?.databases || []).filter((k) => d.groups?.[k])
     : [tab];
@@ -3597,13 +3798,15 @@ function renderFind(box, d, tab, goTab) {
     const g = d.groups?.[k];
     if (!g) return;
     const rows = g.rows || [];
-    if (tab === "all" && !rows.length) return;
+    if (tab === "all" && !rows.length && !g.error && g.complete !== false) return;
     any = any || !!rows.length;
     const head = el("div", "sr-head",
       `${FIND_TABS.find(([t]) => t === k)?.[1] || k}`
       + (g.count ? ` (${g.count})` : ""));
     if (g.note) head.appendChild(el("span", "hint", " " + g.note));
-    if (g.error) head.appendChild(el("span", "hint", " unavailable"));
+    if (g.error) head.appendChild(el("span", "hint", " · " + (g.status || "unavailable") + ": " + g.error));
+    else if (g.total_exact && g.total != null)
+      head.appendChild(el("span", "hint", " · " + g.total + " indexed matches"));
     box.appendChild(head);
     const host = el("div");
     box.appendChild(host);
@@ -3619,7 +3822,8 @@ function renderFind(box, d, tab, goTab) {
       box.appendChild(more);
     }
   });
-  if (!any) box.appendChild(el("div", "empty left", "No matches."));
+  if (!any) box.appendChild(el("div", "empty left", d.complete === false
+    ? "No matches in the completed searches. Coverage is incomplete." : "No matches."));
 }
 
 function findAnswer(d) {
@@ -9601,6 +9805,7 @@ const activeTerms = {};   // jid -> JobTerm currently rendering that job
 
 // SSE poke: something changed on a session — refetch on any open terminal.
 function onSessionEvent(ev) {
+  refreshFindChatFromEvent(ev);
   if (ev.id && activeTerms[ev.id]) activeTerms[ev.id].schedule();
   if (ev.kind === "status") refreshJobs().catch(() => {});
   // Any session movement can raise or resolve a decision, wherever the

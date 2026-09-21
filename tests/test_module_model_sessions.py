@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import jobfiles, models, modulemodels, session, settings, suggest, virachat
+from server import answer_runtime, jobfiles, models, modulemodels, session, settings, suggest, virachat
 
 
 def choice(provider="openai", model="gpt-test", backend="cli"):
@@ -126,7 +126,7 @@ class FindChatDefaults(LocalConfig):
         launch = self.registry.launch.call_args
         self.assertEqual(launch.kwargs["provider"], "openai")
         self.assertEqual(launch.kwargs["model"], "gpt-test")
-        self.assertIn("vira.find first", launch.args[0])
+        self.assertIn("narrowest useful tool", launch.args[0])
         self.answer()
         sent = virachat.send("Follow-up")
         self.registry.launch.assert_called_once()
@@ -189,6 +189,9 @@ class FindChatDefaults(LocalConfig):
         self.assertEqual(sent["model_selection"]["provider"], "anthropic")
         self.assertEqual(sent["turns"][-1]["status"], "failed")
         self.assertIn("Selected provider unavailable", sent["turns"][-1]["answer"])
+        self.assertEqual(sent.get("previous_jobs", []), [])
+        self.assertEqual(sent["turns"][-1]["job_id"], "first-job")
+        self.assertNotIn("model_changed", sent["turns"][-1])
         self.registry.say.assert_not_called()
 
     def test_a_disabled_pick_cannot_continue_a_parked_chat(self):
@@ -215,10 +218,10 @@ class FindChatDefaults(LocalConfig):
 
     def test_concept_completion_reenters_find_scope_in_the_worker(self):
         self.pick("find", choice())
-        with mock.patch.object(suggest, "complete", side_effect=lambda prompt: self.check_scope()), \
+        with mock.patch.object(suggest, "complete", side_effect=lambda prompt, **kwargs: self.check_scope()), \
              mock.patch.object(virachat.modelbudget, "split",
                                side_effect=lambda *a, **k: (self.check_scope() and (500, 100))):
-            concepts, followups = virachat._concepts("synthetic-chat", "answer", [])
+            concepts, followups = virachat._concepts("Synthetic question", "answer", [], [])
         self.assertEqual((concepts, followups), ([], []))
         self.assertIsNone(modulemodels.current())
 
@@ -226,6 +229,81 @@ class FindChatDefaults(LocalConfig):
         self.assertEqual(modulemodels.current(), "find")
         self.assertEqual(suggest.config()["_module_model_explicit"], choice())
         return "{}"
+
+    def test_model_switch_keeps_scope_depth_effort_and_prompt_contract(self):
+        self.cfg["chat_effort"] = "high"
+        self.pick("find", choice("anthropic", "sonnet"))
+        first = virachat.send("First scoped question", mode="synthesis", sources=["vault:primary"])
+        self.answer()
+        self.pick("find", choice())
+        sent = virachat.send("Compare with the prior answer", first["id"])
+        launch = self.registry.launch.call_args
+        self.assertEqual(launch.kwargs["effort"], "high")
+        runtime = launch.kwargs["runtime"]
+        self.assertEqual(runtime["evidence_scope"], {"sources": ["vault:primary"]})
+        self.assertEqual(runtime["answer_mode"], "synthesis")
+        self.assertEqual(runtime["prompt_version"], virachat.PROMPT_VERSION)
+        self.assertEqual(runtime["chat_id"], first["id"])
+        self.assertEqual(runtime["work_class"], "foreground")
+        self.assertEqual(sent["turns"][-1]["prior_result"], "")
+        self.assertEqual(sent["turns"][-1]["sources"], ["vault:primary"])
+        self.assertEqual(sent["turns"][-1]["answer_mode"], "synthesis")
+        self.assertEqual(sent["turns"][0]["id"], first["turns"][0]["id"])
+        self.assertEqual(sent["model_selection"], choice())
+
+    def test_model_switch_reserves_before_dispatch_and_keeps_concurrent_updates(self):
+        self.pick("find", choice("anthropic", "sonnet"))
+        first = virachat.send("First question")
+        self.answer()
+        self.pick("find", choice())
+
+        def launch(*args, **kwargs):
+            saved = virachat._load()["sessions"][first["id"]]
+            self.assertEqual(saved["turns"][-1]["status"], "pending")
+            self.assertTrue(saved["turns"][-1]["launching"])
+            self.assertEqual(saved["model_selection"], choice("anthropic", "sonnet"))
+            with self.assertRaises(virachat.Busy):
+                virachat.send("Concurrent message", first["id"])
+            virachat._mutate(lambda st: st["sessions"][first["id"]]["turns"][0].update(
+                looked_at=[{"kind": "note", "path": "synthetic.md"}]))
+            return "switched-job"
+
+        self.registry.launch.side_effect = launch
+        sent = virachat.send("Switch this answer", first["id"])
+        self.assertEqual(sent["job_id"], "switched-job")
+        self.assertEqual(sent["previous_jobs"], ["first-job"])
+        self.assertEqual(sent["turns"][0]["looked_at"], [{"kind": "note", "path": "synthetic.md"}])
+        self.assertEqual(len(sent["turns"]), 2)
+
+    def test_switch_uses_full_saved_history_not_the_http_page(self):
+        self.pick("find", choice("anthropic", "sonnet"))
+        first = virachat.send("First question")
+        self.answer()
+        history = [{"id": f"saved-{i}", "question": f"Synthetic question {i}",
+                    "answer": f"Saved answer {i}", "status": "done"}
+                   for i in range(75)]
+        virachat._mutate(lambda st: st["sessions"][first["id"]].update(turns=history))
+        self.assertEqual(len(virachat.current()["turns"]), virachat.HISTORY_PAGE)
+        self.pick("find", choice())
+        sent = virachat.send("Use the whole conversation")
+        prompt = self.registry.launch.call_args.args[0]
+        self.assertIn("Synthetic question 0", prompt)
+        self.assertIn("Saved answer 74", prompt)
+        self.assertEqual(len(virachat._load()["sessions"][first["id"]]["turns"]), 76)
+        self.assertEqual(sent["history"]["total"], 76)
+
+    def test_auxiliary_completion_keeps_finished_turn_model_after_picker_changes(self):
+        self.pick("find", choice("anthropic", "opus"))
+        pinned = {"effective": {"provider": "openai", "backend": "cli", "model": "gpt-pinned"}}
+        with answer_runtime.scope(pinned), \
+                mock.patch.object(suggest, "_run", return_value=("{}", "cli")) as run:
+            virachat._concepts("Synthetic question", "Saved answer", [], [])
+        self.assertEqual(run.call_args.args[1]["ai_provider"], "openai")
+        self.assertEqual(run.call_args.args[1]["openai_cli_model"], "gpt-pinned")
+        self.assertEqual(run.call_args.kwargs["tools"], [])
+        self.assertEqual(self.cfg["module_models"]["find"], choice("anthropic", "opus"))
+        self.assertIsNone(modulemodels.current())
+        self.assertEqual(answer_runtime.current(), {})
 
     def test_large_carried_history_is_bounded_and_marked(self):
         turns = [{"question": "Question", "answer": "x" * 100, "status": "done"}]

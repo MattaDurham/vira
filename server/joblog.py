@@ -560,6 +560,8 @@ def record_launch(job):
         "id": job["id"], "session_id": "", "transcript": "",
         "prompt": job["prompt"], "cwd": job["cwd"],
         "model": job.get("model"),
+        "effort": job.get("effort"),
+        "runtime": job.get("runtime") or {},
         # Which engine actually answered. Recorded at launch because the
         # live registry is the ONLY other place that knows it — once a job
         # ages out, a row without this reads as the gated Anthropic default
@@ -651,6 +653,17 @@ def record_model_used(jid, model):
             r["model_used"] = model
             return True
         return False
+    _mutate(fn)
+
+
+def record_runtime(jid, runtime):
+    """Persist the provider-observed runtime separately from the request."""
+    def fn(s):
+        row = next((r for r in s["jobs"] if r["id"] == jid), None)
+        if row is None or row.get("runtime") == runtime:
+            return False
+        row["runtime"] = runtime
+        return True
     _mutate(fn)
 
 

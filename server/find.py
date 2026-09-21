@@ -36,10 +36,12 @@ from . import modulemodels
 import concurrent.futures as futures
 import json
 import re
+import time
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 
 from . import data as crm
+from . import retrieval
 
 DATABASES = ("notes", "media", "people", "messages")
 
@@ -266,6 +268,9 @@ def _dates(text, today=None):
 def _name_maps():
     """{full name: pid} and {first name: [pids]}, rebuilt only when the
     CRM cache reloads underneath us."""
+    if not retrieval.allows_corpus("people"):
+        return {}, {}
+    retrieval.check_deadline()
     c = crm._load()
     stamp = c.get("loaded_at")
     cached = _name_maps.cache
@@ -336,6 +341,10 @@ def _operators(text, f):
         elif key == "source":
             f["source"] = val.lower()
         elif key in ("since", "until"):
+            try:
+                val = date.fromisoformat(val).isoformat()
+            except ValueError as exc:
+                raise ValueError(f"{key}: requires an ISO date (YYYY-MM-DD)") from exc
             f[key] = val
         elif key == "is" and val.lower() in ("sent", "received"):
             f["direction"] = val.lower()
@@ -458,8 +467,11 @@ def _why(p):
     elif f["until"]:
         bits.append("before " + f["until"])
     if f["person"]:
-        who = crm._load()["by_id"].get(f["person"])
-        bits.append(who["name"] if who else f["person"])
+        if retrieval.allows_corpus("people"):
+            who = crm._load()["by_id"].get(f["person"])
+            bits.append(who["name"] if who else f["person"])
+        else:
+            bits.append("selected conversation")
     if f["kind"]:
         bits.append("/".join(f["kind"]))
     if f["direction"]:
@@ -478,8 +490,11 @@ def _why(p):
 def plan(q, today=None):
     """Rung 1. Pure heuristics: no model, no network, safe to call on
     every keystroke."""
+    retrieval.check_deadline()
     raw = (q or "").strip()
     p = _blank_plan(raw)
+    p["explicit_filters"] = [({"from": "sender", "to": "direction", "is": "direction"}.get(m[1].lower(), m[1].lower()))
+                             for m in OP_RE.finditer(raw)]
     if not raw:
         return p
     f = p["filters"]
@@ -487,10 +502,11 @@ def plan(q, today=None):
     text, explicit_db = _operators(text, f)
     if not (f["since"] or f["until"]):
         f["since"], f["until"], text = _dates(text, today=today)
+    f["since"], f["until"] = retrieval.validate_date_window(f["since"], f["until"])
     text = _order(text, f)
     text = _totality(text, f)
     _kind(text, f)
-    if not f["sender"]:
+    if not f["sender"] and retrieval.allows_corpus("people"):
         f["person"], text = _names(text)
     if re.search(r"\b(i sent|did i send|i shared|from me)\b", raw, re.I):
         f["direction"] = "sent"
@@ -498,7 +514,8 @@ def plan(q, today=None):
         f["direction"] = "received"
     p["shape"] = _shape(raw)
     p["databases"] = _rank_databases(text, raw, f, explicit_db, p["shape"])
-    p["primary"] = p["databases"][0]
+    p["databases"] = [d for d in p["databases"] if retrieval.allows_corpus(d)]
+    p["primary"] = p["databases"][0] if p["databases"] else None
     p["text"] = _terms(text)
     p["why"] = _why(p)
     return p
@@ -555,8 +572,9 @@ def plan_llm(q, today=None):
         from .search import _people_for_prompt
         from .suggest import complete
         raw = complete(PLAN_PROMPT.format(
-            people=_people_for_prompt(), question=q,
-            today=(today or date.today()).isoformat()))
+            people=_people_for_prompt() if retrieval.allows_corpus("people") else "Identity directory outside selected source scope; keep names as query terms.", question=q,
+            today=(today or date.today()).isoformat()), tools=[],
+            timeout=retrieval.remaining(maximum=2.0))
         m = re.search(r"\{.*\}", raw or "", re.S)
         if not m:
             return base
@@ -578,6 +596,10 @@ def plan_llm(q, today=None):
         p["primary"] = dbs[0]
     for key in ("person", "sender", "direction", "since", "until",
                 "face_person"):
+        if key in ("person", "sender", "face_person") and not retrieval.allows_corpus("people"):
+            continue
+        if key in base.get("explicit_filters", []):
+            continue
         if got.get(key):
             f[key] = got[key]
     if got.get("kind") in KIND_WORDS:
@@ -586,6 +608,12 @@ def plan_llm(q, today=None):
         f["order"] = got["order"]
     if got.get("query"):
         p["text"] = got["query"]
+    try:
+        f["since"], f["until"] = retrieval.validate_date_window(f["since"], f["until"])
+    except ValueError:
+        return base
+    p["databases"] = [d for d in p["databases"] if retrieval.allows_corpus(d)]
+    p["primary"] = p["databases"][0] if p["databases"] else None
     p["filters"] = f
     p["wants"] = got.get("wants") or ""
     p["why"] = _why(p)
@@ -611,29 +639,26 @@ def _epoch(iso):
 
 
 def a_notes(p, limit):
-    """One row per NOTE, not per chunk: a long note whose every section
-    mentions the query would otherwise fill the group with itself. The
-    best-ranked chunk wins and its heading becomes the row's context;
-    the ask still sees the full hit list, chunks and all.
-
-    Two paths now. A quoted phrase, or a totality word ("every", "all"),
-    takes the LITERAL path: exhaustive substring match, no ranking, every
-    hit. Anything else ranks as before. The literal path falls back to the
-    ranked one when it finds nothing, so asking for everything can never
-    return less than asking for something.
-    """
     from . import vault
     f = p["filters"]
-    phrase = (f.get("phrases") or [None])[0]
-    if f.get("limit_all") or phrase:
-        hits = vault.grep_notes(phrase or p["text"], limit=limit,
-                                since=f["since"], until=f["until"],
-                                order=f["order"])
-        if hits:
-            return _note_rows(hits, limit, literal=True)
-    hits = vault.search_filtered(p["text"], limit=limit * 3, since=f["since"],
-                                 until=f["until"], order=f["order"])
-    return _note_rows(hits, limit)
+    request = retrieval.current_request()
+    policy = request.policy if request else vault._read_policy()
+    if f.get("source"):
+        from dataclasses import replace
+        source = f["source"]
+        ids = (source,) if policy.source_ids is None or source in policy.source_ids else ()
+        policy = replace(policy, source_ids=ids)
+    out = vault.query_notes(p["text"], limit=limit, since=f["since"], until=f["until"],
+        order=f["order"], policy=policy,
+        semantic=request.semantic if request else False, phrases=f.get("phrases") or ())
+    group = _note_rows(out["hits"], limit)
+    group.update(total=out["total"], total_exact=out["total_exact"],
+                 next_cursor=out["next_cursor"], coverage=out["coverage"],
+                 date_field=out["date_field"], complete=out["complete"])
+    ignored = [k for k in ("person", "sender", "direction", "kind") if f.get(k)]
+    if ignored:
+        group["unsupported_filters"] = ignored
+    return group
 
 
 def _note_rows(hits, limit, literal=False):
@@ -666,16 +691,18 @@ def a_media(p, limit):
         limit=limit, exact=f["exact"],
         # order was silently dropped here since the module shipped - a
         # recency sort reached every other corpus and never this one
-        order=f["order"])
-    return {"rows": rows, "count": len(rows)}
+        order=f["order"], phrases=f.get("phrases") or (), source=f.get("source"))
+    return _result_group(rows)
 
 
 def a_people(p, limit):
     from . import crmindex
     f = p["filters"]
     rows = crmindex.search(p["text"], limit=limit, exact=f["exact"],
-                           person=f["person"], order=f["order"])
-    return {"rows": rows, "count": len(rows)}
+                           person=f["person"], order=f["order"], phrases=f.get("phrases") or ())
+    group = _result_group(rows)
+    group["unsupported_filters"] = [k for k in ("since", "until", "sender", "direction", "source", "kind") if f.get(k)]
+    return group
 
 
 def a_messages(p, limit):
@@ -689,8 +716,17 @@ def a_messages(p, limit):
     rows = textindex.search(
         p["text"], limit=limit, person=f["person"], sender=f["sender"],
         direction=f["direction"], source=f["source"], since=f["since"],
-        until=f["until"], order=f["order"], exact=f["exact"])
-    return {"rows": rows, "count": len(rows)}
+        until=f["until"], order=f["order"], exact=f["exact"], phrases=f.get("phrases") or ())
+    return _result_group(rows)
+
+
+def _result_group(rows):
+    group = {"rows": rows, "count": len(rows)}
+    if hasattr(rows, "coverage"):
+        group.update(coverage=rows.coverage, total=rows.total,
+                     next_cursor=rows.next_cursor,
+                     complete=all(c.get("status") == "complete" for c in rows.coverage))
+    return group
 
 
 ADAPTERS = {"notes": a_notes, "media": a_media, "people": a_people,
@@ -719,28 +755,95 @@ EXHAUSTIVE_LIMIT = 2000
 ASK_LIMIT = 24
 
 
-def run(p, limit=20):
-    """Query every database in the plan concurrently. Groups stay
-    separate — see the module docstring on why nothing is fused. One
-    dead corpus reports its error and never kills the whole search."""
+def run(p, limit=20, *, policy=None, deadline=None, semantic=False):
+    """Bounded concurrent fan-out with explicit partial-coverage receipts."""
+    from . import vault
+    policy = vault._read_policy(policy=policy)
+    request = retrieval.request_for(policy=policy, deadline=deadline, semantic=semantic)
+    if request.deadline is None:
+        request = retrieval.Request(request.policy, time.monotonic() + retrieval.DEFAULT_BUDGET_S,
+                                    semantic, request.allow_cold_models)
     if p.get("filters", {}).get("limit_all"):
         limit = max(limit, EXHAUSTIVE_LIMIT)
-    groups = {}
-    dbs = [d for d in p["databases"] if d in ADAPTERS]
-    with futures.ThreadPoolExecutor(max_workers=max(1, len(dbs))) as pool:
-        jobs = {db: pool.submit(ADAPTERS[db], p, limit) for db in dbs}
+    limit = max(1, min(int(limit), EXHAUSTIVE_LIMIT))
+    groups, jobs = {}, {}
+    dbs = [d for d in p["databases"] if d in ADAPTERS
+           and (request.policy.corpus_ids is None or d in request.policy.corpus_ids)]
+    effective_plan = dict(p, databases=dbs, primary=p.get("primary") if p.get("primary") in dbs else (dbs[0] if dbs else None))
+    started = time.monotonic()
+    with retrieval.request_scope(request):
+        for db in dbs:
+            job = retrieval.submit_bounded(ADAPTERS[db], p, limit)
+            if job is None:
+                groups[db] = {"rows": [], "count": 0, "status": "busy", "complete": False,
+                              "error": "retrieval worker capacity is busy; source not searched"}
+            else:
+                jobs[db] = job
+        futures.wait(list(jobs.values()), timeout=retrieval.remaining())
         for db, job in jobs.items():
+            if not job.done():
+                job.cancel()
+                groups[db] = {"rows": [], "count": 0, "status": "timed_out", "complete": False,
+                              "error": "retrieval deadline exceeded; source coverage incomplete"}
+                continue
             try:
-                groups[db] = job.result(timeout=30)
-            except Exception as e:      # noqa: BLE001
-                groups[db] = {"rows": [], "count": 0, "error": str(e)[:200]}
-    return {"plan": p, "groups": groups,
-            "counts": {db: g.get("count", 0) for db, g in groups.items()}}
+                group = dict(job.result())
+                status = "complete"
+                if group.get("error") or group.get("note") in ("not installed", "not indexed yet"):
+                    status = "unavailable"
+                elif group.get("complete") is False or group.get("unsupported_filters"):
+                    status = "partial"
+                group.setdefault("status", status)
+                group.setdefault("complete", status == "complete")
+                groups[db] = group
+            except Exception as exc:
+                groups[db] = {"rows": [], "count": 0,
+                    "status": "timed_out" if isinstance(exc, TimeoutError) else "unavailable",
+                    "complete": False, "error": str(exc)[:200] or type(exc).__name__}
+    return {"plan": effective_plan, "groups": groups,
+            "counts": {db: g.get("count", 0) for db, g in groups.items()},
+            "complete": all(g.get("complete", False) for g in groups.values()),
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "retrieval_mode": "hybrid" if semantic else "text"}
 
 
-def find(q, limit=20, today=None):
-    """The list path: rung 1 only, so typing never costs a model call."""
-    return run(plan(q, today=today), limit=limit)
+def _planning_result(q, planner, request, today=None):
+    """Bound identity/filesystem work as well as corpus retrieval."""
+    with retrieval.request_scope(request):
+        job = retrieval.submit_bounded(planner, q, today=today)
+        if job is None:
+            reason, status = "query planning capacity busy", "busy"
+        else:
+            try:
+                return job.result(timeout=retrieval.remaining()), None
+            except futures.TimeoutError:
+                job.cancel()
+                reason, status = "query planning deadline exceeded", "timed_out"
+            except ValueError as exc:
+                reason, status = str(exc), "invalid_query"
+        base = _blank_plan(str(q or ""))
+        base["databases"] = [d for d in base["databases"] if retrieval.allows_corpus(d)]
+        base["primary"] = base["databases"][0] if base["databases"] else None
+        base["why"] = reason
+        groups = {d: {"rows": [], "count": 0, "complete": False,
+                      "status": status, "error": reason} for d in base["databases"]}
+        return None, {"plan": base, "groups": groups,
+                      "counts": {d: 0 for d in groups}, "complete": False,
+                      "planning_status": status, "error": reason}
+
+
+def find(q, limit=20, today=None, *, policy=None, deadline=None, semantic=False):
+    from . import vault
+    request = retrieval.request_for(policy=vault._read_policy(policy=policy), deadline=deadline,
+                                    semantic=semantic)
+    if request.deadline is None:
+        request = retrieval.Request(request.policy, time.monotonic() + retrieval.DEFAULT_BUDGET_S,
+                                    semantic, request.allow_cold_models)
+    p, failed = _planning_result(q, plan, request, today=today)
+    if failed:
+        return failed
+    with retrieval.request_scope(request):
+        return run(p, limit=limit, policy=request.policy, deadline=request.deadline, semantic=semantic)
 
 
 # ---------- the ask layer's relaxation + answer contracts ----------
@@ -767,6 +870,8 @@ def _relax(p, primary, limit):
     relaxed = []
     f = p["filters"]
     for key in RELAX_LADDER:
+        if key in p.get("explicit_filters", []):
+            continue
         if key == "sender":
             if not f.get("sender") or f["sender"] == "me":
                 continue
@@ -786,7 +891,7 @@ def _relax(p, primary, limit):
             relaxed.append(_RELAX_LABEL[key])
         else:
             continue
-        got = ADAPTERS[primary](p, limit)
+        got = run(dict(p, databases=[primary]), limit=limit)["groups"].get(primary, {})
         if got.get("count"):
             return got, relaxed
     return None, relaxed
@@ -795,6 +900,8 @@ def _relax(p, primary, limit):
 def _pid_name(pid):
     if not pid or pid == "me":
         return "you" if pid == "me" else ""
+    if not retrieval.allows_corpus("people"):
+        return "selected conversation"
     try:
         person = crm._load()["by_id"].get(pid) or {}
         return person.get("name") or pid
@@ -910,7 +1017,16 @@ def _no_hits_text(p, relaxed, orig_filters=None):
 
 
 @modulemodels.scoped("find")
-def ask(question, limit=ASK_LIMIT, today=None):
+def ask(question, limit=ASK_LIMIT, today=None, *, policy=None, deadline=None):
+    from . import vault
+    request = retrieval.request_for(policy=vault._read_policy(policy=policy), deadline=deadline)
+    if request.deadline is None:
+        request = retrieval.Request(request.policy, time.monotonic() + retrieval.DEFAULT_BUDGET_S)
+    with retrieval.request_scope(request):
+        return _ask(question, limit=limit, today=today)
+
+
+def _ask(question, limit=ASK_LIMIT, today=None):
     """The answer path: rung 2, then the owning corpus's own ask.
 
     The ask contracts stay distinct on purpose (the 2026-07-21 audit
@@ -924,9 +1040,13 @@ def ask(question, limit=ASK_LIMIT, today=None):
     names the step, because an answer from the wrong corpus presented
     as the right one is the vault-chat dead-end this exists to end.
     """
-    p = plan_llm(question, today=today)
+    p, failed = _planning_result(question, plan_llm, retrieval.current_request(), today=today)
+    if failed:
+        failed.update(answer="I could not finish planning this search within its retrieval budget.", citations=[], relaxed=[])
+        return failed
     orig_filters = dict(p["filters"])
     out = run(p, limit=limit)
+    p = out["plan"]
     out["answer"] = None
     out["citations"] = []
     out["relaxed"] = []
@@ -965,7 +1085,7 @@ def ask(question, limit=ASK_LIMIT, today=None):
     try:
         if answer_db == "notes":
             from . import vault
-            hits = out["groups"].get("notes", {}).get("hits") or None
+            hits = out["groups"].get("notes", {}).get("hits") or []
             got = vault.ask(question, hits=hits)
             out["answer"] = got.get("answer")
             out["citations"] = got.get("citations") or []

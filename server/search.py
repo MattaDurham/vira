@@ -20,6 +20,7 @@ from . import modulemodels
 import json
 import re
 import sqlite3
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,7 +41,7 @@ _matrices = retrieval.MatrixCache({
 
 
 def _con():
-    con = sqlite3.connect(mediaindex.DB, timeout=30)
+    con = sqlite3.connect(mediaindex.DB, timeout=min(0.2, retrieval.remaining(maximum=0.2)))
     con.row_factory = sqlite3.Row
     return con
 
@@ -49,21 +50,18 @@ def invalidate():
     _matrices.invalidate()
 
 
-@lru_cache(maxsize=256)
 def _scene_qvec(q):
-    from .localmodels import siglip_embed_text
-    return siglip_embed_text(q)
+    from .localmodels import query_scene_embedding
+    return query_scene_embedding(q)
 
 
-@lru_cache(maxsize=256)
 def _text_qvec(q):
-    from .localmodels import ollama_embed
-    v = ollama_embed([f"search_query: {q}"])
-    return v[0] if v else None
+    from .localmodels import query_embedding
+    return query_embedding(q)
 
 
 def _candidates(con, pid=None, sender_pid=None, kind=None, direction=None,
-                face_pid=None, since=None, until=None):
+                face_pid=None, since=None, until=None, source=None):
     """Seq set passing the deterministic filters; None = unfiltered."""
     where, params = [], []
     if pid:
@@ -83,8 +81,11 @@ def _candidates(con, pid=None, sender_pid=None, kind=None, direction=None,
     if since:
         where.append("i.date_ns >= ?")
         params.append(since)
+    if source:
+        where.append("i.source=?")
+        params.append(source)
     if until:
-        where.append("i.date_ns <= ?")
+        where.append("i.date_ns < ?")
         params.append(until)
     if face_pid:
         where.append(
@@ -100,64 +101,58 @@ def _candidates(con, pid=None, sender_pid=None, kind=None, direction=None,
 
 def search(q=None, pid=None, sender_pid=None, kind=None, direction=None,
            face_pid=None, since=None, until=None, limit=60, exact=False,
-           phrases=(), order="relevance"):
-    """Hybrid retrieval. Returns hydrated entries newest-first when no
-    query text, fused-relevance order otherwise.
-
-    exact: the caller detected a literal the user is sure of (a filename,
-    a phone number, a quoted phrase). The bm25 order then leads and the
-    fused vector hits follow as a tail, instead of semantic neighbours
-    competing with the string the user actually named.
-    order: 'recent'/'oldest' re-sorts the result by date, with relevance
-    surviving only as the tiebreak.
-    """
-    mediaindex._db().close()      # ensure schema exists on first call
-    _matrices.load(_con)
+           phrases=(), order="relevance", source=None, semantic=None, deadline=None):
+    """Text first within scope; semantic media is optional and never cold-loads."""
+    previous = retrieval.current_request()
+    request = retrieval.request_for(deadline=deadline,
+        semantic=(previous.semantic if previous else True) if semantic is None else semantic)
+    if request.policy.corpus_ids is not None and "media" not in request.policy.corpus_ids:
+        return retrieval.Hits()
+    if not mediaindex.DB.exists():
+        return retrieval.Hits(coverage=[{"source_id": "media", "status": "unavailable",
+                                         "error": "not indexed yet"}])
+    if request.deadline is None:
+        request = retrieval.Request(request.policy, time.monotonic() + retrieval.DEFAULT_BUDGET_S,
+                                    request.semantic, request.allow_cold_models)
     con = _con()
-    cand = _candidates(con, pid, sender_pid, kind, direction, face_pid,
-                       since, until)
-
-    if not q:
-        where = "" if cand is None else \
-            f"WHERE i.seq IN ({','.join(map(str, cand))})" if cand else \
-            "WHERE 0"
-        rows = con.execute(
-            f"SELECT i.seq FROM items i {where} "
-            "ORDER BY i.date_ns " + ("ASC" if order == "oldest" else "DESC")
-            + " LIMIT ?", (limit,)).fetchall()
-        out = _hydrate(con, [r["seq"] for r in rows])
-        con.close()
-        return out
-
-    fts = retrieval.rank_fts(con, q, cand, limit=FTS_LIMIT, phrases=phrases)
-    lists = [
-        fts,
-        retrieval.rank_vec(_matrices.get("scene"), _scene_qvec(q), cand,
-                           floor=0.05),
-        retrieval.rank_vec(_matrices.get("text"), _text_qvec(q), cand,
-                           floor=0.35),
-    ]
-    ranks = retrieval.rrf(lists)
-    top = sorted(ranks, key=ranks.get, reverse=True)
-    if exact and fts:
-        rest = [s for s in top if s not in set(fts)]
-        top = fts + rest
-    # a date sort has to run over every match, not the relevance head —
-    # the newest photo of a thing is rarely the best-scoring one
-    top = top[:max(limit * 8, 200)] if order in ("recent", "oldest") \
-        else top[:limit]
-    out = _hydrate(con, top, scores=ranks)
-    if order in ("recent", "oldest"):
-        out.sort(key=lambda r: r["when"] or "", reverse=order == "recent")
-        out = out[:limit]
-    con.close()
-    return out
+    coverage = {"source_id": "media", "status": "complete", "mode": "fts", "date_field": "message_sent"}
+    with retrieval.request_scope(request):
+        try:
+            retrieval.configure_connection(con)
+            cand = _candidates(con, pid, sender_pid, kind, direction, face_pid, since, until, source)
+            q = (q or "").strip()
+            if not q or order in ("recent", "oldest"):
+                ids = retrieval.matching_fts(con, q, cand, phrases=phrases) if q else cand
+                clause = retrieval.candidate_clause(con, ids, "seq")
+                total = con.execute("SELECT COUNT(*) FROM items WHERE 1" + clause).fetchone()[0]
+                rows = con.execute("SELECT seq FROM items WHERE 1" + clause +
+                    " ORDER BY date_ns " + ("ASC" if order == "oldest" else "DESC") +
+                    ",seq " + ("ASC" if order == "oldest" else "DESC") + " LIMIT ?", (limit,)).fetchall()
+                out = _hydrate(con, [r["seq"] for r in rows])
+                return retrieval.Hits(out, coverage=[coverage], total=total)
+            fts = retrieval.rank_fts(con, q, cand, limit=max(limit, FTS_LIMIT), phrases=phrases)
+            lists = [fts]
+            if request.semantic and not exact:
+                retrieval.check_deadline()
+                _matrices.load(_con)
+                scene, text = _scene_qvec(q), _text_qvec(q)
+                lists.extend([retrieval.rank_vec(_matrices.get("scene"), scene, cand, floor=0.05),
+                              retrieval.rank_vec(_matrices.get("text"), text, cand, floor=0.35)])
+                coverage["mode"] = "hybrid"
+                if scene is None or text is None:
+                    coverage.update(status="partial", error="some semantic layers unavailable; lexical results retained")
+            ranks = retrieval.rrf(lists)
+            top = sorted(ranks, key=ranks.get, reverse=True)
+            out = _hydrate(con, top[:limit], scores=ranks)
+            return retrieval.Hits(out, coverage=[coverage], total=None)
+        finally:
+            con.close()
 
 
 def _hydrate(con, seqs, scores=None):
     if not seqs:
         return []
-    c = crm._load()
+    c = crm._load() if retrieval.allows_corpus("people") else {"by_id": {}}
     qmarks = ",".join("?" * len(seqs))
     rows = {r["seq"]: r for r in con.execute(
         f"""SELECT i.*, c.context, c.ctx_from_me, c.title, c.url, c.domain,
@@ -190,7 +185,7 @@ def _hydrate(con, seqs, scores=None):
                          "own": True}
                         if r["context"] else None),
             "sender": sender,
-            "person_id": r["chat_pid"],
+            "person_id": r["chat_pid"] if retrieval.allows_corpus("people") else None,
             "person": owner["name"] if owner else None,
             "chat_id": r["chat_id"],
             "is_group": bool(r["is_group"]),

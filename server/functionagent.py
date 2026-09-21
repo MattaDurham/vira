@@ -103,6 +103,9 @@ class FunctionSession:
         joblog.record_session(self.spec["id"], self.session_id,
                               transport=self._transport())
         joblog.record_model_used(self.spec["id"], self.model)
+        if hasattr(self.runner, "set_runtime"):
+            self.runner.set_runtime(self.model, source="requested_api_model",
+                                    transport=self._transport(), backend="api")
         self.runner.append(
             f"[vira] {models.PROVIDERS[self.provider]['sub_name']} "
             f"{self.model} working… (Vira function session "
@@ -115,13 +118,19 @@ class FunctionSession:
             return f"error: unknown Vira tool {name}"
         permission = await self.runner.gate(fqname, args, None)
         if not _allowed(permission):
+            if hasattr(self.runner, "native_tool"):
+                self.runner.native_tool(uuid.uuid4().hex, fqname, args,
+                                        error="Denied by Vira's permission policy.", completed=True)
             return "Denied by Vira's permission policy."
-        self.runner.record_tool(fqname, args)
+        if not hasattr(self.runner, "start_tool"):
+            self.runner.record_tool(fqname, args)
         result = await viratools.invoke(
             name, args, read_only=bool(self.spec.get("read_only")),
             ask_owner=self.runner.ask_owner,
             vault_destination=self.spec.get("vault_destination"),
-            vault_context=self.spec.get("vault_context"))
+            vault_context=self.spec.get("vault_context"),
+            runtime=self.runner.state.get("runtime"),
+            receipt=self.runner if hasattr(self.runner, "start_tool") else None)
         return _text(result)
 
     def _preamble(self):
@@ -135,8 +144,12 @@ class FunctionSession:
     async def _google(self, prompt):
         contents = list(self.data.get("contents") or [])
         contents.append({"role": "user", "parts": [{"text": prompt}]})
+        self.data["contents"] = contents
+        _write(self.path, self.data)
         last_text = ""
         for _round in range(MAX_TOOL_ROUNDS):
+            if getattr(self.runner, "interrupted", False) or getattr(self.runner, "closing", False):
+                raise RuntimeError("model turn interrupted")
             body = {
                 "systemInstruction": {"parts": [{"text": self._preamble()}]},
                 "contents": contents,
@@ -149,6 +162,10 @@ class FunctionSession:
                 "https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{self.model}:generateContent", body,
                 {"x-goog-api-key": self.key}, self.timeout)
+            if hasattr(self.runner, "record_usage") and payload.get("usageMetadata"):
+                self.runner.record_usage(payload["usageMetadata"])
+            if getattr(self.runner, "interrupted", False) or getattr(self.runner, "closing", False):
+                raise RuntimeError("model turn interrupted")
             candidates = payload.get("candidates") or []
             if not candidates:
                 raise RuntimeError("Gemini returned no candidates")
@@ -178,8 +195,12 @@ class FunctionSession:
     async def _xai(self, prompt):
         messages = list(self.data.get("messages") or [])
         messages.append({"role": "user", "content": prompt})
+        self.data["messages"] = messages
+        _write(self.path, self.data)
         last_text = ""
         for _round in range(MAX_TOOL_ROUNDS):
+            if getattr(self.runner, "interrupted", False) or getattr(self.runner, "closing", False):
+                raise RuntimeError("model turn interrupted")
             # xAI's chat-completions contract accepts full local history,
             # including assistant tool_calls and role=tool results. Keeping
             # that history under data/model-sessions makes resume independent
@@ -195,6 +216,10 @@ class FunctionSession:
             payload = await asyncio.to_thread(
                 _post, "https://api.x.ai/v1/chat/completions", body,
                 {"authorization": "Bearer " + self.key}, self.timeout)
+            if hasattr(self.runner, "record_usage") and payload.get("usage"):
+                self.runner.record_usage(payload["usage"])
+            if getattr(self.runner, "interrupted", False) or getattr(self.runner, "closing", False):
+                raise RuntimeError("model turn interrupted")
             choices = payload.get("choices") or []
             if not choices:
                 raise RuntimeError("Grok returned no choices")
@@ -251,14 +276,24 @@ async def run_session(runner, provider):
         runner.client = session
         prompt = runner.spec["prompt"]
         while True:
-            result_text = await session.turn(prompt)
-            ok = True
+            if hasattr(runner, "begin_turn"):
+                await runner.begin_turn()
+            try:
+                result_text = await session.turn(prompt)
+                ok = not runner.interrupted
+            except Exception:
+                if not runner.interrupted:
+                    raise
+                result_text, ok = "", False
+            if hasattr(runner, "end_turn"):
+                runner.end_turn("interrupted" if runner.interrupted else "completed",
+                                "" if runner.interrupted else result_text)
             if result_text:
                 runner.append(result_text + "\n")
-            if runner.closing or runner.interrupted:
+            if runner.closing:
                 break
             steered = False
-            while not runner.inbox.empty():
+            while not runner.interrupted and not runner.inbox.empty():
                 item = runner.inbox.get_nowait()
                 if item is runner.END:
                     continue
@@ -274,7 +309,7 @@ async def run_session(runner, provider):
             runner.state["result_text"] = result_text[:RESULT_KEEP]
             runner.flush_state()
             reply = (await runner.await_reply()
-                     if runner.parks_at_turn_end() else None)
+                     if runner.should_park(ok) else None)
             if reply is None:
                 break
             runner.finished_cleanly = False

@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -199,6 +200,9 @@ def _learn_from_cli(envelope, model):
     try:
         from . import modelbudget
         usage = envelope.get("modelUsage") or {}
+        if len(usage) == 1:
+            from . import answer_runtime
+            answer_runtime.resolved("anthropic", "cli", next(iter(usage)), source="provider_model_usage")
         for resolved, row in usage.items():
             ctx = int(row.get("contextWindow") or 0)
             out = int(row.get("maxOutputTokens") or 0)
@@ -334,12 +338,12 @@ def _call_xai_api(prompt, model, timeout, key):
 def _provider_models(cfg, pid):
     """(cli_model, api_model) for the provider in play."""
     if pid == "openai":
-        return cfg["openai_cli_model"], cfg["openai_api_model"]
+        return cfg.get("openai_cli_model", ""), cfg.get("openai_api_model", "")
     if pid == "google":
-        return "", cfg["google_api_model"]
+        return "", cfg.get("google_api_model", "")
     if pid == "xai":
-        return "", cfg["xai_api_model"]
-    return cfg["cli_model"], cfg["api_model"]
+        return "", cfg.get("xai_api_model", "")
+    return cfg.get("cli_model", ""), cfg.get("api_model", "")
 
 
 def effective_backend(cfg):
@@ -365,8 +369,9 @@ def effective_backend(cfg):
         raise provider.ProviderDisabled(pid, role="the configured go-to")
     # The key may come from the env (existing installs) or the Keychain
     # (pasted in Setup by someone with no shell profile to edit).
-    if cfg.get("_module_model_explicit"):
-        # An explicit module pick must either run as selected or fail by name.
+    if cfg.get("_module_model_explicit") or cfg.get("_runtime_model_explicit"):
+        # Explicit module picks and a consuming session's pinned connection
+        # must run as selected or fail by name, never spend on a fallback.
         return pid, backend
     key = provider.api_key(pid)
     if pid in API_ONLY:
@@ -381,6 +386,38 @@ def effective_backend(cfg):
 
 
 def _run(prompt, cfg, tools=None):
+    from . import modeladmission as admission, answer_runtime
+    import uuid
+    runtime = answer_runtime.current()
+    call_id = uuid.uuid4().hex
+    started = time.monotonic()
+    deadline = time.monotonic() + float(cfg["timeout"])
+    lease = runtime.get("execution_lease")
+    gate = (admission.borrow_execution(lease, timeout=min(cfg["timeout"], 30)) if admission.borrowed(lease) else admission.execution(
+        owner="completion", work_class=runtime.get("work_class", "auxiliary"),
+        timeout=runtime.get("queue_timeout_s", min(cfg["timeout"], 30))))
+    requested_model = _provider_models(cfg, cfg.get("ai_provider", "anthropic"))[0 if cfg.get("ai_backend") == "cli" else 1]
+    runtime = dict(runtime, requested={"provider": cfg.get("ai_provider"), "backend": cfg.get("ai_backend"),
+                                      "model": requested_model, "effort": None},
+                   effective={"source": "awaiting_admission"},
+                   tool_mode="restricted" if tools == [] else "default" if tools is None else "read_allowlist")
+    with answer_runtime.scope(runtime):
+        answer_runtime.completion_event("queued", call_id)
+        try:
+            with gate:
+                cfg = dict(cfg, timeout=max(0.1, deadline - time.monotonic()))
+                if time.monotonic() >= deadline:
+                    raise admission.QueueTimeout("model queue consumed the completion deadline; no model call was started")
+                answer_runtime.completion_event("started", call_id, queued_ms=round((time.monotonic() - started) * 1000))
+                result = _run_admitted(prompt, cfg, tools)
+            answer_runtime.completion_event("completed", call_id, duration_ms=round((time.monotonic() - started) * 1000), output_chars=len(result[0]))
+            return result
+        except BaseException as exc:
+            answer_runtime.completion_event("failed", call_id, duration_ms=round((time.monotonic() - started) * 1000), error_type=type(exc).__name__)
+            raise
+
+
+def _run_admitted(prompt, cfg, tools=None):
     """Pick the EFFECTIVE backend, call it, and on failure record the auth
     state so the app degrades gracefully. Returns (text, backend_used).
 
@@ -394,6 +431,8 @@ def _run(prompt, cfg, tools=None):
     pid, backend = effective_backend(cfg)
     key = provider.api_key(pid)
     cli_model, api_model = _provider_models(cfg, pid)
+    from . import answer_runtime
+    answer_runtime.resolved(pid, backend, api_model if backend == "api" else cli_model)
     try:
         if backend == "api":
             if not key:
@@ -407,6 +446,7 @@ def _run(prompt, cfg, tools=None):
                     raise RuntimeError(
                         f"no API model set for {pid}, and its model list "
                         f"could not be read — pick one in Config > Models")
+            answer_runtime.resolved(pid, backend, api_model)
             if pid == "openai":
                 return _call_openai_api(prompt, api_model, cfg["timeout"], key), backend
             if pid == "google":
@@ -424,7 +464,7 @@ def _run(prompt, cfg, tools=None):
         raise
 
 
-def complete(prompt, tools=None):
+def complete(prompt, tools=None, *, timeout=None, runtime=None, work_class=None):
     """One-shot completion on the configured backend.
 
     An explicit empty list requests restricted extraction: Claude exposes
@@ -438,7 +478,28 @@ def complete(prompt, tools=None):
     caller must treat it as an enhancement and still work when it does
     nothing. Ask modelbudget.has_tools() before relying on it.
     """
-    return _run(prompt, config(), tools=tools)[0]
+    from . import answer_runtime
+    cfg = dict(config())
+    manifest = answer_runtime.current() if runtime is None else runtime
+    selected = dict(manifest.get("configured") or {})
+    selected.update({k: v for k, v in (manifest.get("requested") or {}).items() if v is not None})
+    selected.update({k: v for k, v in (manifest.get("effective") or {}).items() if v is not None})
+    if selected.get("provider"):
+        cfg["ai_provider"] = selected["provider"]
+        cfg["ai_backend"] = selected.get("backend") or cfg["ai_backend"]
+        cfg.pop("_module_model_explicit", None)
+        cfg["_runtime_model_explicit"] = True
+        if selected.get("model"):
+            from . import models
+            key = (models.PROVIDERS.get(cfg["ai_provider"], {}).get("config_keys") or {}).get(cfg["ai_backend"])
+            if key:
+                cfg[key] = selected["model"]
+    if timeout is not None:
+        cfg["timeout"] = max(0.1, min(float(timeout), float(cfg["timeout"])))
+    if work_class:
+        manifest = dict(manifest, work_class=work_class)
+    with answer_runtime.scope(manifest):
+        return _run(prompt, cfg, tools=tools)[0]
 
 
 def _extract_json(text):

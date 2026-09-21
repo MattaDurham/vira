@@ -52,6 +52,8 @@ def _codex_argv(binary, spec, resume_id, prompt):
     argv += ["--json", "--skip-git-repo-check"]
     if spec.get("model_resolved") or spec.get("model"):
         argv += ["--model", spec.get("model_resolved") or spec["model"]]
+    if spec.get("effort"):
+        argv += ["-c", "model_reasoning_effort=" + json.dumps(spec["effort"])]
     if sandbox == "danger-full-access":
         # autopilot: the owner opted out of gating entirely (same meaning
         # as bypassPermissions on the SDK path).
@@ -144,6 +146,22 @@ CAPABILITIES = {
 def capabilities(pid):
     """A copy of the verified feature contract for one provider."""
     return dict(CAPABILITIES.get(pid, {}))
+
+
+def validate_effort(provider, effort):
+    """Validate transport vocabulary; the provider validates model support.
+
+    No model family is assigned an invented effort. Unset means resolve from
+    the provider once, record that value and reuse it for later turns.
+    """
+    value = str(effort or "").strip().lower()
+    if not value:
+        return None
+    allowed = {"anthropic": {"low", "medium", "high", "xhigh", "max"},
+               "openai": {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}}
+    if value not in allowed.get(provider, set()):
+        raise ValueError(f"reasoning effort {value!r} is not supported by the {provider} adapter")
+    return value
 
 
 # The transport each adapter STAMPS on the ledger row (joblog.record_session
@@ -333,6 +351,8 @@ def _render_item(item):
 async def _run_turn(runner, binary, prompt, resume_id):
     """One codex exec turn. Returns (thread_id, last_message, ok)."""
     spec = runner.spec
+    if hasattr(runner, "begin_turn"):
+        await runner.begin_turn()
     argv = CLI_EXEC[spec["provider"]]["argv"](binary, spec, resume_id, prompt)
     proc = await asyncio.create_subprocess_exec(
         *argv, cwd=spec["cwd"],
@@ -398,6 +418,8 @@ async def _run_turn(runner, binary, prompt, resume_id):
                     last_msg = item.get("text") or last_msg
             elif et == "turn.completed":
                 turn_ok = True
+                if hasattr(runner, "record_usage") and ev.get("usage"):
+                    runner.record_usage(ev["usage"])
             elif et in ("turn.failed", "error"):
                 msg = (ev.get("error") or {}).get("message") \
                     if isinstance(ev.get("error"), dict) else ev.get("message")
@@ -418,6 +440,9 @@ async def _run_turn(runner, binary, prompt, resume_id):
     finally:
         err_task.cancel()
         runner.exec_proc = None
+        if hasattr(runner, "end_turn"):
+            runner.end_turn("interrupted" if runner.interrupted else "completed" if turn_ok else "failed",
+                            last_msg if turn_ok and not runner.interrupted else "")
     return thread_id, last_msg, turn_ok
 
 
@@ -468,12 +493,12 @@ async def run_cliexec(runner):
     while not done:
         thread_id, last_msg, ok = await _run_turn(
             runner, binary, prompt, thread_id)
-        result_text = last_msg or result_text
-        if runner.closing or runner.interrupted:
+        result_text = last_msg if ok else ""
+        if runner.closing:
             break
         # Turn boundary — mirror the SDK loop: queued steering first.
         steered = False
-        while not runner.inbox.empty():
+        while not runner.interrupted and not runner.inbox.empty():
             try:
                 item = runner.inbox.get_nowait()
             except asyncio.QueueEmpty:
@@ -499,7 +524,7 @@ async def run_cliexec(runner):
         from . import runner as _runner_mod   # lazy: runner imports this module
         runner.state["result_text"] = (result_text or "")[:_runner_mod.RESULT_KEEP]
         runner.flush_state()
-        park = ok and runner.parks_at_turn_end()
+        park = runner.should_park(ok)
         if park:
             park = await runner.offer_landing()
         reply = await runner.await_reply() if park else None
@@ -507,6 +532,7 @@ async def run_cliexec(runner):
             done = True
         else:
             runner.finished_cleanly = False
+            runner.interrupted = False
             runner.append("[vira] reply delivered\n")
             # a new turn: tool calls from here belong to it (record_tool)
             runner.state["turn"] = int(runner.state.get("turn") or 0) + 1

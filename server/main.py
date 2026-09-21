@@ -11,6 +11,7 @@ import os
 import queue
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -1361,7 +1362,13 @@ def api_find_ask(body: AskBody):
     q = body.question.strip()
     if not q:
         raise HTTPException(400, "empty question")
-    return find.ask(q)
+    # One answer engine for every entry point. Clients follow the returned
+    # chat session; the deterministic /api/find endpoint never spends a model.
+    try:
+        return {"session": virachat.send(q), "sessions": virachat.summary_rows(),
+                "follow": "/api/vira/chat", "status": "accepted"}
+    except virachat.Busy as e:
+        raise HTTPException(409, str(e))
 
 
 class OmniRouteBody(BaseModel):
@@ -1426,6 +1433,8 @@ def api_find_chat_ask(body: FindChatReq):
 class ViraChatReq(BaseModel):
     question: str
     session_id: str | None = None
+    mode: str | None = None
+    sources: list[str] | None = None
 
 
 class ViraChatSwitchReq(BaseModel):
@@ -1433,10 +1442,12 @@ class ViraChatSwitchReq(BaseModel):
 
 
 @app.get("/api/vira/chat")
-def api_vira_chat():
+def api_vira_chat(session_id: str | None = None, before: int | None = None,
+                  limit: int = 30):
     """The active chat (with live progress for a pending turn) plus the
     picker's list of every saved chat."""
-    return {"session": virachat.current(), "sessions": virachat.summary_rows()}
+    return {"session": virachat.current(session_id, before, limit),
+            "sessions": virachat.summary_rows()}
 
 
 @app.post("/api/vira/chat/new")
@@ -1459,10 +1470,114 @@ def api_vira_chat_send(body: ViraChatReq):
     if not q:
         raise HTTPException(400, "empty message")
     try:
-        return {"session": virachat.send(q, body.session_id),
+        return {"session": virachat.send(q, body.session_id, mode=body.mode, sources=body.sources),
                 "sessions": virachat.summary_rows()}
     except virachat.Busy as e:
         raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ViraChatControlReq(BaseModel):
+    action: str
+    text: str = ""
+
+
+@app.post("/api/vira/chat/{sid}/control")
+def api_vira_chat_control(sid: str, body: ViraChatControlReq):
+    try:
+        return {"session": virachat.control(sid, body.action, body.text)}
+    except KeyError:
+        raise HTTPException(404, "no such chat")
+    except virachat.Busy as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/vira/chat/{sid}/visible/{turn_id}")
+def api_vira_chat_visible(sid: str, turn_id: str, stage: str = "answer"):
+    try:
+        virachat.visible(sid, turn_id, stage)
+        return {"ok": True}
+    except KeyError:
+        raise HTTPException(404, "no such turn")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@contextmanager
+def _answer_scope(session_id=None):
+    from . import answer_runtime, retrieval
+    sources = []
+    if session_id:
+        saved = (virachat._load().get("sessions") or {}).get(session_id)
+        if not saved:
+            raise HTTPException(404, "no such chat")
+        sources = saved.get("sources") or []
+    with answer_runtime.scope({"evidence_scope": {"sources": sources}}), retrieval.source_scope(sources):
+        yield
+
+
+@app.get("/api/answer/sources")
+def api_answer_sources(session_id: str | None = None):
+    from . import answer_sources
+    with _answer_scope(session_id):
+        return answer_sources.enumerate_sources(for_model=True)
+
+
+@app.get("/api/answer/evaluation")
+def api_answer_evaluation():
+    from . import answer_eval_guard
+    return answer_eval_guard.status()
+
+
+class AnswerSourceReadReq(BaseModel):
+    source: str
+    start: int = 0
+    length: int = 12000
+    version: str | None = None
+
+
+@app.post("/api/answer/read")
+def api_answer_read(body: AnswerSourceReadReq, session_id: str | None = None):
+    from . import answer_sources
+    try:
+        with _answer_scope(session_id):
+            return answer_sources.read_source(body.source, start=body.start,
+                                              length=body.length, version=body.version,
+                                              for_model=True)
+    except (ValueError, KeyError, PermissionError, FileNotFoundError):
+        raise HTTPException(404, "source unavailable within the model's permitted scope")
+
+
+class AnswerSourceSearchReq(BaseModel):
+    source: str
+    query: str
+    version: str | None = None
+    start: int = 0
+    limit: int = 10
+
+
+@app.post("/api/answer/search")
+def api_answer_search(body: AnswerSourceSearchReq, session_id: str | None = None):
+    from . import answer_sources
+    try:
+        with _answer_scope(session_id):
+            return answer_sources.search_source(body.source, body.query, version=body.version,
+                                                 start=body.start, limit=body.limit, for_model=True)
+    except (ValueError, KeyError, PermissionError, FileNotFoundError):
+        raise HTTPException(404, "source unavailable within the model's permitted scope")
+
+
+@app.get("/api/answer/evidence/{handle}")
+def api_answer_evidence(handle: str, session_id: str | None = None):
+    from . import answer_sources
+    try:
+        with _answer_scope(session_id):
+            return answer_sources.evidence(handle, for_model=True)
+    except (ValueError, KeyError, PermissionError, FileNotFoundError):
+        raise HTTPException(404, "evidence unavailable within the model's permitted scope")
 
 
 @app.get("/api/search/faces")
