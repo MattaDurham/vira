@@ -14283,15 +14283,15 @@ function brainNoteCount(source) {
 function brainPolicySupported(vault) {
   // Static assets can update while an older server is still running. Missing
   // policy fields must never become unchecked controls that can be saved.
-  if (!vault || !Array.isArray(vault.sources) || typeof vault.default_destination !== "string") return false;
+  if (!vault || vault.policy_version !== 2 || !Array.isArray(vault.sources) || typeof vault.default_destination !== "string") return false;
   if (vault.policy_version !== undefined &&
-      (!Number.isInteger(vault.policy_version) || vault.policy_version < 1)) return false;
+      (!Number.isInteger(vault.policy_version) || vault.policy_version < 2)) return false;
   return vault.sources.every((source) => source &&
     ["read_enabled", "write_enabled", "model_exposure", "allow_publish", "default_destination"]
       .every((key) => typeof source[key] === "boolean") &&
     ["contexts", "write_dirs", "protected_dirs", "model_exclude_dirs"]
       .every((key) => Array.isArray(source[key]) && source[key].every((item) => typeof item === "string")) &&
-    ["id", "name", "root", "purpose", "capture_dir"]
+    ["id", "name", "root", "purpose", "capture_dir", "write_scope"]
       .every((key) => typeof source[key] === "string"));
 }
 
@@ -14325,6 +14325,67 @@ function brainServerUpdateNotice(card, sources) {
   card.appendChild(check);
 }
 
+// Paths are selected as folders; their displayed labels are never editable paths.
+function brainFolderControl(label, initial, { root = null, allowRoot = false, onChange = () => {} } = {}) {
+  const wrap = el("div", "vault-config-field");
+  wrap.appendChild(el("span", "vault-config-label", label));
+  const button = el("button", "vault-folder-choice"); button.type = "button";
+  let value = initial || "";
+  const paint = () => {
+    button.textContent = value || "Choose folder…";
+    button.setAttribute("aria-label", `${label}: ${value || "Choose folder"}`);
+    button.title = value || "Choose folder";
+  };
+  button.onclick = async () => {
+    const base = typeof root === "function" ? root() : root;
+    const start = base && value ? base.replace(/[\\/]$/, "") + "/" + value : base || value;
+    const picked = await FolderPicker.choose({ title: label, path: start,
+      root: base || undefined, allowRoot: base ? allowRoot : true });
+    if (picked.cancelled || !picked.path) return;
+    value = base ? picked.relative : picked.path;
+    paint(); onChange(value);
+  };
+  paint(); wrap.appendChild(button);
+  return { wrap, button, get value() { return value; } };
+}
+
+function brainFolderList(label, initial, root, help) {
+  const wrap = el("div", "vault-config-field wide");
+  wrap.appendChild(el("span", "vault-config-label", label));
+  const list = el("div", "vault-folder-list");
+  let values = [...(initial || [])];
+  const paint = () => {
+    list.textContent = "";
+    if (!values.length) list.appendChild(el("span", "hint", "None"));
+    values.forEach((path) => {
+      const chip = el("span", "vault-folder-chip");
+      chip.appendChild(el("span", "", path));
+      const remove = el("button", "vault-folder-remove", "Remove"); remove.type = "button";
+      remove.setAttribute("aria-label", `Remove ${path} from ${label.toLowerCase()}`);
+      remove.onclick = () => { values = values.filter((p) => p !== path); paint(); };
+      chip.appendChild(remove); list.appendChild(chip);
+    });
+  };
+  const add = el("button", "btn", "Choose folder…"); add.type = "button";
+  add.setAttribute("aria-label", `Add to ${label.toLowerCase()}`);
+  add.onclick = async () => {
+    const base = root();
+    const picked = await FolderPicker.choose({ title: label, path: base, root: base, allowRoot: false });
+    if (picked.cancelled || !picked.path || !picked.relative || picked.relative === ".") return;
+    if (!values.includes(picked.relative)) values.push(picked.relative);
+    paint();
+  };
+  paint(); wrap.appendChild(list); wrap.appendChild(add);
+  if (help) wrap.appendChild(el("span", "hint", help));
+  return { wrap, get value() { return [...values]; } };
+}
+
+function brainError(error) {
+  let message = error.message || "Could not save vault settings.";
+  try { const detail = JSON.parse(message).detail; if (typeof detail === "string") message = detail; } catch (_) {}
+  return message;
+}
+
 function brainSourceEditor(card, source) {
   const tile = el("details", "setup-prov vault-config" + (source.connected ? " on" : ""));
   tile.dataset.sourceId = source.id;
@@ -14338,91 +14399,102 @@ function brainSourceEditor(card, source) {
   const states = [source.connected ? "connected" : "folder unavailable"];
   states.push(source.write_enabled ? "writable" : "read only");
   if (!source.read_enabled) states.push("reading off");
-  if (!source.model_exposure) states.push("model access off");
-  if (source.default_destination) states.push("default destination");
+  if (!source.model_exposure) states.push("local only");
+  if (source.default_destination) states.push("default for saves");
   head.appendChild(el("span", "setup-prov-state", states.join(" · ")));
-  head.appendChild(el("span", "vault-config-edit", "Configure"));
+  head.appendChild(el("span", "vault-config-edit", "Settings"));
   tile.appendChild(head);
-  tile.appendChild(el("p", "hint vault-config-path", source.root));
-  tile.appendChild(el("p", "hint", brainNoteCount(source) +
-    (source.legacy ? " · existing connection; saving preserves its source links" : "")));
-  if (source.purpose) tile.appendChild(el("p", "hint", source.purpose));
+  tile.appendChild(el("p", "hint", brainNoteCount(source)));
 
   const form = el("form", "vault-config-form");
   const fields = el("div", "vault-config-fields");
   const controls = {};
-  const field = (key, label, value, help, wide = false) => {
-    const wrap = el("label", "vault-config-field" + (wide ? " wide" : ""));
+  const field = (key, label, value, help, parent = fields) => {
+    const wrap = el("label", "vault-config-field");
     wrap.appendChild(el("span", "vault-config-label", label));
     const input = el("input", "search");
-    input.type = "text"; input.name = key; input.value = value || "";
-    input.autocomplete = "off";
+    input.type = "text"; input.name = key; input.value = value || ""; input.autocomplete = "off";
     wrap.appendChild(input);
     if (help) wrap.appendChild(el("span", "hint", help));
-    fields.appendChild(wrap); controls[key] = input;
+    parent.appendChild(wrap); controls[key] = input;
     return input;
   };
   field("name", "Vault name", source.name);
-  field("path", "Folder on this machine", source.root);
-  field("purpose", "What belongs here", source.purpose,
-    "Describe this vault for the assistant. Automatic context routing uses the names below.", true);
-  field("contexts", "Route these contexts here", (source.contexts || []).join(", "),
-    "Comma-separated context names, matched exactly (ignoring case). Each context should identify one vault.", true);
-  form.appendChild(fields);
-
-  const capabilities = el("div", "vault-config-capabilities");
-  const toggle = (key, label, help) => {
+  const moved = el("p", "hint vault-root-notice");
+  const folder = brainFolderControl("Vault folder", source.root, { onChange: () => {
+    moved.textContent = "Folder settings below are relative to the chosen vault. Check protected folders and the inbox before saving.";
+  } });
+  form.appendChild(moved);
+  fields.appendChild(folder.wrap); form.appendChild(fields);
+  const toggle = (key, label, help, parent) => {
     const wrap = el("label", "vault-config-toggle");
     const input = el("input"); input.type = "checkbox"; input.name = key;
     input.checked = !!source[key]; controls[key] = input;
     const words = el("span");
-    words.appendChild(el("strong", "", label));
-    words.appendChild(el("span", "hint", help));
-    wrap.appendChild(input); wrap.appendChild(words); capabilities.appendChild(wrap);
+    words.appendChild(el("strong", "", label)); words.appendChild(el("span", "hint", help));
+    wrap.appendChild(input); wrap.appendChild(words); parent.appendChild(wrap);
     return input;
   };
-  toggle("read_enabled", "Read and search", "Include this vault in local retrieval.");
-  toggle("model_exposure", "Share with the answering model",
-    "Allow content to enter model prompts. The connected model may be hosted remotely.");
-  const writable = toggle("write_enabled", "Allow writing",
-    "Create and update notes only in the folders allowed below.");
-  toggle("allow_publish", "Allow plan rendering hooks",
-    "Permit the configured plan rendering or publication hook for this vault.");
-  form.appendChild(capabilities);
-
+  const basic = el("div", "vault-config-capabilities");
+  const writable = toggle("write_enabled", "Allow writing", "Create and update notes in this vault. Protected folders stay unchanged.", basic);
+  form.appendChild(basic);
   const destinations = el("div", "vault-config-fields");
-  form.appendChild(destinations);
-  field("capture_dir", "Capture inbox", source.capture_dir || "inbox",
-    "New ideas go here; use a relative folder such as inbox/notes.");
-  field("write_dirs", "Writable folders", (source.write_dirs || []).join(", "),
-    "Required when writing is on. Use comma-separated relative folders and include the capture inbox.");
-  field("protected_dirs", "Protected folders", (source.protected_dirs || []).join(", "),
-    "These folders and their contents cannot be changed, even inside a writable folder.", true);
-  field("model_exclude_dirs", "Folders hidden from models", (source.model_exclude_dirs || []).join(", "),
-    "Comma-separated relative folders. Keep local reading available while excluding these contents from model prompts.", true);
-  // Keep these policy fields together after the capability controls.
-  ["capture_dir", "write_dirs", "protected_dirs", "model_exclude_dirs"].forEach((key) =>
-    destinations.appendChild(controls[key].parentElement));
-  const defaultWrap = el("label", "vault-config-toggle vault-config-default");
-  const useDefault = el("input"); useDefault.type = "checkbox";
-  useDefault.checked = !!source.default_destination;
-  useDefault.disabled = !useDefault.checked && (!writable.checked || !source.connected);
-  writable.onchange = () => {
-    useDefault.disabled = !useDefault.checked && (!writable.checked || !source.connected);
+  const capture = brainFolderControl("Save new notes in", source.capture_dir || "inbox", { root: () => folder.value });
+  capture.wrap.appendChild(el("span", "hint", "The inbox is created when you save your first note."));
+  destinations.appendChild(capture.wrap);
+  const protectedDirs = brainFolderList("Protected folders", source.protected_dirs, () => folder.value,
+    "Optional. Vira can read these folders but cannot change their contents.");
+  destinations.appendChild(protectedDirs.wrap); form.appendChild(destinations);
+
+  const advanced = el("details", "vault-config-advanced");
+  advanced.appendChild(el("summary", "", "Advanced settings"));
+  const advFields = el("div", "vault-config-fields"); advanced.appendChild(advFields);
+  field("purpose", "What belongs here", source.purpose, "Optional description for the assistant.", advFields);
+  field("contexts", "Route by context", (source.contexts || []).join(", "), "Optional context names, separated by commas.", advFields);
+  const scopes = el("label", "vault-config-field wide");
+  scopes.appendChild(el("span", "vault-config-label", "Writing access"));
+  const scope = el("select", "search"); scope.name = "write_scope";
+  [["all", "Entire vault, except protected folders"], ["selected", "Only selected folders"]].forEach(([value, label]) => {
+    const option = el("option", "", label); option.value = value; scope.appendChild(option);
+  });
+  // Only existing restrictions opt into selected-folder mode. Turning on a
+  // previously unconfigured read-only connection must work in one step.
+  scope.value = source.write_scope === "all" || (!source.write_enabled && !source.write_dirs.length) ? "all" : "selected";
+  scopes.appendChild(scope); advFields.appendChild(scopes);
+  const writeDirs = brainFolderList("Selected folders", source.write_dirs, () => folder.value,
+    "Writing is limited to these folders. Include the folder for new notes.");
+  advFields.appendChild(writeDirs.wrap);
+  const scopeNote = el("p", "hint vault-scope-note"); basic.appendChild(scopeNote);
+  const updateScope = () => {
+    writeDirs.wrap.hidden = scope.value !== "selected";
+    scopeNote.textContent = writable.checked && scope.value === "selected"
+      ? "Existing folder limits are preserved. Choose Entire vault in Advanced settings to remove those limits." : "";
   };
+  scope.onchange = updateScope; updateScope();
+  const capabilities = el("div", "vault-config-capabilities");
+  toggle("read_enabled", "Read and search", "Include this vault in local search.", capabilities);
+  toggle("model_exposure", "Use in AI answers", "The connected answering model may be hosted remotely.", capabilities);
+  toggle("allow_publish", "Allow plan rendering hooks", "Use this vault’s configured rendering or publication hook.", capabilities);
+  advanced.appendChild(capabilities);
+  const excluded = brainFolderList("Folders hidden from models", source.model_exclude_dirs, () => folder.value,
+    "Keep these folders out of model prompts while allowing local reading.");
+  advanced.appendChild(excluded.wrap);
+  const defaultWrap = el("label", "vault-config-toggle vault-config-default");
+  const useDefault = el("input"); useDefault.type = "checkbox"; useDefault.name = "default_destination";
+  useDefault.checked = !!source.default_destination;
+  const updateDefault = () => {
+    useDefault.disabled = !useDefault.checked && (!writable.checked || !source.connected);
+    updateScope();
+  };
+  writable.onchange = updateDefault; updateDefault();
   defaultWrap.appendChild(useDefault);
   const defaultWords = el("span");
-  defaultWords.appendChild(el("strong", "", "Use as an optional fallback destination"));
-  defaultWords.appendChild(el("span", "hint",
-    "Used only when a save has no selected vault or context. Leave this off in every vault to require a choice " +
-    "when several vaults allow writing; a single writable vault is still used automatically."));
-  defaultWrap.appendChild(defaultWords);
-  form.appendChild(defaultWrap);
-  const error = el("p", "vault-config-error"); error.setAttribute("role", "alert");
-  form.appendChild(error);
+  defaultWords.appendChild(el("strong", "", "Default vault for saves"));
+  defaultWords.appendChild(el("span", "hint", "Used when you have not chosen another vault or context."));
+  defaultWrap.appendChild(defaultWords); advanced.appendChild(defaultWrap); form.appendChild(advanced);
+  const error = el("p", "vault-config-error"); error.setAttribute("role", "alert"); form.appendChild(error);
   const actions = el("div", "setup-row vault-config-actions");
-  const save = el("button", "btn primary vault-config-save", "Save vault settings"); save.type = "submit";
-  actions.appendChild(save);
+  const save = el("button", "btn primary vault-config-save", "Save settings"); save.type = "submit"; actions.appendChild(save);
   if (source.removable) {
     const remove = el("button", "btn", "Disconnect"); remove.type = "button";
     remove.onclick = () => setupAct(remove,
@@ -14430,32 +14502,18 @@ function brainSourceEditor(card, source) {
       () => `${source.name} disconnected; its files were not changed`);
     actions.appendChild(remove);
   }
-  form.appendChild(actions);
-  form.appendChild(el("p", "hint", "Disconnecting removes the connection and keeps every file."));
+  form.appendChild(actions); form.appendChild(el("p", "hint", "Disconnecting keeps every file."));
   form.onsubmit = (event) => {
     event.preventDefault(); error.textContent = "";
-    const split = (key) => controls[key].value.split(",").map((x) => x.trim()).filter(Boolean);
-    const body = { id: source.id, name: controls.name.value.trim(), path: controls.path.value.trim(),
-      purpose: controls.purpose.value.trim(), contexts: split("contexts"),
-      capture_dir: controls.capture_dir.value.trim(), write_dirs: split("write_dirs"),
-      protected_dirs: split("protected_dirs"), model_exclude_dirs: split("model_exclude_dirs"),
-      default_destination: useDefault.checked };
-    ["read_enabled", "write_enabled", "model_exposure", "allow_publish"].forEach((key) => {
-      body[key] = controls[key].checked;
-    });
+    const body = { id: source.id, name: controls.name.value.trim(), path: folder.value,
+      purpose: controls.purpose.value.trim(), contexts: controls.contexts.value.split(",").map((x) => x.trim()).filter(Boolean),
+      capture_dir: capture.value, write_scope: scope.value, write_dirs: writeDirs.value,
+      protected_dirs: protectedDirs.value, model_exclude_dirs: excluded.value, default_destination: useDefault.checked };
+    ["read_enabled", "write_enabled", "model_exposure", "allow_publish"].forEach((key) => { body[key] = controls[key].checked; });
     brainOpenSource = source.id;
     setupAct(save, async () => {
-      try {
-        return await post("/api/vault/sources", body);
-      } catch (e) {
-        let message = e.message || "Could not save vault settings.";
-        try {
-          const detail = JSON.parse(message).detail;
-          if (typeof detail === "string") message = detail;
-        } catch (_) { /* Plain-text failures already carry a useful message. */ }
-        error.textContent = message;
-        throw new Error(message);
-      }
+      try { return await post("/api/vault/sources", body); }
+      catch (e) { error.textContent = brainError(e); throw new Error(error.textContent); }
     }, (r) => `${r.name} settings saved`).then(() => {
       document.querySelector(`.vault-config[data-source-id="${CSS.escape(source.id)}"] .vault-config-save`)?.focus();
     });
@@ -14465,70 +14523,57 @@ function brainSourceEditor(card, source) {
 
 function cardBrain(card, step, st) {
   const vault = st.vault || {};
-  const sources = (Array.isArray(vault.sources) ? vault.sources : [])
-    .filter((source) => source && (!source.primary || vault.root));
-  if (!brainPolicySupported(vault)) {
-    brainServerUpdateNotice(card, sources);
-    return;
-  }
-  card.appendChild(el("p", "hint",
-    "Choose what Vira can read, write, and share with its answering model in each vault. " +
-    "A selected vault takes priority over an exact context match. " +
-    "The optional fallback applies only when neither is supplied."));
-  card.appendChild(el("div", "setup-sub", "Connected vaults"));
-  if (!sources.length) card.appendChild(el("p", "hint", "No vaults connected yet."));
+  const sources = (Array.isArray(vault.sources) ? vault.sources : []).filter((source) => source && (!source.primary || vault.root));
+  if (!brainPolicySupported(vault)) { brainServerUpdateNotice(card, sources); return; }
+  card.appendChild(el("p", "card-lede", "All your vaults, connected in one place. Choose a folder to start using it."));
+  const add = el("form", "vault-config-add");
+  add.appendChild(el("div", "setup-sub", "Add a vault"));
+  const addFields = el("div", "vault-config-fields");
+  const nameWrap = el("label", "vault-config-field");
+  nameWrap.appendChild(el("span", "vault-config-label", "Vault name"));
+  const name = el("input", "search"); name.name = "name"; name.placeholder = "Filled from the folder name";
+  name.setAttribute("aria-label", "New vault name"); nameWrap.appendChild(name);
+  const button = el("button", "btn primary", "Connect vault"); button.type = "submit"; button.disabled = true;
+  let suggestedName = "";
+  const folder = brainFolderControl("Choose vault folder", "", { onChange: (path) => {
+    const nextName = path.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "Notes";
+    if (!name.value.trim() || name.value === suggestedName) name.value = nextName;
+    suggestedName = nextName;
+    button.disabled = false;
+  } });
+  addFields.appendChild(folder.wrap); addFields.appendChild(nameWrap); add.appendChild(addFields);
+  add.appendChild(el("p", "hint", "Choose an existing vault, or use New folder in the picker to start one. Reading and writing are ready when you connect."));
+  const shareWrap = el("label", "vault-config-toggle");
+  const share = el("input"); share.type = "checkbox"; share.name = "model_exposure";
+  const shareWords = el("span"); shareWords.appendChild(el("strong", "", "Use in AI answers"));
+  shareWords.appendChild(el("span", "hint", "Optional. The answering model may be hosted remotely."));
+  shareWrap.appendChild(share); shareWrap.appendChild(shareWords); add.appendChild(shareWrap);
+  const error = el("p", "vault-config-error"); error.setAttribute("role", "alert"); add.appendChild(error); add.appendChild(button);
+  add.onsubmit = (event) => {
+    event.preventDefault(); error.textContent = "";
+    if (!folder.value) { folder.button.click(); return; }
+    setupAct(button, async () => {
+      try {
+        const source = await post("/api/vault/sources", { name: name.value.trim(), path: folder.value, connect_only: true,
+          read_enabled: true, write_enabled: true, write_scope: "all", capture_dir: "inbox",
+          model_exposure: share.checked, allow_publish: false });
+        brainOpenSource = source.id; return source;
+      } catch (e) { error.textContent = brainError(e); throw new Error(error.textContent); }
+    }, (source) => `${source.name} connected and ready`);
+  };
+  card.appendChild(add);
+  card.appendChild(el("div", "setup-sub", `Connected vaults${sources.length ? " · " + sources.length : ""}`));
+  if (!sources.length) card.appendChild(el("p", "hint", "Your first vault will appear here."));
   sources.forEach((source) => brainSourceEditor(card, source));
-  const selected = st.vault.default_destination;
+  const selected = vault.default_destination;
   if (selected && !sources.some((source) => source.id === selected && source.connected && source.write_enabled)) {
-    card.appendChild(el("p", "vault-config-error",
-      "The selected default destination is unavailable or read only. Saves without a destination will wait for a valid choice."));
+    card.appendChild(el("p", "vault-config-error", "The default vault is unavailable or read only. Choose another default in its settings."));
     const clear = el("button", "btn", "Clear unavailable default");
-    clear.onclick = () => setupAct(clear,
-      () => post("/api/vault/default-destination", { source_id: "" }),
-      () => "Default cleared; choose a destination or configure a context");
+    clear.onclick = () => setupAct(clear, () => post("/api/vault/default-destination", { source_id: "" }), () => "Default cleared");
     card.appendChild(clear);
   }
-  if (!st.vault.default_destination) card.appendChild(el("p", "hint",
-    "No fallback selected. With several writable vaults, saves need a selected vault or a context that identifies one vault. " +
-    "A single writable vault is used automatically."));
-
-  if (!st.vault.root) {
-    card.appendChild(el("div", "setup-sub", "Primary vault"));
-    card.appendChild(el("p", "hint", "Connect an existing folder, or create your first notes vault."));
-    const row = el("div", "setup-row");
-    const vin = el("input", "search");
-    vin.setAttribute("aria-label", "Primary vault folder");
-    vin.placeholder = st.platform === "win" ? "C:\\Users\\you\\Documents\\Notes" : "~/Documents/Notes";
-    const vb = el("button", "btn primary", "Use this vault");
-    vb.onclick = () => setupAct(vb,
-      () => post("/api/onboard/vault", { path: vin.value.trim(), init: false }),
-      () => "Primary vault connected");
-    const vnb = el("button", "btn", "Start a new vault here");
-    vnb.onclick = () => setupAct(vnb,
-      () => post("/api/onboard/vault", { path: vin.value.trim(), init: true }),
-      () => "Vault created and connected");
-    row.appendChild(vin); row.appendChild(vb); row.appendChild(vnb); card.appendChild(row);
-  }
-
-  card.appendChild(el("div", "setup-sub", "Add a vault"));
-  card.appendChild(el("p", "hint", "New connections start with writing off. Configure allowed folders after connecting."));
-  const add = el("form", "setup-row vault-config-add");
-  const name = el("input", "search"); name.placeholder = "Name, e.g. Work notes";
-  name.setAttribute("aria-label", "New vault name");
-  const path = el("input", "search");
-  path.setAttribute("aria-label", "New vault folder");
-  path.placeholder = st.platform === "win" ? "C:\\Users\\you\\Documents\\Work" : "~/Documents/Work";
-  path.required = true;
-  const button = el("button", "btn", "Add vault"); button.type = "submit";
-  add.onsubmit = (event) => {
-    event.preventDefault();
-    setupAct(button, async () => {
-      const source = await post("/api/vault/sources", { name: name.value.trim(), path: path.value.trim() });
-      brainOpenSource = source.id;
-      return source;
-    }, (source) => `${source.name} connected; choose its permissions below`);
-  };
-  add.appendChild(name); add.appendChild(path); add.appendChild(button); card.appendChild(add);
+  if (!selected && sources.filter((source) => source.write_enabled).length > 1)
+    card.appendChild(el("p", "hint", "Choose a vault when saving, or set a default in Advanced settings."));
 }
 
 function cardMail(card, step, st) {
@@ -15295,23 +15340,13 @@ function placeTourCard(card, left, top) {
 }
 addEventListener("resize", () => { if (tourCards().length) positionTour(); });
 
-// A real OS folder panel — navigate, select, Open. Never "copy the path".
-// The server opens it (server/pickfolder.py) because Vira is local, and the
-// browser APIs that open a panel refuse to hand back a filesystem path.
-//
-// `local` is decided HERE: only a browser on the same machine should make a
-// window appear on that machine's desktop. The phone over Tailscale gets the
-// text field instead, which is the honest answer rather than a panel opening
-// on a Mac nobody is looking at.
+// Folder choices use the same in-app browser on desktop, phone, and previews.
 function browserIsLocal() {
   return ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 }
 
 async function chooseFolder(prompt) {
-  return post("/api/pick-folder",
-              { prompt, local: browserIsLocal() }).catch(() => ({
-    unavailable: true, reason: "could not reach Vira to open a folder window",
-  }));
+  return FolderPicker.choose({ title: prompt });
 }
 
 async function tourConnect(kind, card) {
@@ -15329,10 +15364,9 @@ async function tourConnect(kind, card) {
   busy.remove();
   if (r.cancelled) { positionTour(); return; }    // a cancel is an answer
   if (r.unavailable || !r.path) {
-    // No panel available (phone, demo, an unsupported platform) — say why
-    // and send them to the field that always works.
+    // A failed picker is recoverable from the Config connection flow.
     const p = el("p", "tour-note warn", (r.reason || "no folder window here")
-      + ". Open Config and type the path instead.");
+      + ". Open Config and choose the folder again.");
     row?.after(p);
     positionTour();
     return;

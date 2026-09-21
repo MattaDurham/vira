@@ -8770,3 +8770,22 @@ mark.doc-term {
 /* Preparation remains scrollable on short desktops and phone screens. */
 #launch-review-sheet .sheet-card { max-height: 92dvh; overflow-y: auto; }
 #launch-review-sheet textarea { min-height: 72px; resize: vertical; }
+
+/* Folder choices replace path-entry fields in vault setup. */
+.vault-config-add { display: grid; gap: 14px; padding: 18px; margin: 12px 0 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-raised); }
+.vault-config-add > .setup-sub, .vault-config-add > .hint { margin: 0; }
+.vault-config-add > .btn { justify-self: start; }
+.vault-folder-choice { width: 100%; min-height: 40px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; text-align: left; background: var(--bg); color: var(--text-head); cursor: pointer; overflow-wrap: anywhere; font: inherit; font-size: 13px; }
+.vault-folder-choice:hover { border-color: var(--accent); }
+.vault-folder-choice:focus-visible, .vault-folder-remove:focus-visible, .vault-config-advanced > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.vault-folder-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.vault-folder-chip { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; min-width: 0; font-size: 13px; }
+.vault-folder-chip > span { overflow-wrap: anywhere; }
+.vault-folder-remove { border: 0; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 11px; }
+.vault-folder-remove:hover { color: var(--red); }
+.vault-config-field > .btn { align-self: flex-start; }
+.vault-config-field[hidden] { display: none; }
+.vault-config-advanced { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 20px 0; padding: 14px 0; }
+.vault-config-advanced > summary { font-size: 13px; color: var(--text-head); cursor: pointer; }
+.vault-config-advanced[open] > summary { margin-bottom: 16px; }
+.vault-scope-note:empty { display: none; }

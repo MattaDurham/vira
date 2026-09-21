@@ -1,8 +1,8 @@
 """Destination selection and confined vault mutations, shared by every writer.
 
 Source IDs are durable; a destination never changes global settings. A write
-policy grants folders, not an entire filesystem. Model exposure is a separate
-permission from local reading and writing.
+policy grants a vault or selected folders within it, with protected exceptions.
+Model exposure is a separate permission from local reading and writing.
 """
 import hashlib
 import os
@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from . import settings
 from .filelock import locked
 
-POLICY_FIELDS = ("read_enabled", "write_enabled", "model_exposure", "purpose",
+POLICY_FIELDS = ("read_enabled", "write_enabled", "write_scope", "model_exposure", "purpose",
                  "contexts", "capture_dir", "write_dirs", "protected_dirs",
                  "allow_publish", "model_exclude_dirs")
 LOCK_ROOT = Path(__file__).resolve().parent.parent / "data" / "vault-locks"
@@ -32,6 +32,9 @@ def policy(row=None, primary=False):
     return {
         "read_enabled": bool(row.get("read_enabled", True)),
         "write_enabled": bool(row.get("write_enabled", primary)),
+        # Older connections keep their folder allowlists until the owner
+        # explicitly selects whole-vault access. Unknown values fail closed.
+        "write_scope": "all" if row.get("write_scope") == "all" else "selected",
         "model_exposure": bool(row.get("model_exposure", True)),
         "model_exclude_dirs": list(row.get("model_exclude_dirs") or []),
         "purpose": str(row.get("purpose") or ""),
@@ -146,7 +149,8 @@ def safe_path(spec, rel, operation="write"):
         assert_mutation_allowed()
         if not spec.get("write_enabled"):
             raise ValueError("vault destination is read-only")
-        if not any(_under(rel, d) for d in spec.get("write_dirs", [])):
+        if (spec.get("write_scope") != "all"
+                and not any(_under(rel, d) for d in spec.get("write_dirs", []))):
             raise ValueError("path is outside this vault's writable folders")
         if any(_under(rel, d, protected=True) for d in spec.get("protected_dirs", [])):
             raise ValueError("path is in a protected vault folder")

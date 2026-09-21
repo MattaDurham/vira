@@ -110,6 +110,62 @@ class VaultWriteTests(unittest.TestCase):
             vaultwrite.write_note(spec, "inbox/notes/escape.md", "text")
         self.assertFalse((self.roots["family"] / "escape.md").exists())
 
+    def test_whole_vault_creates_captures_updates_and_deletes_without_an_allowlist(self):
+        source = self.config["vault_sources"][0]
+        source.update(write_scope="all", write_dirs=[])
+        self.save_config()
+        spec = vaultwrite.resolve_destination("profile")
+        root_note = vaultwrite.write_note(spec, "new-note.md", "# Starting here\n")
+        nested = vaultwrite.write_note(spec, "projects/future/plan.md", "# Orchard plan\n")
+        capture = vaultwrite.capture("An idea", "Plant an orchard.", "profile")
+        self.assertIn("Plant an orchard", vault.note_text(capture["path"]))
+        self.assertEqual(vault.search("Orchard plan")[0]["path"], nested["path"])
+        changed = vaultwrite.update(root_note["path"], "# Updated\n", root_note["sha256"])
+        self.assertEqual(vault.note_text(changed["path"]), "# Updated\n")
+        vaultwrite.delete_text(spec, nested["relative_path"], nested["sha256"])
+        self.assertFalse((self.roots["profile"] / nested["relative_path"]).exists())
+
+    def test_whole_vault_still_protects_folders_and_refuses_invalid_or_linked_paths(self):
+        source = self.config["vault_sources"][0]
+        source.update(write_scope="all", write_dirs=[], protected_dirs=["canon", "caf\u00e9"])
+        self.save_config()
+        spec = vaultwrite.resolve_destination("profile")
+        for rel in ("canon/facts.md", "CANON/facts.md", "cafe\u0301/notes.md",
+                    "../outside.md", "/outside.md", "new/../../escape.md",
+                    "C:\\escape.md", "new/CON.md", "new/name. /note.md"):
+            with self.subTest(rel=rel), self.assertRaises(ValueError):
+                vaultwrite.write_note(spec, rel, "blocked")
+        for rel in ("canon/image.png", "CANON/image.png"):
+            with self.subTest(rel=rel), self.assertRaisesRegex(ValueError, "protected"):
+                vaultwrite.write_bytes(spec, rel, b"blocked")
+        try:
+            (self.roots["profile"] / "linked").symlink_to(self.roots["family"],
+                                                           target_is_directory=True)
+        except OSError:
+            self.skipTest("symlink creation unavailable")
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            vaultwrite.write_note(spec, "linked/escape.md", "blocked")
+        self.assertFalse((self.roots["family"] / "escape.md").exists())
+
+    def test_all_scope_requires_explicit_selection_and_is_rechecked_before_writing(self):
+        source = self.config["vault_sources"][0]
+        spec = vaultwrite.resolve_destination("profile")
+        self.assertEqual(spec["write_scope"], "selected")
+        with self.assertRaisesRegex(ValueError, "writable folders"):
+            vaultwrite.write_note(spec, "projects/plan.md", "blocked")
+        source.update(write_scope="all", write_dirs=[])
+        self.save_config()
+        spec = vaultwrite.resolve_destination("profile")
+        source["write_scope"] = "selected"
+        self.save_config()
+        with self.assertRaisesRegex(ValueError, "writable folders"):
+            vaultwrite.write_note(spec, "projects/plan.md", "blocked")
+        source["write_scope"] = "all"
+        source["write_enabled"] = False
+        self.save_config()
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            vaultwrite.write_note(spec, "projects/plan.md", "blocked")
+
     def test_policy_is_rechecked_at_write_and_read_disable_does_not_remap_primary(self):
         spec = vaultwrite.resolve_destination("profile")
         self.config["vault_sources"][0]["write_enabled"] = False

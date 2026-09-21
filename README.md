@@ -226,16 +226,14 @@ PC the wizard skips what does not exist there - see **Windows** above):
    per person to your own model backend - the same privacy boundary as
    reply drafting. Re-run any time; people who already have a dossier are
    skipped.
-4. **Wire the Brain** - point Vira at a notes vault you already have
-   (Obsidian or any folder of markdown), or click "Start a new vault
-   here" to seed a fresh one with the bundled
-   [qocha](https://github.com/MattaDurham/qocha) engine. Semantic
-   indexing wants [Ollama](https://ollama.com) with `nomic-embed-text`
-   pulled; without it the Brain still answers from full-text search. Add
-   more named vaults in the same card when your notes live in separate
-   folders. Configure local reading, assistant access, and writable folders
-   separately for each vault. Captures, plans, definitions, and ingested notes
-   keep their selected destination.
+4. **Wire the Brain** - in **Config > Brain**, choose a vault folder,
+   navigate to it in the popup, click **Select this folder**, then **Connect
+   vault**. Use **New folder** in the picker to start an empty vault. Repeat
+   for as many separate vaults as you need. Reading and writing are enabled
+   for new connections; **Use in AI answers** is an explicit opt-in.
+   Semantic indexing wants [Ollama](https://ollama.com) with `nomic-embed-text`
+   pulled; without it the Brain still supports full-text search. Captures,
+   plans, definitions, and ingested notes keep their selected destination.
 5. **Mail** - Gmail/IMAP: app password in the Keychain (service
    `vira-mail`, account = the address), then add the account to
    `data/mail-accounts.json`. Microsoft 365: IMAP basic auth is dead, so
@@ -255,16 +253,23 @@ PC the wizard skips what does not exist there - see **Windows** above):
 
 ## Working across vaults
 
-In **Config > Brain**, open **Configure** on any vault to rename it, describe
-its purpose, assign context keys, and choose its capture folder. Enable writing
-only for folders that may receive assistant output. Protect canonical records,
-immutable evidence, and confidential folders explicitly. The capture folder
-must be inside a writable folder and outside protected folders. Disconnecting
-a vault removes its connection, never its files. Existing secondary and legacy
-connections remain read-only until configured otherwise; their source IDs and
-`@source/path.md` links stay stable.
+In **Config > Brain**, open **Settings** on a vault to rename it, choose its
+folder, enable writing, or select where new notes go. Folder settings use the
+same navigable picker; no absolute or relative paths need to be typed. The
+picker browses folders on the computer running Vira, including from a phone.
+New folders can be created there; passive previews allow browsing but cannot
+create folders or write notes.
 
-**Read and search** and **Share with the answering model** are separate controls.
+New connections allow writing throughout the vault, with **Protected folders**
+as optional exceptions. Existing selected-folder limits are preserved; change
+**Advanced settings > Writing access** to **Entire vault, except protected
+folders** to remove those limits explicitly. Advanced settings also contain
+context routing, model access, and the default destination. The inbox cannot
+be protected; in selected-folder mode it must also be writable. Disconnecting
+keeps every file. Existing secondary and legacy connections retain their
+permissions and stable `@source/path.md` links until edited.
+
+**Read and search** and **Use in AI answers** are separate controls.
 Find can index and
 display a locally readable vault while native assistant retrieval and Ask omit
 it from model context. **Folders hidden from models** excludes confidential
