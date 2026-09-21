@@ -12,6 +12,7 @@ only translates between Codex protocol values and those established contracts.
 """
 import asyncio
 import json
+import uuid
 
 from . import joblog, viratools
 
@@ -353,14 +354,20 @@ class CodexSession:
             args = args if isinstance(args, dict) else {}
             allowed, _session = await self._gate(fqname, args)
             if not allowed:
+                if hasattr(self.runner, "native_tool"):
+                    self.runner.native_tool(params.get("callId") or uuid.uuid4().hex,
+                                            fqname, args, error="Denied by Vira's permission policy.", completed=True)
                 return {"success": False, "contentItems": [{
                     "type": "inputText", "text": "Denied by Vira's permission policy."}]}
-            self.runner.record_tool(fqname, args)
+            if not hasattr(self.runner, "start_tool"):
+                self.runner.record_tool(fqname, args)
             result = await viratools.invoke(
                 tool, args, read_only=bool(self.spec.get("read_only")),
                 ask_owner=self.runner.ask_owner,
                 vault_destination=self.spec.get("vault_destination"),
-                vault_context=self.spec.get("vault_context"))
+                vault_context=self.spec.get("vault_context"),
+                runtime=self.runner.state.get("runtime"),
+                receipt=self.runner if hasattr(self.runner, "start_tool") else None)
             text = _result_text(result)
             return {"success": not text.startswith("error:"),
                     "contentItems": [{"type": "inputText", "text": text}]}
@@ -459,6 +466,10 @@ class CodexSession:
         model = spec.get("model_resolved") or spec.get("model")
         if model:
             params["model"] = model
+        if spec.get("effort"):
+            # thread/start.config and turn/start.effort are protocol fields,
+            # verified against the installed generated JSON schema and docs.
+            params["config"] = {"model_reasoning_effort": spec["effort"]}
         return params
 
     async def start(self):
@@ -491,6 +502,10 @@ class CodexSession:
         joblog.record_session(self.spec["id"], self.thread_id,
                               transport="codex-app-server")
         model = result.get("model") or self.spec.get("model_resolved") or "Codex"
+        if hasattr(self.runner, "set_runtime"):
+            self.runner.set_runtime(model, result.get("reasoningEffort"),
+                                    instruction_sources=result.get("instructionSources") or [],
+                                    transport="codex-app-server")
         if model:
             self.runner.state["model_used"] = model
             joblog.record_model_used(self.spec["id"], model)
@@ -503,25 +518,56 @@ class CodexSession:
         params = message.get("params") or {}
         if params.get("threadId") not in (None, self.thread_id):
             return None
+        if params.get("turnId") not in (None, self.turn_id):
+            return None
+        if method == "thread/tokenUsage/updated":
+            if hasattr(self.runner, "record_usage"):
+                self.runner.record_usage(params.get("tokenUsage") or {})
+            return None
+        if method == "model/rerouted":
+            if hasattr(self.runner, "set_runtime"):
+                self.runner.set_runtime(params.get("toModel"), source="provider_reroute",
+                                        reroute_reason=params.get("reason"))
+            return None
+        if method == "item/started":
+            item = params.get("item") or {}
+            if item.get("type") == "agentMessage" and hasattr(self.runner, "publish_message"):
+                self.runner.publish_message(item.get("id") or "message", item.get("text") or "",
+                                            phase=item.get("phase") or "unknown")
+            else:
+                self._native_tool_item(item)
+            return None
         if method == "item/agentMessage/delta":
             item_id = params.get("itemId") or ""
             self.streamed_items.add(item_id)
             delta = params.get("delta") or ""
             self.runner.append(delta)
+            if hasattr(self.runner, "publish_message"):
+                self.runner.publish_message(item_id, delta, delta=True)
             return None
         if method == "item/completed":
             item = params.get("item") or {}
             if item.get("type") == "agentMessage":
-                self.last_message = item.get("text") or self.last_message
-                if item.get("id") not in self.streamed_items and self.last_message:
-                    self.runner.append(self.last_message + "\n")
+                text = item.get("text") or ""
+                # Explicit commentary is never promoted into a final answer.
+                # Older protocol versions omit phase; their last completed
+                # message remains the compatibility answer at turn completion.
+                if item.get("phase") != "commentary":
+                    self.last_message = text or self.last_message
+                if hasattr(self.runner, "publish_message"):
+                    self.runner.publish_message(item.get("id") or "message", item.get("text") or "",
+                                                phase=item.get("phase") or "unknown", completed=True)
+                if item.get("id") not in self.streamed_items and text:
+                    self.runner.append(text + "\n")
                 elif item.get("id") in self.streamed_items:
                     self.runner.append("\n")
             else:
                 piece = render_item(item)
                 if piece:
                     self.runner.append(piece)
-                if item.get("type") == "commandExecution":
+                if hasattr(self.runner, "native_tool"):
+                    self._native_tool_item(item, completed=True)
+                elif item.get("type") == "commandExecution":
                     self.runner.record_tool("Bash", {
                         "query": (item.get("command") or "")[:200]})
                 elif item.get("type") == "fileChange":
@@ -549,26 +595,67 @@ class CodexSession:
             raise AppServerUnavailable(params.get("error") or "App Server ended")
         return None
 
+    def _native_tool_item(self, item, completed=False):
+        if not hasattr(self.runner, "native_tool"):
+            return
+        kind = item.get("type")
+        name, args = None, {}
+        if kind == "commandExecution":
+            name, args = "Bash", {"query": item.get("command"), "cwd": item.get("cwd")}
+        elif kind == "fileChange":
+            name, args = "Edit", {"path": ", ".join(change_paths(item))}
+        elif kind == "webSearch":
+            name, args = "WebSearch", {"query": item.get("query")}
+        elif kind in ("mcpToolCall", "dynamicToolCall"):
+            namespace = item.get("namespace") or item.get("server") or ""
+            if namespace == "vira" or (not namespace and viratools.has_tool(item.get("tool"))):
+                return  # viratools.invoke records the actual local execution
+            name, args = f"{namespace}.{item.get('tool')}", item.get("arguments") or {}
+        if name:
+            error = item.get("error")
+            if item.get("status") in ("failed", "declined") or item.get("success") is False or item.get("exitCode") not in (None, 0):
+                error = error or f"{name}: {item.get('status') or 'failed'} (exit {item.get('exitCode')})"
+            metadata = {"durationMs": item.get("durationMs"), "exitCode": item.get("exitCode"),
+                        "provider_status": item.get("status")}
+            self.runner.native_tool(item.get("id") or name, name, args,
+                                    result={"structuredContent": metadata},
+                                    error=str(error) if error else None, completed=completed)
+
     async def run_turn(self, prompt):
         self.last_message = ""
-        response = await self.rpc.request("turn/start", {
+        if hasattr(self.runner, "begin_turn"):
+            await self.runner.begin_turn()
+        params = {
             "threadId": self.thread_id,
             "input": [{"type": "text", "text": prompt}],
-        })
+        }
+        effective = (self.runner.state.get("runtime") or {}).get("effective") or {}
+        effort = self.spec.get("effort") or effective.get("effort")
+        if effort:
+            params["effort"] = effort
+        if effective.get("model"):
+            params["model"] = effective["model"]
+        response = await self.rpc.request("turn/start", params)
         turn = response.get("turn") or {}
         self.turn_id = turn.get("id") or ""
         if not self.turn_id:
             raise RuntimeError("Codex App Server returned no turn id")
+        if hasattr(self.runner, "bind_turn"):
+            self.runner.bind_turn(self.turn_id)
         while True:
             notification = asyncio.create_task(self.rpc.notifications.get())
-            steering = asyncio.create_task(self.runner.inbox.get())
+            steering = (asyncio.create_task(self.runner.inbox.get())
+                        if not self.runner.interrupted else None)
             done, pending = await asyncio.wait(
-                (notification, steering), return_when=asyncio.FIRST_COMPLETED)
+                [task for task in (notification, steering) if task is not None],
+                return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             if notification in done:
                 status = await self._handle_notification(notification.result())
                 if status:
+                    if hasattr(self.runner, "end_turn"):
+                        self.runner.end_turn(status, self.last_message if status == "completed" else "")
                     # A steer and completion can cross on the same event-loop
                     # tick. Preserve the owner's text for the next turn rather
                     # than consuming it with a now-finished expectedTurnId.
@@ -579,6 +666,9 @@ class CodexSession:
             if steering in done:
                 text = steering.result()
                 if text is self.runner.END:
+                    continue
+                if self.runner.interrupted:
+                    self.runner.inbox.put_nowait(text)
                     continue
                 text = str(text or "").strip()
                 if text:
@@ -608,11 +698,11 @@ async def run_session(runner, binary, env):
         prompt = runner.spec["prompt"]
         while True:
             last, ok = await session.run_turn(prompt)
-            result_text = last or result_text
-            if runner.closing or runner.interrupted:
+            result_text = last if ok else ""
+            if runner.closing:
                 break
             steered = False
-            while not runner.inbox.empty():
+            while not runner.interrupted and not runner.inbox.empty():
                 try:
                     item = runner.inbox.get_nowait()
                 except asyncio.QueueEmpty:
@@ -630,7 +720,7 @@ async def run_session(runner, binary, env):
             runner.state["result_text"] = result_text[:RESULT_KEEP]
             runner.flush_state()
             reply = (await runner.await_reply()
-                     if ok and runner.parks_at_turn_end() else None)
+                     if runner.should_park(ok) else None)
             if reply is None:
                 break
             runner.finished_cleanly = False

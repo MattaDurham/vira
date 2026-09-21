@@ -4175,6 +4175,24 @@ a.sub-name:hover { color: var(--accent); text-decoration: underline; }
 .chat-looked > .hint { font-size: 11px; margin-right: 2px; }
 .find-chat-picker { max-width: 200px; font-size: 12px; }
 .find-related-type.source { color: var(--steel); }
+.chat-stream { margin-bottom: 12px; }
+.find-chat-composer > button[hidden] { display: none; }
+.answer-evidence {
+  color: var(--text); background: var(--bg-window); border: 1px solid var(--line);
+  border-radius: 10px; width: min(840px, 90vw); max-height: 85vh; padding: 24px;
+}
+.answer-evidence::backdrop { background: rgba(0, 0, 0, .65); }
+.answer-evidence > button { float: right; }
+.answer-evidence-text { white-space: pre-wrap; overflow-wrap: anywhere;
+  font: inherit; line-height: 1.65; }
+@media (min-width: 1000px) {
+  .fwin.find-answer-focus {
+    left: max(24px, calc(50vw - 470px)) !important; top: 7vh !important;
+    width: min(940px, calc(100vw - 48px)) !important; height: 86vh !important;
+    transform: none !important;
+  }
+  .find-answer-focus .find-chat-log { max-height: calc(86vh - 300px); }
+}
 
 .brain-msg.error { color: var(--red); }
 .brain-empty { padding: 18px 6px; }

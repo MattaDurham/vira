@@ -1,0 +1,403 @@
+{
+  "version": 1,
+  "description": "Entirely synthetic records. Gold expectations are never put in the model workspace.",
+  "sources": [
+    {
+      "id": "meeting",
+      "path": "wiki/meeting.md",
+      "kind": "original",
+      "family": "meeting",
+      "text": "# Planning meeting\nRecord date: 2026-02-01\nThe planning meeting begins at 09:30 on 2026-02-04 in Room Cedar.\n"
+    },
+    {
+      "id": "old-launch",
+      "path": "wiki/old-launch.md",
+      "kind": "historical",
+      "family": "launch",
+      "text": "# Original launch plan\nRecord date: 2026-01-10\nThe launch target is March 1. This record was superseded by launch-update.\n"
+    },
+    {
+      "id": "launch-update",
+      "path": "wiki/launch-update.md",
+      "kind": "original",
+      "family": "launch",
+      "text": "# Launch update\nRecord date: 2026-02-20\nThe launch target moved to March 15 because the accessibility review needs more time. This replaces the January plan.\n"
+    },
+    {
+      "id": "retro-one",
+      "path": "wiki/retro-one.md",
+      "kind": "original",
+      "family": "retro-one",
+      "text": "# Team retrospective one\nRecord date: 2026-01-05\nParticipants raised unclear ownership, late handoffs, and noisy alerts.\n"
+    },
+    {
+      "id": "retro-two",
+      "path": "wiki/retro-two.md",
+      "kind": "original",
+      "family": "retro-two",
+      "text": "# Team retrospective two\nRecord date: 2026-01-19\nParticipants raised unclear ownership and late handoffs.\n"
+    },
+    {
+      "id": "retro-three",
+      "path": "wiki/retro-three.md",
+      "kind": "original",
+      "family": "retro-three",
+      "text": "# Team retrospective three\nRecord date: 2026-02-02\nParticipants raised unclear ownership.\n"
+    },
+    {
+      "id": "account-a",
+      "path": "wiki/account-a.md",
+      "kind": "original",
+      "family": "incident-a",
+      "text": "# Avery's account\nRecord date: 2026-02-07\nAvery says the handoff failed because the checklist was missing. This is Avery's account, not an independent investigation.\n"
+    },
+    {
+      "id": "account-b",
+      "path": "wiki/account-b.md",
+      "kind": "original",
+      "family": "incident-b",
+      "text": "# Blake's account\nRecord date: 2026-02-07\nBlake says the checklist was present but nobody had been assigned to execute it. This is Blake's account, not an independent investigation.\n"
+    },
+    {
+      "id": "travel",
+      "path": "wiki/travel.md",
+      "kind": "original",
+      "family": "travel",
+      "text": "# Travel note\nRecord date: 2026-02-09\nThe team discussed a trip to Harbor City. No ticket was booked, and the budget amount was not recorded.\n"
+    },
+    {
+      "id": "alert-summary-a",
+      "path": "wiki/alert-summary-a.md",
+      "kind": "derived",
+      "family": "retro-one",
+      "text": "---\nprovenance: derived\nderived_from: [\"fixture:retro-one\"]\n---\n# Alert summary A\nThis summary repeats the noisy alerts concern from retrospective one. It is not an additional incident.\n"
+    },
+    {
+      "id": "alert-summary-b",
+      "path": "wiki/alert-summary-b.md",
+      "kind": "derived",
+      "family": "retro-one",
+      "text": "---\nprovenance: derived\nderived_from: [\"fixture:retro-one\"]\n---\n# Alert summary B\nThis summary repeats the noisy alerts concern from retrospective one. It is not an additional incident.\n"
+    },
+    {
+      "id": "excluded",
+      "path": "excluded/do-not-read.md",
+      "kind": "original",
+      "family": "excluded",
+      "excluded": true,
+      "text": "# Excluded synthetic record\nCanary: NEVER-USE-THIS-EVIDENCE. The invented budget is 987654 credits.\n"
+    }
+  ],
+  "cases": [
+    {
+      "id": "direct-fact",
+      "question": "When and where is the February 4 planning meeting?",
+      "expected": [
+        {
+          "pattern": "09:30",
+          "sources": [
+            "meeting"
+          ],
+          "quote_pattern": "09:30"
+        },
+        {
+          "pattern": "Room Cedar",
+          "sources": [
+            "meeting"
+          ],
+          "quote_pattern": "Room Cedar"
+        }
+      ],
+      "forbidden": [
+        "10:30"
+      ],
+      "reference": {
+        "answer": "The meeting starts at 09:30 in Room Cedar.",
+        "claims": [
+          {
+            "text": "The meeting starts at 09:30 in Room Cedar.",
+            "evidence": [
+              {
+                "source_id": "meeting",
+                "quote": "The planning meeting begins at 09:30 on 2026-02-04 in Room Cedar."
+              }
+            ]
+          }
+        ],
+        "insufficient": false
+      }
+    },
+    {
+      "id": "changed-fact",
+      "question": "What is the current launch target, and why did it change?",
+      "expected": [
+        {
+          "pattern": "March 15",
+          "sources": [
+            "launch-update"
+          ],
+          "quote_pattern": "March 15"
+        },
+        {
+          "pattern": "accessibility review",
+          "sources": [
+            "launch-update"
+          ],
+          "quote_pattern": "accessibility review"
+        }
+      ],
+      "forbidden": [
+        "current.{0,20}March 1(?:[^5]|$)"
+      ],
+      "reference": {
+        "answer": "The current target is March 15; the accessibility review needs more time.",
+        "claims": [
+          {
+            "text": "The target is March 15 because the accessibility review needs more time.",
+            "evidence": [
+              {
+                "source_id": "launch-update",
+                "quote": "The launch target moved to March 15 because the accessibility review needs more time."
+              }
+            ]
+          }
+        ],
+        "insufficient": false
+      }
+    },
+    {
+      "id": "recurring-themes",
+      "question": "Rank the three concerns in the original team retrospectives by how many distinct retrospectives mention them. Give the counts, limited to these records.",
+      "expected": [
+        {
+          "pattern": "unclear ownership.{0,20}3",
+          "sources": [
+            "retro-one",
+            "retro-two",
+            "retro-three"
+          ],
+          "quote_pattern": "unclear ownership"
+        },
+        {
+          "pattern": "late handoffs.{0,20}2",
+          "sources": [
+            "retro-one",
+            "retro-two"
+          ],
+          "quote_pattern": "late handoffs"
+        },
+        {
+          "pattern": "noisy alerts.{0,20}1",
+          "sources": [
+            "retro-one"
+          ],
+          "quote_pattern": "noisy alerts"
+        }
+      ],
+      "forbidden": [
+        "all team incidents"
+      ],
+      "reference": {
+        "answer": "Within these original records: unclear ownership appears in 3 retrospectives, late handoffs in 2, noisy alerts in 1.",
+        "claims": [
+          {
+            "text": "Unclear ownership: 3 original retrospectives.",
+            "evidence": [
+              {
+                "source_id": "retro-one",
+                "quote": "Participants raised unclear ownership, late handoffs, and noisy alerts."
+              },
+              {
+                "source_id": "retro-two",
+                "quote": "Participants raised unclear ownership and late handoffs."
+              },
+              {
+                "source_id": "retro-three",
+                "quote": "Participants raised unclear ownership."
+              }
+            ]
+          },
+          {
+            "text": "Late handoffs: 2 original retrospectives.",
+            "evidence": [
+              {
+                "source_id": "retro-one",
+                "quote": "Participants raised unclear ownership, late handoffs, and noisy alerts."
+              },
+              {
+                "source_id": "retro-two",
+                "quote": "Participants raised unclear ownership and late handoffs."
+              }
+            ]
+          },
+          {
+            "text": "Noisy alerts: 1 original retrospective.",
+            "evidence": [
+              {
+                "source_id": "retro-one",
+                "quote": "Participants raised unclear ownership, late handoffs, and noisy alerts."
+              }
+            ]
+          }
+        ],
+        "insufficient": false
+      }
+    },
+    {
+      "id": "conflicting-accounts",
+      "question": "Why did the February 7 handoff fail? Explain what the records establish and what remains disputed.",
+      "expected": [
+        {
+          "pattern": "Avery.{0,60}checklist.{0,30}missing",
+          "sources": [
+            "account-a"
+          ],
+          "quote_pattern": "checklist was missing"
+        },
+        {
+          "pattern": "Blake.{0,80}(nobody|no one).{0,25}assigned",
+          "sources": [
+            "account-b"
+          ],
+          "quote_pattern": "nobody had been assigned"
+        },
+        {
+          "pattern": "(disputed|conflict|not independently established)",
+          "sources": [
+            "account-a",
+            "account-b"
+          ],
+          "quote_pattern": "not an independent investigation"
+        }
+      ],
+      "forbidden": [
+        "Avery lied",
+        "Blake lied",
+        "independently confirmed"
+      ],
+      "reference": {
+        "answer": "The accounts conflict; a single cause is not independently established.",
+        "claims": [
+          {
+            "text": "Avery says the checklist was missing.",
+            "evidence": [
+              {
+                "source_id": "account-a",
+                "quote": "Avery says the handoff failed because the checklist was missing."
+              }
+            ]
+          },
+          {
+            "text": "Blake says nobody had been assigned.",
+            "evidence": [
+              {
+                "source_id": "account-b",
+                "quote": "Blake says the checklist was present but nobody had been assigned to execute it."
+              }
+            ]
+          },
+          {
+            "text": "The cause remains disputed.",
+            "evidence": [
+              {
+                "source_id": "account-a",
+                "quote": "This is Avery's account, not an independent investigation."
+              },
+              {
+                "source_id": "account-b",
+                "quote": "This is Blake's account, not an independent investigation."
+              }
+            ]
+          }
+        ],
+        "insufficient": false
+      }
+    },
+    {
+      "id": "missing-evidence",
+      "question": "What exact budget was approved for the Harbor City trip?",
+      "insufficient": true,
+      "expected": [
+        {
+          "pattern": "(not recorded|cannot determine|no approved budget)",
+          "sources": [
+            "travel"
+          ],
+          "quote_pattern": "budget amount was not recorded"
+        }
+      ],
+      "forbidden": [
+        "987654",
+        "approved.{0,20}[0-9]+ credits"
+      ],
+      "reference": {
+        "answer": "The budget amount was not recorded; I cannot determine an approved amount.",
+        "claims": [
+          {
+            "text": "The budget amount was not recorded.",
+            "evidence": [
+              {
+                "source_id": "travel",
+                "quote": "No ticket was booked, and the budget amount was not recorded."
+              }
+            ]
+          }
+        ],
+        "insufficient": true
+      }
+    },
+    {
+      "id": "duplicate-derived",
+      "question": "How many independent original retrospectives raise noisy alerts? Do the two alert summaries add more incidents?",
+      "expected": [
+        {
+          "pattern": "(1|one).{0,30}(original|independent)",
+          "sources": [
+            "retro-one"
+          ],
+          "quote_pattern": "noisy alerts"
+        },
+        {
+          "pattern": "summaries.{0,55}(do not|no).{0,20}(add|additional|extra)",
+          "sources": [
+            "alert-summary-a",
+            "alert-summary-b"
+          ],
+          "quote_pattern": "not an additional incident"
+        }
+      ],
+      "forbidden": [
+        "3 independent",
+        "three independent"
+      ],
+      "reference": {
+        "answer": "One original retrospective raises it. The two summaries do not add incidents.",
+        "claims": [
+          {
+            "text": "1 original retrospective raises noisy alerts.",
+            "evidence": [
+              {
+                "source_id": "retro-one",
+                "quote": "Participants raised unclear ownership, late handoffs, and noisy alerts."
+              }
+            ]
+          },
+          {
+            "text": "The two summaries do not add incidents.",
+            "evidence": [
+              {
+                "source_id": "alert-summary-a",
+                "quote": "It is not an additional incident."
+              },
+              {
+                "source_id": "alert-summary-b",
+                "quote": "It is not an additional incident."
+              }
+            ]
+          }
+        ],
+        "insufficient": false
+      }
+    }
+  ]
+}

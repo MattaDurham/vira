@@ -298,7 +298,7 @@ class TheParkSitesCallIt(unittest.TestCase):
 
     def test_the_provider_loop_offers_before_parking(self):
         s = self._body("server/agentbackend.py")
-        i = s.index("park = ok and runner.parks_at_turn_end()")
+        i = s.index("park = runner.should_park(ok)")
         self.assertIn("park = await runner.offer_landing()", s[i:i + 200])
         self.assertIn("reply = await runner.await_reply() if park else None",
                       s[i:i + 300])

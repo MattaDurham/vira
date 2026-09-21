@@ -279,6 +279,9 @@ class _FakeRunner:
     def parks_at_turn_end(self):
         return True
 
+    def should_park(self, ok):
+        return bool(ok) or self.interrupted
+
     async def await_reply(self):
         # what the state PUBLISHED at the moment of parking - the answer a
         # chat or the reply channel reads at the turn boundary

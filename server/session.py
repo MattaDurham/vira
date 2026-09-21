@@ -78,7 +78,7 @@ SESSION_DEFAULTS = {
     # nothing — the session that broke the desktop on 2026-07-25 was one
     # the owner was approving call by call.
     "session_default_mode": "bypassPermissions",
-    "session_max_live": 4,               # concurrent detached sessions cap
+    "session_max_live": 4,               # shared model execution slots; parked sessions use none
     "session_reply_window_hours": 12,    # safety reap for an idle linger
     # A writing session in a branch-first repo gets its own worktree, and
     # the gate refuses writes to the live checkout. See worktree.py for why
@@ -636,7 +636,7 @@ class Sessions:
                read_only=False, meta=None, provider=None,
                resume_session=None, resumed_from=None,
                subject=None, about=None, kind_label=None, pr=None,
-               vault_destination=None, vault_context=None):
+               vault_destination=None, vault_context=None, effort=None, runtime=None):
         """Start a run; returns the job id. `subject` / `about` /
         `kind_label` / `pr` are the three-part name's inputs (joblog): what
         the work is about, its long-form explanation, what this run IS,
@@ -649,7 +649,8 @@ class Sessions:
         the gate denies everything outside the auto-allow set instantly
         (judge sessions, circuit read stages). `meta` is a small dict
         recorded on the ledger row (circuit_run/stage/judge_of/routine_id).
-        Raises ValueError when the live-session cap is hit."""
+        Model execution is admitted by the runner's shared priority queue;
+        spawning a parked or queued runner does not consume an execution slot."""
         # Resolve an explicitly selected route before spawning work, and pin
         # automatic plan routing at launch so later default changes cannot
         # move a running or resumed job's output to another vault.
@@ -680,6 +681,7 @@ class Sessions:
         # the model names it, else the configured session-capable go-to. A
         # CLI-exec provider runs the detached runner even without the SDK.
         prov = agentbackend.session_provider(model=model, provider=provider)
+        effort = agentbackend.validate_effort(prov, effort)
         if not agentbackend.sessions_quality(prov):
             raise ValueError(
                 f"{prov} cannot host live agent sessions yet — pick a "
@@ -768,6 +770,12 @@ class Sessions:
                         "branch-first worktree could not be created "
                         f"({detail}); refusing to run in the live checkout "
                         f"at {cwd}")
+        from . import answer_runtime
+        runtime = answer_runtime.manifest(prov, model, effort, runtime,
+                                         "api" if prov in ("google", "xai") else "cli")
+        machine = any((meta or {}).get(key) for key in ("machine", "routine_id", "circuit_run", "judge_of"))
+        runtime.setdefault("work_class", "background" if machine else "foreground")
+        runtime.setdefault("evidence_scope", {"vault_context": vault_context})
         data = {"id": jid, "prompt": prompt, "cwd": cwd or str(Path.home()),
                 "status": "running", "output": "", "started": time.time(),
                 "finished": None,
@@ -777,6 +785,7 @@ class Sessions:
                 "model": (resolve_model(model) if prov == "anthropic"
                           else (model or "").strip() or None),
                 "provider": prov,
+                "effort": effort, "runtime": runtime,
                 "publish_plan": publish_plan,
                 "vault_destination": vault_destination,
                 "vault_context": vault_context,
@@ -809,15 +818,6 @@ class Sessions:
                 "landing_card": bool(_scfg("session_landing_card")),
                 "auto_serve": bool(_scfg("session_auto_serve"))}
         with self.lock:
-            if live:
-                running = sum(
-                    1 for x in self.sessions.values()
-                    if x.kind == "detached" and x.working())
-                cap = int(_scfg("session_max_live"))
-                if running >= cap:
-                    raise ValueError(
-                        f"live-session cap reached ({running} running, "
-                        f"cap {cap}) — wait for one to finish or close it")
             self._prune_registry()
         if live:
             self.sessions[jid] = self._spawn_runner(data)
@@ -866,6 +866,13 @@ class Sessions:
             "permission_timeout": float(_scfg("session_permission_timeout")),
             "reply_window": float(_scfg("session_reply_window_hours")) * 3600,
         })
+        from . import answer_runtime
+        spec.setdefault("runtime", answer_runtime.manifest(prov, spec["model_resolved"], spec.get("effort")))
+        spec["runtime"]["configured"] = {"provider": prov,
+                                          "backend": "api" if prov in ("google", "xai") else "cli",
+                                          "model": spec["model_resolved"] or None,
+                                          "effort": spec.get("effort")}
+        data["runtime"] = spec["runtime"]
         jobfiles.write_json_atomic(jdir / "job.json", spec)
         (jdir / "control.jsonl").touch()
         joblog.record_launch(data)
@@ -941,6 +948,10 @@ class Sessions:
             "awaiting": st.get("awaiting"),
             "live": True,
             "result_text": st.get("result_text", ""),
+            "runtime": st.get("runtime") or spec.get("runtime") or {},
+            "execution": st.get("execution") or {},
+            "admission": st.get("admission") or {},
+            "receipts": st.get("receipts") or [],
             # what each turn looked at (runner.record_tool) - a chat reads
             # it back as its progress line and its "looked at" cards; the
             # first live chat turn recorded 15 calls and showed none,
@@ -1120,7 +1131,9 @@ class Sessions:
         new = self.launch(
             prompt=text,
             cwd=cwd,
-            model=row.get("model") or None,
+            model=(row.get("runtime") or {}).get("effective", {}).get("model") or row.get("model") or None,
+            effort=(row.get("runtime") or {}).get("effective", {}).get("effort") or row.get("effort"),
+            runtime=dict(row.get("runtime") or {}, work_class="foreground"),
             provider=row.get("provider") or None,
             mode=row.get("mode") or None,
             permission_mode=row.get("permission_mode") or None,

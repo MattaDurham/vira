@@ -197,13 +197,26 @@ def capability(provider=None, backend=None, model=""):
     "this card was composed against a 1M window" must be able to tell a
     learned fact from a floor we assumed.
     """
+    from . import answer_runtime
+    manifest = answer_runtime.current()
+    runtime = dict(manifest.get("configured") or {})
+    runtime.update({k: v for k, v in (manifest.get("requested") or {}).items() if v is not None})
+    runtime.update({k: v for k, v in (manifest.get("effective") or {}).items() if v is not None})
+    if provider is None:
+        provider = runtime.get("provider")
+    if backend is None:
+        backend = runtime.get("backend")
+    if not model and runtime.get("provider") == provider and runtime.get("backend") == backend:
+        model = runtime.get("model") or ""
     if provider is None or backend is None:
-        provider, backend = effective()
+        configured_provider, configured_backend = effective()
+        provider = provider or configured_provider
+        backend = backend or configured_backend
     cfg = _cfg()
     if not model:
         from . import models
-        key = models.PROVIDERS.get(provider, {}).get("config_keys", {}).get(backend)
-        model = cfg.get(key, "") if key else ""
+        key = (models.PROVIDERS.get(provider, {}).get("config_keys") or {}).get(backend)
+        model = cfg.get(key or "") or ""
 
     hit = _learned(provider, backend, model)
     if hit and hit.get("context_tokens"):
@@ -301,7 +314,7 @@ def transport_cap():
 TOOL_RESULTS_COEXIST = 8
 
 
-def tool_result_cap(provider=None, backend=None):
+def tool_result_cap(provider=None, backend=None, model=""):
     """Characters ONE native tool may hand back to a session.
 
     TWO CEILINGS BIND HERE AND THEY ARE UNRELATED. The window decides how much
@@ -316,18 +329,15 @@ def tool_result_cap(provider=None, backend=None):
     before runner.py passed max_buffer_size, a larger result would have killed
     the session whole. Never raise a tool-output cap without asking here.
 
-    NOTE the provider caveat: this reads the DRAFTING backend's capability,
-    while a tool result is consumed by the SESSION's model. Those are the same
-    on the ordinary install (both Anthropic) and can differ if the owner runs
-    a codex session while drafting elsewhere. The transport ceiling is exact
-    either way, and the context term degrades downward, so a mismatch costs
-    headroom rather than correctness.
+    Tool invocation installs the consuming session's runtime in a context
+    variable. Its resolved model and provider take precedence over mutable
+    drafting settings. Calls outside a session still use configured defaults.
     """
     # "standard", not "deep": a tool result is not a one-shot prompt whose
     # material IS the whole ask. It stays in context for the rest of the
     # session and sits alongside every other result, so the share it draws
     # on must leave room for the turns after it.
-    by_window = int(context_chars("standard", provider, backend)
+    by_window = int(context_chars("standard", provider, backend, model)
                     / TOOL_RESULTS_COEXIST)
     return max(min(by_window, transport_cap()), 4_000)
 

@@ -513,7 +513,7 @@ class AskRelaxAndFallback(PlanFixture):
                     "notes": self.ZERO, "people": self.ZERO}
         prompts = []
 
-        def fake_complete(prompt):
+        def fake_complete(prompt, **kwargs):
             if not prompts:          # rung 2's plan call
                 prompts.append(prompt)
                 return self._plan_payload()

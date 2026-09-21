@@ -139,7 +139,7 @@ class ModuleModelsTest(unittest.TestCase):
 
     def test_saved_choice_reaches_real_find_route_and_reset_restores_default(self):
         from fastapi.testclient import TestClient
-        from server import main
+        from server import main, virachat
         client = TestClient(main.app)
         picked = {"provider": "openai", "backend": "cli", "model": "test-selected"}
         seen = []
@@ -150,7 +150,8 @@ class ModuleModelsTest(unittest.TestCase):
             return {"answer": "Synthetic answer"}
 
         with mock.patch.object(modulemodels, "snapshot", return_value={"modules": []}), \
-                mock.patch.object(main.find, "ask", side_effect=answer):
+                mock.patch.object(virachat, "send", side_effect=answer), \
+                mock.patch.object(virachat, "summary_rows", return_value=[]):
             self.assertEqual(client.put("/api/module-models/find", json=picked).status_code, 200)
             self.assertEqual(client.post("/api/find/ask", json={"question": "Test question"}).status_code, 200)
             self.assertEqual(seen, [("Test question", "openai", "test-selected")])

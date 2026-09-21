@@ -209,67 +209,75 @@ def embed_pending(limit=128, log=lambda *a: None):
         con.close()
 
 
-@lru_cache(maxsize=256)
 def _qvec(q):
     from . import localmodels
-    v = localmodels.ollama_embed([f"search_query: {q}"])
-    return v[0] if v else None
+    return localmodels.query_embedding(q)
+
+
+def _clear_qvec_cache():
+    from .localmodels import clear_query_cache
+    clear_query_cache()
+
+
+_qvec.cache_clear = _clear_qvec_cache
 
 
 # ---------- search ----------
 
 def search(q=None, limit=20, exact=False, person=None, order="relevance",
-           phrases=()):
-    """Hybrid over the CRM. Empty query means browse: most recently
-    contacted first, which is what `data.search_people` already
-    considers the natural order for people."""
+           phrases=(), semantic=None, deadline=None):
+    previous = retrieval.current_request()
+    request = retrieval.request_for(deadline=deadline,
+        semantic=(previous.semantic if previous else True) if semantic is None else semantic)
+    if request.policy.corpus_ids is not None and "people" not in request.policy.corpus_ids:
+        return retrieval.Hits()
+    coverage = {"source_id": "people", "status": "complete", "mode": "fts", "date_field": "last_contact"}
     q = (q or "").strip()
-    if person and not q:
-        detail = crm.get_person(person)
-        if not detail:
-            return []
-        return [_row(detail["person"], None)]
     if not q:
-        rows = crm.search_people(limit=limit,
-                                 sort="alpha" if order == "oldest"
-                                 else "recent")
-        for r in rows:                  # one row shape for the whole group
-            r.setdefault("snippet", None)
-            r.setdefault("score", None)
-        return rows
-
-    refresh()
-    _matrices.load(_con)
-    con = _con()
-    try:
-        fts = retrieval.rank_fts(con, q, None, limit=200, phrases=phrases)
-        qv = _qvec(q) if not exact else None
-        lists = [fts]
-        if qv is not None:
-            lists.append(retrieval.rank_vec(_matrices.get("text"), qv, None,
-                                            floor=0.45))
-        ranks = retrieval.rrf(lists)
-        top = sorted(ranks, key=ranks.get, reverse=True)
-        if exact and fts:
-            top = fts + [s for s in top if s not in set(fts)]
-        top = top[:limit]
-        if not top:
-            return []
-        got = {r["seq"]: r for r in con.execute(
-            "SELECT seq, pid, text FROM people WHERE seq IN (%s)"
-            % ",".join("?" * len(top)), top)}
-    finally:
-        con.close()
-
+        people = list(crm._load()["people"])
+        if person:
+            people = [p for p in people if p["id"] == person]
+        people.sort(key=lambda p: (crm._last_contact(p), p["id"]), reverse=order != "oldest")
+        return retrieval.Hits([_row(p, None) for p in people[:limit]], coverage=[coverage], total=len(people))
+    if previous is None:
+        refresh()
+    if not DB.exists():
+        return retrieval.Hits(coverage=[dict(coverage, status="unavailable", error="people index unavailable")])
+    con = sqlite3.connect(DB.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
+    con.row_factory = sqlite3.Row
+    with retrieval.request_scope(request):
+        try:
+            retrieval.configure_connection(con)
+            cand = {r[0] for r in con.execute("SELECT seq FROM people WHERE pid=?", (person,))} if person else None
+            ids = retrieval.matching_fts(con, q, cand, phrases=phrases)
+            fts = retrieval.rank_fts(con, q, ids, max(1, len(ids)), phrases=phrases)
+            lists = [fts]
+            if request.semantic and not exact and order == "relevance":
+                _matrices.load(_con)
+                qv = _qvec(q)
+                if qv is not None:
+                    lists.append(retrieval.rank_vec(_matrices.get("text"), qv, cand, floor=0.45))
+                    coverage["mode"] = "hybrid"
+                else:
+                    coverage.update(status="partial", error="semantic layer unavailable; lexical matches retained")
+            ranks = retrieval.rrf(lists)
+            top = sorted(ranks, key=ranks.get, reverse=True)
+            clause = retrieval.candidate_clause(con, top, "seq")
+            got = {r["seq"]: r for r in con.execute("SELECT seq,pid,text FROM people WHERE 1" + clause)}
+            coverage["built_at"] = (con.execute("SELECT val FROM state WHERE key='built_at'").fetchone() or [None])[0]
+        finally:
+            con.close()
     c = crm._load()
+    if order in ("recent", "oldest"):
+        top.sort(key=lambda seq: (crm._last_contact(c["by_id"].get(got[seq]["pid"], {})), seq),
+                 reverse=order == "recent")
     out = []
-    for seq in top:
+    for seq in top[:limit]:
         r = got.get(seq)
         p = c["by_id"].get(r["pid"]) if r else None
-        if not p:
-            continue
-        out.append(_row(p, _snippet(r["text"], q), ranks.get(seq)))
-    return out
+        if p:
+            out.append(_row(p, _snippet(r["text"], q), ranks.get(seq)))
+    return retrieval.Hits(out, coverage=[coverage], total=len(top) if not request.semantic else None)
 
 
 def _row(p, snippet, score=None):

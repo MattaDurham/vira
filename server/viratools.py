@@ -33,6 +33,7 @@ import datetime as dt
 import email as email_lib
 import imaplib
 import json
+import time
 from contextvars import ContextVar
 import urllib.parse
 from pathlib import Path
@@ -59,6 +60,7 @@ def _text_cap():
         return 12_000
 _VAULT_ROUTE = ContextVar("native_vault_route", default=(None, None))
 _OWNER_CHANNEL = ContextVar("native_owner_channel", default=None)
+_READ_SOURCES = ContextVar("native_read_sources", default=None)
 PREVIEW = 160            # per-line body/context preview
 
 
@@ -87,6 +89,13 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "search it before claiming you don't know something about "
         f"{owner}'s world). list_ideas shows the ideas backlog and "
         "propose_idea STAGES a new idea for the owner's approval. They "
+        "answer_sources lists the sources this conversation may read. Use source_read "
+        "and sources_read for exact paginated reads, source_search to search within a "
+        "long source, message_context for surrounding messages, and thread_read for "
+        "an exact date range. Continue every returned cursor needed to answer the "
+        "question. Returned source_date is distinct from filesystem modified_at; "
+        "derived or historical records are labeled. Cite read evidence as "
+        "[[evidence:ev_HASH|label]] using only handles returned by tools. "
         "ARE your calendar/email/contacts/knowledge access — use them "
         "instead of reporting that no connector is available.\n\n"
         if native else "")
@@ -225,7 +234,115 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
 # ---------- shared rendering helpers ----------
 
 def _txt(text):
-    return {"content": [{"type": "text", "text": text[:_text_cap()]}]}
+    cap = _text_cap()
+    if len(text) > cap:
+        notice = f"\n[Tool result truncated: {len(text)} characters total; request a narrower or paginated read.]"
+        text = text[:max(0, cap - len(notice))] + notice
+    return {"content": [{"type": "text", "text": text}]}
+
+
+def _remember_source(source, *, path=None, kind=None):
+    records = _READ_SOURCES.get()
+    if records is not None:
+        records.append({"source": source, "path": path, "kind": kind})
+
+
+def _read_budget():
+    # Six bytes of JSON escaping per character is the worst case; leave
+    # room for provenance, the cursor and a source's display metadata.
+    return max(64, min(6000, (_text_cap() - 5000) // 6))
+
+
+def _json_tool(value):
+    text = json.dumps(value, ensure_ascii=False)
+    if len(text) > _text_cap():
+        # A valid response naming the limit beats a cut JSON document or a
+        # result that pretends a missing tail was the complete evidence.
+        return _txt(json.dumps({"error": "Result exceeds this runtime's tool budget; request fewer rows or a smaller span.",
+                               "complete": False, "retry": {"limit": 1, "length": 128}}))
+    return {"content": [{"type": "text", "text": text}]}
+
+
+async def _source_call(fn, *args, **kwargs):
+    try:
+        return _json_tool(await asyncio.to_thread(fn, *args, **kwargs))
+    except (ValueError, OSError) as exc:
+        return _json_tool({"error": str(exc), "complete": False})
+
+
+async def _t_answer_sources(args):
+    from . import answer_sources
+    return _json_tool(answer_sources.enumerate_sources(for_model=True))
+
+
+async def _t_source_read(args):
+    from . import answer_sources
+    return await _source_call(answer_sources.read_source, args.get("source"), args.get("start", 0),
+                              min(int(args.get("length") or _read_budget()), _read_budget()), version=args.get("version"))
+
+
+async def _t_sources_read(args):
+    from . import answer_sources
+    requests = args.get("requests") or []
+    if not isinstance(requests, list):
+        return _json_tool({"error": "requests must be an array", "complete": False})
+    count = max(1, min(answer_sources.MAX_BATCH, _text_cap() // 5000))
+    selected = [{**r, "length": min(int(r.get("length") or 512), 512)} if isinstance(r, dict) else r
+                for r in requests[:count]]
+    result = await asyncio.to_thread(answer_sources.read_many, selected)
+    if len(requests) > count:
+        result.update(complete=False, continuation={"requests": requests[count:]})
+    return _json_tool(result)
+
+
+async def _t_source_search(args):
+    from . import answer_sources
+    return await _source_call(answer_sources.search_source, args.get("source"), args.get("query"),
+                              version=args.get("version"), start=args.get("start", 0),
+                              limit=min(int(args.get("limit") or 3), max(1, _text_cap() // 3500)), context=100)
+
+
+def _message_output(result):
+    from . import answer_sources
+    for row in result.get("messages") or []:
+        row.pop("text", None)  # the versioned evidence holds the bounded text
+        proof = row.get("evidence")
+        if proof and len(proof.get("text") or "") > min(512, _read_budget()):
+            row["evidence"] = answer_sources.read_source(proof["source_handle"], length=min(512, _read_budget()),
+                                                          version=proof["version"])
+    return result
+
+
+async def _t_message_context(args):
+    from . import answer_sources
+    try:
+        maximum = max(0, (_text_cap() // 4000 - 1) // 2)
+        result = await asyncio.to_thread(answer_sources.message_context, args.get("rowid"),
+                                         min(int(args.get("before") or 2), maximum),
+                                         min(int(args.get("after") or 2), maximum), chat_id=args.get("chat_id"))
+        return _json_tool(_message_output(result))
+    except (ValueError, OSError) as exc:
+        return _json_tool({"error": str(exc), "complete": False})
+
+
+async def _t_thread_read(args):
+    from . import answer_sources
+    try:
+        result = await asyncio.to_thread(answer_sources.thread_range, args.get("person_id"),
+                                         args.get("start_date"), args.get("end_date"), chat_id=args.get("chat_id"),
+                                         cursor=args.get("cursor"), limit=min(int(args.get("limit") or 10), max(1, _text_cap() // 8000)))
+        return _json_tool(_message_output(result))
+    except (ValueError, OSError) as exc:
+        return _json_tool({"error": str(exc), "complete": False})
+
+
+async def _t_vault_query(args):
+    from . import vault
+    return await _source_call(vault.query_notes, args.get("query", ""), limit=min(int(args.get("limit") or 10), 20),
+                              cursor=args.get("cursor"), mode=args.get("mode") or "search", since=args.get("since"),
+                              until=args.get("until"), order=args.get("order") or "relevance",
+                              date_field=args.get("date_field") or "modified")
+
 
 
 def _hm(iso):
@@ -493,13 +610,19 @@ def _thread_text(name, limit):
     if not msgs:
         return f"No direct iMessage thread with {top['name']}."
     lines = [f"iMessage thread with {top['name']} "
-             f"(last {len(msgs)} messages):"]
+             f"(last {len(msgs)} messages; text previews up to 300 characters):",
+             "This is a recent slice, not the complete thread. Use thread_read with "
+             f"person_id={top['id']} and follow its cursor for a date range; source_read "
+             "opens each original message without the preview limit."]
     for msg in msgs:
         when = msg.get("when")
         stamp = (settings.strf(dt.datetime.fromisoformat(when), "%b %-d %-I:%M %p")
                  if when else "?")
         who = "Me" if msg.get("from_me") else top["name"]
-        lines.append(f"  [{stamp}] {who}: {msg.get('text', '')[:300]}")
+        source = f"imessage:{msg['rowid']}" if msg.get("rowid") else ""
+        if source:
+            _remember_source(source, kind="imessage")
+        lines.append(f"  [{stamp}] {who}: {msg.get('text', '')[:300]}" + (f" [source={source}]" if source else ""))
     return "\n".join(lines)
 
 
@@ -527,12 +650,13 @@ def _media_text(query, person, limit):
         return f"No matches for {query!r}."
     lines = [f"Media search {query!r} ({len(results)} hit(s)):"]
     for r in results:
+        _remember_source(f"media:{r['seq']}", kind="media")
         ctx = r.get("context") or {}
         ctx_txt = f' — "{ctx.get("text", "")[:PREVIEW]}"' if ctx else ""
         lines.append(f"  [{r.get('kind')}] {r.get('name') or r.get('title')}"
                      f" · from {r.get('sender') or '?'}"
                      f" · thread: {r.get('person') or '?'}"
-                     f" · {(r.get('when') or '')[:10]}{ctx_txt}")
+                     f" · {(r.get('when') or '')[:10]}{ctx_txt} [source=media:{r['seq']}]")
     return "\n".join(lines)
 
 
@@ -559,28 +683,43 @@ def _find_text(query, limit):
     plan = out["plan"]
     head = [f"Find {query!r} — plan: {plan['why'] or 'no filters'}"
             f" (terms: {plan['text'] or '-'})"]
+    head.append(json.dumps({"complete": out.get("complete", False),
+                           "retrieval_mode": out.get("retrieval_mode", "text"),
+                           "coverage": {db: {k: g.get(k) for k in (
+                               "status", "complete", "error", "total", "total_exact", "next_cursor", "coverage")
+                               if k in g} for db, g in out.get("groups", {}).items()}}, ensure_ascii=False))
+    hit_count = 0
     for db in plan["databases"]:
         g = out["groups"].get(db) or {}
         rows = g.get("rows") or []
         if not rows:
             continue
+        hit_count += len(rows)
         head.append(f"{db} ({g.get('count', len(rows))}):")
         for r in rows:
             when = (r.get("when") or "")[:10]
             if db == "notes":
+                _remember_source("vault:" + r["path"], path=r["path"])
                 head.append(f"  {r['path']} · {r.get('heading') or ''}"
-                            f" · {when} — {(r.get('snippet') or '')[:PREVIEW]}")
+                            f" · {when} — {(r.get('snippet') or '')[:PREVIEW]} [source=vault:{r['path']}]")
             elif db == "people":
+                _remember_source("people:" + r["id"], kind="people")
                 head.append(f"  {r['name']} ({r['id']})"
                             f" — {(r.get('snippet') or '')[:PREVIEW]}")
             elif db == "messages":
+                _remember_source(f"message:{r['seq']}", kind="imessage" if r.get("source") == "imessage" else "mail")
                 head.append(f"  [{r.get('source')}] {r.get('sender') or '?'}"
-                            f" · {when} — {(r.get('text') or '')[:PREVIEW]}")
+                            f" · {when} — {(r.get('text') or '')[:PREVIEW]} [source=message:{r['seq']}]")
             else:
+                _remember_source(f"media:{r['seq']}", kind="media")
                 head.append(f"  [{r.get('kind')}] "
                             f"{r.get('name') or r.get('title')}"
-                            f" · from {r.get('sender') or '?'} · {when}")
-    return "\n".join(head) if len(head) > 1 else f"No matches for {query!r}."
+                            f" · from {r.get('sender') or '?'} · {when} [source=media:{r['seq']}]")
+    if not hit_count:
+        head.append(f"No matches for {query!r} in the completed searches. "
+                    + ("Some sources could not be searched; this is not evidence of absence."
+                       if not out.get("complete", True) else ""))
+    return "\n".join(head)
 
 
 async def _t_find(args):
@@ -604,7 +743,8 @@ def _vault_search_text(query, limit):
         return f"No vault matches for {query!r}."
     lines = [f"Vault search {query!r} ({len(hits)} hit(s)):"]
     for h in hits:
-        lines.append(f"\n[{h['path']}] {h['heading']}")
+        _remember_source("vault:" + h["path"], path=h["path"])
+        lines.append(f"\n[{h['path']}] {h['heading']} [source=vault:{h['path']}]")
         lines.append("  " + h["text"][:500].replace("\n", "\n  "))
     lines.append("\nUse vault_note with a path above for the full note.")
     return "\n".join(lines)
@@ -624,6 +764,7 @@ def _vault_note_text(path):
     from qocha.vault import NOTE_CAP
     try:
         from . import vaultwrite
+        _remember_source("vault:" + str(path), path=path)
         full = vault.note_text((path or "").strip(), for_model=True)
         # A replacement hash is useful only when this tool can show the whole
         # note. Never let a capped read become an apparently safe full rewrite.
@@ -631,7 +772,7 @@ def _vault_note_text(path):
         if len(full) > NOTE_CAP or len(header) + len(full) > _text_cap():
             notice = (f"[{path}]\nRead-only excerpt: this note exceeds the tool's "
                       "complete-read budget. No update hash is supplied; use the "
-                      "local note editor for a full replacement.\n\n")
+                      f"source_read with source=vault:{path} to page through the full source; source_search finds exact passages.\n\n")
             return notice + full[:max(0, min(NOTE_CAP, _text_cap() - len(notice)))]
         return header + full
     except (ValueError, OSError) as e:
@@ -639,7 +780,9 @@ def _vault_note_text(path):
 
 
 async def _t_vault_note(args):
-    return _txt(await asyncio.to_thread(_vault_note_text, args.get("path")))
+    return await _t_source_read({"source": "vault:" + str(args.get("path") or ""),
+                                 "start": args.get("start", 0), "length": args.get("length"),
+                                 "version": args.get("version")})
 
 
 async def _t_vault_destinations(args):
@@ -1089,6 +1232,19 @@ async def _t_record_role_scores(args):
 # (name, description, input schema, handler). Schemas use the SDK's simple
 # name->type form; handlers tolerate missing optional keys.
 TOOL_SPECS = [
+    ("answer_sources", "List this conversation's approved sources, current exposure policies and freshness basis.", {}, _t_answer_sources),
+    ("source_read", "Read an exact source page with an immutable evidence handle, original date, provenance, full length and continuation. Pass version on every continued read.",
+     {"source": str, "start": int, "length": int, "version": str}, _t_source_read),
+    ("sources_read", "Batch exact source reads. Each request has source, start, length and optional version; follow per-source and batch continuations.",
+     {"requests": list}, _t_sources_read),
+    ("source_search", "Find literal text inside one full versioned source. Returns exact match spans, surrounding context and continuation.",
+     {"source": str, "query": str, "version": str, "start": int, "limit": int}, _t_source_search),
+    ("message_context", "Read exact messages before and after an iMessage rowid. If the message belongs to multiple chats, select an explicitly returned chat_id.",
+     {"rowid": int, "before": int, "after": int, "chat_id": int}, _t_message_context),
+    ("thread_read", "Read an exact chat or person's direct thread over a date range, start inclusive and end exclusive. Results include original timestamps and evidence; follow cursor to exhaust the range.",
+     {"person_id": str, "chat_id": int, "start_date": str, "end_date": str, "cursor": str, "limit": int}, _t_thread_read),
+    ("vault_query", "Search, enumerate or count approved vault notes with complete/cursor/coverage receipts. Set mode to search, enumerate or count; dates use date_field explicitly.",
+     {"query": str, "mode": str, "cursor": str, "limit": int, "since": str, "until": str, "order": str, "date_field": str}, _t_vault_query),
     ("calendar",
      "The owner's calendar for the next N days: local macOS calendars "
      "(personal + family + birthdays) merged with the M365 work calendar. "
@@ -1127,10 +1283,10 @@ TOOL_SPECS = [
      "exactly which database holds the answer.",
      {"query": str, "limit": int}, _t_find),
     ("media_search",
-     "Semantic search over everything ever shared with the owner in "
+     "Text search over everything ever shared with the owner in "
      "iMessage (photos, videos, documents, links, voice memos) — by "
-     "content, OCR text, captions. Optionally scoped to one person. First "
-     "call may take ~15s (model load).",
+     "content, OCR text, captions. Optionally scoped to one person. "
+     "Interactive text search does not cold-load an image model.",
      {"query": str, "person": str, "limit": int}, _t_media_search),
     ("vault_destinations",
      "Inspect connected vault IDs, purpose/context routes, capture folders and writable scopes. "
@@ -1156,9 +1312,9 @@ TOOL_SPECS = [
      "chunks with note paths — follow up with vault_note for a full note.",
      {"query": str, "limit": int}, _t_vault_search),
     ("vault_note",
-     "Read one full note from the owner's knowledge vault by its path "
-     "(as returned by vault_search).",
-     {"path": str}, _t_vault_note),
+     "Read one versioned page of a note from the owner's knowledge vault by its path "
+     "(as returned by vault_search). Follow continuation for the complete text.",
+     {"path": str, "start": int, "length": int, "version": str}, _t_vault_note),
     ("list_ideas",
      "The owner's ideas backlog (cross-project). Optional status filter: "
      "proposed | open | on-hold | deferred | done | dropped.",
@@ -1297,6 +1453,11 @@ def json_input_schema(simple):
     props = {}
     for name, pytype in (simple or {}).items():
         props[name] = {"type": _JSON_TYPES.get(pytype, "string")}
+        if name == "requests" and pytype is list:
+            props[name]["items"] = {"type": "object", "properties": {
+                "source": {"type": "string"}, "start": {"type": "integer"},
+                "length": {"type": "integer"}, "version": {"type": "string"}},
+                "required": ["source"], "additionalProperties": False}
     return {"type": "object", "properties": props,
             "additionalProperties": False}
 
@@ -1323,7 +1484,7 @@ def has_tool(name):
 
 
 async def invoke(name, arguments=None, read_only=False, ask_owner=None,
-                 vault_destination=None, vault_context=None):
+                 vault_destination=None, vault_context=None, runtime=None, receipt=None):
     """Call one registered Vira tool through a provider-neutral adapter."""
     plain = str(name or "").removeprefix("mcp__vira__")
     for tool_name, _description, _schema, handler in TOOL_SPECS:
@@ -1335,11 +1496,42 @@ async def invoke(name, arguments=None, read_only=False, ask_owner=None,
         args = arguments if isinstance(arguments, dict) else {}
         token = _VAULT_ROUTE.set((vault_destination, vault_context))
         owner_token = _OWNER_CHANNEL.set(ask_owner)
+        source_token = _READ_SOURCES.set([])
         try:
-            from . import vault
-            with vault.model_access():
-                return await handler(args)
+            from . import answer_runtime, answer_sources, retrieval, vault
+            with answer_runtime.scope(runtime, observer=receipt), answer_runtime.tool_call(fqname, args) as record:
+                approved = [s["id"] for s in answer_sources.enumerate_sources(for_model=True)["sources"] if s["allowed"]]
+                with vault.model_access(), retrieval.source_scope(approved or ["__no_sources__"], for_model=True,
+                                                                  deadline=time.monotonic() + retrieval.DEFAULT_BUDGET_S):
+                    if answer_sources._scope() and plain in {"calendar", "daily_brief", "list_ideas"}:
+                        raise ValueError("This cross-source tool is unavailable in a narrowed evidence scope. "
+                                         "Use the selected source readers or start a chat with all enabled sources.")
+                    kind = {"imessage_thread": "imessage", "mail_search": "mail", "media_search": "media",
+                            "crm_lookup": "people", "circles": "people"}.get(plain)
+                    if kind:
+                        answer_sources._require(kind)
+                    if plain == "imessage_thread" or (plain == "media_search" and args.get("person")):
+                        answer_sources._require("people")
+                    result = await handler(args)
+                    # Existing text tools become citable too. This snapshot is
+                    # explicitly a derived tool rendering, never a full source.
+                    if plain in {"find", "vault_search", "imessage_thread", "media_search", "mail_search", "crm_lookup", "circles"}:
+                        sources = _READ_SOURCES.get() or []
+                        body = "\n".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
+                        proof = await asyncio.to_thread(answer_sources.capture_result, body, tool_name=plain,
+                                                       scope=json.dumps(args, sort_keys=True),
+                                                       policy_paths=[s["path"] for s in sources if s.get("path")],
+                                                       policy_kinds=list({s["kind"] for s in sources if s.get("kind")} | ({kind} if kind else set())))
+                        result["evidence"] = {k: v for k, v in proof.items() if k != "text"}
+                        result["content"].insert(0, {"type": "text", "text": json.dumps({
+                            "evidence_handle": proof["evidence_handle"], "provenance": "derived tool rendering",
+                            "sources": list(dict.fromkeys(s["source"] for s in sources)),
+                            "full_length": proof["full_length"], "span": proof["span"], "truncated": proof["truncated"],
+                            "continuation": proof["continuation"]}, ensure_ascii=False)})
+                    record["result"] = result
+                    return result
         finally:
+            _READ_SOURCES.reset(source_token)
             _OWNER_CHANNEL.reset(owner_token)
             _VAULT_ROUTE.reset(token)
     return _txt(f"error: unknown Vira tool {plain or '(blank)'}")
@@ -1360,7 +1552,7 @@ def function_tool_specs(read_only=False):
 _server = None
 
 
-def sdk_server(vault_destination=None, vault_context=None, read_only=False):
+def sdk_server(vault_destination=None, vault_context=None, read_only=False, runtime=None, receipt=None):
     """The in-process MCP server config for ClaudeAgentOptions.mcp_servers,
     or None when the SDK is unavailable (legacy fallback path)."""
     global _server
@@ -1370,16 +1562,16 @@ def sdk_server(vault_destination=None, vault_context=None, read_only=False):
         async def handler(args):
             return await invoke(name, args, read_only=read_only,
                                 vault_destination=vault_destination,
-                                vault_context=vault_context)
+                                vault_context=vault_context, runtime=runtime, receipt=receipt)
         return handler
 
-    if vault_destination or vault_context or read_only:
+    if vault_destination or vault_context or read_only or runtime is not None or receipt is not None:
         return create_sdk_mcp_server(
-            name="vira", tools=[tool(n, d, s)(wrapped(n))
+            name="vira", tools=[tool(n, d, json_input_schema(s))(wrapped(n))
                                 for n, d, s, _h in TOOL_SPECS
                                 if not read_only or f"mcp__vira__{n}" not in WRITE_TOOLS])
     if _server is None:
         _server = create_sdk_mcp_server(
-            name="vira", tools=[tool(n, d, s)(wrapped(n))
+            name="vira", tools=[tool(n, d, json_input_schema(s))(wrapped(n))
                                 for n, d, s, _h in TOOL_SPECS])
     return _server

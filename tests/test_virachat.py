@@ -12,13 +12,18 @@ a test here must never launch a real runner.
 
 Run: .venv/bin/python -m unittest tests.test_virachat
 """
+import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import runner, virachat
+from server import jobfiles, runner, virachat
+
+
+REAL_THREAD = threading.Thread
 
 
 def snap(status="running", awaiting="reply", result="", tools=(), error=None):
@@ -34,9 +39,12 @@ class ChatBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        for p in (mock.patch.object(virachat, "STORE",
+        for p in (mock.patch.object(virachat, "_ENRICHMENT_SLOTS", threading.BoundedSemaphore(2)),
+                  mock.patch.object(virachat, "STORE",
                                     Path(self.tmp.name) / "vira-chat.json"),
-                  mock.patch.object(virachat.threading, "Thread")):
+                  mock.patch.object(jobfiles, "JOBS_DIR", Path(self.tmp.name) / "jobs"),
+                  mock.patch.object(virachat.threading, "Thread"),
+                  mock.patch.object(virachat.threading, "Timer")):
             p.start()
             self.addCleanup(p.stop)
         self.launched, self.said = [], []
@@ -75,10 +83,10 @@ class SendingATurn(ChatBase):
         self.assertFalse(kw.get("read_only", False))
         self.assertNotIn("mode", kw)
         self.assertNotIn("permission_mode", kw)
-        self.assertIn("/api/subs", args[0])
+        self.assertIn("narrowest useful tool", args[0])
         self.assertEqual(kw["meta"], {"kind": "chat"})
         self.assertEqual(kw["provider"], "anthropic")   # the engine with the tools
-        self.assertIn("mcp__vira__find first", args[0])
+        self.assertIn("mcp__vira__find", args[0])
         self.assertIn("What is on my calendar tomorrow?", args[0])
         self.assertEqual(s["job_id"], "job000000001")
         self.assertEqual(s["turns"][0]["status"], "pending")
@@ -89,7 +97,7 @@ class SendingATurn(ChatBase):
             virachat.send("hello")
         args, kw = self.launched[0]
         self.assertEqual(kw["provider"], "openai")
-        self.assertIn("vira.find first", args[0])
+        self.assertIn("vira.find", args[0])
         self.assertNotIn("mcp__vira__find", args[0])
 
     def test_a_later_turn_talks_to_the_same_session(self):
@@ -128,6 +136,7 @@ class FollowingATurn(ChatBase):
     """_follow driven with a scripted sequence of snapshots and a fake clock."""
 
     def drive(self, snaps, prior="", max_s=60, sent_t=0.0):
+        virachat._mutate(lambda st: st["sessions"][self.sid]["turns"][0].update(sent_t=sent_t))
         seq = iter(snaps)
         last = {"s": None}
 
@@ -143,6 +152,9 @@ class FollowingATurn(ChatBase):
             virachat._follow(self.sid, 0, "job000000001", prior, sent_t, max_s=max_s,
                              clock=lambda: clock["t"],
                              sleep=lambda s: clock.__setitem__("t", clock["t"] + s))
+            for call in virachat.threading.Thread.call_args_list:
+                if call.kwargs.get("target") is virachat._enrich:
+                    virachat._enrich(*call.kwargs["args"])
         return virachat.current()["turns"][0]
 
     def setUp(self):
@@ -184,6 +196,300 @@ class FollowingATurn(ChatBase):
         virachat._finish_turn(self.sid, 0, "first", "", [], [], [], [])
         virachat._finish_turn(self.sid, 0, "second", "", [], [], [], [])
         self.assertEqual(virachat.current()["turns"][0]["answer"], "first")
+
+
+class AnswerDelivery(ChatBase):
+    def setUp(self):
+        super().setUp()
+        self.chat = virachat.send("original question")
+        self.sid = self.chat["id"]
+        self.key = self.chat["turns"][0]["id"]
+
+    def follow(self, result="the answer"):
+        with mock.patch.object(virachat, "_session_snapshot", return_value=snap(result=result)):
+            virachat._follow(self.sid, 0, "job000000001", "", turn_key=self.key)
+
+    def worker(self):
+        calls = [c for c in virachat.threading.Thread.call_args_list
+                 if c.kwargs.get("target") is virachat._enrich]
+        self.assertEqual(len(calls), 1)
+        thread = REAL_THREAD(target=virachat._enrich, args=calls[0].kwargs["args"])
+        thread.start()
+        return thread
+
+    def test_every_slow_enrichment_stage_runs_after_the_answer_is_readable(self):
+        for stage in ("looked_at", "citations", "_concepts"):
+            with self.subTest(stage=stage):
+                # Each phase can stall independently. No phase may delay
+                # answer delivery, nor may reading the chat retry it.
+                if stage != "looked_at":
+                    self.chat = virachat.new()
+                    self.chat = virachat.send("original question")
+                    self.sid = self.chat["id"]
+                    self.key = self.chat["turns"][0]["id"]
+                    virachat.threading.Thread.reset_mock()
+                entered, release = threading.Event(), threading.Event()
+                result = ([], []) if stage == "_concepts" else []
+
+                def blocked(*args, **kwargs):
+                    entered.set()
+                    self.assertTrue(release.wait(2))
+                    return result
+                with mock.patch.object(virachat, "looked_at", return_value=[]), \
+                     mock.patch.object(virachat, "citations", return_value=[]), \
+                     mock.patch.object(virachat, "_concepts", return_value=([], [])), \
+                     mock.patch.object(virachat, stage, side_effect=blocked):
+                    self.follow()
+                    thread = self.worker()
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        for _ in range(2):
+                            t = virachat.current()["turns"][0]
+                            self.assertEqual((t["status"], t["answer"]), ("done", "the answer"))
+                            self.assertEqual(t["enrichment"]["status"], "running")
+                        self.assertEqual(len([c for c in virachat.threading.Thread.call_args_list
+                                              if c.kwargs.get("target") is virachat._enrich]), 1)
+                    finally:
+                        release.set()
+                        thread.join(2)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(virachat.current()["turns"][0]["enrichment"]["status"], "done")
+
+    def test_timeout_releases_enrichment_and_discards_its_late_result(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked(*args):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return [{"term": "late", "weight": .5}], ["Late suggestion?"]
+        with mock.patch.object(virachat, "_concepts", side_effect=blocked):
+            self.follow()
+            thread = self.worker()
+            try:
+                self.assertTrue(entered.wait(2))
+                t = virachat.current()["turns"][0]
+                timer_call = virachat.threading.Timer.call_args
+                with mock.patch.object(virachat.time, "time", return_value=t["enrichment"]["deadline_t"] + 1):
+                    timer_call.args[1](*timer_call.kwargs["args"], **timer_call.kwargs["kwargs"])
+                    self.assertEqual(virachat.current()["turns"][0]["enrichment"]["status"], "failed")
+                next_chat = virachat.send("next question")
+                self.assertEqual(next_chat["turns"][-1]["status"], "pending")
+            finally:
+                release.set()
+                thread.join(2)
+        old = virachat.current()["turns"][0]
+        self.assertEqual((old["status"], old["answer"]), ("done", "the answer"))
+        self.assertEqual(old["enrichment"]["status"], "failed")
+        self.assertEqual(virachat.current()["concepts"], [])
+
+    def test_new_turn_during_enrichment_keeps_the_original_question_and_current_summary(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked(_answer):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return []
+        with mock.patch.object(virachat, "citations", side_effect=blocked), \
+             mock.patch.object(virachat, "_concepts", return_value=([
+                 {"term": "old", "weight": .5}], ["Old suggestion?"])) as concepts:
+            self.follow()
+            thread = self.worker()
+            try:
+                self.assertTrue(entered.wait(2))
+                virachat.send("new question")
+                virachat._finish_turn(self.sid, 1, "new answer", "", [], [],
+                                      [{"term": "new", "weight": .6}], ["New suggestion?"])
+            finally:
+                release.set()
+                thread.join(2)
+        self.assertEqual(concepts.call_args.args[0], "original question")
+        s = virachat.current()
+        self.assertEqual(s["follow_up_questions"], ["New suggestion?"])
+        self.assertEqual([c["term"] for c in s["concepts"]], ["new"])
+        self.assertEqual(s["turns"][0]["enrichment"]["status"], "done")
+
+    def test_old_callbacks_cannot_replace_a_later_turn_and_history_is_preserved(self):
+        self.follow()
+        virachat.send("replacement question")
+        virachat._finish_turn(self.sid, 0, "stale answer", "", [], [], [], [], turn_key=self.key)
+        virachat._finish_enrichment(self.sid, self.key, [{"kind": "find"}], [], [], ["Stale?"])
+        s = virachat.current()
+        self.assertEqual(s["turns"][1]["question"], "replacement question")
+        self.assertEqual(s["turns"][1]["status"], "pending")
+        self.assertEqual(s["turns"][1]["looked_at"], [])
+        self.assertNotEqual(s["turns"][0]["answer"], "stale answer")
+        self.assertEqual(s["follow_up_questions"], [])
+
+    def test_send_preserves_decoration_that_finishes_while_the_next_session_opens(self):
+        self.follow()
+
+        def opening(*args, **kwargs):
+            virachat._finish_enrichment(self.sid, self.key, [{"kind": "find", "query": "old"}], [], [], [])
+            return "job000000001", False, False
+        with mock.patch.object(virachat, "_open_session", side_effect=opening):
+            s = virachat.send("next question")
+        self.assertEqual(s["turns"][0]["looked_at"], [{"kind": "find", "query": "old"}])
+        self.assertEqual(s["turns"][0]["enrichment"]["status"], "done")
+
+    def test_enrichment_exception_is_named_without_changing_the_answer(self):
+        with mock.patch.object(virachat, "citations", side_effect=RuntimeError("lookup failed")):
+            self.follow()
+            thread = self.worker()
+            thread.join(2)
+        t = virachat.current()["turns"][0]
+        self.assertEqual((t["status"], t["answer"]), ("done", "the answer"))
+        self.assertEqual(t["enrichment"], {"status": "failed", "deadline_t": t["enrichment"]["deadline_t"],
+                                          "error": "lookup failed"})
+
+
+    def test_sources_survive_concept_failure_and_are_counted_once(self):
+        card = {"kind": "find", "query": "original"}
+        cite = {"path": "wiki/source.md", "title": "source"}
+        with mock.patch.object(virachat, "looked_at", return_value=[card]), \
+             mock.patch.object(virachat, "citations", return_value=[cite]), \
+             mock.patch.object(virachat, "_concepts", side_effect=RuntimeError("concept failed")):
+            self.follow()
+            thread = self.worker()
+            thread.join(2)
+        s = virachat.current()
+        self.assertEqual(s["turns"][0]["looked_at"], [card])
+        self.assertEqual(s["turns"][0]["citations"], [cite])
+        self.assertEqual(s["cited"][0]["count"], 1)
+        self.assertEqual(s["turns"][0]["enrichment"]["status"], "failed")
+
+    def test_sources_are_visible_during_a_blocked_concept_pass_and_survive_timeout(self):
+        entered, release = threading.Event(), threading.Event()
+        card = {"kind": "find", "query": "original"}
+        cite = {"path": "wiki/source.md", "title": "source"}
+
+        def blocked(*args):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return [], []
+        with mock.patch.object(virachat, "looked_at", return_value=[card]), \
+             mock.patch.object(virachat, "citations", return_value=[cite]), \
+             mock.patch.object(virachat, "_concepts", side_effect=blocked):
+            self.follow()
+            thread = self.worker()
+            try:
+                self.assertTrue(entered.wait(2))
+                t = virachat.current()["turns"][0]
+                self.assertEqual(t["looked_at"], [card])
+                self.assertEqual(t["citations"], [cite])
+                with mock.patch.object(virachat.time, "time", return_value=t["enrichment"]["deadline_t"] + 1):
+                    expired = virachat.current()["turns"][0]
+                    self.assertEqual(expired["enrichment"]["status"], "failed")
+            finally:
+                release.set()
+                thread.join(2)
+        t = virachat.current()["turns"][0]
+        self.assertEqual(t["looked_at"], [card])
+        self.assertEqual(t["citations"], [cite])
+
+
+class Recovery(ChatBase):
+    def write_snapshot(self, result, **extra):
+        path = jobfiles.job_dir("job000000001") / "state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(dict(snap(status="done", awaiting=None, result=result), **extra)),
+                        encoding="utf-8")
+
+    def make_legacy(self, sid, idx):
+        def up(st):
+            t = st["sessions"][sid]["turns"][idx]
+            for key in ("id", "prior_result", "job_id"):
+                t.pop(key, None)
+        virachat._mutate(up)
+
+    def test_current_recovers_a_legacy_answer_from_a_finished_durable_job(self):
+        s = virachat.send("question")
+        self.make_legacy(s["id"], 0)
+        self.write_snapshot("recovered answer")
+        recovered = virachat.current()
+        self.assertEqual(recovered["turns"][0]["answer"], "recovered answer")
+        self.assertEqual(recovered["turns"][0]["status"], "done")
+        self.assertEqual(recovered["turns"][0]["enrichment"]["status"], "running")
+        virachat.current()
+        calls = [c for c in virachat.threading.Thread.call_args_list
+                 if c.kwargs.get("target") is virachat._enrich]
+        self.assertEqual(len(calls), 1)
+
+    def test_current_does_not_recover_the_previous_answer_for_a_legacy_new_question(self):
+        s = virachat.send("first question")
+        virachat._finish_turn(s["id"], 0, "previous answer", "", [], [], [], [])
+        virachat.send("new question")
+        self.make_legacy(s["id"], 1)
+        self.write_snapshot("previous answer")
+        t = virachat.current()["turns"][1]
+        self.assertEqual((t["status"], t["answer"]), ("pending", ""))
+
+    def test_session_baseline_prevents_recovering_an_answer_not_yet_in_the_chat(self):
+        s = virachat.send("first question")
+        virachat._finish_turn(s["id"], 0, "chat answer", "", [], [], [], [])
+        self.sessions.get.return_value = snap(result="answer from session terminal")
+        virachat.send("new question")
+        t = virachat.current()["turns"][1]
+        self.assertEqual((t["status"], t["answer"]), ("pending", ""))
+
+    def test_current_expires_enrichment_whose_timer_was_lost_on_restart(self):
+        s = virachat.send("question")
+        virachat._finish_turn(s["id"], 0, "answer", "", [], [], [], [], enrich=True)
+        t = virachat.current()["turns"][0]
+        with mock.patch.object(virachat.time, "time", return_value=t["enrichment"]["deadline_t"] + 1):
+            t = virachat.current()["turns"][0]
+        self.assertEqual(t["status"], "done")
+        self.assertEqual(t["enrichment"]["status"], "failed")
+
+
+    def test_current_expires_a_launch_reservation_abandoned_by_a_crash(self):
+        s = virachat.send("question")
+        virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
+            launching=True, sent_t=time.time() - virachat.TURN_MAX_S - 1))
+        t = virachat.current()["turns"][0]
+        self.assertEqual(t["status"], "failed")
+        self.assertIn("did not finish starting", t["answer"])
+        self.assertEqual(virachat.send("next question")["turns"][-1]["status"], "pending")
+
+    def test_a_late_launch_cannot_replace_the_new_turns_job_after_its_lease_expires(self):
+        s = virachat.new()
+        opened = []
+
+        def opening(job_id, question, **kwargs):
+            opened.append(question)
+            if question == "slow launch":
+                virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
+                    sent_t=time.time() - virachat.TURN_MAX_S - 1))
+                self.assertEqual(virachat.current()["turns"][0]["status"], "failed")
+                virachat.send("new launch")
+                return "job_old_late", False, False
+            return "job_new", False, False
+        with mock.patch.object(virachat, "_open_session", side_effect=opening):
+            result = virachat.send("slow launch")
+        self.assertEqual(opened, ["slow launch", "new launch"])
+        self.assertEqual(result["job_id"], "job_new")
+        self.assertEqual(result["turns"][-1]["job_id"], "job_new")
+        followers = [c for c in virachat.threading.Thread.call_args_list
+                     if c.kwargs.get("target") is virachat._follow]
+        self.assertEqual(len(followers), 1)
+        self.assertEqual(followers[0].kwargs["args"][2], "job_new")
+
+    def test_current_expires_a_pending_turn_whose_follower_was_lost(self):
+        s = virachat.send("question")
+        virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
+            sent_t=time.time() - virachat.TURN_MAX_S - 1))
+        t = virachat.current()["turns"][0]
+        self.assertEqual(t["status"], "failed")
+        self.assertIn("no answer after", t["answer"])
+
+
+class ConceptCompletion(unittest.TestCase):
+    def test_concept_prompt_uses_the_captured_question_with_no_tools(self):
+        with mock.patch("server.suggest.complete", return_value='{"concepts": []}') as complete:
+            virachat._concepts("the original question", "the original answer", [], [])
+        self.assertIn("QUESTION:\nthe original question", complete.call_args.args[0])
+        self.assertEqual(complete.call_args.kwargs["tools"], [])
+        self.assertEqual(complete.call_args.kwargs["work_class"], "auxiliary")
+        self.assertLessEqual(complete.call_args.kwargs["timeout"], virachat.ENRICHMENT_MAX_S)
 
 
 class WhatItLookedAt(unittest.TestCase):
@@ -285,7 +591,8 @@ class TheRunnerRecordsWhatATurnLookedAt(unittest.TestCase):
 
     def test_render_and_reply_are_wired(self):
         src = Path(runner.__file__).read_text(encoding="utf-8")
-        self.assertIn("self.record_tool(b.name, b.input)", src)
+        self.assertIn("self.native_tool(b.id, b.name, b.input)", src)
+        self.assertIn("self.record_tool(name, arguments)", src)
         i = src.index("await client.query(reply)")
         self.assertIn('self.state["turn"]', src[i - 400:i])
 

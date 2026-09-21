@@ -205,6 +205,95 @@ def ollama_embed(texts, timeout=None):
     return out
 
 
+
+_QUERY_CACHE = {}
+_QUERY_FLIGHTS = {}
+_QUERY_LOCK = threading.Lock()
+_QUERY_SLOTS = threading.BoundedSemaphore(2)
+_QUERY_CACHE_TTL = 600.0
+
+
+def clear_query_cache():
+    with _QUERY_LOCK:
+        _QUERY_CACHE.clear()
+
+
+def query_embedding(text, deadline=None):
+    """Shared interactive query cache, with short I/O and bounded concurrency.
+
+    Failed/late embeddings are not cached. Background indexing continues to
+    call ollama_embed directly and cannot consume these admission slots.
+    """
+    import time
+    from . import retrieval
+    key = (EMBED_MODEL, str(text)[:5986])
+    end = time.monotonic() + min(1.5, retrieval.remaining(deadline, maximum=1.5))
+    with _QUERY_LOCK:
+        cached = _QUERY_CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < _QUERY_CACHE_TTL:
+            return cached[1]
+        event = _QUERY_FLIGHTS.get(key)
+        owner = event is None
+        if owner:
+            event = threading.Event()
+            _QUERY_FLIGHTS[key] = event
+    if not owner:
+        event.wait(max(0.0, end - time.monotonic()))
+        with _QUERY_LOCK:
+            cached = _QUERY_CACHE.get(key)
+            return cached[1] if cached and time.monotonic() - cached[0] < _QUERY_CACHE_TTL else None
+    try:
+        if not _QUERY_SLOTS.acquire(blocking=False):
+            return None
+        try:
+            left = end - time.monotonic()
+            if left <= 0:
+                return None
+            vectors = ollama_embed(["search_query: " + key[1]], timeout=left)
+            if vectors and time.monotonic() <= end:
+                vector = vectors[0]
+                with _QUERY_LOCK:
+                    if len(_QUERY_CACHE) >= 256:
+                        oldest = min(_QUERY_CACHE, key=lambda k: _QUERY_CACHE[k][0])
+                        _QUERY_CACHE.pop(oldest, None)
+                    _QUERY_CACHE[key] = (time.monotonic(), vector)
+                return vector
+            return None
+        finally:
+            _QUERY_SLOTS.release()
+    finally:
+        with _QUERY_LOCK:
+            _QUERY_FLIGHTS.pop(key, None)
+            event.set()
+
+
+def query_scene_embedding(q, deadline=None):
+    """Only an already-loaded vision model may serve an interactive query."""
+    from . import retrieval
+    if not scene_ready():
+        return None
+    wait = retrieval.remaining(deadline, maximum=0.25)
+    if not _infer_lock.acquire(timeout=max(0.0, wait)):
+        return None
+    try:
+        import torch
+        s = _siglip
+        with torch.no_grad():
+            inp = s["proc"](text=[q.lower()], padding="max_length", max_length=64,
+                            truncation=True, return_tensors="pt").to(s["dev"])
+            v = s["model"].get_text_features(**inp)
+            if hasattr(v, "pooler_output"):
+                v = v.pooler_output
+            v = v / v.norm(dim=-1, keepdim=True)
+        return v.float().cpu().numpy()[0]
+    finally:
+        _infer_lock.release()
+
+
+def scene_ready():
+    """Interactive text retrieval never needs to cold-load a vision model."""
+    return bool(_siglip.get("model"))
+
 def ollama_caption(path, prompt):
     """One dense caption via the local VLM, or None when unreachable."""
     Image = _pil()

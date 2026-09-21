@@ -22,6 +22,9 @@ Everything else delegates to a lazily (re)built qocha.Vault.
 
 from . import modulemodels
 import hashlib
+import base64
+import json
+import sqlite3
 import re
 import threading
 import time
@@ -35,7 +38,7 @@ from qocha import Config as _QochaConfig, Vault as _QochaVault
 from qocha.chunker import (CHUNK_MAX, CHUNK_TARGET,  # noqa: F401 — re-export
                            chunk_markdown)
 
-from . import settings
+from . import settings, retrieval
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "data" / "vault-index.sqlite"
@@ -76,9 +79,7 @@ def model_path_allowed(path):
         actual = (spec["root"] / rel).resolve().relative_to(spec["root"].resolve()).as_posix()
     except (OSError, ValueError):
         return False
-    return not any(vaultwrite._under(value, folder, protected=True)
-                   for value in (rel, actual)
-                   for folder in spec.get("model_exclude_dirs", []))
+    return _path_allowed(spec, rel, _read_policy(True))
 
 
 def _model_hits(hits):
@@ -369,176 +370,252 @@ def embed_pending(limit=2000):
     return total
 
 
-def search(q, limit=10, for_model=False):
-    hits = []
-    for row in _vault_rows():
-        if (for_model or _MODEL_ACCESS.get()) and not row["spec"]["model_exposure"]:
-            continue
-        if not row["spec"]["root"].is_dir():
-            continue
+def _read_policy(for_model=False, policy=None):
+    return retrieval.request_for(policy=policy,
+        for_model=bool(for_model or _MODEL_ACCESS.get())).policy
+
+
+def _path_allowed(spec, rel, policy):
+    if policy.corpus_ids is not None and "notes" not in policy.corpus_ids:
+        return False
+    if not spec.get("read_enabled", True):
+        return False
+    if policy.source_ids is not None and spec["id"] not in policy.source_ids:
+        return False
+    if policy.for_model and not spec.get("model_exposure"):
+        return False
+    public = _public_path(spec, rel)
+    if policy.path_prefixes and not any(public == p or public.startswith(p.rstrip("/") + "/")
+                                       for p in policy.path_prefixes):
+        return False
+    root = spec["root"].resolve()
+    try:
+        actual = (root / rel).resolve().relative_to(root).as_posix()
+    except (ValueError, OSError):
+        return False
+    if policy.for_model:
+        from .vaultwrite import _under
+        if any(_under(p, folder, protected=True)
+               for p in (rel, actual) for folder in spec.get("model_exclude_dirs", ())):
+            return False
+    return True
+
+
+def _query_cursor(query_key, generation, offset):
+    return base64.urlsafe_b64encode(json.dumps(
+        {"q": query_key, "g": generation, "o": offset}, separators=(",", ":")
+    ).encode("utf-8")).decode("ascii")
+
+
+def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
+                until=None, order="relevance", date_field="modified", policy=None,
+                deadline=None, semantic=False, phrases=(), literal=False):
+    """Policy-scoped notes with explicit count, pagination and coverage.
+
+    Dates are file modification times, never claimed to be event dates.
+    Literal enumeration/count is exhaustive over the indexed snapshot; semantic
+    search is ranked and is never represented as an exhaustive event census.
+    """
+    since, until = retrieval.validate_date_window(since, until)
+    if mode not in ("search", "enumerate", "count"):
+        raise ValueError("mode must be search, enumerate, or count")
+    if date_field != "modified":
+        raise ValueError("notes support date_field='modified'; event dates require source evidence")
+    if order not in ("relevance", "recent", "oldest"):
+        raise ValueError("invalid order")
+    request = retrieval.request_for(policy=_read_policy(policy=policy), deadline=deadline,
+                                     semantic=semantic)
+    if request.deadline is None:
+        request = retrieval.Request(request.policy, time.monotonic() + retrieval.DEFAULT_BUDGET_S,
+                                    request.semantic, request.allow_cold_models)
+    limit = max(1, min(int(limit), 2000))
+    q = str(query or "").strip()
+    lo, hi = _epoch(since), _epoch(until)
+    signature = hashlib.sha256(json.dumps([q, mode, since, until, order, date_field,
+        request.policy.for_model, request.policy.source_ids, request.policy.path_prefixes,
+        semantic, list(phrases), literal], sort_keys=True).encode("utf-8")).hexdigest()
+    requested_offset = 0
+    if cursor:
         try:
-            hits.extend(_hit(row, h) for h in
-                        row["vault"].search(q, limit=max(limit * 2, 20)))
-        except Exception:  # a missing/unmounted source is an honest partial
-            continue
-    if for_model or _MODEL_ACCESS.get():
-        hits = _model_hits(hits)
-    hits.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
-    return hits[:limit]
+            requested_offset = int(json.loads(base64.urlsafe_b64decode(str(cursor)).decode("utf-8"))["o"])
+            if requested_offset < 0:
+                raise ValueError("negative cursor")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError("invalid cursor") from exc
+    hits, coverage, generations = [], [], []
+    with retrieval.request_scope(request):
+        for row in _vault_rows():
+            if request.policy.corpus_ids is not None and "notes" not in request.policy.corpus_ids:
+                break
+            spec = row["spec"]
+            if request.policy.source_ids is not None and spec["id"] not in request.policy.source_ids:
+                continue
+            if request.policy.for_model and not spec.get("model_exposure"):
+                continue
+            started = time.monotonic()
+            state = {"source_id": spec["id"], "status": "complete", "mode": "fts",
+                     "date_field": "modified"}
+            con = None
+            try:
+                retrieval.check_deadline()
+                if not spec["root"].is_dir() or not Path(spec["db"]).exists():
+                    state.update(status="unavailable", error="source or index unavailable")
+                    coverage.append(state)
+                    continue
+                con = sqlite3.connect(Path(spec["db"]).resolve().as_uri() + "?mode=ro",
+                                      uri=True, timeout=min(0.2, retrieval.remaining(maximum=0.2)))
+                con.row_factory = sqlite3.Row
+                retrieval.configure_connection(con)
+                meta = dict(con.execute("SELECT k,v FROM meta"))
+                state["last_scan"] = meta.get("last_scan")
+                generations.append([spec["id"], meta.get("gen"), meta.get("last_scan"),
+                                    spec.get("model_exposure"), spec.get("model_exclude_dirs", [])])
+                where, params = [], []
+                if lo is not None:
+                    where.append("n.mtime>=?")
+                    params.append(lo)
+                if hi is not None:
+                    where.append("n.mtime<?")
+                    params.append(hi)
+                notes = {r["path"]: dict(r) for r in con.execute(
+                    "SELECT n.path,n.title,n.mtime,n.size FROM notes n" +
+                    (" WHERE " + " AND ".join(where) if where else ""), params)}
+                # Restrict allowed paths before chunk ranking/limit. This also
+                # checks resolved paths so an excluded folder cannot be aliased.
+                allowed = set()
+                for i, path in enumerate(notes):
+                    if i % 100 == 0:
+                        retrieval.check_deadline()
+                    if _path_allowed(spec, path, request.policy):
+                        allowed.add(path)
+                con.execute("CREATE TEMP TABLE allowed_notes(path TEXT PRIMARY KEY)")
+                con.executemany("INSERT INTO allowed_notes VALUES(?)", ((p,) for p in allowed))
+                chunks = {r["id"]: dict(r) for r in con.execute(
+                    "SELECT c.id,c.path,c.seq,c.heading FROM chunks c JOIN allowed_notes a ON a.path=c.path")}
+                cand = set(chunks)
+                if literal and q:
+                    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    pattern = "%" + escaped + "%"
+                    ids = {r[0] for r in con.execute(
+                        "SELECT c.id FROM chunks c JOIN allowed_notes a ON a.path=c.path "
+                        "JOIN notes n ON n.path=c.path WHERE c.text LIKE ? ESCAPE '\\' "
+                        "OR n.title LIKE ? ESCAPE '\\' OR c.path LIKE ? ESCAPE '\\'",
+                        (pattern, pattern, pattern))}
+                    ordered = sorted(ids)
+                elif q:
+                    ids = retrieval.matching_fts(con, q, cand, table="chunks_fts", phrases=phrases)
+                    ordered = retrieval.rank_fts(con, q, ids, max(1, len(ids)),
+                                                table="chunks_fts", phrases=phrases)
+                else:
+                    ordered = sorted(cand)
+                    ids = cand
+                scores = retrieval.rrf([ordered]) if q else {}
+                # Semantic augmentation is opt-in and shares one bounded query
+                # embedding. Candidate and access masks precede vector ranking.
+                if semantic and q and mode == "search" and order == "relevance" and not literal:
+                    from . import localmodels
+                    vector = localmodels.query_embedding(q, deadline=request.deadline)
+                    if vector is not None:
+                        vectors = con.execute("SELECT chunk_id,vec FROM vecs").fetchall()
+                        if vectors:
+                            matrix = retrieval.stack_vecs([r["vec"] for r in vectors])
+                            space = (retrieval.np.array([r["chunk_id"] for r in vectors]), matrix)
+                            sem = retrieval.rank_vec(space, vector, cand, 0.35,
+                                                     limit=max(limit * 4, 200))
+                            scores = retrieval.rrf([ordered, sem])
+                            ordered = sorted(scores, key=scores.get, reverse=True)
+                            state["mode"] = "hybrid"
+                    else:
+                        state.update(status="partial", semantic_status="unavailable",
+                                     error="semantic augmentation unavailable within deadline; lexical matches retained")
+                seen = set()
+                for cid in ordered:
+                    c = chunks[cid]
+                    if c["path"] in seen:
+                        continue
+                    seen.add(c["path"])
+                    note = notes[c["path"]]
+                    hits.append(_hit(row, {"path": c["path"], "title": note["title"],
+                        "heading": c["heading"] or "", "text": "",
+                        "mtime": note["mtime"], "date_field": "modified",
+                        "size": note["size"], "score": scores.get(cid),
+                        "chunk_id": cid, "chunk_seq": c["seq"], "literal": literal,
+                        "_db": str(spec["db"]),
+                        "index_generation": meta.get("gen"), "last_scan": meta.get("last_scan")}))
+                state["matched_notes"] = len(seen)
+            except (TimeoutError, sqlite3.OperationalError) as exc:
+                status = "timed_out" if isinstance(exc, TimeoutError) or retrieval.remaining() == 0 else "unavailable"
+                state.update(status=status, error=str(exc) or status)
+            except (OSError, ValueError) as exc:
+                state.update(status="unavailable", error=str(exc))
+            finally:
+                if con is not None:
+                    con.close()
+            state["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+            coverage.append(state)
+    if order in ("recent", "oldest") or not q:
+        hits.sort(key=lambda h: (h.get("mtime") or 0, h["path"]), reverse=order != "oldest")
+    else:
+        hits.sort(key=lambda h: (-(h.get("score") or 0), h["path"]))
+    generation = hashlib.sha256(json.dumps(generations, sort_keys=True).encode("utf-8")).hexdigest()
+    offset = 0
+    if cursor:
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(str(cursor)).decode("utf-8"))
+            if decoded["q"] != signature or decoded["g"] != generation:
+                raise ValueError("query or index changed; restart pagination")
+            offset = int(decoded["o"])
+            if offset < 0:
+                raise ValueError("invalid cursor")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError("invalid or stale cursor; restart pagination") from exc
+    complete = all(c["status"] == "complete" for c in coverage)
+    page = [] if mode == "count" else hits[offset:offset + limit]
+    for hit in page:
+        try:
+            retrieval.check_deadline(request.deadline)
+            con = sqlite3.connect(Path(hit["_db"]).resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1)
+            try:
+                retrieval.configure_connection(con, request.deadline)
+                found = con.execute("SELECT text FROM chunks WHERE id=?", (hit["chunk_id"],)).fetchone()
+                hit["text"] = found[0] if found else ""
+            finally:
+                con.close()
+        except (TimeoutError, sqlite3.Error) as exc:
+            complete = False
+            coverage.append({"source_id": hit.get("vault_id"), "status": "partial", "error": "source excerpt unavailable: " + str(exc)})
+    for hit in hits:
+        hit.pop("_db", None)
+    next_cursor = _query_cursor(signature, generation, offset + limit) if complete and mode != "count" and offset + limit < len(hits) else None
+    return {"rows": page, "hits": page, "total": len(hits), "total_exact": complete and not semantic,
+            "next_cursor": next_cursor, "complete": complete, "coverage": coverage,
+            "date_field": date_field, "match_mode": "literal" if literal else "lexical",
+            "scope": "indexed notes", "mode": mode}
+
+
+def search(q, limit=10, for_model=False, policy=None, deadline=None, semantic=None):
+    request = retrieval.current_request()
+    semantic = request.semantic if semantic is None and request else bool(semantic)
+    out = query_notes(q, limit=limit, policy=_read_policy(for_model, policy),
+                      deadline=deadline, semantic=semantic)
+    return retrieval.Hits(out["hits"], coverage=out["coverage"], total=out["total"], next_cursor=out["next_cursor"])
 
 
 def search_filtered(q, limit=10, since=None, until=None, order="relevance",
-                    for_model=False):
-    """Hybrid hits narrowed to a date window and optionally re-ordered by
-    note age. qocha ranks by similarity alone; `notes.mtime` has been in
-    the schema since the start but nothing ever queried it, which is why
-    "the most recent session where..." was unanswerable. ISO dates in,
-    hits out with `mtime` attached.
-
-    With no query text this is a pure browse: newest (or oldest) notes in
-    the window, one row per note.
-    """
-    lo, hi = _epoch(since), _epoch(until)
-    q = (q or "").strip()
-    out = []
-    for row in _vault_rows():
-        if (for_model or _MODEL_ACCESS.get()) and not row["spec"]["model_exposure"]:
-            continue
-        if not row["spec"]["root"].is_dir():
-            continue
-        try:
-            out.extend(_search_filtered_one(row, q, max(limit, 1), lo, hi,
-                                            order))
-        except Exception:  # a disconnected source must not hide the others
-            continue
-    if for_model or _MODEL_ACCESS.get():
-        out = _model_hits(out)
-    if order in ("recent", "oldest"):
-        out.sort(key=lambda h: h["mtime"] or 0, reverse=order == "recent")
-    elif q:
-        out.sort(key=lambda h: float(h.get("score") or 0), reverse=True)
-    else:
-        out.sort(key=lambda h: h["mtime"] or 0, reverse=True)
-    return out[:limit]
-
-
-def _search_filtered_one(row, q, limit, lo, hi, order):
-    con = row["vault"]._connect()
-    try:
-        _init(con)
-        if not q:
-            where, params = [], []
-            if lo is not None:
-                where.append("n.mtime >= ?")
-                params.append(lo)
-            if hi is not None:
-                where.append("n.mtime < ?")
-                params.append(hi)
-            rows = con.execute(
-                "SELECT n.path, n.title, n.mtime, c.heading, c.text "
-                "FROM notes n LEFT JOIN chunks c"
-                " ON c.path=n.path AND c.seq=0"
-                + (" WHERE " + " AND ".join(where) if where else "")
-                + " ORDER BY n.mtime " + ("ASC" if order == "oldest"
-                                          else "DESC")
-                + " LIMIT ?", (*params, limit)).fetchall()
-            return [_hit(row, {"path": r["path"], "title": r["title"],
-                                "heading": r["heading"] or "",
-                                "text": r["text"] or "",
-                                "mtime": r["mtime"], "score": None})
-                    for r in rows]
-
-        # A filtered or re-ordered search has to over-fetch, and by a lot:
-        # "the newest note about X" means the newest of ALL the notes about
-        # X, not the newest of the ten the ranker happened to like best.
-        deep = (max(limit * 8, 200)
-                if (lo is not None or hi is not None or order != "relevance")
-                else limit)
-        hits = row["vault"].search(q, limit=deep)
-        mt = {r["path"]: r["mtime"] for r in
-              con.execute("SELECT path, mtime FROM notes")}
-    finally:
-        con.close()
-
-    out = []
-    for h in hits:
-        mtime = mt.get(h["path"])
-        if lo is not None and (mtime is None or mtime < lo):
-            continue
-        if hi is not None and (mtime is None or mtime >= hi):
-            continue
-        out.append(_hit(row, dict(h, mtime=mtime)))
-    return out
+                    for_model=False, policy=None, deadline=None, phrases=()):
+    request = retrieval.current_request()
+    out = query_notes(q, limit=limit, since=since, until=until, order=order,
+        policy=_read_policy(for_model, policy), deadline=deadline,
+        semantic=request.semantic if request else False, phrases=phrases)
+    return retrieval.Hits(out["hits"], coverage=out["coverage"], total=out["total"], next_cursor=out["next_cursor"])
 
 
 def grep_notes(text, limit=None, since=None, until=None, order="recent",
-               for_model=False):
-    """Literal, exhaustive substring match over every indexed chunk.
-
-    Nothing here ranks and nothing here truncates by relevance. This is the
-    path that was missing entirely: a similarity retriever cannot answer
-    "show me every note that mentions X", and that is most of what a work
-    record is asked for. The engine returned the top 8 by cosine and the
-    right note sat at rank 34 (2026-07-25) -- no amount of tuning fixes a
-    question the contract cannot express.
-
-    Ordered by note age, because when you have every match the useful axis is
-    time, not score.
-    """
-    text = (text or "").strip()
-    if not text:
-        return []
-    lo, hi = _epoch(since), _epoch(until)
-    out = []
-    for row in _vault_rows():
-        if (for_model or _MODEL_ACCESS.get()) and not row["spec"]["model_exposure"]:
-            continue
-        if not row["spec"]["root"].is_dir():
-            continue
-        try:
-            out.extend(_grep_one(row, text, lo, hi))
-        except Exception:
-            continue
-    if for_model or _MODEL_ACCESS.get():
-        out = _model_hits(out)
-    out.sort(key=lambda h: h["mtime"] or 0, reverse=order != "oldest")
-    return out[:limit] if limit else out
-
-
-def _grep_one(row, text, lo, hi):
-    con = row["vault"]._connect()
-    try:
-        _init(con)
-        sql = ("SELECT c.path, n.title, c.heading, c.text, n.mtime "
-               "FROM chunks c JOIN notes n ON n.path = c.path "
-               "WHERE (c.text LIKE ? ESCAPE '\\' "
-               "OR n.title LIKE ? ESCAPE '\\' "
-               "OR c.path LIKE ? ESCAPE '\\')")
-        pat = "%" + text.replace("\\", "\\\\").replace(
-            "%", "\\%").replace("_", "\\_") + "%"
-        params = [pat, pat, pat]
-        if lo is not None:
-            sql += " AND n.mtime >= ?"
-            params.append(lo)
-        if hi is not None:
-            sql += " AND n.mtime < ?"
-            params.append(hi)
-        rows = con.execute(sql, params).fetchall()
-    finally:
-        con.close()
-
-    out, seen = [], set()
-    for result in rows:
-        key = (result["path"], result["heading"])
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(_hit(row, {
-            "path": result["path"], "title": result["title"],
-            "heading": result["heading"] or "", "text": result["text"] or "",
-            "mtime": result["mtime"], "score": None, "literal": True,
-        }))
-    return out
+               for_model=False, policy=None, deadline=None):
+    # Legacy callers get a list; new agents use query_notes with a cursor.
+    out = query_notes(text, limit=limit or 2000, since=since, until=until, order=order,
+        mode="enumerate", literal=True, policy=_read_policy(for_model, policy), deadline=deadline)
+    return retrieval.Hits(out["hits"], coverage=out["coverage"], total=out["total"], next_cursor=out["next_cursor"])
 
 
 def _epoch(iso):
@@ -619,7 +696,7 @@ def note_text(path, cap=None, for_model=False):
     engine appends an in-band marker). See qocha's note_text docstring.
     """
     row, rel = _source_path(path)
-    if (for_model or _MODEL_ACCESS.get()) and not model_path_allowed(path):
+    if not _path_allowed(row["spec"], rel, _read_policy(for_model)):
         raise ValueError("model access is disabled for this vault or folder")
     return row["vault"].note_text(rel, cap=cap)
 
@@ -804,7 +881,7 @@ def _clean_ref(ref, keep_ext=False):
     return r.strip("/ ")
 
 
-def _resolve_ref_one(row, ref):
+def _resolve_ref_one(row, ref, qualified=False):
     """{path, exact} for a wikilink, or None.
 
     `exact` False means this came from the search fallback and the caller
@@ -815,6 +892,22 @@ def _resolve_ref_one(row, ref):
     if not r:
         return None
     root = row["spec"]["root"]
+    # Qualified file paths never need a whole-vault stem/asset walk.
+    if qualified or "/" in raw_ref:
+        for cand in ((root / raw_ref), Path(str(root / raw_ref) + ".md")):
+            if not cand.is_file():
+                continue
+            try:
+                direct = cand.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                return None
+            if not _path_allowed(row["spec"], direct, _read_policy()):
+                return None
+            result = {"path": _public_path(row["spec"], direct), "exact": True}
+            if not row["spec"]["primary"]:
+                result.update(vault_id=row["spec"]["id"], vault_name=row["spec"]["name"])
+            return result
+        return None
     m = _stem_map(row)
     rel = None
     if "/" not in raw_ref and raw_ref != r:
@@ -868,8 +961,17 @@ def resolve_ref(ref, from_path=None):
     """
     if not _clean_ref(ref):
         return None
-    rows = [r for r in _vault_rows() if not _MODEL_ACCESS.get()
-            or r["spec"]["model_exposure"]]
+    policy = _read_policy()
+    if policy.corpus_ids is not None and "notes" not in policy.corpus_ids:
+        return None
+    rows = [r for r in _vault_rows() if (not policy.for_model or r["spec"]["model_exposure"])
+            and (policy.source_ids is None or r["spec"]["id"] in policy.source_ids)]
+    if str(ref).startswith("@"):
+        try:
+            row, rel = _source_path(_clean_ref(ref, keep_ext=True))
+        except ValueError:
+            return None
+        return _resolve_ref_one(row, rel, qualified=True) if row in rows else None
     if from_path:
         try:
             context, _ = _source_path(from_path)
@@ -881,7 +983,7 @@ def resolve_ref(ref, from_path=None):
         if not row["spec"]["root"].is_dir():
             continue
         hit = _resolve_ref_one(row, ref)
-        if hit is not None and (not _MODEL_ACCESS.get() or model_path_allowed(hit["path"])):
+        if hit is not None and (not policy.for_model or model_path_allowed(hit["path"])):
             return hit
     found = search(_clean_ref(ref), limit=1) or []
     if found:

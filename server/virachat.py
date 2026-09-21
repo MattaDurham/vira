@@ -1,53 +1,12 @@
-"""Chat with Vira - a conversation over EVERYTHING Vira holds (2026-09-01,
-branch claude/chat-with-vira).
+"""Durable conversations backed by the native session harness.
 
-Find's Chat used to be vault-only by construction: brainchat.py retrieved
-from qocha, answered from those chunks, and validated every citation
-against a vault path. That shape was written when everything in Vira was
-going to be in the vault. It is not - messages, mail, shared media with
-their OCR, contacts, the calendar, the brief and the ideas backlog live in
-their own stores and reach a session only through the mcp__vira__* tools.
-So a chat that must reach everything IS a live agent session on those
-tools, and this module is the thin layer that makes a session read as a
-conversation: one turn in, one answer out, what it looked at beside it.
-
-- THE ENGINE IS THE SESSION HARNESS. `send` launches a session per chat
-  and later turns use `sessions.say` until the module's model changes. A
-  model change starts a new session with the saved conversation as context.
-  The visible chat and prior job records remain available. A
-  finished turn PARKS in the reply window, which is exactly the state a
-  conversation wants; a chat resumed after the window closed continues
-  through `_resume_ended` by session id, so the transcript is never lost.
-- IT RUNS ON THE DEFAULT RUNG, NOT READ-ONLY (owner's ruling, 2026-09-01,
-  after the first live chat failed a question about his subscriptions).
-  The first cut launched `read_only=True`: the vira tools are auto-allowed
-  either way, so it cost no cards - what it cost was Bash and the HTTP
-  API. The session could SEE that /api/subs held the full ledger and could
-  not call it, so it counted from the brief's five-row slice and said so.
-  Read-only is the plan session's contract, not a chat's; a chat is an
-  owner session and gets what every Implement and Ask-Vira dispatch gets:
-  `session_default_mode`, decided in config, never hardcoded here. cwd is
-  the home directory, so branch-first placement never fires and no
-  worktree is minted for a conversation.
-- THE ANSWER ARRIVES AT THE TURN BOUNDARY. `_follow` polls the job
-  snapshot the way inbound.py's reply follower does: settled means the
-  session is parked again (or ended) and the published result differs
-  from the answer this chat already holds.
-- WHAT IT LOOKED AT IS DATA, NOT A GUESS. The runner records every tool
-  call with the turn it belongs to (state["tools"]); `looked_at` turns
-  those into cards the client can open - the find query, the note, the
-  person. Nothing is inferred from the prose.
-- CITATIONS ARE RESOLVED EXACTLY. A [[wikilink]] in the answer is resolved
-  through vault.resolve_ref (the exact-stem rule), and one that resolves
-  only by search is marked so; nothing is passed off as the link.
-- The concept pass is ONE model call over the turn, the same shape
-  brainchat used, with one change: a concept needs no vault path. A term
-  with a cited note opens on that note; one without opens as a Find over
-  everything, which is what a concept means in a chat that spans it all.
-
-Model-call class is reply drafting, so passive instances answer too - but
-a passive instance runs no supervisor, so a turn there can only report
-that the session could not start.
+The answer and useful provider messages are published independently of optional
+source/concept decoration. Stable turn IDs fence late callbacks; ordinary reads
+recover settled answers from durable runner state. History is retained in full
+and paginated only at the HTTP boundary. Evidence scope and the prompt contract
+are recorded per conversation, and exact citations reopen immutable read spans.
+A module model change starts a new native session with bounded saved conversation
+context, preserving the visible chat and the earlier job records.
 """
 import json
 import re
@@ -60,14 +19,20 @@ from pathlib import Path
 from . import agentbackend, jsonstore, modelbudget, modulemodels, settings
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "vira-chat.json"
-MAX_SESSIONS = 20
-MAX_TURNS = 60
+# History is never trimmed. These are response page sizes, not retention limits.
+HISTORY_PAGE = 30
+PROMPT_VERSION = "vira-chat-v2"
 MAX_PRIOR_CONCEPTS = 60
 # A turn that has not settled by this is reported as failed rather than
 # left pending forever - the compose box must never wedge shut. A real
 # multi-tool turn on this machine runs 20-90s; ten minutes is far past any
 # honest answer.
 TURN_MAX_S = 600
+# Optional source/concept decoration gets its own deadline; it never owns
+# the answer or the compose box. Late results are discarded after this.
+ENRICHMENT_MAX_S = 45
+# Held until a worker actually exits, including after its publication deadline.
+_ENRICHMENT_SLOTS = threading.BoundedSemaphore(2)
 POLL_S = 1.0
 BUDGET = "standard"
 
@@ -91,22 +56,21 @@ def _new_session():
             "follow_up_questions": [], "cited": []}
 
 
-def _public(s):
-    return json.loads(json.dumps(s))
+def _public(s, *, before=None, limit=HISTORY_PAGE):
+    out = json.loads(json.dumps(s))
+    if not isinstance(out, dict) or "turns" not in out:
+        return out
+    turns = out["turns"]
+    end = len(turns) if before is None else max(0, min(int(before), len(turns)))
+    start = max(0, end - max(1, min(int(limit), 100)))
+    out["turns"] = turns[start:end]
+    out["history"] = {"total": len(turns), "start": start, "end": end,
+                      "before": start if start else None}
+    return out
 
 
 def _load():
     return jsonstore.read(STORE, _blank())
-
-
-def _prune(state):
-    sessions = state.get("sessions") or {}
-    if len(sessions) <= MAX_SESSIONS:
-        return
-    oldest = sorted(sessions, key=lambda k: sessions[k].get("updated", ""))
-    for sid in oldest[:len(sessions) - MAX_SESSIONS]:
-        if sid != state.get("active_id"):
-            sessions.pop(sid, None)
 
 
 def _mutate(fn):
@@ -126,10 +90,13 @@ def summary_rows(state=None):
     return sorted(rows, key=lambda r: r.get("updated") or "", reverse=True)
 
 
-def current():
+def current(session_id=None, before=None, limit=HISTORY_PAGE):
     state = _load()
-    s = (state.get("sessions") or {}).get(state.get("active_id"))
-    return _with_progress(_public(s)) if s else None
+    s = (state.get("sessions") or {}).get(session_id or state.get("active_id"))
+    if s:
+        _reconcile(s)
+        s = (_load().get("sessions") or {}).get(s["id"])
+    return _with_progress(_public(s, before=before, limit=limit)) if s else None
 
 
 def new():
@@ -138,7 +105,6 @@ def new():
     def up(state):
         state.setdefault("sessions", {})[s["id"]] = s
         state["active_id"] = s["id"]
-        _prune(state)
     _mutate(up)
     return _public(s)
 
@@ -158,67 +124,86 @@ def _owner():
     return settings.get("owner_name") or "the owner"
 
 
-CHAT_BRIEF = """This is a CHAT with {owner} inside Vira - a conversation, not a task. \
-Answer the message below directly, in plain prose, in a few sentences \
-unless more is genuinely asked for.
+CHAT_BRIEF = """You are answering {owner} in Vira. Answer the question directly;
+ordinary chat is not a request for a report, dossier, or saved artifact.
 
-Before answering anything about {owner}'s life or records, LOOK IT UP with \
-the {tool_prefix}* tools - {tool_prefix}find first (it spans notes, media with \
-OCR, people and the text of messages and mail), then the single-corpus \
-tools when you know where the answer lives (calendar, daily_brief, \
-crm_lookup, imessage_thread, mail_search, media_search, vault_search, \
-vault_note, list_ideas). Never answer from memory what a tool can answer \
-from the data. When a tool returns a SLICE (the daily brief shows five \
-renewals, not the ledger), go to the whole thing: Vira's HTTP API on \
-http://localhost:8377 serves every store raw and you may call it with \
-Bash - GET /api/subs (the full subscriptions ledger), /api/brief, \
-/api/people?q=, /api/person/<id>, /api/find?q=, /api/applications, \
-/api/reading/list, /api/ideas, /api/attention. Name people, dates and \
-the thing you found; when a vault note grounds a claim, cite it as a \
-[[wikilink]] to its path. Never invent a fact, a date or a document. If \
-nothing in the data answers, say so plainly and name what you searched. \
-You can act as well as answer - draft, file, look things up, run what is \
-needed - and when an action is genuinely {owner}'s call, ask with \
-{tool_prefix}ask_owner rather than guessing.
+Evidence scope: {scope}. Use only sources enabled for model answers and within
+this scope. The {tool_prefix}* tools enforce this policy. Do not bypass an
+excluded source through shell, raw HTTP, another agent, or a cached summary.
+Use {tool_prefix}answer_sources to discover available sources and their dates.
+Start with the narrowest useful tool: calendar for dates, a person's messages
+for a conversation, source search for a named document; use {tool_prefix}find
+when the location is unknown. Independent lookups may run in parallel.
 
-Do not narrate your tool calls or your plan, and do not end with offers or \
-status - the reply box under this chat stays open on its own.
+Choose the research depth the question needs (requested mode: {mode}):
+- Lookup: read the decisive passage and answer promptly with its date.
+- Synthesis: compare independent originals across the relevant period, then
+  check a recent example and counterevidence. Derived summaries are leads;
+  repeated copies of one event are not independent corroboration.
+- Count/rank: enumerate and count the complete filtered population; relevance
+  search is not a denominator. If coverage is partial, label the result a
+  qualitative pattern, not a measured top three or an exact count.
+- Deep research: use batched reads, source search, and continuation cursors.
+  A truncated passage or a recent-message slice is not the complete record.
+Distinguish event dates from file modification dates and source versions.
+Read original passages before making strong claims. Treat conflicting accounts
+as accounts, not established motives or diagnoses. Say what is unknown.
+
+Cite concrete claims using the evidence_handle returned by a read, as
+[[evidence:ev_HASH|short source label]]. This opens the exact version and span
+read. Never invent a handle. Legacy [[path]] links are navigation only.
+Every 15-30 seconds of substantial work, give a brief useful progress update
+about evidence found or an unresolved gap. Publish a supported preliminary
+answer when ready and mark it provisional if checks remain. Aim to answer
+ordinary questions within three minutes; explain a remaining gap rather than
+silently extending research. Do not expose private reasoning or raw tool logs.
+
+You can also perform actions the owner requests, using the configured session
+permissions. Ask with {tool_prefix}ask_owner when a necessary choice belongs
+to the owner. Do not create or file a report unless one was requested.
+
+{owner} says:
+{question}"""
+
+CHAT_BRIEF_HTTP = """You are answering {owner} in Vira. Answer directly; ordinary
+chat is not a report request. Requested mode: {mode}. Evidence scope: {scope}.
+Use Vira's model-scoped evidence API at http://localhost:8377/api/answer:
+GET /sources, POST /read (source, start, length), POST /search (source, query),
+GET /evidence/<handle>. These preserve source permissions and evidence versions.
+Use only allowed sources. Never bypass exclusions through raw stores or files.
+Read decisive original passages; follow continuation cursors for complete
+coverage. Compare independent sources, current evidence and counterexamples
+for a synthesis. Use enumeration for exact counts, and label incomplete ranks
+as qualitative. Distinguish event dates from modification dates and conflicting
+accounts from established facts. Cite [[evidence:ev_HASH|source label]] using
+returned handles. Share useful progress every 15-30 seconds and publish a
+supported preliminary answer promptly if research continues. Say what remains
+unknown; never invent a source. Do not file an unrequested artifact.
 
 {owner} says:
 {question}"""
 
 
-CHAT_BRIEF_HTTP = """This is a CHAT with {owner} inside Vira - a conversation, not a task. \
-Answer the message below directly, in plain prose, in a few sentences \
-unless more is genuinely asked for.
-
-Before answering anything about {owner}'s life or records, LOOK IT UP - \
-Vira's HTTP API on http://localhost:8377 is your data access: \
-GET /api/find?q=<query> spans notes, shared media with OCR, people and the \
-text of messages and mail; GET /api/brief is the calendar and who is \
-waiting; GET /api/people?q=<name> and GET /api/person/<id> are the CRM. \
-Never answer from memory what the data can answer. Name people, dates \
-and the thing you found; never invent a fact, a date or a document. If \
-nothing answers, say so plainly and name what you searched.
-
-Do not narrate your calls or your plan, and do not end with offers or \
-status - the reply box under this chat stays open on its own.
-
-{owner} says:
-{question}"""
-
-
-def _launch_prompt(question, native=True, provider="anthropic"):
+def _launch_prompt(question, native=True, provider="anthropic", *,
+                   mode="auto", sources=None, chat_id=None):
     brief = CHAT_BRIEF if native else CHAT_BRIEF_HTTP
     prefix = "mcp__vira__" if provider == "anthropic" else "vira."
+    scope = ", ".join(sources or []) or "all sources enabled for model answers"
     return brief.format(owner=_owner(), question=question.strip(),
-                        tool_prefix=prefix)
+                        tool_prefix=prefix, mode=mode, scope=scope) + (
+                            "\nFor every /api/answer request include ?session_id=" + chat_id
+                            if chat_id and not native else "")
 
 
 def _session_snapshot(job_id):
     try:
-        from . import session
-        return session.sessions.get(job_id)
+        from . import jobfiles, session
+        snap = session.sessions.get(job_id)
+        if snap is not None:
+            return snap
+        # Finished runners can leave the in-memory registry while their
+        # durable answer remains available, including after a restart.
+        return jsonstore.read(jobfiles.job_dir(job_id) / "state.json", None)
     except Exception:  # noqa: BLE001 - a missing registry reads as no session
         return None
 
@@ -300,18 +285,19 @@ def _conversation_context(turns, route):
     return "\n\n".join(reversed(pieces)), truncated
 
 
-def _open_session(job_id, question, route=None, prior_route=None, turns=()):
+
+def _open_session(job_id, question, *, route=None, prior_route=None, turns=(),
+                  mode="auto", sources=None, chat_id=None):
     """Return (job id, model changed, carried context truncated).
 
-    A resumed job can change its id without changing the selected engine;
-    report those events separately so the chat never invents a model switch.
+    An engine change starts a new run with the same evidence and answer contract.
+    Resuming an expired native session can also change its job ID; that alone is
+    not a model change.
     """
     from . import session
     route = route or _chat_model()
     changed = bool(job_id and prior_route is not None and route != prior_route)
     if job_id and prior_route is None and modulemodels.selection("find"):
-        # Older chats predate the saved choice marker. Read the recorded
-        # session rather than assume a model that the chat never stored.
         snap = _session_snapshot(job_id) or {}
         changed = (snap.get("provider") != route["provider"]
                    or (snap.get("model") or "") != route["model"])
@@ -332,7 +318,11 @@ def _open_session(job_id, question, route=None, prior_route=None, turns=()):
                 + (transcript or "(no completed messages)")
                 + "\n\nCURRENT MESSAGE:\n" + question)
         new_job = session.sessions.launch(
-            _launch_prompt(message, native, provider or ""), model=model,
+            _launch_prompt(message, native, provider or "", mode=mode, sources=sources, chat_id=chat_id), model=model,
+            effort=settings.raw().get("chat_effort") or None,
+            runtime={"prompt_version": PROMPT_VERSION, "chat_id": chat_id, "evidence_scope": {"sources": sources or []},
+                     "answer_mode": mode, "work_class": "foreground",
+                     "latency_budget": {"first_update_s": 15, "answer_s": 180, "hard_limit_s": TURN_MAX_S}},
             provider=provider, meta={"kind": "chat"},
             subject=q[:140],
             about=f"A conversation with Vira, opened with: {q[:600]}")
@@ -341,140 +331,531 @@ def _open_session(job_id, question, route=None, prior_route=None, turns=()):
     return out.get("job") or job_id, False, False
 
 
-def send(question, session_id=None):
-    """Append a pending turn and drive the session; the answer lands via
-    `_follow` on a daemon thread. Returns the session with the turn
-    pending so the client can render it and poll."""
+def send(question, session_id=None, *, mode=None, sources=None):
+    """Reserve a turn atomically, then launch its session outside the lock."""
     question = (question or "").strip()
     if not question:
         raise ValueError("empty message")
-    state = _load()
-    sid = session_id or state.get("active_id")
-    s = (state.get("sessions") or {}).get(sid)
-    if s is None:
-        s = _new_session()
-        sid = s["id"]
-    if any(t.get("status") == "pending" for t in s.get("turns") or []):
-        raise Busy("Vira is still answering the last message")
-    prior = ""
-    for t in reversed(s.get("turns") or []):
-        if t.get("status") == "done":
-            prior = t.get("answer") or ""
-            break
-    turn = {"question": question, "answer": "", "status": "pending",
-            "created": _now(), "sent_t": time.time(),
-            "looked_at": [], "citations": []}
-    idx = len(s.get("turns") or [])
-    job_id = s.get("job_id") or ""
-    error = ""
-    try:
-        route = _chat_model()
-        previous_job = job_id
-        job_id, changed, truncated = _open_session(
-            job_id, question, route, s.get("model_selection"), s.get("turns") or [])
-        turn["provider"] = route["provider"]
-        turn["model"] = route["model"]
-        turn["job_id"] = job_id
-        turn["model_changed"] = changed
-        if turn["model_changed"]:
-            turn["context_truncated"] = truncated
-            prior = ""  # a new engine has no previous parked answer to skip
-        if previous_job and job_id != previous_job:
-            s.setdefault("previous_jobs", []).append(previous_job)
-        s["model_selection"] = route
-    except Exception as e:  # noqa: BLE001 - the refusal is the turn's answer
-        error = str(e)[:400]
-    if error:
-        turn["status"] = "failed"
-        turn["answer"] = "I could not start the conversation: " + error
-    s["job_id"] = job_id
-    s["turns"] = ((s.get("turns") or []) + [turn])[-MAX_TURNS:]
-    s["updated"] = _now()
-    idx = len(s["turns"]) - 1
+    if mode is not None and mode not in ("auto", "lookup", "synthesis", "count", "deep"):
+        raise ValueError("unknown answer mode")
+    if sources is not None and (not isinstance(sources, list) or not all(isinstance(x, str) for x in sources)):
+        raise ValueError("sources must be a list of source IDs")
+    turn = {"id": "turn_" + secrets.token_hex(8), "question": question,
+            "answer": "", "status": "pending", "created": _now(),
+            "sent_t": time.time(), "looked_at": [], "citations": [],
+            "launching": True}
+    reserved = {}
 
-    def up(st):
+    def reserve(st):
+        sid = session_id or st.get("active_id")
+        s = (st.get("sessions") or {}).get(sid)
+        if s is None:
+            s = _new_session()
+            sid = s["id"]
+        if any(t.get("status") == "pending" for t in s.get("turns") or []):
+            raise Busy("Vira is still answering the last message")
+        prior = next((t.get("answer") or "" for t in reversed(s.get("turns") or [])
+                      if t.get("status") == "done"), "")
+        if s.get("turns") and sources is not None and sources != s.get("sources", []):
+            raise ValueError("Start a new chat to change the evidence scope")
+        if s.get("turns") and mode is not None and mode != s.get("answer_mode", "auto"):
+            raise ValueError("Start a new chat to change the answer depth")
+        if not s.get("turns"):
+            s["sources"] = sources or []
+            s["answer_mode"] = mode or "auto"
+        turn["answer_mode"] = mode or s.get("answer_mode", "auto")
+        turn["sources"] = s.get("sources", [])
+        turn["prompt_version"] = PROMPT_VERSION
+        turn["prior_result"] = prior
+        s["turns"] = (s.get("turns") or []) + [turn]
+        s["updated"] = _now()
         st.setdefault("sessions", {})[sid] = s
         st["active_id"] = sid
-        _prune(st)
-    _mutate(up)
-    if not error:
+        reserved.update(sid=sid, job_id=s.get("job_id") or "", prior=prior,
+                        prior_route=s.get("model_selection"), history=s["turns"][:-1],
+                        idx=len(s["turns"]) - 1)
+    _mutate(reserve)
+    sid, job_id, prior = reserved["sid"], reserved["job_id"], reserved["prior"]
+    error = ""
+    previous_job = job_id
+    route, changed, truncated = None, False, False
+    try:
+        route = _chat_model()
+        before = _session_snapshot(job_id) if job_id else None
+        prior = (_answer_text(before or {}) or prior).strip()
+        job_id, changed, truncated = _open_session(
+            job_id, question, route=route, prior_route=reserved["prior_route"],
+            turns=reserved["history"], mode=turn["answer_mode"],
+            sources=turn["sources"], chat_id=sid)
+        if changed:
+            prior = ""  # a fresh engine has no parked answer to skip
+    except Exception as e:  # noqa: BLE001 - the refusal is the turn's answer
+        error = str(e)[:400]
+
+    attached = []
+
+    def launched(st):
+        s, t = _find_turn(st, sid, turn["id"])
+        if not t or t.get("status") != "pending":
+            return
+        t.pop("launching", None)
+        t["job_id"] = job_id
+        t["prior_result"] = prior
+        if not error:
+            t.update(provider=route["provider"], model=route["model"], model_changed=changed)
+            if changed:
+                t["context_truncated"] = truncated
+            if previous_job and job_id != previous_job:
+                s.setdefault("previous_jobs", []).append(previous_job)
+            s["model_selection"] = route
+            s["job_id"] = job_id
+        attached.append(True)
+    _mutate(launched)
+    if error:
+        _finish_turn(sid, reserved["idx"], "", "could not start the conversation: " + error,
+                     [], [], [], [], turn_key=turn["id"])
+    elif attached:
         threading.Thread(target=_follow,
-                         args=(sid, idx, job_id, prior, turn["sent_t"]),
+                         args=(sid, reserved["idx"], job_id, prior, turn["sent_t"]),
+                         kwargs={"turn_key": turn["id"]},
                          daemon=True, name="vira-chat-follow").start()
+    s = (_load().get("sessions") or {}).get(sid)
     return _with_progress(_public(s))
 
 
 # ---------- following a turn to its answer ----------
+
+def _current_final(snap, since=0):
+    items = (snap.get("execution") or {}).get("message_items") or []
+    finals = [item for item in items if item.get("phase") == "final_answer"
+              and item.get("text") and float(item.get("updated_t") or 0) >= since]
+    return max(finals, key=lambda item: float(item.get("updated_t") or 0))["text"].strip() if finals else ""
+
+
+def _answer_text(snap, since=0):
+    # Typed final items retain the complete answer. The legacy result field
+    # is capped for older session consumers and is only a fallback here.
+    return _current_final(snap, since) or (snap.get("result_text") or "").strip()
+
 
 def _settled(snap):
     status = snap.get("status")
     return snap.get("awaiting") in ("reply", "paused") or status != "running"
 
 
-def _follow(sid, idx, job_id, prior, sent_t=0.0, max_s=TURN_MAX_S,
-            poll_s=POLL_S, clock=time.time, sleep=time.sleep):
-    """Watch the session until this turn's answer is published, then file
-    it with what the turn looked at and the concept pass. Runs OUTSIDE
-    the store lock; only the final write takes it.
+def _waiting_for_owner(snap):
+    return (snap.get("execution") or {}).get("status") == "awaiting_input" or snap.get("awaiting") in ("ask", "permission")
 
-    ATTRIBUTION IS BY TIME, not by the runner's turn counter. The counter
-    moves when the runner DELIVERS a reply, which is after this follower
-    starts, and a turn that makes no calls of its own leaves the newest
-    recorded call belonging to the previous turn - on the second live turn
-    that handed the new answer the old answer's seven cards. A call made
-    after the message was sent belongs to this turn; nothing else does."""
+
+def control(sid, action, text=""):
+    """Control only the pending turn attached to this saved chat."""
+    from . import session
+    s = (_load().get("sessions") or {}).get(sid)
+    if not s:
+        raise KeyError(sid)
+    t = next((t for t in reversed(s.get("turns") or []) if t.get("status") == "pending"), None)
+    if not t or not t.get("job_id"):
+        raise Busy("There is no running turn to control")
+    if action == "steer":
+        if t.get("stop_requested_t"):
+            raise Busy("Wait for the model to acknowledge Stop before sending a follow-up")
+        text = str(text).strip()
+        if not text:
+            raise ValueError("empty steering message")
+        session.sessions.say(t["job_id"], text)
+        def record(st):
+            _, live = _find_turn(st, sid, _turn_key(t))
+            if live:
+                live.setdefault("steering", []).append({"text": text, "t": time.time()})
+        _mutate(record)
+    elif action == "stop":
+        # The native harness owns interrupting the turn; never stop its server.
+        session.sessions.interrupt(t["job_id"])
+        def stopped(st):
+            _, live = _find_turn(st, sid, _turn_key(t))
+            if live and live.get("status") == "pending":
+                live["stop_requested_t"] = time.time()
+        _mutate(stopped)
+    else:
+        raise ValueError("unknown chat control")
+    return current(sid)
+
+
+def _settle_stop(sid, key, snap):
+    """A stop request is not permission to enqueue into a runner still ending."""
+    acknowledged = snap is None or snap.get("awaiting") == "paused" or snap.get("status") in (
+        "done", "error", "failed", "interrupted", "finished", "orphaned")
+    if not acknowledged:
+        return False
+    changed = []
+    def up(st):
+        _, t = _find_turn(st, sid, key)
+        if t and t.get("status") == "pending" and t.get("stop_requested_t"):
+            t.update(status="stopped", outcome="interrupted", finished=_now(), finished_t=time.time())
+            changed.append(True)
+    _mutate(up)
+    return bool(changed)
+
+
+def visible(sid, turn_id, stage="answer"):
+    """Receipt from the browser after a useful update or answer was rendered."""
+    if stage not in ("useful", "answer"):
+        raise ValueError("unknown visibility stage")
+    def up(st):
+        _, t = _find_turn(st, sid, turn_id)
+        if not t:
+            raise KeyError(turn_id)
+        if stage == "answer" and t.get("status") != "done":
+            return
+        metrics = t.setdefault("metrics", {})
+        metrics.setdefault(stage + "_visible_t", time.time())
+        baseline = metrics.get("answer_ready_t") or t.get("finished_t")
+        if stage == "answer" and baseline:
+            metrics["visible_answer_lag_s"] = max(0, metrics["answer_visible_t"] - baseline)
+    _mutate(up)
+
+
+def _observe(sid, key, snap):
+    """Persist provider messages and timing before optional decoration."""
+    execution = snap.get("execution") or {}
+    _, existing = _find_turn(_load(), sid, key)
+    if not existing:
+        return
+    since = float(existing.get("sent_t") or 0)
+    messages = [r for r in execution.get("message_items") or []
+                if r.get("phase") in ("commentary", "final_answer")
+                and r.get("text") and float(r.get("updated_t") or 0) >= since]
+    receipts = [r for r in snap.get("receipts") or [] if float(r.get("started_t") or 0) >= since]
+    ready = execution.get("answer_ready_t")
+    waiting = _waiting_for_owner(snap)
+    if (messages == existing.get("messages", [])
+            and (not snap.get("runtime") or snap["runtime"] == existing.get("runtime"))
+            and (not execution.get("usage") or execution["usage"] == existing.get("usage"))
+            and receipts == existing.get("receipts", [])
+            and waiting == bool(existing.get("waiting_since_t"))
+            and (not ready or ready < since or ready == existing.get("metrics", {}).get("answer_ready_t"))):
+        return
+    def up(st):
+        _, t = _find_turn(st, sid, key)
+        if not t:
+            return
+        if waiting:
+            t.setdefault("waiting_since_t", time.time())
+        elif t.get("waiting_since_t"):
+            t["waited_s"] = t.get("waited_s", 0) + max(0, time.time() - t.pop("waiting_since_t"))
+        since = float(t.get("sent_t") or 0)
+        # Thinking/reasoning items and unknown-phase text are never displayed.
+        messages = [r for r in execution.get("message_items") or []
+                    if r.get("phase") in ("commentary", "final_answer")
+                    and r.get("text") and float(r.get("updated_t") or 0) >= since]
+        if messages:
+            t["messages"] = messages
+            metrics = t.setdefault("metrics", {})
+            metrics.setdefault("first_useful_t", time.time())
+            metrics["time_to_first_useful_s"] = max(0, metrics["first_useful_t"] - since)
+        if snap.get("runtime"):
+            t["runtime"] = snap["runtime"]
+        if execution.get("answer_ready_t") and execution["answer_ready_t"] >= since:
+            t.setdefault("metrics", {})["answer_ready_t"] = execution["answer_ready_t"]
+        if execution.get("usage"):
+            t["usage"] = execution["usage"]
+        if receipts:
+            # The full unbounded event journal remains with the native job.
+            t["receipts"] = receipts
+            t["receipt_job_id"] = t.get("job_id")
+    _mutate(up)
+
+
+def _turn_key(turn):
+    # Older persisted chats predate UUIDs; their send timestamp is stable
+    # across pagination and legacy records, unlike a displayed page index.
+    return turn.get("id") or turn.get("sent_t")
+
+
+def _find_turn(state, sid, key):
+    s = (state.get("sessions") or {}).get(sid)
+    t = next((t for t in (s or {}).get("turns") or [] if _turn_key(t) == key), None)
+    return s, t
+
+
+def _follow(sid, idx, job_id, prior, sent_t=0.0, max_s=TURN_MAX_S,
+            poll_s=POLL_S, clock=time.time, sleep=time.sleep, turn_key=None):
+    """Publish the answer at its boundary, before ANY optional enrichment.
+
+    Source attribution uses the send time, not the runner's turn counter:
+    the counter moves after dispatch and a turn may make no calls at all.
+    Every asynchronous write uses the stable identity, never a list index.
+    """
+    if turn_key is None:
+        s = (_load().get("sessions") or {}).get(sid) or {}
+        turns = s.get("turns") or []
+        if idx >= len(turns):
+            return
+        turn_key = _turn_key(turns[idx])
     end = clock() + max_s
+    last_clock = clock()
     saw_working = False
-    answer, failed = "", ""
-    while clock() < end:
+    answer, failed, snap = "", "", {}
+    while True:
+        _, t = _find_turn(_load(), sid, turn_key)
+        if not t or t.get("status") != "pending":
+            return
         snap = _session_snapshot(job_id)
         if snap is None:
+            if t.get("stop_requested_t") and _settle_stop(sid, turn_key, None):
+                return
             failed = "the session is gone"
+            break
+        _observe(sid, turn_key, snap)
+        if t.get("stop_requested_t"):
+            if _settle_stop(sid, turn_key, snap):
+                return
+            sleep(poll_s)
+            continue
+        now = clock()
+        if _waiting_for_owner(snap):
+            end += max(0, now - last_clock)
+        last_clock = now
+        if now >= end and not _waiting_for_owner(snap):
+            failed = f"no answer after {int(max_s)}s"
+            _interrupt_timeout(job_id)
             break
         if snap.get("status") == "running" and snap.get("awaiting") not in ("reply", "paused"):
             saw_working = True
-        out = (snap.get("result_text") or "").strip()
-        if _settled(snap) and out and (out != prior or saw_working):
+        out = _answer_text(snap, sent_t)
+        fresh_boundary = saw_working and snap.get("awaiting") in ("reply", "paused")
+        if _settled(snap) and out and (out != prior or fresh_boundary or _current_final(snap, sent_t)):
             answer = out
             break
         if snap.get("status") not in ("running", None):
             failed = snap.get("error") or f"the session ended ({snap.get('status')})"
             break
         sleep(poll_s)
-    else:
-        failed = f"no answer after {int(max_s)}s"
     if not answer and not failed:
         failed = "the session ended without an answer"
-    snap = _session_snapshot(job_id) or {}
-    looked = looked_at(snap, since_t=sent_t)
-    cites = citations(answer) if answer else []
-    concepts, followups = [], []
-    if answer:
-        try:
-            concepts, followups = _concepts(sid, answer, cites)
-        except Exception:  # noqa: BLE001 - the answer is useful without them
-            pass
-    _finish_turn(sid, idx, answer, failed, looked, cites, concepts, followups)
+    if _finish_turn(sid, idx, answer, failed, [], [], [], [],
+                    turn_key=turn_key, enrich=bool(answer)) and answer:
+        _start_enrichment(sid, turn_key, snap or {})
 
 
-def _finish_turn(sid, idx, answer, failed, looked, cites, concepts, followups):
+def _finish_turn(sid, idx, answer, failed, looked, cites, concepts, followups,
+                 *, turn_key=None, enrich=False):
+    changed = []
+
     def up(st):
         s = (st.get("sessions") or {}).get(sid)
-        if not s or idx >= len(s.get("turns") or []):
+        if not s:
             return
-        t = s["turns"][idx]
-        if t.get("status") != "pending":
+        turns = s.get("turns") or []
+        # The index form remains for existing local repair callers. All
+        # followers and reconciliation calls supply a stable turn key.
+        t = (_find_turn(st, sid, turn_key)[1] if turn_key is not None
+             else turns[idx] if 0 <= idx < len(turns) else None)
+        if not t or t.get("status") != "pending":
             return
         t["answer"] = answer if answer else ("Vira could not answer: " + failed)
         t["status"] = "done" if answer else "failed"
+        t["outcome"] = "completed" if answer else ("timed_out" if "no answer after" in failed else "failed")
         t["looked_at"] = looked
         t["citations"] = cites
         t["finished"] = _now()
+        t["finished_t"] = time.time()
         if answer:
-            s["concepts"] = _merge_concepts(s.get("concepts") or [], concepts)
-            if followups:
-                s["follow_up_questions"] = followups
-            s["cited"] = _merge_cited(s.get("cited") or [], cites, idx + 1)
+            t["enrichment"] = {"status": "pending" if enrich else "done",
+                               "deadline_t": time.time() + ENRICHMENT_MAX_S}
+            if not enrich and t is turns[-1]:
+                s["concepts"] = _merge_concepts(s.get("concepts") or [], concepts)
+                if followups:
+                    s["follow_up_questions"] = followups
+                s["cited"] = _merge_cited(s.get("cited") or [], cites, len(turns))
+        s["updated"] = _now()
+        changed.append(True)
+    _mutate(up)
+    return bool(changed)
+
+
+def _interrupt_timeout(job_id):
+    if not job_id:
+        return
+    try:
+        from . import session
+        session.sessions.interrupt(job_id)
+    except Exception:
+        # The failure remains durable even if the provider is unreachable.
+        pass
+
+
+def _reconcile(s):
+    """Recover a stranded answer from the durable session on normal reads.
+
+    A parked previous answer is not evidence for the new question. Legacy
+    turns use their preceding answer as the baseline; new turns also save
+    the session result seen immediately before dispatch.
+    """
+    turns = s.get("turns") or []
+    for idx, t in enumerate(turns):
+        key = _turn_key(t)
+        if (t.get("status") == "pending" and t.get("launching")
+                and time.time() - float(t.get("sent_t") or 0) >= TURN_MAX_S):
+            _finish_turn(s["id"], idx, "", "the conversation did not finish starting",
+                         [], [], [], [], turn_key=key)
+            continue
+        if t.get("status") == "pending" and not t.get("launching"):
+            snapshot = _session_snapshot(t.get("job_id") or s.get("job_id") or "")
+            snap = snapshot or {}
+            _observe(s["id"], key, snap)
+            t = _find_turn(_load(), s["id"], key)[1] or t
+            if t.get("stop_requested_t"):
+                _settle_stop(s["id"], key, snapshot)
+                continue
+            prior = t.get("prior_result")
+            if prior is None:
+                prior = next((p.get("answer") or "" for p in reversed(turns[:idx])
+                              if p.get("status") == "done"), "")
+            since = float(t.get("sent_t") or 0)
+            out = _answer_text(snap, since)
+            if _settled(snap) and out and (out != prior or _current_final(snap, since)):
+                if _finish_turn(s["id"], idx, out, "", [], [], [], [],
+                                turn_key=key, enrich=True):
+                    _start_enrichment(s["id"], key, snap)
+            elif (not _waiting_for_owner(snap)
+                  and time.time() - float(t.get("sent_t") or 0) - t.get("waited_s", 0) >= TURN_MAX_S):
+                _interrupt_timeout(t.get("job_id") or s.get("job_id"))
+                _finish_turn(s["id"], idx, "", f"no answer after {TURN_MAX_S}s",
+                             [], [], [], [], turn_key=key)
+        phase = t.get("enrichment") or {}
+        if phase.get("status") not in ("pending", "running"):
+            continue
+        if time.time() >= phase.get("deadline_t", 0):
+            _finish_enrichment(s["id"], key, error="enrichment timed out")
+        elif phase.get("status") == "pending":
+            snap = _session_snapshot(t.get("job_id") or s.get("job_id") or "") or {}
+            _start_enrichment(s["id"], key, snap)
+
+
+def _start_enrichment(sid, key, snap):
+    context = {}
+
+    def claim(st):
+        s, t = _find_turn(st, sid, key)
+        if not t or (t.get("enrichment") or {}).get("status") != "pending":
+            return
+        phase = t["enrichment"]
+        phase["status"] = "running"
+        context.update(question=t["question"], answer=t["answer"],
+                       prior=_public(s.get("concepts") or []),
+                       since_t=float(t.get("sent_t") or 0),
+                       until_t=t["finished_t"], deadline_t=phase["deadline_t"],
+                       runtime=t.get("runtime") or snap.get("runtime") or {},
+                       sources=s.get("sources") or [])
+    _mutate(claim)
+    if not context:
+        return
+    slots = _ENRICHMENT_SLOTS
+    if not slots.acquire(blocking=False):
+        _finish_enrichment(sid, key, error="optional source and concept workers are busy")
+        return
+    context["worker_slots"] = slots
+    # The timer changes durable state even if a lookup or provider call
+    # hangs. Python cannot cancel that call; its late callback is harmless.
+    timer = threading.Timer(max(0, context["deadline_t"] - time.time()),
+                            _finish_enrichment, args=(sid, key),
+                            kwargs={"error": "enrichment timed out"})
+    timer.daemon = True
+    try:
+        timer.start()
+        threading.Thread(target=_enrich, args=(sid, key, snap, context, timer),
+                         daemon=True, name="vira-chat-enrich").start()
+    except Exception:
+        timer.cancel()
+        slots.release()
+        _finish_enrichment(sid, key, error="optional source worker could not start")
+
+
+def _enrichment_open(sid, key):
+    _, t = _find_turn(_load(), sid, key)
+    phase = (t or {}).get("enrichment") or {}
+    return phase.get("status") == "running" and time.time() < phase.get("deadline_t", 0)
+
+
+def _save_sources(sid, key, *, looked=None, cites=None):
+    """Keep completed provenance even if the later concept call fails."""
+    saved = []
+
+    def up(st):
+        s, t = _find_turn(st, sid, key)
+        phase = (t or {}).get("enrichment") or {}
+        if phase.get("status") != "running" or time.time() >= phase.get("deadline_t", 0):
+            return
+        if looked is not None:
+            t["looked_at"] = looked
+        if cites is not None:
+            t["citations"] = cites
+            if t is s["turns"][-1]:
+                s["cited"] = _merge_cited(s.get("cited") or [], cites, len(s["turns"]))
+        s["updated"] = _now()
+        saved.append(True)
+    _mutate(up)
+    return bool(saved)
+
+
+def _enrich(sid, key, snap, context, timer):
+    from . import answer_runtime, retrieval
+    runtime = dict(context.get("runtime") or {},
+                   auxiliary_deadline_t=context["deadline_t"], work_class="auxiliary",
+                   evidence_scope={"sources": context.get("sources") or []})
+    try:
+        with answer_runtime.scope(runtime), retrieval.source_scope(context.get("sources") or []):
+            _enrich_scoped(sid, key, snap, context, timer)
+    finally:
+        context["worker_slots"].release()
+
+
+def _enrich_scoped(sid, key, snap, context, timer):
+    try:
+        if not _enrichment_open(sid, key):
+            return
+        snap = dict(snap, tools=[r for r in snap.get("tools") or []
+                                if float(r.get("t") or 0) <= context["until_t"]])
+        looked = looked_at(snap, since_t=context["since_t"])
+        if not _save_sources(sid, key, looked=looked):
+            return
+        cites = citations(context["answer"])
+        if not _save_sources(sid, key, cites=cites):
+            return
+        concepts, followups = _concepts(context["question"], context["answer"],
+                                       cites, context["prior"])
+        _finish_enrichment(sid, key, looked, cites, concepts, followups)
+    except Exception as exc:  # noqa: BLE001 - optional decoration never loses the answer
+        _finish_enrichment(sid, key, error=str(exc)[:400] or "enrichment failed")
+    finally:
+        # A deadline reached between stages must still get a terminal state.
+        _finish_enrichment(sid, key, error="enrichment timed out", expired_only=True)
+        timer.cancel()
+
+
+def _finish_enrichment(sid, key, looked=None, cites=None, concepts=None,
+                       followups=None, *, error="", expired_only=False):
+    def up(st):
+        s, t = _find_turn(st, sid, key)
+        phase = (t or {}).get("enrichment") or {}
+        if phase.get("status") not in ("pending", "running"):
+            return
+        expired = time.time() >= phase.get("deadline_t", 0)
+        if expired_only and not expired:
+            return
+        failure = "enrichment timed out" if expired else error
+        phase["status"] = "failed" if failure else "done"
+        if failure:
+            phase["error"] = failure
+        else:
+            t["looked_at"] = looked or []
+            t["citations"] = cites or []
+            # Older turns may receive their own source cards, but must not
+            # replace the current turn's shared suggestions or summaries.
+            if t is s["turns"][-1]:
+                s["concepts"] = _merge_concepts(s.get("concepts") or [], concepts or [])
+                s["follow_up_questions"] = followups or []
         s["updated"] = _now()
     _mutate(up)
 
@@ -491,6 +872,15 @@ def _with_progress(s):
         rows = [r for r in snap.get("tools") or []
                 if float(r.get("t") or 0) >= since and not _harness(r)]
         s["progress"] = [_label(r) for r in rows][-6:]
+        s["execution"] = {k: v for k, v in (snap.get("execution") or {}).items()
+                          if k != "message_items"}
+        s["admission"] = snap.get("admission") or {}
+        s["runtime"] = snap.get("runtime") or {}
+        s["elapsed_s"] = max(0, time.time() - since)
+        s["activity_age_s"] = max(0, time.time() - float(
+            (snap.get("execution") or {}).get("updated_t") or since))
+        s["receipts"] = [r for r in snap.get("receipts") or []
+                         if float(r.get("started_t") or 0) >= since]
         s["live"] = bool(snap)
     return s
 
@@ -498,7 +888,7 @@ def _with_progress(s):
 # ---------- what the turn looked at ----------
 
 def _label(row):
-    name = (row.get("name") or "").replace("mcp__vira__", "")
+    name = (row.get("name") or "").replace("mcp__vira__", "").removeprefix("vira.")
     inp = row.get("input") or {}
     what = inp.get("query") or inp.get("q") or inp.get("path") \
         or inp.get("name") or inp.get("person") or ""
@@ -534,7 +924,7 @@ def looked_at(snap, since_t=0.0):
             continue
         seen.add(key)
         out.append(card)
-    return out[:12]
+    return out
 
 
 def _person(name):
@@ -552,7 +942,7 @@ def _person(name):
 
 
 def _card(row):
-    name = (row.get("name") or "").replace("mcp__vira__", "")
+    name = (row.get("name") or "").replace("mcp__vira__", "").removeprefix("vira.")
     inp = row.get("input") or {}
     q = inp.get("query") or inp.get("q") or ""
     if name == "find":
@@ -598,6 +988,18 @@ def citations(answer):
             continue
         seen.add(ref.lower())
         hit = None
+        if ref.startswith("evidence:"):
+            handle = ref.removeprefix("evidence:")
+            try:
+                from . import answer_sources
+                evidence = answer_sources.evidence(handle, for_model=True)
+                out.append({"ref": ref, "evidence_handle": handle,
+                            "title": evidence.get("title") or evidence.get("source_handle") or ref,
+                            "path": None, "exact": True,
+                            "version": evidence.get("version"), "span": evidence.get("span")})
+            except (ValueError, KeyError, PermissionError, FileNotFoundError):
+                out.append({"ref": ref, "path": None, "title": "Unavailable evidence", "exact": False})
+            continue
         try:
             from . import vault
             hit = vault.resolve_ref(ref)
@@ -630,22 +1032,20 @@ Never invent a note path.
 
 
 @modulemodels.scoped("find")
-def _concepts(sid, answer, cites):
-    from . import modelbudget, suggest
-    state = _load()
-    s = (state.get("sessions") or {}).get(sid) or {}
-    turns = s.get("turns") or []
-    question = turns[-1]["question"] if turns else ""
+def _concepts(question, answer, cites, prior_concepts):
+    from . import answer_runtime, modelbudget, suggest
     total, part = modelbudget.split(BUDGET, parts=3)
     prior = ", ".join(f"{c.get('term')} (w={float(c.get('weight') or 0):.2f})"
-                      for c in (s.get("concepts") or [])[:MAX_PRIOR_CONCEPTS]
+                      for c in prior_concepts[:MAX_PRIOR_CONCEPTS]
                       if c.get("term")) or "(none; this is the first turn)"
     notes = [c["path"] for c in cites if c.get("path")]
     prompt = (_CONCEPT_PROMPT + "\nQUESTION:\n" + question[:part]
               + "\n\nANSWER:\n" + answer[:part]
               + "\n\nNOTES:\n" + ("\n".join(notes) or "(none)")
               + "\n\nPRIOR CONCEPTS:\n" + prior)
-    raw = suggest.complete(prompt)
+    deadline = answer_runtime.current().get("auxiliary_deadline_t", time.time() + ENRICHMENT_MAX_S)
+    raw = suggest.complete(prompt, tools=[], timeout=max(0.1, deadline - time.time()),
+                           work_class="auxiliary")
     m = re.search(r"\{.*\}", raw or "", re.S)
     if not m:
         return [], []

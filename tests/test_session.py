@@ -361,7 +361,7 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(spawned, [jid])
         self.assertEqual(reg.sessions[jid].kind, "detached")
 
-    def test_live_session_cap(self):
+    def test_registry_leaves_execution_admission_to_shared_runner_queue(self):
         reg = make_registry()
 
         def fake_spawn(_self, data):
@@ -380,8 +380,10 @@ class LaunchTests(unittest.TestCase):
                                1 if k == "session_max_live"
                                else session.SESSION_DEFAULTS[k]):
             reg.launch("first")
-            with self.assertRaises(ValueError):
-                reg.launch("second")
+            reg.launch("second")
+        self.assertEqual(len(reg.sessions), 2)
+        # The cross-process limit applies at turn execution, including resumed
+        # turns and completions; tests/test_answer_runtime exercises that join.
 
 
 class ResumableTests(unittest.TestCase):

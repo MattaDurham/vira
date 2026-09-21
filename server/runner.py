@@ -19,6 +19,7 @@ publishing, and closing out the launching idea. The runner finalizes its
 own joblog record; the stores are cross-process safe (filelock).
 """
 import asyncio
+import copy
 import json
 import os
 import re
@@ -29,7 +30,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import agentbackend, jobfiles, joblog, settings, viratools, worktree
+from . import modeladmission as admission, agentbackend, answer_runtime, jobfiles, joblog, settings, viratools, worktree
 from .session import (EDIT_TOOLS, OUTPUT_CAP, READ_ONLY_EXCLUDE,
                       _extract_plan_md, _finalize_plan, _mark_idea,
                       _plan_ref, _scfg, _sdk_env, _tool_preview,
@@ -53,12 +54,14 @@ try:
         TextBlock,
         ThinkingBlock,
         ToolUseBlock,
+        ToolResultBlock,
+        UserMessage,
     )
 except Exception as e:  # noqa: BLE001 — tolerated for CLI-exec jobs
     SDK_IMPORT_ERROR = e
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = HookMatcher = None
     ResultMessage = None
-    SystemMessage = TextBlock = ThinkingBlock = ToolUseBlock = None
+    SystemMessage = TextBlock = ThinkingBlock = ToolUseBlock = ToolResultBlock = UserMessage = None
 
     # The Vira gate is provider-neutral even when the Claude SDK is absent.
     # These two tiny stand-ins preserve its allow/deny contract for Codex;
@@ -76,6 +79,53 @@ except Exception as e:  # noqa: BLE001 — tolerated for CLI-exec jobs
 # misconfiguration must not be able to reintroduce the failure this exists
 # to remove.
 _SDK_DEFAULT_BUFFER = 1024 * 1024
+
+
+def _receipt_metadata(result):
+    """Keep outcome/provenance fields, never duplicate source text in receipts."""
+    keys = {"source", "sources", "source_handle", "evidence_handle", "version", "span",
+            "cache", "cache_hit", "cache_status", "cached", "freshness", "provenance",
+            "partial", "truncated", "complete", "continuation", "errors", "error",
+            "source_status", "status", "full_length", "total", "count", "durationMs", "scope", "coverage",
+            "exitCode", "provider_status"}
+    def clean(value):
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items() if k not in {"text", "body", "snippet", "content", "excerpt"}}
+        if isinstance(value, list):
+            return [clean(x) for x in value]
+        return value
+    metadata = {}
+    evidence = []
+    def visit(value):
+        if isinstance(value, dict):
+            if value.get("evidence_handle"):
+                evidence.append({k: clean(v) for k, v in value.items() if k in keys})
+            for key, item in value.items():
+                if key in keys:
+                    if key in ("partial", "truncated"):
+                        metadata[key] = bool(metadata.get(key) or item)
+                    elif key == "complete":
+                        metadata[key] = metadata.get(key, True) and item
+                    else:
+                        metadata[key] = clean(item)
+                elif isinstance(item, (dict, list)):
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+    if not isinstance(result, dict):
+        return metadata
+    visit(result.get("structuredContent") or {})
+    visit(result.get("evidence") or {})
+    for item in result.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "text":
+            try:
+                visit(json.loads(item.get("text") or ""))
+            except (ValueError, TypeError):
+                pass
+    if evidence:
+        metadata["evidence"] = evidence
+    return metadata
 
 
 def _max_buffer_bytes():
@@ -185,7 +235,7 @@ class Runner:
 
     def __init__(self, jdir):
         self.dir = Path(jdir)
-        self.spec = json.loads((self.dir / "job.json").read_text())
+        self.spec = json.loads((self.dir / "job.json").read_text(encoding="utf-8"))
         self.disarmed = self._disarmed_guard()
         self.state = {
             "id": self.spec["id"], "status": "running",
@@ -194,7 +244,17 @@ class Runner:
             "pending": [], "result_text": "", "heartbeat": time.time(),
             "pid": os.getpid(), "mode": self.spec["mode"], "live": True,
             "error": "",
+            "runtime": copy.deepcopy(self.spec.get("runtime") or answer_runtime.manifest(
+                self.spec.get("provider", "anthropic"), self.spec.get("model_resolved") or self.spec.get("model"),
+                self.spec.get("effort"))),
+            "execution": {}, "receipts": [], "admission": {},
         }
+        self._lease = None
+        self._execution_lock = asyncio.Lock()
+        self._deadline_task = None
+        self._native_tools = {}
+        self._execution_started_mono = None
+        self._execution_elapsed = 0.0
         self.out = open(self.dir / "output.log", "a", encoding="utf-8")
         self.output_tail = ""            # rolling copy (plan-URL search)
         self.inbox = asyncio.Queue()     # queued steering messages
@@ -230,6 +290,195 @@ class Runner:
         self.flush_state()
 
     # ----- files -----
+
+    def record_event(self, event, **fields):
+        row = {"event": event, "t": time.time(),
+               "turn_id": self.state.get("execution", {}).get("turn_id"), **fields}
+        with open(self.dir / "events.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        self.state.setdefault("execution", {})["updated_t"] = row["t"]
+        return row
+
+    def set_runtime(self, model=None, effort=None, source="provider", **extra):
+        runtime = self.state["runtime"]
+        effective = runtime.setdefault("effective", {})
+        effective.update({"provider": self.spec.get("provider", "anthropic"), "source": source})
+        if model:
+            effective["model"] = model
+        if effort is not None:
+            effective["effort"] = effort
+        effective.update(extra)
+        public = copy.deepcopy(runtime)
+        public.pop("execution_lease", None)
+        self.state.setdefault("execution", {})["runtime"] = public
+        self.record_event("runtime", runtime=runtime)
+        joblog.record_runtime(self.spec["id"], runtime)
+        self.flush_state()
+
+    async def acquire_execution(self):
+        async with self._execution_lock:
+            if self._lease and self._lease.active:
+                return
+            runtime = self.state["runtime"]
+            lease = admission.Lease(self.spec["id"], runtime.get("work_class", "background"),
+                                    path=self.dir.parent.parent / "model-admission.sqlite3")
+            self._lease = lease
+            timeout = float(runtime.get("queue_timeout_s", admission.QUEUE_TIMEOUT))
+            end = time.monotonic() + timeout
+            self.state["execution"].update(status="queued", phase="admission")
+            self.record_event("queued", work_class=lease.work_class)
+            try:
+                while True:
+                    if self.closing or self.interrupted:
+                        raise admission.QueueTimeout("model queue cancelled")
+                    self.state["admission"] = await asyncio.to_thread(lease.poll)
+                    self.flush_state()
+                    if lease.active:
+                        self._execution_started_mono = time.monotonic()
+                        runtime["execution_lease"] = {"id": lease.id, "path": str(lease.path), "pid": os.getpid()}
+                        self.state["execution"].update(status="running", phase="model")
+                        self.record_event("admitted", admission=self.state["admission"])
+                        self.flush_state()
+                        return
+                    if time.monotonic() >= end:
+                        raise admission.QueueTimeout("model queue wait expired; no model call was started")
+                    await asyncio.sleep(admission.POLL_S)
+            except BaseException:
+                lease.release("queue cancelled or expired")
+                self.state["admission"]["status"] = "cancelled"
+                self.flush_state()
+                raise
+
+    def release_execution(self, reason="turn ended"):
+        if self._execution_started_mono is not None:
+            self._execution_elapsed += time.monotonic() - self._execution_started_mono
+            self._execution_started_mono = None
+            self.state.setdefault("execution", {})["active_duration_s"] = round(self._execution_elapsed, 3)
+        if self._lease:
+            self._lease.release(reason)
+            self.state.setdefault("admission", {})["status"] = "released"
+            self._lease = None
+        self.state.get("runtime", {}).pop("execution_lease", None)
+
+    async def begin_turn(self, turn_id=None):
+        if self._deadline_task:
+            self._deadline_task.cancel()
+        ident = turn_id or uuid.uuid4().hex
+        self._execution_elapsed = 0.0
+        self.state["error"] = ""
+        self.state["result_text"] = ""
+        self.state["execution"] = {"turn_id": ident, "status": "queued", "phase": "admission",
+                                   "started_t": time.time(), "updated_t": time.time(),
+                                   "message_items": [], "usage": {}}
+        public = copy.deepcopy(self.state["runtime"])
+        public.pop("execution_lease", None)
+        self.state["execution"]["runtime"] = public
+        self.record_event("turn_started", runtime=public)
+        await self.acquire_execution()
+        limit = (self.state["runtime"].get("latency_budget") or {}).get("hard_limit_s")
+        if limit:
+            self._deadline_task = asyncio.create_task(self._turn_deadline(ident, float(limit)))
+        return ident
+
+    async def _turn_deadline(self, local_id, seconds):
+        while True:
+            elapsed = self._execution_elapsed
+            if self._execution_started_mono is not None:
+                elapsed += time.monotonic() - self._execution_started_mono
+            if elapsed >= seconds:
+                break
+            await asyncio.sleep(max(0.01, min(0.25, seconds - elapsed)))
+        # bind_turn can replace the local id with a provider id. This task is
+        # cancelled at every completion/new turn, so it cannot stop a successor.
+        if self.state.get("execution", {}).get("status") in ("running", "awaiting_input"):
+            self.interrupted = True
+            self.state["execution"].update(status="stopping", phase="deadline")
+            self.record_event("execution_deadline", seconds=seconds, local_turn_id=local_id)
+            self.state["error"] = f"answer deadline reached after {seconds:g}s; interruption requested"
+            self.deny_pending("answer deadline reached")
+            self.flush_state()
+            await self.do_interrupt()
+
+    def bind_turn(self, turn_id):
+        self.state.setdefault("execution", {})["turn_id"] = turn_id
+        self.record_event("provider_turn_started")
+        self.flush_state()
+
+    def end_turn(self, status, answer=""):
+        if self._deadline_task:
+            self._deadline_task.cancel()
+            self._deadline_task = None
+        execution = self.state.setdefault("execution", {})
+        execution.update(status=status, phase="answer_ready" if answer else status)
+        if answer:
+            self.state["result_text"] = answer[:RESULT_KEEP]
+            execution["answer_ready_t"] = time.time()
+            self.publish_message("final-" + str(execution.get("turn_id", "")), answer,
+                                 phase="final_answer", completed=True)
+        self.record_event("turn_completed", status=status, answer_chars=len(answer))
+        self.release_execution()
+        self.flush_state()
+
+    def publish_message(self, item_id, text, phase="unknown", completed=False, delta=False):
+        execution = self.state.setdefault("execution", {})
+        items = execution.setdefault("message_items", [])
+        item = next((x for x in items if x["id"] == item_id), None)
+        if item is None:
+            item = {"id": item_id, "phase": phase, "text": ""}
+            items.append(item)
+        item["text"] = (item["text"] + text) if delta else text
+        if phase != "unknown":
+            item["phase"] = phase
+        item.update(status="completed" if completed else "streaming", updated_t=time.time())
+        self.record_event("message_completed" if completed else "message_delta",
+                          item_id=item_id, phase=item["phase"], text=text)
+        self.flush_state()
+
+    def start_tool(self, name, arguments):
+        ident = uuid.uuid4().hex
+        self.record_tool(name, arguments)
+        row = {"id": ident, "name": name, "started_t": time.time(), "status": "running",
+               "turn_id": self.state.get("execution", {}).get("turn_id")}
+        self.state.setdefault("receipts", []).append(row)
+        # The full event log is retained; this bound is only the polling snapshot.
+        self.state["receipts"] = self.state["receipts"][-120:]
+        self.state.setdefault("execution", {})["phase"] = "tool"
+        self.record_event("tool_started", receipt=row)
+        self.flush_state()
+        return ident
+
+    def finish_tool(self, ident, result=None, error=None):
+        row = next((x for x in self.state.get("receipts", []) if x["id"] == ident), None)
+        if row is None:
+            return
+        content = result.get("content", []) if isinstance(result, dict) else []
+        text = "\n".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
+        metadata = _receipt_metadata(result)
+        error = error or metadata.get("error") or (text[:500] if text.startswith("error:") else None)
+        if error and not isinstance(error, str):
+            error = json.dumps(error, ensure_ascii=False, default=str)[:500]
+        if isinstance(result, dict) and result.get("isError") and not error:
+            error = text[:500] or "tool reported an error"
+        partial = metadata.get("partial") or metadata.get("truncated") or metadata.get("errors") or metadata.get("complete") is False
+        row.update(status="failed" if error else "partial" if partial else "completed", finished_t=time.time(), error=error,
+                   duration_ms=round((time.time() - row["started_t"]) * 1000),
+                   result_chars=len(text), metadata=metadata)
+        self.record_event("tool_completed", receipt=row)
+        self.state.setdefault("execution", {})["phase"] = "model"
+        self.flush_state()
+
+    def native_tool(self, item_id, name, arguments=None, *, result=None, error=None, completed=False):
+        """Normalize native shell/file/MCP lifecycle without counting Vira twice."""
+        if item_id not in self._native_tools:
+            self._native_tools[item_id] = self.start_tool(name, arguments or {})
+        if completed:
+            ident = self._native_tools.pop(item_id)
+            self.finish_tool(ident, result, error)
+
+    def record_usage(self, usage):
+        self.state.setdefault("execution", {})["usage"] = usage
+        self.record_event("usage", usage=usage)
+        self.flush_state()
 
     def flush_state(self):
         self.state["heartbeat"] = time.time()
@@ -474,6 +723,7 @@ class Runner:
         # the input box away: the agent received the queued steer, acted on
         # it, wrapped up cleanly, and the session closed anyway because
         # `interrupted` was set.
+        self.release_execution("parked for reply")
         if self.closing:
             return None
         # A cut-short turn is still NOT "finished cleanly" — that flag is
@@ -817,6 +1067,11 @@ class Runner:
         })
         self.record_card(req_id, "ask", q)
         self.state["awaiting"] = "ask"
+        held_execution = bool(self._lease and self._lease.active)
+        if held_execution:
+            self.release_execution("waiting for owner")
+        self.state.setdefault("execution", {}).update(status="awaiting_input", phase="awaiting_input")
+        self.record_event("awaiting_input", kind="question", request_id=req_id)
         self.append(f"[vira] question for you — {q}\n")
         for i, o in enumerate(opts, 1):
             self.append(f"    {i} — {o['label']}\n")
@@ -836,6 +1091,8 @@ class Runner:
                                       else None)
             self.flush_state()
         self.resolve_card(req_id, "timeout" if answer is None else "answered")
+        if held_execution and not self.closing and not self.interrupted:
+            await self.acquire_execution()
         if answer is None:
             self.append("[vira] no answer within the window — the session "
                         "should stop and report the question\n")
@@ -852,6 +1109,8 @@ class Runner:
     # ----- the permission gate -----
 
     async def gate(self, tool_name, tool_input, context):  # noqa: ARG002
+        if self.interrupted or self.closing:
+            return PermissionResultDeny(message="This turn has been stopped. Do not start another tool operation.")
         if self.spec.get("read_only"):
             # Read-only policy FIRST (audit P1-4): the denial outranks every
             # allow list — session grants never apply, and READ_ONLY_EXCLUDE
@@ -916,6 +1175,11 @@ class Runner:
         })
         self.record_card(req_id, "permission", summary)
         self.state["awaiting"] = "permission"
+        held_execution = bool(self._lease and self._lease.active)
+        if held_execution:
+            self.release_execution("waiting for permission")
+        self.state.setdefault("execution", {}).update(status="awaiting_input", phase="awaiting_input")
+        self.record_event("awaiting_input", kind="permission", request_id=req_id)
         self.append(f"[vira] permission needed — {summary}\n")
         self.flush_state()
         timeout = float(self.spec.get("permission_timeout") or 600)
@@ -933,6 +1197,8 @@ class Runner:
                                       else None)
             self.flush_state()
         self.resolve_card(req_id, ("allow-" + str(scope)) if allow else "deny")
+        if held_execution and not self.closing and not self.interrupted:
+            await self.acquire_execution()
         if allow:
             if scope == "session":
                 self.session_allow.add(tool_name)
@@ -983,7 +1249,7 @@ class Runner:
         inp = inp or {}
         keep = {}
         for k in ("query", "q", "path", "name", "person", "status", "days",
-                  "start", "end", "limit"):
+                  "start", "end", "limit", "source", "version", "rowid", "chat_id"):
             v = inp.get(k) if isinstance(inp, dict) else None
             if v not in (None, ""):
                 keep[k] = str(v)[:200]
@@ -1006,13 +1272,25 @@ class Runner:
                     txt = (b.text or "").strip()
                     if txt:
                         out += txt + "\n"
+                        self.publish_message("claude-" + uuid.uuid4().hex, txt,
+                                             phase="commentary", completed=True)
                 elif isinstance(b, ToolUseBlock):
                     out += "  → " + _tool_summary(
                         {"name": b.name, "input": b.input}) + "\n"
-                    self.record_tool(b.name, b.input)
+                    if not b.name.startswith("mcp__vira__"):
+                        self.native_tool(b.id, b.name, b.input)
                 elif isinstance(b, ThinkingBlock):
                     pass  # keep the log readable, as before
             self.append(out)
+            return None
+        if isinstance(msg, UserMessage) and isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock) and block.tool_use_id in self._native_tools:
+                    content = block.content
+                    if isinstance(content, str):
+                        content = [{"type": "text", "text": content}]
+                    self.native_tool(block.tool_use_id, "tool", result={
+                        "content": content or [], "isError": bool(block.is_error)}, completed=True)
             return None
         if isinstance(msg, SystemMessage) and msg.subtype == "init":
             sid = msg.data.get("session_id") or ""
@@ -1035,11 +1313,17 @@ class Runner:
             if model and self.state.get("model_used") != model:
                 self.state["model_used"] = model
                 joblog.record_model_used(self.spec["id"], model)
+            self.set_runtime(model, self.spec.get("effort"), source="provider_model",
+                             transport="claude-sdk", effort_source="requested" if self.spec.get("effort") else "not_reported")
             if sid:
                 self.flush_state()
             self.append(f"[vira] {model} working…{tail}\n")
             return None
         if isinstance(msg, ResultMessage):
+            usage = getattr(msg, "usage", None)
+            if usage:
+                self.record_usage(usage)
+            self.end_turn("failed" if msg.is_error else "completed", msg.result or "" if not msg.is_error else "")
             return (msg.result or "", not msg.is_error)
         return None
 
@@ -1088,7 +1372,8 @@ class Runner:
             vira_srv = viratools.sdk_server(
                 vault_destination=spec.get("vault_destination"),
                 vault_context=spec.get("vault_context"),
-                read_only=bool(spec.get("read_only")))
+                read_only=bool(spec.get("read_only")),
+                runtime=self.state["runtime"], receipt=self)
             options = ClaudeAgentOptions(
                 cwd=spec["cwd"],
                 # See session.SESSION_DEFAULTS for why this is set at all:
@@ -1098,6 +1383,7 @@ class Runner:
                 # repo's own static/app.js is unsurvivable.
                 max_buffer_size=_max_buffer_bytes(),
                 model=spec.get("model_resolved") or spec.get("model"),
+                effort=spec.get("effort"),
                 env=_sdk_env(),
                 # CONTINUE an earlier conversation rather than starting one.
                 # This is what makes a session outlive its own process: the
@@ -1149,6 +1435,7 @@ class Runner:
             )
             async with ClaudeSDKClient(options) as client:
                 self.client = client
+                await self.begin_turn()
                 await client.query(spec["prompt"])
                 done = False
                 while not done:
@@ -1160,7 +1447,7 @@ class Runner:
                         break
                     # Turn boundary: deliver queued steering first.
                     steered = False
-                    while not self.inbox.empty():
+                    while not self.interrupted and not self.inbox.empty():
                         try:
                             item = self.inbox.get_nowait()
                         except asyncio.QueueEmpty:
@@ -1169,6 +1456,7 @@ class Runner:
                             continue
                         self.finished_cleanly = False
                         self.append("[vira] steering delivered\n")
+                        await self.begin_turn()
                         await client.query(item)
                         steered = True
                     if steered:
@@ -1215,6 +1503,7 @@ class Runner:
                         # belong to it, not to the answer just published
                         self.state["turn"] = int(self.state.get("turn") or 0) + 1
                         self.flush_state()
+                        await self.begin_turn()
                         await client.query(reply)
         except _EngineDone:
             pass                     # CLI-exec engine finished; epilogue below
@@ -1225,6 +1514,11 @@ class Runner:
         finally:
             self.client = None
             self.deny_pending("session ended")
+            self.release_execution("session ended")
+            if self._deadline_task:
+                self._deadline_task.cancel()
+            if self.state.get("execution", {}).get("status") in ("running", "queued", "awaiting_input", "stopping"):
+                self.end_turn("interrupted" if self.interrupted else "failed")
 
         self.state["result_text"] = (result_text or "")[:RESULT_KEEP]
         # Abandoned, not merely ended: a Stop/Close that landed on a
