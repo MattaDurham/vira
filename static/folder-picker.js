@@ -2,6 +2,9 @@
 window.FolderPicker = (() => {
   let active = null;
   let serial = 0;
+  // A folder listing is a local read. Bound both the connection and response
+  // body so a queued or stalled request cannot leave the dialog loading forever.
+  const REQUEST_TIMEOUT_MS = 10000;
 
   function node(tag, cls, text) {
     const result = document.createElement(tag);
@@ -18,13 +21,39 @@ window.FolderPicker = (() => {
   }
 
   async function request(url, options = {}) {
-    const response = await fetch(url, options);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(typeof data.detail === 'string' ? data.detail :
-        'The folder could not be opened. Check that Vira can access it and try again.');
+    const controller = new AbortController();
+    const cancelled = () => Object.assign(new Error('Folder request cancelled.'), {name: 'AbortError'});
+    if (options.signal?.aborted) throw cancelled();
+    let timer, abort;
+    const interrupted = new Promise((_, reject) => {
+      abort = () => {
+        reject(cancelled());
+        controller.abort();
+      };
+      options.signal?.addEventListener('abort', abort, {once: true});
+      timer = setTimeout(() => {
+        const message = options.method === 'POST' ?
+          'Vira has not confirmed whether the folder was created. Refresh the folder list before trying again.' :
+          'Vira took too long to open this folder. Try again, or choose another location.';
+        reject(Object.assign(new Error(message), {name: 'TimeoutError'}));
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([interrupted, (async () => {
+        const response = await fetch(url, {...options, cache: 'no-store', signal: controller.signal});
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw Object.assign(new Error(typeof data.detail === 'string' ? data.detail :
+            'The folder could not be opened. Check that Vira can access it and try again.'),
+          {status: response.status});
+        }
+        return data;
+      })()]);
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abort);
     }
-    return data;
   }
 
   function choose(options = {}) {
@@ -300,7 +329,8 @@ window.FolderPicker = (() => {
         if (root) query.set('root', root);
         if (showHidden.checked) query.set('show_hidden', 'true');
         try {
-          const data = await request(`/api/folders?${query}`, {signal: controller.signal});
+          const suffix = query.toString();
+          const data = await request('/api/folders' + (suffix ? '?' + suffix : ''), {signal: controller.signal});
           if (finished || turn !== generation) return;
           paint(data);
           if (fallback) {
@@ -309,7 +339,10 @@ window.FolderPicker = (() => {
           }
         } catch (error) {
           if (finished || turn !== generation) return;
-          if (root && path && path !== root && !fallback) {
+          // Missing or inaccessible saved folders can recover at their vault.
+          // Connection failures and timeouts need an explicit retry, not a
+          // second stalled request or a misleading "folder unavailable" notice.
+          if ([400, 403, 404].includes(error.status) && root && path && path !== root && !fallback) {
             pending = false;
             return load(root, true);
           }
@@ -338,6 +371,9 @@ window.FolderPicker = (() => {
           return;
         }
         const parent = listing.path;
+        const turn = ++generation;
+        controller?.abort();
+        controller = new AbortController();
         creating = true;
         createError.hidden = true;
         createSubmit.textContent = 'Creating...';
@@ -346,8 +382,9 @@ window.FolderPicker = (() => {
           const data = await request('/api/folders', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({parent, name, ...(root ? {root} : {})}),
+            signal: controller.signal,
           });
-          if (finished) return;
+          if (finished || turn !== generation) return;
           paint(data);
           createForm.hidden = true;
           newFolder.hidden = false;
@@ -355,8 +392,11 @@ window.FolderPicker = (() => {
           notice.textContent = 'Folder created. Select it to continue.';
           notice.hidden = false;
         } catch (error) {
-          if (finished) return;
+          if (finished || turn !== generation) return;
           createError.textContent = error.message;
+          if (error.name === 'TimeoutError') {
+            createError.appendChild(button('Refresh folders', '', () => load(parent)));
+          }
           createError.hidden = false;
         } finally {
           creating = false;

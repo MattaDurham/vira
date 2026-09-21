@@ -35,8 +35,9 @@ const del = (path) => api(path, { method: "DELETE" });
 // app, including the ones added next month: a capture-phase click listener
 // remembers the control pressed, every api()/post()/put()/del() call is
 // routed through busyTrack, and a request started in the click's own
-// window - or chained right behind one already attributed to it - belongs
-// to that control. While any of them is in flight past a short delay (so a
+// event dispatch belongs to that control. Time proximity is not ownership:
+// background polling must never extend a control's wait. While its requests
+// are in flight past a short delay (so a
 // 40ms answer never flickers) the control wears .is-busy, drawn entirely
 // in CSS pseudo-elements so a handler that rewrites its own label or
 // disables itself never fights an inserted node. Once shown it stays a
@@ -60,11 +61,9 @@ const BUSY_DELAY_MS = 220;   // a plain request faster than this never shows
 // longer depends on the server being slow.
 const BUSY_RICH_DELAY_MS = 0;
 const BUSY_MIN_MS = 480;     // once shown, hold at least this long
-const BUSY_CLICK_MS = 160;   // a request starting this soon after a click is its own
-const BUSY_CHAIN_MS = 200;   // ...or this soon after one of its requests settled
 const BUSY_SEL = "button, .btn, .fchip, .icon-btn, .seg-btn, .seg button, [role=button], .linkish, .ai-banner-btn, .fr-tile, .lp-tile, summary";
 const BUSY_RICH_RE = /^\s*(refresh|re-?scan|scan|sweep|rebuild|build|re-?check|recheck|re-?index|re-?score|compose|rewrite|re-?read|read again|read it again|check|sync|connect|reconnect|test|retry|have vira|land|resume|score|generate|regenerate|run)\b/i;
-const busyClicks = [];       // {node, at, pending, lastSettle, shownAt, timer}
+const busyClicks = [];       // {node, event, pending, shownAt, timer}
 
 function busyRich(node) {
   const mode = node.dataset.busy;
@@ -88,10 +87,8 @@ function busyHide(e) {
 function busyMaybeHide(e) {
   if (e.pending.size) return;
   const now = performance.now();
-  // a chained request may still be about to start; the min-time keeps a
-  // shown wheel from blinking away
-  const wait = Math.max(BUSY_CHAIN_MS - (now - e.lastSettle),
-    e.shownAt ? BUSY_MIN_MS - (now - e.shownAt) : 0, 0);
+  // Only the minimum display time remains after the owned work settles.
+  const wait = Math.max(e.shownAt ? BUSY_MIN_MS - (now - e.shownAt) : 0, 0);
   clearTimeout(e.timer);
   e.timer = setTimeout(() => {
     if (e.pending.size) return;
@@ -104,17 +101,18 @@ function busyAttach(e, p) {
   clearTimeout(e.timer);
   if (!e.shownAt) e.timer = setTimeout(() => { if (e.pending.size && e.node.isConnected) busyShow(e); },
     e.rich ? BUSY_RICH_DELAY_MS : BUSY_DELAY_MS);
-  const done = () => { e.pending.delete(p); e.lastSettle = performance.now(); busyMaybeHide(e); };
+  const done = () => { e.pending.delete(p); busyMaybeHide(e); };
   p.then(done, done);
   return p;
 }
 function busyTrack(p) {
   if (!(p && typeof p.then === "function")) return p;
-  const now = performance.now();
   for (let i = busyClicks.length - 1; i >= 0; i--) {
     const e = busyClicks[i];
     if (!e.node.isConnected) { busyHide(e); continue; }
-    if (now - e.at <= BUSY_CLICK_MS || e.pending.size || now - e.lastSettle <= BUSY_CHAIN_MS) return busyAttach(e, p);
+    // eventPhase returns to NONE (0) when dispatch ends. Unlike a timer
+    // window, this cannot adopt an unrelated poll that happens to be nearby.
+    if (e.event && e.event.eventPhase > 0) return busyAttach(e, p);
   }
   return p;
 }
@@ -123,7 +121,7 @@ function busyWhile(node, work, opts = {}) {
   if (!node) return p;
   let e = busyClicks.find((x) => x.node === node);
   if (!e) {
-    e = { node, at: performance.now(), pending: new Set(), lastSettle: 0, shownAt: 0, timer: 0,
+    e = { node, event: null, pending: new Set(), shownAt: 0, timer: 0,
       rich: opts.rich != null ? !!opts.rich : busyRich(node) };
     busyClicks.push(e);
   }
@@ -138,14 +136,13 @@ document.addEventListener("click", (e) => {
   // a press that leaves a text selection is a read, not an activation
   const sel = window.getSelection?.();
   if (sel && !sel.isCollapsed && node.contains(sel.anchorNode)) return;
-  const now = performance.now();
-  // one live entry per control: a re-press inside the window just re-arms it
+  // One live entry per control; only this event can attach automatic work.
   const prior = busyClicks.find((x) => x.node === node);
-  if (prior) { prior.at = now; return; }
-  const entry = { node, at: now, pending: new Set(), lastSettle: 0, shownAt: 0, timer: 0, rich: busyRich(node) };
+  if (prior) { prior.event = e; return; }
+  const entry = { node, event: e, pending: new Set(), shownAt: 0, timer: 0, rich: busyRich(node) };
   busyClicks.push(entry);
   // an entry that never attracted a request leaves quietly
-  entry.timer = setTimeout(() => { if (!entry.pending.size && !entry.shownAt) busyHide(entry); }, BUSY_CLICK_MS + 20);
+  entry.timer = setTimeout(() => { if (!entry.pending.size && !entry.shownAt) busyHide(entry); }, 0);
 }, true);
 // a placeholder line that says what it is waiting on, wearing the wheel
 const waitLine = (text, cls = "") => el("div", ("waiting " + cls).trim(), text);
@@ -230,17 +227,22 @@ function lsSet(key, value) {
 // at its done condition; maxMs is the safety lifetime some pollers cap
 // with. A throwing or rejecting tick never kills the loop.
 function startPoll(fn, ms, maxMs) {
+  let inFlight = false, stopped = false;
   const h = {
     _t: null,
-    stop() { clearInterval(h._t); h._t = null; },
+    _expiry: null,
+    stop() { stopped = true; clearInterval(h._t); clearTimeout(h._expiry); h._t = null; },
   };
   h._t = setInterval(() => {
+    // Slow reads must not consume another connection slot on every tick.
+    if (stopped || inFlight) return;
+    inFlight = true;
+    const settled = () => { inFlight = false; };
     try {
-      const r = fn(h);
-      if (r && typeof r.catch === "function") r.catch(() => {});
-    } catch { /* poll survives a bad tick */ }
+      Promise.resolve(fn(h)).then(settled, settled);
+    } catch { settled(); /* poll survives a bad tick */ }
   }, ms);
-  if (maxMs) setTimeout(h.stop, maxMs);
+  if (maxMs) h._expiry = setTimeout(h.stop, maxMs);
   return h;
 }
 
@@ -10149,26 +10151,46 @@ const alertKind = (c) =>
 // pending cards verbatim (the pending_all shape), which is what keeps
 // answering here and answering in a terminal the same act.
 let attnData = null;      // last /api/attention payload
-async function refreshAlerts() {
-  let p;
-  try {
-    p = await api("/api/attention");
-  } catch {
-    return;   // a failed poll must never clear a decision off the screen
+let alertRefreshPending = null;
+let alertRefreshQueued = false;
+function refreshAlerts({ changed = true } = {}) {
+  // Polls, session events, and manual refreshes share one request. A new
+  // change can ask for one trailing snapshot; a timer tick merely joins the
+  // current read so a slow server cannot accumulate queued attention calls.
+  if (alertRefreshPending) {
+    if (changed) alertRefreshQueued = true;
+    return alertRefreshPending;
   }
-  attnData = p;
-  const rows = p.cards || [];
-  alertRows = rows;
-  const live = new Set(rows.map((r) => r.card.req_id));
-  let dropped = false;
-  [...alertMin].forEach((id) => {
-    if (!live.has(id)) { alertMin.delete(id); dropped = true; }
+  alertRefreshPending = (async () => {
+    do {
+      alertRefreshQueued = false;
+      let p;
+      try {
+        p = await api("/api/attention");
+      } catch {
+        continue;   // a failed poll must never clear a visible decision
+      }
+      attnData = p;
+      const rows = p.cards || [];
+      alertRows = rows;
+      const live = new Set(rows.map((r) => r.card.req_id));
+      let dropped = false;
+      [...alertMin].forEach((id) => {
+        if (!live.has(id)) { alertMin.delete(id); dropped = true; }
+      });
+      if (dropped) saveAlertMin();
+      if (alertFront && !live.has(alertFront)) alertFront = null;
+      renderAlerts();
+      renderAttention();
+      attnMaybeOpen();
+    } while (alertRefreshQueued);
+  })().finally(() => {
+    alertRefreshPending = null;
+    // A caller can arrive in the microtask between the final paint and this
+    // cleanup. Preserve that change as well, rather than leaving stale data.
+    if (alertRefreshQueued) return refreshAlerts({ changed: false });
   });
-  if (dropped) saveAlertMin();
-  if (alertFront && !live.has(alertFront)) alertFront = null;
-  renderAlerts();
-  renderAttention();
-  attnMaybeOpen();
+  return alertRefreshPending;
 }
 
 function alertPark(reqId) {
@@ -13274,15 +13296,39 @@ let setupPollTimer = null;
 let setupActive = null;          // step id / manage id pinned by a rail click
 let setupSt = null;              // raw /api/onboard, for card bodies
 let setupExtra = null;           // config-card state (notify / companion / update)
+let setupVaultRevision = 0;      // successful local mutations outrank older reads
+
+function setupRecount(flow) {
+  const countable = flow.steps.filter((item) => item.state !== "skipped");
+  flow.done = countable.filter((item) => item.state === "done").length;
+  flow.total = countable.length;
+  flow.complete = countable.length > 0 && flow.done === countable.length;
+}
+
+function setupKeepCurrentVault(flow, st, revision) {
+  if (revision === setupVaultRevision || !setupSt?.vault) return;
+  // A status read started before the save may finish afterwards. Its other
+  // status fields remain useful, but it must not roll back the saved vault.
+  st.vault = setupSt.vault;
+  const current = setupFlow?.steps.find((item) => item.id === "brain");
+  const incoming = flow.steps.find((item) => item.id === "brain");
+  if (current && incoming) {
+    incoming.state = current.state;
+    incoming.detail = current.detail;
+  }
+  setupRecount(flow);
+}
 
 async function loadSetup() {
   const body = $("#setup-body");
   if (!body) return;
+  const vaultRevision = setupVaultRevision;
   const [flow, st, extra] = await Promise.all([
     api("/api/onboard/steps"),
     api("/api/onboard"),
     loadSetupExtra(),
   ]);
+  setupKeepCurrentVault(flow, st, vaultRevision);
   setupSt = st;
   setupExtra = extra;
   renderSetup(flow, st);
@@ -13310,11 +13356,13 @@ function pollSetup() {
     if (!$("#setup-body")) {
       h.stop(); setupPollTimer = null; return;
     }
+    const vaultRevision = setupVaultRevision;
     const [flow, st] = await Promise.all([
       api("/api/onboard/steps").catch(() => null),
       api("/api/onboard").catch(() => null),
     ]);
     if (!flow || !st) return;
+    setupKeepCurrentVault(flow, st, vaultRevision);
     setupSt = st;
     renderSetup(flow, st);
     launchUnlocked(flow);
@@ -13396,19 +13444,29 @@ function srcTile(row, chips) {
   return tile;
 }
 
-async function setupAct(btn, fn, okMsg) {
+async function setupAct(btn, fn, okMsg, { refresh = true, onSaved = null } = {}) {
+  if (btn.disabled) return null;
   const prev = btn.textContent;
   btn.disabled = true;
   btn.textContent = "working…";
+  let res;
   try {
-    const res = await fn();
-    if (okMsg) toast(okMsg(res));
-    await loadSetup();
+    res = await busyWhile(btn, fn);
   } catch (e) {
     toast(e.message || "failed");
+    return null;
+  } finally {
     btn.disabled = false;
     btn.textContent = prev;
   }
+  if (okMsg) toast(okMsg(res));
+  try {
+    if (onSaved) onSaved(res);
+    if (refresh) await loadSetup();
+  } catch (e) {
+    toast("Action completed, but Config could not refresh: " + (e.message || "reopen Config to check its status"));
+  }
+  return res;
 }
 
 // ---- render: the Config dashboard --------------------------------------
@@ -13585,7 +13643,7 @@ function dashHero(flow, st, ai, attn, hard) {
       ok: st.feed.chat_db === "ok", na: st.feed.chat_db === "missing" && !(st.platform === "mac") },
     { id: "contacts", k: "people", v: fmtNum(st.crm.people), ok: st.crm.people > 0 },
     { id: "dossiers", k: "dossiers", v: fmtNum(st.crm.profiles), ok: st.crm.profiles > 0 },
-    { id: "brain", k: "files", v: (st.vault.notes_capped ? "≥ " : "") + fmtNum(st.vault.notes), ok: st.vault.connected },
+    { id: "brain", k: "files", v: st.vault.notes == null ? "—" : (st.vault.notes_capped ? "≥ " : "") + fmtNum(st.vault.notes), ok: st.vault.connected },
     { id: "mail", k: "mailboxes",
       v: m.accounts ? (m.failing ? `${m.ok} of ${m.accounts}` : String(m.accounts)) : "0",
       ok: m.accounts > 0 && !m.failing, attn: !!m.failing },
@@ -14276,8 +14334,91 @@ function cardDossiers(card, step, st) {
 
 let brainOpenSource = null;
 
+const VAULT_MUTATION_TIMEOUT_MS = 15000;
+async function brainVaultMutation(path, body, {
+  method = "POST", uncertainty = "your vault settings were saved",
+} = {}) {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      // Aborting a client cannot undo a request that reached the server.
+      // Report the uncertainty, keep the form, and never retry automatically.
+      reject(new Error(`Vira has not confirmed whether ${uncertainty}. Reopen Config to check before trying again.`));
+      controller.abort();
+    }, VAULT_MUTATION_TIMEOUT_MS);
+  });
+  try {
+    const options = { method, signal: controller.signal };
+    if (body !== undefined) {
+      options.headers = { "content-type": "application/json" };
+      options.body = JSON.stringify(body);
+    }
+    // Race the complete API promise, including its JSON body. Some queued
+    // transports do not settle promptly when their abort signal is raised.
+    // setupAct owns this bounded operation explicitly. The raw transport
+    // must not also attach to the clicked button and outlive this deadline.
+    return await Promise.race([apiRaw(path, options), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function brainNoteCount(source) {
+  if (source.notes == null) return "File count has not been checked yet.";
   return `${source.notes_capped ? "at least " : ""}${fmtNum(source.notes || 0)} Markdown ${source.notes === 1 ? "file" : "files"}`;
+}
+
+// Saving a vault returns its normalized settings. Apply that result locally;
+// rescanning every vault and probing every AI provider is unrelated to a save.
+function brainApplyVaultChange(card, step, st, result) {
+  const currentStep = setupFlow?.steps.find((item) => item.id === "brain");
+  if (setupSt?.vault && currentStep) {
+    // Config can be reopened or repainted while the mutation is in flight.
+    // Apply its response to the current dashboard rather than a detached card.
+    st = setupSt;
+    step = currentStep;
+  }
+  setupVaultRevision++;
+  const vault = st.vault;
+  let sources = [...vault.sources];
+  if (result.removed) {
+    sources = sources.filter((source) => source.id !== result.id);
+    if (result.id === "primary") vault.root = "";
+  } else if (result.id) {
+    const index = sources.findIndex((source) => source.id === result.id);
+    const previous = sources[index];
+    const saved = { ...result };
+    if (previous?.root === saved.root && saved.notes == null && previous.notes != null) {
+      saved.notes = previous.notes;
+      saved.notes_capped = previous.notes_capped;
+    }
+    if (index < 0) sources.push(saved);
+    else sources[index] = saved;
+    if (saved.primary) vault.root = saved.root;
+    if (saved.default_destination) vault.default_destination = saved.id;
+    else if (vault.default_destination === saved.id) vault.default_destination = "";
+  } else if (typeof result.default_destination === "string") {
+    vault.default_destination = result.default_destination;
+  }
+  vault.sources = sources.map((source) => ({...source,
+    default_destination: source.id === vault.default_destination}));
+  vault.connected = sources.some((source) => source.connected && source.write_enabled);
+  vault.notes = sources.every((source) => source.notes != null)
+    ? sources.reduce((count, source) => count + source.notes, 0) : null;
+  vault.notes_capped = sources.some((source) => source.notes_capped);
+  step.state = vault.connected ? "done" : "todo";
+  const connectedCount = sources.filter((source) => source.connected).length;
+  step.detail = vault.connected ? `${connectedCount} vault${connectedCount === 1 ? "" : "s"} connected.` : "No writable vault connected.";
+  if (setupSt === st && setupFlow) {
+    setupRecount(setupFlow);
+    renderSetup(setupFlow, st);
+    launchUnlocked(setupFlow);
+    refreshGates(setupFlow);
+  } else {
+    card.replaceChildren();
+    cardBrain(card, step, st);
+  }
 }
 
 function brainPolicySupported(vault) {
@@ -14386,7 +14527,7 @@ function brainError(error) {
   return message;
 }
 
-function brainSourceEditor(card, source) {
+function brainSourceEditor(card, source, step, st) {
   const tile = el("details", "setup-prov vault-config" + (source.connected ? " on" : ""));
   tile.dataset.sourceId = source.id;
   tile.open = brainOpenSource === source.id;
@@ -14395,6 +14536,7 @@ function brainSourceEditor(card, source) {
     else if (brainOpenSource === source.id) brainOpenSource = null;
   };
   const head = el("summary", "setup-prov-head");
+  head.dataset.busy = "off";
   head.appendChild(el("span", "setup-prov-name", source.name));
   const states = [source.connected ? "connected" : "folder unavailable"];
   states.push(source.write_enabled ? "writable" : "read only");
@@ -14447,7 +14589,9 @@ function brainSourceEditor(card, source) {
   destinations.appendChild(protectedDirs.wrap); form.appendChild(destinations);
 
   const advanced = el("details", "vault-config-advanced");
-  advanced.appendChild(el("summary", "", "Advanced settings"));
+  const advancedHead = el("summary", "", "Advanced settings");
+  advancedHead.dataset.busy = "off";
+  advanced.appendChild(advancedHead);
   const advFields = el("div", "vault-config-fields"); advanced.appendChild(advFields);
   field("purpose", "What belongs here", source.purpose, "Optional description for the assistant.", advFields);
   field("contexts", "Route by context", (source.contexts || []).join(", "), "Optional context names, separated by commas.", advFields);
@@ -14497,9 +14641,14 @@ function brainSourceEditor(card, source) {
   const save = el("button", "btn primary vault-config-save", "Save settings"); save.type = "submit"; actions.appendChild(save);
   if (source.removable) {
     const remove = el("button", "btn", "Disconnect"); remove.type = "button";
-    remove.onclick = () => setupAct(remove,
-      () => api("/api/vault/sources/" + encodeURIComponent(source.id), { method: "DELETE" }),
-      () => `${source.name} disconnected; its files were not changed`);
+    remove.onclick = () => setupAct(remove, async () => {
+      try {
+        return await brainVaultMutation("/api/vault/sources/" + encodeURIComponent(source.id), undefined,
+          { method: "DELETE", uncertainty: "the vault was disconnected" });
+      } catch (e) { error.textContent = brainError(e); throw new Error(error.textContent); }
+    },
+      () => `${source.name} disconnected; its files were not changed`,
+      { refresh: false, onSaved: (result) => brainApplyVaultChange(card, step, st, result) });
     actions.appendChild(remove);
   }
   form.appendChild(actions); form.appendChild(el("p", "hint", "Disconnecting keeps every file."));
@@ -14512,9 +14661,11 @@ function brainSourceEditor(card, source) {
     ["read_enabled", "write_enabled", "model_exposure", "allow_publish"].forEach((key) => { body[key] = controls[key].checked; });
     brainOpenSource = source.id;
     setupAct(save, async () => {
-      try { return await post("/api/vault/sources", body); }
+      try { return await brainVaultMutation("/api/vault/sources", body); }
       catch (e) { error.textContent = brainError(e); throw new Error(error.textContent); }
-    }, (r) => `${r.name} settings saved`).then(() => {
+    }, (r) => `${r.name} settings saved`,
+      { refresh: false, onSaved: (result) => brainApplyVaultChange(card, step, st, result) }).then((result) => {
+      if (!result) return;
       document.querySelector(`.vault-config[data-source-id="${CSS.escape(source.id)}"] .vault-config-save`)?.focus();
     });
   };
@@ -14554,23 +14705,33 @@ function cardBrain(card, step, st) {
     if (!folder.value) { folder.button.click(); return; }
     setupAct(button, async () => {
       try {
-        const source = await post("/api/vault/sources", { name: name.value.trim(), path: folder.value, connect_only: true,
+        const source = await brainVaultMutation("/api/vault/sources", { name: name.value.trim(), path: folder.value, connect_only: true,
           read_enabled: true, write_enabled: true, write_scope: "all", capture_dir: "inbox",
-          model_exposure: share.checked, allow_publish: false });
+          model_exposure: share.checked, allow_publish: false }, { uncertainty: "the vault was connected" });
         brainOpenSource = source.id; return source;
       } catch (e) { error.textContent = brainError(e); throw new Error(error.textContent); }
-    }, (source) => `${source.name} connected and ready`);
+    }, (source) => `${source.name} connected and ready`,
+      { refresh: false, onSaved: (result) => brainApplyVaultChange(card, step, st, result) });
   };
   card.appendChild(add);
   card.appendChild(el("div", "setup-sub", `Connected vaults${sources.length ? " · " + sources.length : ""}`));
   if (!sources.length) card.appendChild(el("p", "hint", "Your first vault will appear here."));
-  sources.forEach((source) => brainSourceEditor(card, source));
+  sources.forEach((source) => brainSourceEditor(card, source, step, st));
   const selected = vault.default_destination;
   if (selected && !sources.some((source) => source.id === selected && source.connected && source.write_enabled)) {
     card.appendChild(el("p", "vault-config-error", "The default vault is unavailable or read only. Choose another default in its settings."));
     const clear = el("button", "btn", "Clear unavailable default");
-    clear.onclick = () => setupAct(clear, () => post("/api/vault/default-destination", { source_id: "" }), () => "Default cleared");
+    const clearError = el("p", "vault-config-error"); clearError.setAttribute("role", "alert");
+    clear.onclick = () => setupAct(clear, async () => {
+      clearError.textContent = "";
+      try {
+        return await brainVaultMutation("/api/vault/default-destination", { source_id: "" },
+          { uncertainty: "the default vault was cleared" });
+      } catch (e) { clearError.textContent = brainError(e); throw new Error(clearError.textContent); }
+    }, () => "Default cleared",
+      { refresh: false, onSaved: (result) => brainApplyVaultChange(card, step, st, result) });
     card.appendChild(clear);
+    card.appendChild(clearError);
   }
   if (!selected && sources.filter((source) => source.write_enabled).length > 1)
     card.appendChild(el("p", "hint", "Choose a vault when saving, or set a default in Advanced settings."));
@@ -30125,7 +30286,7 @@ async function boot() {
   // the list is server-side, so the first fetch pops whatever is pending.
   // The stream is the fast path; this poll is what survives a dead stream.
   refreshAlerts();
-  startPoll(() => refreshAlerts(), 5000);
+  startPoll(() => refreshAlerts({ changed: false }), 5000);
   // Desktop: the badge is the Attention window's closed-state face, so
   // clicking it opens the window. The phone keeps the cascade raise.
   $("#alerts-btn")?.addEventListener("click",

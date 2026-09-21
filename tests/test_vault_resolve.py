@@ -62,7 +62,14 @@ class ResolveCase(unittest.TestCase):
         # so patching vault_root does NOT reach it — in a full-suite run it
         # answers from whatever real index an earlier test warmed, and the
         # fallback assertions here started passing or failing on test order.
-        for p in (mock.patch.object(vault, "vault_root",
+        # source_specs also reads secondary vaults and primary policy from
+        # config. A temporary, absent config keeps the fixture independent of
+        # whichever vaults the running instance or preview has connected.
+        for p in (mock.patch.object(vault.settings, "CONFIG_PATH",
+                                    self.root / ".fixture-config.json"),
+                  mock.patch.object(vault, "DB_PATH",
+                                    self.root / ".fixture-index.sqlite"),
+                  mock.patch.object(vault, "vault_root",
                                     return_value=self.root),
                   mock.patch.object(vault, "search", return_value=[])):
             p.start()

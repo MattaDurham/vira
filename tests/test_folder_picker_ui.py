@@ -64,12 +64,29 @@ const key = (key, shiftKey = false) => {
   return {prevented, stopped};
 };
 const calls = [];
-const fetch = (url, options) => new Promise((resolve) => {
-  calls.push({url, options, resolve: (data, ok = true) => resolve({ok, json: async () => data})});
+const fetch = (url, options) => new Promise((resolve, reject) => {
+  // Deliberately ignore abort here: the picker must release its loading state
+  // even if a stalled transport never settles after its signal is aborted.
+  calls.push({url, options, respond: resolve, reject,
+    resolve: (data, ok = true) => resolve({ok, status: ok ? 200 : 404, json: async () => data})});
 });
-const context = vm.createContext({window, document, fetch, AbortController, URLSearchParams, console});
+const timers = new Map();
+let now = 0, nextTimer = 0;
+const setTimeout = (callback, delay) => {
+  const id = ++nextTimer; timers.set(id, {callback, at: now + delay}); return id;
+};
+const clearTimeout = (id) => timers.delete(id);
+const context = vm.createContext({window, document, fetch, AbortController, URLSearchParams, console,
+  setTimeout, clearTimeout});
 vm.runInContext(fs.readFileSync('static/folder-picker.js', 'utf8'), context);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const elapse = async (milliseconds) => {
+  now += milliseconds;
+  for (const [id, timer] of [...timers]) {
+    if (timer.at <= now) { timers.delete(id); timer.callback(); }
+  }
+  await tick();
+};
 const choose = (options) => window.FolderPicker.choose(options);
 const dialog = () => document.body.children.find((n) => n.tag === 'dialog');
 const listing = (path = '/home/demo', overrides = {}) => ({
@@ -88,7 +105,7 @@ const submit = async (form) => { form.dispatchEvent({type: 'submit', preventDefa
   let current = dialog();
   assert(current.open);
   assert(button(current, 'Select this folder').disabled);
-  assert.equal(new URL(calls.at(-1).url, 'http://localhost').pathname, '/api/folders');
+  assert.equal(calls.at(-1).url, '/api/folders', 'an empty query uses the canonical URL without a trailing ?');
   await reply(listing());
   assert.equal(cls(current, 'folder-picker-folders').children.length, 2);
   assert.equal(cls(current, 'folder-picker-folder-name').textContent, 'Notes');
@@ -156,6 +173,69 @@ const submit = async (form) => { form.dispatchEvent({type: 'submit', preventDefa
   await reply(listing());
   button(current, 'Cancel').click(); await result;
 
+  // A stalled fetch cannot keep Opening folder... forever, even if abort is
+  // ignored by the transport. Retry owns the dialog; old replies cannot paint.
+  result = choose({path: '/slow'}); current = dialog();
+  const stalledRead = calls.at(-1);
+  assert(!button(current, 'Close').disabled);
+  assert(!button(current, 'Cancel').disabled);
+  await elapse(10000);
+  assert(stalledRead.options.signal.aborted);
+  assert.equal(current.attributes['aria-busy'], 'false');
+  assert(!current.textContent.includes('Opening folder...'));
+  assert.match(current.textContent, /took too long/);
+  assert(button(current, 'Select this folder').disabled);
+  assert(!button(current, 'Try again').disabled);
+  button(current, 'Try again').click();
+  const retryRead = calls.at(-1);
+  assert.notEqual(retryRead, stalledRead);
+  assert.equal(new URL(retryRead.url, 'http://localhost').searchParams.get('path'), '/slow');
+  await reply(listing('/stale'), true, stalledRead);
+  assert.equal(current.attributes['aria-busy'], 'true', 'late response cannot finish the retry');
+  assert(button(current, 'Select this folder').disabled);
+  await reply(listing('/slow'), true, retryRead);
+  button(current, 'Select this folder').click();
+  assert.equal((await result).path, '/slow');
+
+  // Receiving headers is insufficient: the deadline also bounds a stalled body.
+  result = choose(); current = dialog();
+  const stalledBody = calls.at(-1);
+  let finishBody;
+  stalledBody.respond({ok: true, status: 200, json: () => new Promise((resolve) => { finishBody = resolve; })});
+  await tick();
+  await elapse(10000);
+  assert.match(current.textContent, /took too long/);
+  assert.equal(current.attributes['aria-busy'], 'false');
+  finishBody(listing('/body-too-late')); await tick();
+  assert(button(current, 'Select this folder').disabled);
+  button(current, 'Cancel').click(); await result;
+
+  // A timeout within a vault is not evidence the folder disappeared. It must
+  // offer a retry immediately, without another automatic request to the root.
+  result = choose({root: '/home/vault', path: '/home/vault/Notes'}); current = dialog();
+  const beforeTimeout = calls.length;
+  await elapse(10000);
+  assert.equal(calls.length, beforeTimeout);
+  assert(!current.textContent.includes('previous folder is unavailable'));
+  assert(!button(current, 'Try again').disabled);
+  button(current, 'Cancel').click(); await result;
+
+  // Closing a stalled request removes its timer. A fresh picker gets its own
+  // complete deadline, and an obsolete timeout cannot mutate it.
+  result = choose(); current = dialog();
+  const cancelledStall = calls.at(-1);
+  await elapse(9000);
+  button(current, 'Close').click();
+  assert.equal((await result).cancelled, true);
+  await tick();
+  assert.equal(timers.size, 0);
+  assert(cancelledStall.options.signal.aborted);
+  result = choose(); current = dialog();
+  await elapse(1000);
+  assert.equal(current.attributes['aria-busy'], 'true');
+  await reply(listing('/new-picker'));
+  button(current, 'Cancel').click(); await result;
+
   // Unsupported scoped names stay browsable but cannot be submitted as policies.
   result = choose({root: '/home/vault', path: '/home/vault/invalid:name'}); current = dialog();
   await reply(listing('/home/vault/invalid:name', {root: '/home/vault', relative: 'invalid:name',
@@ -211,6 +291,46 @@ const submit = async (form) => { form.dispatchEvent({type: 'submit', preventDefa
   button(current, 'Select this folder').click();
   assert.equal((await result).relative, 'Journal');
 
+  // A stalled create may have reached the server. Release the form and offer
+  // a read-only refresh instead of automatically posting the mutation again.
+  result = choose({root: '/home/vault'}); current = dialog();
+  await reply(listing('/home/vault', {root: '/home/vault', relative: '.', parent: null}));
+  button(current, 'New folder').click();
+  const stalledCreateForm = cls(current, 'folder-picker-create');
+  all(stalledCreateForm).find((n) => n.name === 'folder_name').value = 'New notes';
+  await submit(stalledCreateForm);
+  const stalledCreate = calls.at(-1);
+  const countBeforeCreateTimeout = calls.length;
+  await elapse(10000);
+  assert.equal(calls.length, countBeforeCreateTimeout, 'timed-out creates are never retried automatically');
+  assert(stalledCreate.options.signal.aborted);
+  assert.equal(current.attributes['aria-busy'], 'false');
+  assert.match(stalledCreateForm.textContent, /not confirmed whether the folder was created/);
+  button(current, 'Refresh folders').click();
+  const refreshRead = calls.at(-1);
+  assert.equal(refreshRead.options.method, undefined, 'recovery only reads the parent');
+  assert.equal(new URL(refreshRead.url, 'http://localhost').searchParams.get('path'), '/home/vault');
+  await reply(listing('/home/vault/New notes', {relative: 'New notes'}), true, stalledCreate);
+  assert.equal(current.attributes['aria-busy'], 'true', 'late create reply cannot interrupt refresh');
+  await reply(listing('/home/vault', {root: '/home/vault', relative: '.'}), true, refreshRead);
+  button(current, 'Cancel').click(); await result;
+
+  // Close cancels a create request too; it cannot reopen or populate a dialog.
+  result = choose(); current = dialog();
+  await reply(listing());
+  button(current, 'New folder').click();
+  const closingForm = cls(current, 'folder-picker-create');
+  all(closingForm).find((n) => n.name === 'folder_name').value = 'Pending';
+  await submit(closingForm);
+  const closingCreate = calls.at(-1);
+  button(current, 'Close').click();
+  assert.equal((await result).cancelled, true);
+  await tick();
+  assert(closingCreate.options.signal.aborted);
+  assert.equal(timers.size, 0);
+  await reply(listing('/home/demo/Pending'), true, closingCreate);
+  assert.equal(dialog(), undefined);
+
   // Passive previews still browse; creation explains its disabled state.
   result = choose(); current = dialog();
   await reply(listing('/home/demo', {can_create: false, create_disabled_reason: 'Folder creation is unavailable in this preview.'}));
@@ -219,6 +339,7 @@ const submit = async (form) => { form.dispatchEvent({type: 'submit', preventDefa
   assert(!button(current, 'Select this folder').disabled);
   button(current, 'Select this folder').click(); await result;
   assert.equal(listeners.keydown.size, 0, 'closing removes every global listener');
+  assert.equal(timers.size, 0, 'completed and cancelled requests leave no deadline timers');
   console.log('Folder picker UI behavior passed');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 """

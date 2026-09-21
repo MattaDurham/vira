@@ -129,6 +129,33 @@ class VaultPolicyConfigTests(unittest.TestCase):
         self.assertEqual(spec["model_exclude_dirs"], ["confidential", "raw/private"])
         self.assertEqual(self.config()["vault_default_destination"], row["id"])
 
+    def test_save_commits_and_returns_complete_policy_without_scanning_notes(self):
+        with mock.patch.object(onboard, "_md_count", side_effect=AssertionError(
+                "settings saves must not walk the vault")):
+            row = onboard.vault_source_set(str(self.extra), "Journal",
+                                           write_enabled=True, write_scope="all")
+        self.assertEqual(self.config()["vault_sources"][0]["id"], row["id"])
+        spec = next(s for s in vault.source_specs() if s["id"] == row["id"])
+        for field in onboard._VAULT_POLICY_FIELDS:
+            if field != "dirs":
+                self.assertEqual(row[field], spec[field], field)
+        self.assertTrue(row["connected"])
+        self.assertTrue(row["removable"])
+        self.assertFalse(row["legacy"])
+        self.assertNotIn("notes", row, "an unmeasured count must not be reported as zero")
+        self.assertNotIn("notes_capped", row)
+
+    def test_primary_save_returns_normalized_defaults_after_commit(self):
+        with mock.patch.object(onboard, "_md_count", side_effect=AssertionError(
+                "settings saves must not walk the vault")):
+            row = onboard.vault_source_set(str(self.primary), "Research", "primary")
+        self.assertEqual(self.config()["vault_primary"]["name"], "Research")
+        self.assertTrue(row["primary"])
+        self.assertTrue(row["write_enabled"])
+        self.assertEqual(row["write_dirs"], ["inbox", "plans", "wiki", "raw"])
+        self.assertEqual(row["capture_dir"], "inbox")
+        self.assertFalse(row["read_only"])
+
     def test_whole_vault_access_needs_no_writable_folder_list(self):
         row = onboard.vault_source_set(
             str(self.extra), "Journal", write_enabled=True, write_scope="all",
