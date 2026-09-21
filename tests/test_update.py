@@ -301,10 +301,12 @@ class BranchSupervisorTests(NoSandboxLoop):
              mock.patch.object(update.instance, "is_branch", return_value=True), \
              mock.patch.object(update.settings, "IS_WIN", False), \
              mock.patch.object(update.settings, "raw", return_value={"launchd_label": "com.vira.live"}), \
+             mock.patch.object(update.os, "getuid", return_value=123, create=True), \
+             mock.patch.object(update.os, "_exit", side_effect=AssertionError("unexpected process exit")), \
              mock.patch.object(update.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
             update._restart()
         self.assertEqual(run.call_args.args[0][-1],
-                         f"gui/{update.os.getuid()}/com.vira.branch.demo")
+                         "gui/123/com.vira.branch.demo")
 
     def test_unsupervised_branch_never_uses_copied_primary_label(self):
         with mock.patch.object(update.instance, "service_label", return_value=""), \
