@@ -507,28 +507,33 @@ def _paths_overlap(a, b):
 
 
 _VAULT_POLICY_FIELDS = (
-    "read_enabled", "write_enabled", "model_exposure", "purpose", "contexts",
+    "read_enabled", "write_enabled", "write_scope", "model_exposure", "purpose", "contexts",
     "capture_dir", "write_dirs", "protected_dirs", "model_exclude_dirs", "allow_publish", "dirs",
 )
 
 
 def _relative_scope(value):
-    """A portable folder below a vault; never accept an absolute/parent path."""
-    text = str(value or "").strip().replace("\\", "/")
-    parts = text.split("/")
-    if (not text or text.startswith("/") or ":" in text
-            or any(part in ("", ".", "..") for part in parts)):
-        raise ValueError("vault folders must be relative paths without . or ..")
-    return text
+    """A portable folder below a vault, without renaming a selected folder."""
+    from . import vaultwrite
+    text = str(value or "")
+    if text != text.strip():
+        raise ValueError("vault folder names cannot begin or end with whitespace")
+    try:
+        return vaultwrite.relative_path(text)
+    except ValueError as exc:
+        raise ValueError("choose a vault folder with a supported relative name") from exc
 
 
 def _vault_policy(existing, changes, primary=False):
+    from . import vaultwrite
     policy = {key: existing[key] for key in _VAULT_POLICY_FIELDS
               if key in existing and existing[key] is not None}
     policy.update(changes)
     for key in ("read_enabled", "write_enabled", "model_exposure", "allow_publish"):
         if key in policy and not isinstance(policy[key], bool):
             raise ValueError(f"{key} must be true or false")
+    if policy.get("write_scope", "selected") not in ("all", "selected"):
+        raise ValueError("write_scope must be all or selected")
     for key in ("write_dirs", "protected_dirs", "model_exclude_dirs", "dirs"):
         if key in policy:
             if not isinstance(policy[key], list):
@@ -545,11 +550,12 @@ def _vault_policy(existing, changes, primary=False):
     scopes = policy.get("write_dirs", ["inbox", "plans", "wiki", "raw"] if primary else [])
     capture = policy.get("capture_dir", "inbox")
     if writable:
-        if not scopes:
-            raise ValueError("choose at least one writable folder before enabling writes")
-        if not any(capture == scope or capture.startswith(scope + "/") for scope in scopes):
-            raise ValueError("the capture folder must be inside a writable folder")
-        if any(capture == scope or capture.startswith(scope + "/")
+        if policy.get("write_scope", "selected") != "all":
+            if not scopes:
+                raise ValueError("choose at least one writable folder before enabling writes")
+            if not any(vaultwrite._under(capture, scope) for scope in scopes):
+                raise ValueError("the capture folder must be inside a writable folder")
+        if any(vaultwrite._under(capture, scope, protected=True)
                for scope in policy.get("protected_dirs", [])):
             raise ValueError("the capture folder cannot be protected")
     return policy
@@ -586,7 +592,7 @@ def _legacy_source_rows(cfg):
     return rows, specs
 
 
-def vault_source_set(path, name="", source_id=None, **changes):
+def vault_source_set(path, name="", source_id=None, connect_only=False, **changes):
     """Configure a source; policy changes and legacy migration are one transaction."""
     unknown = set(changes) - set(_VAULT_POLICY_FIELDS) - {"default_destination"}
     if unknown:
@@ -598,6 +604,10 @@ def vault_source_set(path, name="", source_id=None, **changes):
     sid = str(source_id or "").strip().lower()
     if sid and not _VAULT_SOURCE_ID.fullmatch(sid):
         raise ValueError("vault id must use lowercase letters, numbers, and hyphens")
+    if not isinstance(connect_only, bool):
+        raise ValueError("connect_only must be true or false")
+    if connect_only and sid:
+        raise ValueError("new vault connections cannot replace an existing vault ID")
     choose_default = changes.pop("default_destination", None)
     if choose_default is not None and not isinstance(choose_default, bool):
         raise ValueError("default_destination must be true or false")
@@ -606,6 +616,15 @@ def vault_source_set(path, name="", source_id=None, **changes):
     def update(cfg):
         nonlocal sid
         rows, specs = _legacy_source_rows(cfg)
+        if connect_only and any(
+                (not spec["primary"] or str(cfg.get("vault_root") or "").strip())
+                and _paths_overlap(root, spec["root"].resolve()) for spec in specs):
+            raise ValueError("This folder is already connected or overlaps a connected vault. "
+                             "Open its settings to make changes.")
+        first_source = (not sid and not str(cfg.get("vault_root") or "").strip()
+                        and not rows)
+        if first_source:
+            sid = "primary"
         existing_spec = next((s for s in specs if s["id"] == sid), None) if sid else None
         if sid and existing_spec is None:
             raise ValueError("unknown vault source")
@@ -649,6 +668,10 @@ def vault_source_set(path, name="", source_id=None, **changes):
                                     if key not in ("id", "root")}
             if "dirs" in changes:
                 cfg["vault_dirs"] = item["dirs"]
+            elif first_source:
+                # A newly connected folder is the complete vault. Preserve
+                # older connections' explicit indexing scopes on later edits.
+                cfg["vault_dirs"] = ["."]
         elif existing is None:
             rows.append(item)
         else:
@@ -659,7 +682,8 @@ def vault_source_set(path, name="", source_id=None, **changes):
         elif choose_default is False and cfg.get("vault_default_destination") == sid:
             cfg["vault_default_destination"] = ""
         notes = _md_count(root) if root.is_dir() else 0
-        result.update(item, primary=primary, read_only=not writable,
+        result.update(item, write_scope=item.get("write_scope", "selected"),
+                      primary=primary, read_only=not writable,
                       connected=root.is_dir(), notes=notes, notes_capped=notes >= 3000,
                       default_destination=cfg.get("vault_default_destination") == sid)
 
@@ -761,7 +785,7 @@ def status():
         "python": sys.executable,
         "feed": {"chat_db": sources.chatdb_state()},
         "contacts": {"apple_sources": len(sources.addressbook_dbs())},
-        "vault": {"policy_version": 1, "root": vraw, "connected": vault_ok,
+        "vault": {"policy_version": 2, "root": vraw, "connected": vault_ok,
                   "notes": sum(row["notes"] for row in vault_sources),
                   "notes_capped": any(row["notes_capped"] for row in vault_sources),
                   "default_destination": settings.get("vault_default_destination") or "",

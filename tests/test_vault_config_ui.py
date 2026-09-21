@@ -32,8 +32,10 @@ const all = (node) => [node, ...node.children.flatMap(all)];
 const tagged = (node, tag) => all(node).filter((n) => n.tag === tag);
 const byClass = (node, name) => all(node).filter((n) => n.className.split(' ').includes(name));
 const field = (node, name) => all(node).find((n) => n.name === name);
-let posts = [], requests = [], loads = 0, toasts = [];
+let posts = [], requests = [], loads = 0, toasts = [], choices = [], pickerCalls = [];
+const choose = async (options) => { pickerCalls.push(options); return choices.shift() || {cancelled: true}; };
 const context = vm.createContext({
+  FolderPicker: { choose },
   el: (tag, cls, text) => new Element(tag, cls, text),
   fmtNum: (n) => String(n),
   CSS: { escape: (text) => text },
@@ -69,12 +71,12 @@ const source = (overrides = {}) => ({
   id: 'primary', name: 'Research', root: '/fixture/research', primary: true,
   connected: true, read_only: false, removable: true, notes: 3,
   read_enabled: true, write_enabled: true, model_exposure: true,
-  allow_publish: false, default_destination: false, purpose: 'Reference material',
+  write_scope: 'selected', allow_publish: false, default_destination: false, purpose: 'Reference material',
   contexts: ['research'], capture_dir: 'inbox', write_dirs: ['inbox', 'wiki'],
   protected_dirs: ['wiki/canon'], model_exclude_dirs: ['private'], ...overrides,
 });
 const current = (overrides = {}) => ({
-  root: '/fixture/research', policy_version: 1, default_destination: '',
+  root: '/fixture/research', policy_version: 2, default_destination: '',
   sources: [source()], ...overrides,
 });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -106,7 +108,7 @@ function assertBlocked(card) {
   // Even a capability marker cannot make a partial policy payload editable.
   assertBlocked(render({...legacy, policy_version: 1, default_destination: 'missing'}));
   assertBlocked(render({root: '', sources: []}));
-  for (const policy_version of [0, '1', null]) {
+  for (const policy_version of [0, 1, '2', null]) {
     assertBlocked(render(current({policy_version})));
   }
   for (const missing of ['model_exclude_dirs', 'purpose', 'id']) {
@@ -115,11 +117,11 @@ function assertBlocked(card) {
     assertBlocked(render(current({sources: [incomplete]})));
   }
 
-  // The policy-aware server predates the explicit version marker. Its complete
-  // payload still works, so a frontend-only update does not block real setup.
+  // Whole-vault writing requires the version-2 backend; older assets must
+  // not submit an all-scope request that the old server would ignore.
   const priorCurrent = current();
   delete priorCurrent.policy_version;
-  assert.equal(byClass(render(priorCurrent), 'vault-config-form').length, 1);
+  assertBlocked(render(priorCurrent));
 
   const supportedCard = render(current({sources: [source(), source({
     id: 'journal', name: 'Journal', root: '/fixture/journal', primary: false,
@@ -142,6 +144,7 @@ function assertBlocked(card) {
   assert.equal(posts.length, 1);
   assert.equal(posts[0].url, '/api/vault/sources');
   const body = posts[0].body;
+  assert.equal(body.write_scope, 'selected', 'saving other settings preserves existing restrictions');
   assert.equal(body.id, 'primary', 'saving primary edits it rather than adding another source');
   assert.equal(body.path, '/fixture/research');
   assert.equal(body.name, 'Research library');
@@ -160,22 +163,66 @@ function assertBlocked(card) {
   field(forms[1], 'write_enabled').checked = true;
   field(forms[1], 'write_enabled').onchange();
   assert.equal(secondFallback.disabled, false);
-  field(forms[1], 'write_dirs').value = 'inbox';
+  assert.equal(field(forms[1], 'write_scope').value, 'all', 'enabling writing on an unconfigured vault needs no allowlist');
   secondFallback.checked = true;
   await submit(forms[1]);
   assert.equal(posts[1].body.id, 'journal');
   assert.equal(posts[1].body.default_destination, true);
   assert.equal(posts[1].body.write_enabled, true);
 
-  // A new installation with a current server still has its connection forms.
+  // Every folder uses a picker, including arrays with comma-bearing names.
+  assert(!field(form, 'path'), 'root path cannot be manually typed');
+  assert(!field(form, 'capture_dir'), 'capture folder cannot be manually typed');
+  assert(!field(form, 'write_dirs'), 'folder lists cannot be manually typed');
+  const protects = tagged(form, 'button').find((n) => n.attributes['aria-label'] === 'Add to protected folders');
+  choices.push({path: '/fixture/research/Legal, final', relative: 'Legal, final'});
+  await protects.onclick();
+  assert.equal(pickerCalls.at(-1).root, '/fixture/research');
+  assert.equal(pickerCalls.at(-1).allowRoot, false);
+  await submit(form);
+  assert.deepEqual(Array.from(posts.at(-1).body.protected_dirs), ['wiki/canon', 'Legal, final']);
+  field(form, 'write_scope').value = 'all';
+  field(form, 'write_scope').onchange();
+  await submit(form);
+  assert.equal(posts.at(-1).body.write_scope, 'all');
+  assert.deepEqual(Array.from(posts.at(-1).body.protected_dirs), ['wiki/canon', 'Legal, final']);
+
+  const restricted = render(current({sources: [source({write_enabled: false})]}));
+  const restrictedForm = byClass(restricted, 'vault-config-form')[0];
+  field(restrictedForm, 'write_enabled').checked = true;
+  field(restrictedForm, 'write_enabled').onchange();
+  await submit(restrictedForm);
+  assert.equal(posts.at(-1).body.write_scope, 'selected');
+  assert.deepEqual(Array.from(posts.at(-1).body.write_dirs), ['inbox', 'wiki']);
+
+  // First and third vaults share the same simple connection form.
   const empty = render(current({root: '', sources: []}));
-  assert(tagged(empty, 'button').some((n) => n.textContent === 'Use this vault'));
   const add = byClass(empty, 'vault-config-add')[0];
-  const addInputs = tagged(add, 'input');
-  addInputs[0].value = 'Journal'; addInputs[1].value = '/fixture/journal';
+  const connect = tagged(add, 'button').find((n) => n.textContent === 'Connect vault');
+  assert(connect.disabled, 'cannot connect before selecting a folder');
+  const picker = byClass(add, 'vault-folder-choice')[0];
+  await picker.onclick();
+  assert(connect.disabled, 'cancel preserves empty selection');
+  choices.push({path: '/fixture/Personal notes'});
+  await picker.onclick();
+  assert.equal(field(add, 'name').value, 'Personal notes');
+  assert.equal(connect.disabled, false);
   await submit(add);
-  assert.equal(posts[2].url, '/api/vault/sources');
-  assert.equal(posts[2].body.path, '/fixture/journal');
+  assert.equal(posts.at(-1).url, '/api/vault/sources');
+  assert.equal(posts.at(-1).body.path, '/fixture/Personal notes');
+  assert.equal(posts.at(-1).body.write_enabled, true);
+  assert.equal(posts.at(-1).body.read_enabled, true);
+  assert.equal(posts.at(-1).body.write_scope, 'all');
+  assert.equal(posts.at(-1).body.model_exposure, false, 'new private folders are not shared automatically');
+  assert.equal(posts.at(-1).body.capture_dir, 'inbox');
+  assert.equal(posts.at(-1).body.connect_only, true);
+  choices.push({path: '/fixture/Second folder'});
+  await picker.onclick();
+  assert.equal(field(add, 'name').value, 'Second folder');
+  field(add, 'name').value = 'My custom name';
+  choices.push({path: '/fixture/Third folder'});
+  await picker.onclick();
+  assert.equal(field(add, 'name').value, 'My custom name');
   console.log('Vault Config UI behavior passed');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 """

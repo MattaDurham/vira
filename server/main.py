@@ -65,7 +65,7 @@ from . import (
                notify, onboard,
                orphanwork,
                showroom,
-               photos, pickfolder, plans, profilerefresh, radar, reconnect,
+               photos, pickfolder, folders, plans, profilerefresh, radar, reconnect,
                textindex,
                receipts,
                research,
@@ -2910,6 +2910,7 @@ class OnboardVaultReq(BaseModel):
 
 
 class VaultSourceReq(BaseModel):
+    connect_only: bool | None = None
     path: str
     name: str | None = ""
     id: str | None = None
@@ -2919,6 +2920,7 @@ class VaultSourceReq(BaseModel):
     purpose: str | None = None
     contexts: list[str] | None = None
     capture_dir: str | None = None
+    write_scope: str | None = None
     write_dirs: list[str] | None = None
     protected_dirs: list[str] | None = None
     model_exclude_dirs: list[str] | None = None
@@ -3151,6 +3153,28 @@ def api_pick_folder(req: PickFolderReq):
     # Never raises — an unavailable picker is a normal answer the UI renders
     # beside the text field it falls back to.
     return pickfolder.pick(req.prompt, local=req.local)
+
+
+class FolderCreateReq(BaseModel):
+    parent: str
+    name: str
+    root: str = ""
+
+
+@app.get("/api/folders")
+def api_folders(path: str = "", root: str = "", show_hidden: bool = False):
+    try:
+        return folders.browse(path, root, show_hidden)
+    except folders.FolderError as e:
+        raise HTTPException(e.status_code, str(e))
+
+
+@app.post("/api/folders")
+def api_folder_create(req: FolderCreateReq):
+    try:
+        return folders.create(req.parent, req.name, req.root)
+    except folders.FolderError as e:
+        raise HTTPException(e.status_code, str(e))
 
 
 # ---------- the driven sign-in (no terminal) ----------
