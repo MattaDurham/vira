@@ -594,6 +594,7 @@ def _legacy_source_rows(cfg):
 
 def vault_source_set(path, name="", source_id=None, connect_only=False, **changes):
     """Configure a source; policy changes and legacy migration are one transaction."""
+    from . import vaultwrite
     unknown = set(changes) - set(_VAULT_POLICY_FIELDS) - {"default_destination"}
     if unknown:
         raise ValueError("unknown vault settings: " + ", ".join(sorted(unknown)))
@@ -681,10 +682,13 @@ def vault_source_set(path, name="", source_id=None, connect_only=False, **change
             cfg["vault_default_destination"] = sid
         elif choose_default is False and cfg.get("vault_default_destination") == sid:
             cfg["vault_default_destination"] = ""
-        notes = _md_count(root) if root.is_dir() else 0
-        result.update(item, write_scope=item.get("write_scope", "selected"),
-                      primary=primary, read_only=not writable,
-                      connected=root.is_dir(), notes=notes, notes_capped=notes >= 3000,
+        # Saving settings must not enumerate the vault, especially while
+        # holding the shared configuration lock. Return the committed policy
+        # for the editor; note counts belong to a separate status read.
+        result.update(item)
+        result.update(vaultwrite.policy(item, primary=primary))
+        result.update(primary=primary, read_only=not writable,
+                      connected=root.is_dir(), removable=True, legacy=False,
                       default_destination=cfg.get("vault_default_destination") == sid)
 
     jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
