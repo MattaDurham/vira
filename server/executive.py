@@ -125,7 +125,6 @@ def quiet(now=None, cfg=None):
 
 def enabled():
     return (config()["assistant_enabled"] is True
-            and not os.environ.get("VIRA_PASSIVE")
             and not os.environ.get("VIRA_SANDBOX")
             and not settings.fixture_mode())
 
@@ -234,7 +233,7 @@ def reminders(now=None, include_snoozed=False):
 
 
 def reminder_action(rid, action, hours=24, due=None):
-    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
+    if settings.sandboxed() or settings.fixture_mode():
         raise ValueError("Reminder changes are disabled in a preview instance")
     row = next((r for r in reminders(include_snoozed=True) if r["id"] == rid), None)
     if row is None:
@@ -381,16 +380,22 @@ def _calendar_plan_queue(records, previous, state, now):
     return [(key, record) for _, _, key, record in queue]
 
 
-def tick():
+def tick(*, automatic=False):
+    """Refresh local planning every cycle; coordinate shared automatic effects."""
     global _worker_error
     if not enabled() or not _tick_lock.acquire(blocking=False):
         return
     try:
-        from . import calendarplan, contactintel
-        _mutate(lambda s: s.update(last_run=_now().isoformat(), last_error=None))
+        from . import calendarplan, contactintel, instance
+        apply_shared = not automatic or instance.owns_automation()
+        _mutate(lambda s: s.update(last_run=_now().isoformat(), last_error=None,
+                                  automatic_actions_here=apply_shared))
         errors = []
         try:
-            contactintel.tick()
+            if apply_shared:
+                contactintel.tick()
+            else:
+                contactintel.catch_up()
         except Exception as exc:
             errors.append(f"Message processing needs attention ({type(exc).__name__}).")
         try:
@@ -419,7 +424,7 @@ def tick():
                         calendarplan.plan_commitment(record["loop"], record["subject_key"], record["person_name"])
                     except Exception as exc:
                         errors.append(f"A calendar task needs attention ({type(exc).__name__}).")
-            if config()["assistant_calendar_auto_create"]:
+            if apply_shared and config()["assistant_calendar_auto_create"]:
                 ready = [d for d in calendarplan.list_drafts()
                          if d.get("status") in ("suggested", "blocked") and d.get("can_create")]
                 for draft in ready[:10]:
@@ -429,7 +434,8 @@ def tick():
         except Exception as exc:
             errors.append(f"Calendar planning needs attention ({type(exc).__name__}).")
         try:
-            _notify(_now())
+            if apply_shared:
+                _notify(_now())
         except Exception as exc:
             errors.append(f"Reminder delivery needs attention ({type(exc).__name__}).")
         _worker_error = " ".join(errors) or None
@@ -482,7 +488,7 @@ def status(source_items=()):
         notices.append("Email body indexing is off; full email history and sent replies are not covered.")
     if not contact.get("index_available"):
         notices.append("The message index is not available yet.")
-    if not settings.fixture_mode() and not os.environ.get("VIRA_PASSIVE"):
+    if not settings.fixture_mode():
         try:
             from . import mail
             accounts = mail.accounts_view()["accounts"]
@@ -509,8 +515,9 @@ def status(source_items=()):
         notices.append(f"{failed} text reminder(s) failed; delivery will retry within the daily limit.")
     return {
         "enabled": cfg["assistant_enabled"], "active": enabled(), "settings": cfg,
-        "passive": bool(os.environ.get("VIRA_PASSIVE")), "fixture": settings.fixture_mode(),
+        "fixture": settings.fixture_mode(),
         "worker_running": bool(_thread and _thread.is_alive()),
+        "automatic_actions_here": state.get("automatic_actions_here"),
         "notification_ready": bool(notify.config()["enabled"] and notify.config()["handle"]),
         "contact": contact, "reminders": reminder_rows,
         "calendar": calendar, "coverage": notices,
@@ -555,14 +562,14 @@ def attention_rows():
 
 def start():
     global _thread
-    if os.environ.get("VIRA_PASSIVE") or os.environ.get("VIRA_SANDBOX"):
+    if os.environ.get("VIRA_SANDBOX"):
         return None
     if _thread and _thread.is_alive():
         return _thread
     def run():
         event = threading.Event()
         while not event.wait(60):
-            tick()
+            tick(automatic=True)
     _thread = threading.Thread(target=run, name="vira-assistant", daemon=True)
     _thread.start()
     return _thread

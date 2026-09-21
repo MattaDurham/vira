@@ -39,7 +39,7 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-from . import (agentbackend, ideas, jobfiles, joblog, modulemodels, plans, settings,
+from . import (instance, agentbackend, ideas, jobfiles, joblog, modulemodels, plans, settings,
                viratools, worktree)
 from .suggest import config
 
@@ -101,7 +101,7 @@ SESSION_DEFAULTS = {
     # When an owner-dispatched writer session parks with work on its branch,
     # the HARNESS raises the merge / keep playing / discard card (never the
     # model - a question that lives only in a transcript is how a branch
-    # drifts into the orphan sweeper) and serves a passive local-only test
+    # drifts into the orphan sweeper) and serves a local-only branch
     # instance of the branch first, so the card carries a URL to look at
     # rather than an offer to make one. See runner.offer_landing.
     "session_landing_card": True,
@@ -302,8 +302,6 @@ def _finalize_plan(md, idea_id=None, job_id=None, destination=None, context=None
     the model's output.
     """
     result = {"plan_id": None, "title": None, "url": None}
-    if os.environ.get("VIRA_PASSIVE"):
-        return {**result, "error": "passive instance cannot save plans"}
     try:
         spec = plans.destination_spec(destination, context)
         entry = plans.save_plan(md, idea_id=idea_id, job_id=job_id,
@@ -778,6 +776,7 @@ class Sessions:
         runtime.setdefault("evidence_scope", {"vault_context": vault_context})
         data = {"id": jid, "prompt": prompt, "cwd": cwd or str(Path.home()),
                 "status": "running", "output": "", "started": time.time(),
+                "instance_id": instance.id(), "instance_url": instance.api_url(),
                 "finished": None,
                 "permission_mode": ("bypassPermissions"
                                     if mode == "bypassPermissions"
@@ -889,6 +888,7 @@ class Sessions:
             proc = subprocess.Popen(
                 [sys.executable, "-m", "server.runner", str(jdir)],
                 cwd=str(jobfiles.ROOT), stdout=log, stderr=subprocess.STDOUT,
+                env=instance.child_env(),
                 **detach)
         finally:
             log.close()
@@ -1018,9 +1018,8 @@ class Sessions:
         than no card at all.
 
         state.json is read FRESH rather than off `last_state` — the cached
-        copy is refreshed by the supervisor, which does not run on a passive
-        instance, and a decision list that silently stops updating is the
-        one thing this surface must not do. The read is deliberately
+        copy can lag the runner between supervisor ticks. A decision list
+        must reflect a newly raised card immediately. The read is deliberately
         side-effect free (it does NOT touch `last_state`): the supervisor
         detects status transitions by comparing its cached status against a
         fresh read, so refreshing the cache from here could swallow the
@@ -1096,6 +1095,9 @@ class Sessions:
         row = joblog.get_record(jid)
         if not row:
             raise KeyError(jid)
+        if row.get("source_status") == "running" and not instance.owns(row):
+            raise ValueError("this job is running in another instance: "
+                             + (row.get("instance_url") or instance.primary_url()))
         sid = (row.get("session_id") or "").strip()
         if not sid:
             # No conversation was ever recorded — a legacy one-shot, or a run
@@ -1114,10 +1116,6 @@ class Sessions:
             raise ValueError(
                 f"the directory this session ran in is gone ({cwd or 'unset'})"
                 " — recreate it before continuing this conversation.")
-        if os.environ.get("VIRA_PASSIVE"):
-            raise ValueError(
-                "this is a passive test instance — it runs no supervisor, so "
-                "a resumed session here would never start")
         # cwd carries the placement: launch() detects an existing worktree and
         # re-arms worktree/branch/live_root from it (the orphan-work Resume
         # path), so a resumed session lands back on its own branch and the
@@ -1231,6 +1229,8 @@ class Sessions:
             state = jobfiles.read_json(jdir / "state.json")
             spec = jobfiles.read_json(jdir / "job.json")
             if not state or not spec:
+                continue
+            if not instance.owns(spec):
                 continue
             if state.get("status") != "running":
                 continue

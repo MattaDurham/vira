@@ -65,7 +65,7 @@ def enabled():
     """The push runs only on a real, owner-mode Mac that asked for it."""
     if not settings.IS_MAC:
         return False
-    if os.environ.get("VIRA_PASSIVE") or os.environ.get("VIRA_SANDBOX"):
+    if os.environ.get("VIRA_SANDBOX"):
         return False
     return bool(settings.get("apple_contacts_push"))
 

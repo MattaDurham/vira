@@ -4,7 +4,6 @@ New evidence keeps its locator. Older evidence can recover it through an
 exact local index match or a current feed item. Only an explicit owner click
 uses the existing email reader; no website or mailbox is fetched here.
 """
-import os
 from urllib.parse import urlsplit
 
 from . import channels, commitmentresources, settings, textindex
@@ -75,7 +74,7 @@ def enrich(rows, source_items=()):
     ids = list(dict.fromkeys(str(ref["id"]) for row in rows
                             for ref in row.get("evidence", [])
                             if isinstance(ref, dict) and ref.get("id")))
-    isolated = bool(settings.fixture_mode() or settings.sandboxed() or os.environ.get("VIRA_PASSIVE"))
+    isolated = bool(settings.fixture_mode() or settings.sandboxed())
     sources, feed_sources, accounts, unavailable = {}, {}, [], False
     if not isolated:
         try:

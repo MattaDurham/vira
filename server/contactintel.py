@@ -9,7 +9,6 @@ state lives under data; public code contains no owner-specific rules.
 from . import modulemodels
 import hashlib
 import json
-import os
 import re
 import threading
 import time
@@ -39,8 +38,7 @@ def _cfg(key, default):
 
 
 def enabled():
-    return (not os.environ.get("VIRA_PASSIVE")
-            and not settings.sandboxed()
+    return (not settings.sandboxed()
             and not settings.fixture_mode()
             and bool(_cfg("assistant_enabled", False)))
 

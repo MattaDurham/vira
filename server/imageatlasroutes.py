@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import base64
 import io
-import os
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -174,8 +173,7 @@ def viewer_me():
 
 @router.get("/imageatlas/api/vaults")
 def api_vaults():
-    return {"vaults": imageatlas.vault_rows(), "ops": True,
-            "passive": bool(os.environ.get("VIRA_PASSIVE"))}
+    return {"vaults": imageatlas.vault_rows(), "ops": True}
 
 
 @router.post("/imageatlas/api/vaults/create")

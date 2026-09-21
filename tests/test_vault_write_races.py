@@ -27,7 +27,6 @@ class VaultWriteRaceTests(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
         self.spec = vaultwrite.resolve_destination("primary")
 
     def move_parent(self):
@@ -152,7 +151,7 @@ class VaultWriteRaceTests(unittest.TestCase):
                 results = list(pool.map(update, ("inbox/Note.md", "inbox/note.md")))
         self.assertEqual(sum(results), 1)
 
-    def test_portable_fallback_keeps_hash_passive_and_symlink_gates(self):
+    def test_portable_fallback_keeps_hash_and_symlink_gates(self):
         with mock.patch.object(vaultwrite, "_DIR_FD", False):
             created = vaultwrite.write_note(self.spec, "inbox/note.md", "original")
             changed = vaultwrite.write_note(self.spec, "inbox/note.md", "new",
@@ -160,9 +159,7 @@ class VaultWriteRaceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "changed"):
                 vaultwrite.write_note(self.spec, "inbox/note.md", "stale",
                                      expected_hash=created["sha256"], create_only=False)
-            with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-                with self.assertRaisesRegex(ValueError, "passive"):
-                    vaultwrite.delete_text(self.spec, "inbox/note.md")
+            vaultwrite.delete_text(self.spec, "inbox/note.md")
             vaultwrite.delete_text(self.spec, "inbox/note.md", changed["sha256"])
             self.assertFalse((self.root / "inbox/note.md").exists())
             try:

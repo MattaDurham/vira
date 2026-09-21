@@ -3,6 +3,7 @@
 All delivery records are synthetic, the log is temporary, and the clock
 and native message adapter are replaced. No real message can be sent.
 """
+import os
 from unittest import mock
 
 from server import notify, send, settings
@@ -46,7 +47,7 @@ class AssistantBudgetIsolation(Base):
         rows += [_entry(f"agent:routine:{i}", "agent", 60 + i)
                  for i in range(notify.AGENT_DAILY_CAP - 1)]
         self.write(rows)
-        with mock.patch.dict(notify.os.environ, {}, clear=True), \
+        with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(settings, "fixture_mode", return_value=False), \
              mock.patch.object(settings, "sandboxed", return_value=False), \
              mock.patch.object(notify, "config", return_value={"enabled": True, "handle": "+15555550123"}), \

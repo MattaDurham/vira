@@ -49,7 +49,7 @@ class Element {
 const host = new Element("section"), pane = new Element("div");
 const fixture = {
   enabled: true, active: true, worker_running: true, notification_ready: true,
-  passive: false, fixture: false, last_success: "2030-01-01T12:00:00+00:00",
+  instance: { kind: "branch", id: "ui-test", url: "http://localhost:8392" }, fixture: false, last_success: "2030-01-01T12:00:00+00:00",
   settings: { assistant_enabled: true, assistant_contact_updates: true,
     mail_body_index: false,
     assistant_notify: false, assistant_quiet_start: 22, assistant_quiet_end: 8,
@@ -215,9 +215,11 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   assert.match(text(), /still checks messages for commitments/);
   assert.doesNotMatch(text(), /Reminders use the profiles already saved/);
   snapshot.settings.assistant_contact_updates = true;
-  snapshot.passive = true;
+  assert.equal(button("Save assistant settings").disabled, false, "branch instances can change assistant settings");
+  assert.equal(button("Dismiss", card("c2")).disabled, false, "branch instances can act on reminders");
+  snapshot.fixture = true;
   await ui.load();
-  assert.match(text(), /Preview instance/);
+  assert.match(text(), /Sample data/);
   assert.equal(button("Save assistant settings").disabled, true);
   assert.equal(button("Dismiss", card("c2")).disabled, true);
   const beforePreviewSubmit = posts.length;
@@ -252,7 +254,7 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   snapshot.calendar.drafts[0].end = "";
   await ui.load();
   assert.match(text(card("c1")), /has not found a time/);
-  snapshot.passive = false;
+  snapshot.fixture = false;
   snapshot.reminders[0] = { ...snapshot.reminders[0], stage: "review",
     deadline_review: {text: "next Friday", proposed: "2030-01-04", reason: "Confirm which Friday was intended."} };
   await ui.load();
@@ -409,13 +411,13 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   await retrying;
   mailGate = null;
   assert.match(text(card("r1")), /Links in this email/);
-  snapshot.passive = true;
+  snapshot.fixture = true;
   snapshot.reminders[0].resources = [{kind:"email",label:"Open email",source_id:"mail:preview",account:"preview@example.test",rowid:"42"}];
   await ui.load();
   const previewEmail = button("Open email", card("r1"));
   assert.equal(previewEmail.disabled, true);
   await previewEmail.emit("click");
-  assert.equal(mailRequests().length, 3, "passive previews cannot fetch a real email, even through a programmatic click");
+  assert.equal(mailRequests().length, 3, "sample data cannot fetch a real email, even through a programmatic click");
   snapshot.reminders[0].resources = [];
   snapshot.reminders[0].resources_note = "The original message is no longer indexed.";
   await ui.load();

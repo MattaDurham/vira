@@ -49,7 +49,6 @@ would only make that question ambiguous.
 the email-draft path used to take whichever address happened to be first in
 the registry, which on a contact carrying nine of them is a coin toss.
 """
-import os
 import re
 import time
 import uuid
@@ -396,22 +395,13 @@ def save(pid, draft, integrate=True):
     added = draft.get("added") or []
     note = _clean(draft.get("note"))[:MAX_VALUE]
 
-    # The overlay lives in Vira's own data/ and rides the branch.sh clone, so
-    # it is safe to edit anywhere. The two write-through paths below reach
-    # OUTSIDE that clone into the real CRM registry, so a passive test
-    # instance is refused them — same line send.py draws around outbound.
-    passive = bool(os.environ.get("VIRA_PASSIVE"))
+    # The overlay is instance-local; registry edits use the connected CRM.
 
     # --- write-through: the name is registry data, not card decoration
     new_name = _clean(fields.get("display_name")) if "display_name" in fields \
         else None
     if new_name and new_name != (person.get("name") or ""):
-        if passive:
-            warnings.append("test instance: the name change was not written "
-                            "to the CRM registry")
-            new_name = None
-        else:
-            triage.rename_person(pid, new_name)
+        triage.rename_person(pid, new_name)
 
     # --- write-through: an added handle must actually resolve
     fresh = []
@@ -435,10 +425,7 @@ def save(pid, draft, integrate=True):
                             "— skipped")
             continue
         fresh.append({"kind": kind, "value": value})
-    if fresh and passive:
-        warnings.append("test instance: new handles stay on the card and were "
-                        "not written to the CRM registry")
-    elif fresh:
+    if fresh:
         try:
             triage.add_handles(pid, fresh)
         except (OSError, ValueError, KeyError) as e:
@@ -512,13 +499,7 @@ def save(pid, draft, integrate=True):
     after = compose(pid)
     changes = _describe(before, after, note)
     note_id = None
-    if changes and integrate and passive:
-        # the journal's integration pass writes CRM profiles, which live
-        # OUTSIDE the cloned data/ — the same reason the two write-through
-        # paths above are refused here
-        warnings.append("test instance: the change was not filed to the "
-                        "journal, so it cannot touch the real CRM")
-    elif changes and integrate:
+    if changes and integrate:
         try:
             entry = journal.add(
                 _journal_text(after["fields"][0]["value"] or person["name"],

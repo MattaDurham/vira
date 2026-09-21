@@ -13,7 +13,6 @@ import copy
 import datetime as dt
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import subprocess
@@ -111,8 +110,8 @@ def destinations(refresh=False):
     """
     empty = {"available": False, "calendars": [], "selected": None, "selection": "",
              "default_id": "", "default_policy": "", "default_source": "", "error": "", "reason": ""}
-    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
-        return dict(empty, reason="Calendar discovery is disabled in passive, sandbox and fixture instances.")
+    if settings.sandboxed() or settings.fixture_mode():
+        return dict(empty, reason="Calendar discovery is disabled in sandbox and fixture instances.")
     if not settings.IS_MAC:
         return dict(empty, reason="Calendar destination discovery requires macOS.")
     with _destination_lock:
@@ -668,7 +667,7 @@ def plan_commitment(loop, subject_key, person_name=""):
                      due_updated_by_owner=details["due_updated_by_owner"],
                      evidence=details["evidence"], status="suggested", reason="",
                      created_at=prior.get("created_at", _stamp()) if prior else _stamp(), updated_at=_stamp())
-        if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode() or not settings.IS_MAC:
+        if settings.sandboxed() or settings.fixture_mode() or not settings.IS_MAC:
             draft["reason"] = "Free-time planning needs the connected Mac's calendars; this task remains a suggestion."
         elif settings.raw().get("assistant_enabled") is not True:
             draft["reason"] = "Enable the assistant to choose a personal work-block time."
@@ -712,8 +711,8 @@ def _commitment_eligibility(draft):
 
 def _eligibility(draft, automatic=True):
     cfg = settings.raw()
-    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed():
-        return "Calendar writes are disabled in passive and sandbox instances."
+    if settings.sandboxed():
+        return "Calendar writes are disabled in sandbox instances."
     if settings.fixture_mode():
         return "Connect real sources before creating calendar events."
     if cfg.get("assistant_enabled") is not True:

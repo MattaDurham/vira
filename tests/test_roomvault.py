@@ -137,6 +137,8 @@ class IngestTests(Base):
         self.assertEqual(p.read_text(encoding="utf-8"), before)
         self.assertEqual(p.stat().st_mtime, mtime)
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_hub_carries_every_item_and_the_definition(self):
         self.room([item(prio="P1"), item(url="https://e.com/2", prio="P3",
                                          title="Second Thing")],
@@ -187,12 +189,6 @@ class IngestTests(Base):
 
 
 class RefusalTests(Base):
-    def test_passive_refuses(self):
-        self.room([item()])
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(roomvault.IngestError):
-                roomvault.ingest("demo")
-        self.assertFalse((self.vault / "wiki" / "demo-reading-room.md").exists())
 
     def test_unknown_room_raises(self):
         with self.assertRaises(roomvault.IngestError):

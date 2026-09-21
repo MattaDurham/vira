@@ -137,18 +137,12 @@ class MigrateTests(Base):
         row = readinglist.find_by_locator(f"/docs/plans/{self.new_plan}", "url")
         self.assertIsNotNone(row["completed"])
 
-    def test_vault_md_copied_unless_passive(self):
+    def test_vault_md_copied(self):
         self.build_site()
         self.migrate()
         self.assertTrue(
             (self.vault_plans / (self.old_plan[:-5] + ".md")).is_file())
 
-    def test_vault_md_skipped_under_passive(self):
-        self.build_site()
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            out = self.migrate()
-        self.assertEqual(out["copied"]["vault_md"], 0)
-        self.assertFalse(self.vault_plans.exists())
 
     def test_missing_site_reports_error(self):
         # site=None means "use the configured site_root" — which EXISTS on

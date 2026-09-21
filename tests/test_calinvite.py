@@ -158,11 +158,6 @@ class CalendarPart(unittest.TestCase):
 
 
 class Refusals(unittest.TestCase):
-    def test_a_passive_instance_refuses_to_answer_a_real_invitation(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(calinvite.RsvpError) as cm:
-                calinvite.rsvp("a@example.com", "r", "yes")
-        self.assertIn("passive", str(cm.exception))
 
     def test_an_unknown_answer_is_refused_before_anything_is_read(self):
         with self.assertRaises(calinvite.RsvpError):

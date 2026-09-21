@@ -171,10 +171,6 @@ class StubTest(Base):
         with self.assertRaises(FileExistsError):
             vaultpeople.create_stub("Cat Wu", root=self.root)
 
-    def test_refuses_under_passive(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                vaultpeople.create_stub("Someone New", root=self.root)
 
     def test_refuses_with_no_wiki_and_no_name(self):
         with self.assertRaises(FileNotFoundError):
@@ -198,7 +194,7 @@ class RouteTest(Base):
         self.assertEqual(r.json()["people"][0]["name"], "Cat Wu")
 
     def test_create_route_maps_the_refusals(self):
-        for exc, code in ((PermissionError("passive"), 403),
+        for exc, code in ((PermissionError("destination denied"), 403),
                           (FileExistsError("exists"), 409),
                           (ValueError("bad"), 400)):
             with mock.patch.object(vaultpeople, "create_stub",

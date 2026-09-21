@@ -3,7 +3,7 @@
 Covers the overlay merge and its provenance, the two independent handle
 dimensions (rank — including the single-primary rule and what `archived` does
 and does not change — and use), the two write-through paths into the CRM
-registry, the passive-instance refusal, the change list, and the journal
+registry, the change list, and the journal
 hand-off that makes saving a card the same act as telling Vira.
 
 Everything runs against a synthetic CRM in a temp dir — no real people.json
@@ -294,25 +294,16 @@ class WriteThroughTests(CardCase):
         self.assertEqual(self.person()[0]["handles"]["emails"].count(
             "dana@example.com"), 1)
 
-    def test_passive_instance_never_writes_the_real_registry(self):
-        """A test clone edits its own overlay and nothing else. The three
-        things that reach outside the cloned data/ — the rename, the new
-        handle, and the journal note whose integration pass writes CRM
-        profiles — are each refused, and each says so."""
-        with mock.patch.dict("os.environ", {"VIRA_PASSIVE": "1"}):
-            res = self.save(fields={"display_name": "Renamed On A Clone",
-                                    "location": "Portland"},
-                            added=[{"kind": "email",
-                                    "value": "clone@example.com"}])
-        self.assertEqual(self.person()[0]["name"], "Dana Vega")
-        self.assertNotIn("clone@example.com",
-                         self.person()[0]["handles"]["emails"])
-        self.assertEqual(self.notes, [])
-        self.assertEqual(len([w for w in res["warnings"]
-                              if "test instance" in w]), 3)
-        # the overlay half still applies, so the surface stays testable
-        by = {f["key"]: f for f in res["card"]["fields"]}
-        self.assertEqual(by["location"]["value"], "Portland")
+
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
+    def test_branch_updates_connected_registry_and_files_journal(self):
+        result = self.save(fields={"display_name": "Casey Example", "location": "Portland"},
+                           added=[{"kind": "email", "value": "branch@example.com"}])
+        self.assertEqual(self.person()[0]["name"], "Casey Example")
+        self.assertIn("branch@example.com", self.person()[0]["handles"]["emails"])
+        self.assertEqual(len(self.notes), 1)
+        self.assertEqual(result["warnings"], [])
 
     def test_added_handle_resolves_even_if_the_registry_write_failed(self):
         with mock.patch.object(triage, "add_handles",

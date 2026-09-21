@@ -2,7 +2,7 @@
 
 Only directory names are read. A scoped picker stays within its selected
 vault, including when a child is a symlink. Browsing is safe in previews;
-creating a folder is a direct owner action and is disabled in passive mode.
+creating a folder is a direct owner action and is disabled in sandbox mode.
 """
 import os
 import stat
@@ -95,8 +95,6 @@ def _places(root: Path | None) -> list[dict]:
 
 
 def _creation_disabled() -> str:
-    if os.environ.get("VIRA_PASSIVE"):
-        return "Creating folders is disabled in this preview. Existing folders can still be selected."
     if settings.sandboxed():
         return "Creating folders is disabled in this sandbox. Existing folders can still be selected."
     return ""

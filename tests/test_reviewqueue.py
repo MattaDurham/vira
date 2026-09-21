@@ -119,10 +119,10 @@ class _Case(unittest.TestCase):
         # the in-process senders cache must not leak between tests
         reviewqueue._SENDERS_CACHE.update({"at": 0.0, "rows": None})
         # A journal approve can DISPATCH a session inside the blast
-        # radius; pinned passive so no test ever spawns one (the
+        # radius; empty allowed areas so no test ever spawns one (the
         # JournalBase isolation lesson). The dispatch test overrides this
         # and stubs the launch.
-        p8 = mock.patch.object(journal, "_passive", lambda: True)
+        p8 = mock.patch.object(journal, "AUTO_AREAS", set())
         p8.start()
         self.addCleanup(p8.stop)
 
@@ -546,7 +546,7 @@ class JournalSourceTests(_Case):
         self.assertTrue(u.get("resolved"))
 
     def test_approving_stages_through_journals_own_machinery(self):
-        # _passive is pinned True in the base fixture, so staging takes
+        # AUTO_AREAS is empty in the base fixture, so staging takes
         # the proposed path and no session can be dispatched.
         self.write_journal([jentry("note_aaaaaaaaaa", "Do the thing.")])
         row = self.by_source("journal")[0]
@@ -568,7 +568,7 @@ class JournalSourceTests(_Case):
                                    area="app")])
         row = self.by_source("journal")[0]
         from server import session
-        with mock.patch.object(journal, "_passive", lambda: False), \
+        with mock.patch.object(journal, "AUTO_AREAS", {"app", "config", "contacts", "data"}), \
              mock.patch.object(session.sessions, "launch",
                                return_value="jobabc123def") as launch:
             out = reviewqueue.act(row["id"], "approve")

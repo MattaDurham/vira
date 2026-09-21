@@ -178,11 +178,6 @@ class Writing(Base):
         self.assertEqual(jobscores.load(self.udir)["a-1"]["screen"], 42)
         self.assertEqual(rec["screen"], 42)
 
-    def test_a_passive_instance_refuses_to_write(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                jobscores.write(entry(), udir=self.udir)
-        self.assertEqual(jobscores.per_role(self.udir), {})
 
     def test_a_corrupt_score_file_is_skipped_not_fatal(self):
         d = jobscores.scores_dir(self.udir)
@@ -308,11 +303,6 @@ class Migration(Base):
         self.assertEqual(report["written"], 1)
         self.assertEqual(report["skipped"], ["../evil"])
 
-    def test_a_passive_instance_refuses_to_migrate(self):
-        self.batch("v2-raw-scores.json", [entry()])
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                jobscores.migrate(self.udir)
 
 
 class CacheInvalidation(Base):
@@ -374,11 +364,6 @@ class ToolLayer(Base):
         self.assertIn("not valid JSON",
                       viratools._record_role_scores_text("{["))
 
-    def test_a_passive_instance_refuses_the_whole_call(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            out = self.call([entry()])
-        self.assertIn("passive instance", out)
-        self.assertEqual(jobscores.per_role(self.udir), {})
 
 
 if __name__ == "__main__":

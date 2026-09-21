@@ -77,10 +77,6 @@ class PickFolderGuards(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("demo", reason)
 
-    def test_passive_refused(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            ok, _ = pickfolder.available(local=True)
-        self.assertFalse(ok)
 
     def test_pick_returns_unavailable_rather_than_raising(self):
         # A picker that 500s is worse than one that says it cannot run —

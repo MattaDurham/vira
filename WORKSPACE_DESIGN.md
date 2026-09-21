@@ -50,8 +50,9 @@ Saved, indexed, and task-extraction states are independent. "Saved and indexed"
 does not mean that downstream vault synthesis has run.
 
 Private state lives in data/correspondence.json, the private configuration, and
-the selected external vault. The worker stays off in passive and fixture
-instances. No messages are sent by this feature.
+the selected external vault. Fixture instances do not process messages.
+Branch instances run the same worker; shared automatic account effects are
+coordinated across instances. No messages are sent by this feature.
 
 ## Reminder stickies
 

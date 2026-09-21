@@ -502,9 +502,8 @@ def save_contact_intelligence(pid, update, *, expected_summary=None, expected_pr
     gate preserves owner edits, all closed loops, and concurrent summary
     changes. Machine findings remain distinguishable from owner-told facts.
     """
-    import os
     from . import jsonstore
-    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
+    if settings.sandboxed() or settings.fixture_mode():
         raise ValueError("contact intelligence is disabled on a test instance")
     person = _load()["by_id"].get(pid)
     if not person:

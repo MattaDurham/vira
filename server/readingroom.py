@@ -441,7 +441,7 @@ def _ping_additions(slug, title, new_titles):
     """Best-effort owner ping when a rebuild lands new items — the
     applications-module watch pattern: the diff is the signal, one ping per
     batch, keyed so a retry of the same batch never re-pings. A failed or
-    passive-blocked ping never fails the build."""
+    unavailable notification channel never fails the build."""
     try:
         from . import notify
         batch = hashlib.sha1("|".join(sorted(new_titles))

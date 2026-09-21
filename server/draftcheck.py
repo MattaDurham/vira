@@ -47,7 +47,6 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
-import os
 from pathlib import Path
 
 # What this module will ACCEPT and RENDER, not what a model may read.
@@ -705,10 +704,6 @@ def save_beside_package(role, blob, filename):
     for, and refusing to review it because it has no folder would be
     backwards. The DOWNLOAD is the deliverable; this is the convenience.
     """
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError(
-            "this is a test copy of Vira - the marked draft downloads, but it "
-            "is not written into your real package folder from here")
     from . import applicationmap
     root = applicationmap.find_package(role)      # a Path, or None
     if root is None or not Path(root).is_dir():

@@ -737,7 +737,7 @@ class LoginDriverTest(unittest.TestCase):
 
     def setUp(self):
         self._saved = dict(models._login)
-        os.environ.pop("VIRA_PASSIVE", None)
+
         self.addCleanup(self._restore)
 
     def _restore(self):
@@ -755,6 +755,8 @@ class LoginDriverTest(unittest.TestCase):
             time.sleep(0.05)
         return False
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_full_flow_url_code_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = _fake_login_cli(tmp)
@@ -794,10 +796,6 @@ class LoginDriverTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             models.login_code("anthropic", "abc")
 
-    def test_passive_refuses(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(RuntimeError):
-                models.login_start("anthropic")
 
     def test_api_only_provider_refuses(self):
         # google/xai have no login flow — the key path is their connect.

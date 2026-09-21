@@ -52,7 +52,7 @@ class _DefineCase(unittest.TestCase):
         ):
             p.start()
             self.addCleanup(p.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def note(self, stem):
         return (self.root / "wiki" / f"{stem}.md").read_text(encoding="utf-8")
@@ -156,11 +156,6 @@ class SaveTests(_DefineCase):
         self.assertEqual(card["slug"], "consensus-term")
         self.assertIn("A talk.", self.note("consensus"))
 
-    def test_passive_refuses_to_write_the_live_vault(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        with self.assertRaises(define.DefineError) as e:
-            define.save(CARD)
-        self.assertIn("passive", str(e.exception))
 
 
 class BacklinkTests(_DefineCase):
@@ -241,6 +236,8 @@ class LadderTests(_DefineCase):
             define.lookup("quorum")
         compose.assert_called_once()
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_the_model_rung_banks_its_answer(self):
         with mock.patch.object(define, "_compose", return_value=dict(CARD)), \
              mock.patch.object(define, "_context", return_value=[]):
@@ -255,11 +252,11 @@ class LadderTests(_DefineCase):
                 define.lookup("this is far too long to be a term at all okay")
         compose.assert_not_called()
 
-    def test_passive_still_answers_but_does_not_bank(self):
-        os.environ["VIRA_PASSIVE"] = "1"
+    def test_explicit_read_only_answers_without_banking(self):
+
         with mock.patch.object(define, "_compose", return_value=dict(CARD)), \
              mock.patch.object(define, "_context", return_value=[]):
-            card = define.lookup("Byzantine fault tolerance")
+            card = define.lookup("Byzantine fault tolerance", write=False)
         self.assertEqual(card["rows"][0]["value"], CARD["rows"][0]["value"])
         self.assertIsNone(define.entry("Byzantine fault tolerance"))
 

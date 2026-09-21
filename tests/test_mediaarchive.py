@@ -39,7 +39,7 @@ class _Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(self.tmp.cleanup)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def _make_chatdb(self):
         con = sqlite3.connect(self.chat)
@@ -264,32 +264,6 @@ class Cap(_Base):
         self.assertEqual(mediaarchive.sweep(log=lambda *a: None), 5)
 
 
-class Passive(_Base):
-    """A test clone must never grow a duplicate archive, and with the root
-    pointed at an external drive it would write into the owner's real one —
-    the plans.py boundary. Reads stay open, which is what makes the surface
-    testable on a branch."""
-
-    def setUp(self):
-        super().setUp()
-        p = self.add(1, "a.jpg", b"a")
-        mediaarchive.store(1, p)          # seed while still live
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(lambda: os.environ.pop("VIRA_PASSIVE", None))
-
-    def test_store_refuses(self):
-        p = self.add(2, "b.jpg", b"b")
-        with self.assertRaises(PermissionError):
-            mediaarchive.store(2, p)
-
-    def test_the_sweep_is_a_no_op_and_says_so(self):
-        self.add(2, "b.jpg", b"b")
-        said = []
-        self.assertEqual(mediaarchive.sweep(log=said.append), 0)
-        self.assertTrue(any("passive" in m for m in said), said)
-
-    def test_reads_still_work(self):
-        self.assertIsNotNone(mediaarchive.file_for(1))
 
 
 class UnreachableRoot(unittest.TestCase):
@@ -297,7 +271,7 @@ class UnreachableRoot(unittest.TestCase):
     Honest, and never an exception into a media listing."""
 
     def setUp(self):
-        os.environ.pop("VIRA_PASSIVE", None)
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         blocked = Path(self.tmp.name) / "not-a-directory"

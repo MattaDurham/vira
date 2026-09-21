@@ -7,6 +7,8 @@ and paginated only at the HTTP boundary. Evidence scope and the prompt contract
 are recorded per conversation, and exact citations reopen immutable read spans.
 A module model change starts a new native session with bounded saved conversation
 context, preserving the visible chat and the earlier job records.
+Each instance runs its own supervisor; prompts and HTTP lookups stay on the
+instance that owns the conversation.
 """
 import json
 import re
@@ -16,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import agentbackend, jsonstore, modelbudget, modulemodels, settings
+from . import agentbackend, instance, jsonstore, modelbudget, modulemodels, settings
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "vira-chat.json"
 # History is never trimmed. These are response page sizes, not retention limits.
@@ -126,6 +128,7 @@ def _owner():
 
 CHAT_BRIEF = """You are answering {owner} in Vira. Answer the question directly;
 ordinary chat is not a request for a report, dossier, or saved artifact.
+This conversation belongs to the Vira instance at {api_url}.
 
 Evidence scope: {scope}. Use only sources enabled for model answers and within
 this scope. The {tool_prefix}* tools enforce this policy. Do not bypass an
@@ -167,7 +170,7 @@ to the owner. Do not create or file a report unless one was requested.
 
 CHAT_BRIEF_HTTP = """You are answering {owner} in Vira. Answer directly; ordinary
 chat is not a report request. Requested mode: {mode}. Evidence scope: {scope}.
-Use Vira's model-scoped evidence API at http://localhost:8377/api/answer:
+Use Vira's model-scoped evidence API at {api_url}/api/answer:
 GET /sources, POST /read (source, start, length), POST /search (source, query),
 GET /evidence/<handle>. These preserve source permissions and evidence versions.
 Use only allowed sources. Never bypass exclusions through raw stores or files.
@@ -190,7 +193,8 @@ def _launch_prompt(question, native=True, provider="anthropic", *,
     prefix = "mcp__vira__" if provider == "anthropic" else "vira."
     scope = ", ".join(sources or []) or "all sources enabled for model answers"
     return brief.format(owner=_owner(), question=question.strip(),
-                        tool_prefix=prefix, mode=mode, scope=scope) + (
+                        tool_prefix=prefix, mode=mode, scope=scope,
+                        api_url=instance.api_url()) + (
                             "\nFor every /api/answer request include ?session_id=" + chat_id
                             if chat_id and not native else "")
 

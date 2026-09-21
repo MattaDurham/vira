@@ -78,7 +78,7 @@ class AssistantFixture(unittest.TestCase):
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
         model_patch = mock.patch.object(contactintel.suggest, "complete", return_value="{}")
         self.model = model_patch.start()
         self.addCleanup(model_patch.stop)
@@ -119,7 +119,8 @@ class QueueTests(AssistantFixture):
         self.model.return_value = json.dumps(fact_payload(source))
         shared = type("Feed", (), {"lock": threading.Lock(), "feed": [],
                                     "listeners": [], "feed_size": 10})()
-        channels.push_feed_item(shared, dict(source, rowid=41))
+        with mock.patch("server.instance.owns_automation", return_value=True):
+            channels.push_feed_item(shared, dict(source, rowid=41))
         self.model.assert_not_called()
         self.assertEqual(contactintel.status()["pending_messages"], 1)
         contactintel.tick(NOW)
@@ -224,9 +225,7 @@ class QueueTests(AssistantFixture):
         self.assertEqual(contactintel.status()["pending_messages"], 0)
         self.assertEqual(sum(contactintel.status()["counters"].values()), 2)
 
-    def test_passive_sandbox_fixture_and_disabled_do_not_queue(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            contactintel.enqueue([message()])
+    def test_sandbox_fixture_and_disabled_do_not_queue(self):
         with mock.patch.object(contactintel.settings, "sandboxed", return_value=True):
             contactintel.enqueue([message()])
         with mock.patch.object(contactintel.settings, "fixture_mode", return_value=True):

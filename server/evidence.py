@@ -26,11 +26,8 @@ archived), editable in the UI, and exportable as clean plain text for
 pasting into interview prep — a labeled block per case, ASCII punctuation
 only (no markdown, no em-dashes).
 
-No passive guard: mining is read-only (git log, file reads), and the store
-write lands harmlessly in a test instance's cloned data/. compose_episode
-spends model tokens the same way a reply draft does, and passive instances
-already allow that class of call — so there is nothing here for
-VIRA_PASSIVE to refuse.
+Mining is read-only (git log, file reads), and results are stored in this
+instance. Extraction uses the configured reply-drafting provider.
 """
 
 from . import modulemodels

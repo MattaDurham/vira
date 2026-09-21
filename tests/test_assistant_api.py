@@ -88,7 +88,7 @@ class AssistantAPI(unittest.TestCase):
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
-        for key in ("VIRA_PASSIVE", "VIRA_SANDBOX"):
+        for key in ("VIRA_SANDBOX",):
             os.environ.pop(key, None)
         patcher = mock.patch.object(calendarplan, "_calendar_create", return_value={"uid": "synthetic-event"})
         self.native_create = patcher.start()
@@ -229,8 +229,7 @@ class AssistantAPI(unittest.TestCase):
 
     def test_preview_reminder_actions_refuse_without_reading_or_changing_sources(self):
         before = self.commitments_path.read_bytes()
-        for mode in (mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}),
-                     mock.patch.object(settings, "sandboxed", return_value=True),
+        for mode in (mock.patch.object(settings, "sandboxed", return_value=True),
                      mock.patch.object(settings, "fixture_mode", return_value=True)):
             with mode, mock.patch.object(executive, "reminders", side_effect=AssertionError("source read")):
                 for action in ("done", "snooze", "date"):
@@ -260,14 +259,6 @@ class AssistantAPI(unittest.TestCase):
         self.assertEqual(sent_draft["attendees"], [])
         self.assertEqual(calendar_name, "Synthetic personal")
 
-    def test_manual_calendar_route_cannot_bypass_the_real_passive_guard(self):
-        draft = self.stage()
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            response = self.client.post("/api/assistant/calendar/" + draft["id"], json={"action": "create"})
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["status"], "blocked")
-        self.assertIn("passive", response.json()["reason"])
-        self.native_create.assert_not_called()
 
     def test_calendar_dismiss_and_error_responses(self):
         draft = self.stage()

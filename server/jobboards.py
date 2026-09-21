@@ -1079,9 +1079,8 @@ def arm_if_stale(poller=None):
     Deliberately NOT a synchronous fetch: ten boards take the better part
     of a minute, and blocking the module's first paint on that would make
     opening it feel broken. The module paints from the last sweep and the
-    rows correct themselves when this one lands. Honest on a passive
-    instance, which runs no poller at all: nothing is armed and the caller
-    is told so rather than waiting for a sweep that will never come."""
+    rows correct themselves when this one lands. When no poller is available,
+    the caller is told that nothing was armed."""
     fetched = (_read_json(_snapshot_path(), {}) or {}).get("fetched") or ""
     minutes = float(settings.raw().get("boards_poll_minutes") or 15)
     stale = True
@@ -1353,8 +1352,7 @@ def maybe_auto_score():
     Guards, in cost order: the config switch (`boards_auto_score`), one
     dispatch in flight at a time, the AI-ready probe (a machine with no
     model connected must not mint dead jobs — the routines rule), then
-    the batch itself. The poller never runs under VIRA_PASSIVE, so a test
-    clone never dispatches. Returns a small dict saying what happened;
+    the batch itself. Returns a small dict saying what happened;
     callers log it, nothing raises."""
     if not auto_score_enabled():
         return {"ok": False, "reason": "disabled"}
@@ -1414,8 +1412,7 @@ def maybe_auto_score():
 class Poller(threading.Thread):
     """Background poll loop — ticks every minute, polls every
     `boards_poll_minutes` (default 15). Dormant until boards are
-    registered. Started from main._startup, skipped under VIRA_PASSIVE
-    like every worker."""
+    registered. Every instance maintains its own current snapshot."""
 
     SCORE_CHECK_S = 180   # auto-score attempt cadence between polls
 
@@ -1436,7 +1433,8 @@ class Poller(threading.Thread):
                     self.status = "dormant — no boards registered"
                 else:
                     if time.time() >= self.next_poll:
-                        r = poll_once()
+                        from . import instance
+                        r = poll_once(notify_new=instance.owns_automation())
                         minutes = float(settings.raw()
                                         .get("boards_poll_minutes") or 15)
                         self.next_poll = time.time() + minutes * 60
@@ -1445,7 +1443,9 @@ class Poller(threading.Thread):
                                        f"{datetime.now().strftime('%H:%M')}")
                         self.next_score = 0.0   # new sweep — check at once
                     if time.time() >= self.next_score:
-                        sc = maybe_auto_score()
+                        from . import instance
+                        sc = (maybe_auto_score() if instance.owns_automation() else
+                              {"ok": False, "reason": "automatic scoring runs in another instance"})
                         self.next_score = time.time() + self.SCORE_CHECK_S
                         self.score_note = (
                             f"scoring {sc['roles']} (job {sc['job']})"

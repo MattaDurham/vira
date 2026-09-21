@@ -1,5 +1,5 @@
 """Android companion link: pairing auth, batch dedupe, CRM join, feed
-push, pings, triage merge, and the passive-instance write refusal.
+push, pings, triage merge,.
 
 All fixtures are synthetic (555-01xx NANP fiction block, example.com).
 The secrets ladder is forced onto its temp-file floor so no test ever
@@ -73,7 +73,7 @@ class CompanionBase(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(self.tmp.cleanup)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def pair(self):
         p = companion.pair_start(url="http://hub.example.ts.net:8377")
@@ -96,6 +96,8 @@ class PairingTests(CompanionBase):
         p = companion.pair_start(url="http://x")
         self.assertIsNone(companion.auth(p["device_id"], p["token"]))
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_claimed_device_auths(self):
         p = self.pair()
         dev = companion.auth(p["device_id"], p["token"])
@@ -137,20 +139,6 @@ class PairingTests(CompanionBase):
             self.assertNotIn("token", json.dumps(d))
 
 
-class PassiveRefusalTests(CompanionBase):
-    """The send.py precedent: a test clone must never pair or ingest."""
-
-    def test_all_writes_refused(self):
-        p = self.pair()  # pair while active, then flip passive
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            for call in (
-                    lambda: companion.pair_start(url="http://x"),
-                    lambda: companion.pair_complete(p["device_id"],
-                                                    p["token"]),
-                    lambda: companion.ingest(p["device_id"], []),
-                    lambda: companion.unpair(p["device_id"])):
-                with self.assertRaises(RuntimeError):
-                    call()
 
 
 class IngestTests(CompanionBase):
@@ -443,7 +431,7 @@ class NotifyChannelTests(CompanionBase):
 
 
 class RouteTests(CompanionBase):
-    """The thin HTTP layer: header auth, Bearer extraction, passive 403.
+    """The thin HTTP layer: header auth, Bearer extraction, failure status codes.
     TestClient without the context manager runs no lifespan — no watchers
     start."""
 
@@ -490,10 +478,6 @@ class RouteTests(CompanionBase):
                                  headers=headers, json={"messages": []})
             self.assertEqual(r.status_code, 401)
 
-    def test_passive_routes_403(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            r = self.client.post("/api/companion/pair/start")
-            self.assertEqual(r.status_code, 403)
 
     def test_oversize_batch_413(self):
         p = self.pair()

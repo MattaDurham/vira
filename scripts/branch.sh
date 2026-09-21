@@ -5,7 +5,7 @@
 #
 #   branch.sh start <slug>     new branch claude/<slug> + worktree .worktrees/<slug>
 #   branch.sh adopt [slug]     provision a worktree this script didn't create
-#   branch.sh serve <slug>     test instance: cloned data, passive, local + tailnet
+#   branch.sh serve <slug>     branch instance: cloned data, local + tailnet
 #   branch.sh serve <slug> --local   loopback only; never bridge to tailnet
 #   branch.sh serve <slug> --fresh   re-clone data before serving
 #   branch.sh serve <slug> --fixture synthetic-data preview (safe to share)
@@ -250,11 +250,12 @@ start_test_process() {
     plist="$HOME/Library/LaunchAgents/$label.plist"
     mkdir -p "$HOME/Library/LaunchAgents"
     python3 - "$plist" "$label" "$LIVE/.venv/bin/python" "$dir" \
-      "$port" "$dir/.test-instance.log" "$PATH" <<'PY'
+      "$port" "$dir/.test-instance.log" "$PATH" "$slug" "$LIVE" "${PYTHONPATH:-}" <<'PY'
+import os
 import plistlib
 import sys
 
-path, label, python, workdir, port, log, path_env = sys.argv[1:]
+path, label, python, workdir, port, log, path_env, slug, primary, python_path = sys.argv[1:]
 payload = {
     "Label": label,
     # caffeinate must not receive a utility: macOS ignores -t when it does.
@@ -267,7 +268,15 @@ payload = {
         label, "/usr/bin/caffeinate", python, port,
     ],
     "WorkingDirectory": workdir,
-    "EnvironmentVariables": {"VIRA_PASSIVE": "1", "PATH": path_env},
+    "EnvironmentVariables": {
+        "VIRA_INSTANCE_ID": "branch:" + slug,
+        "VIRA_INSTANCE_URL": "http://localhost:" + port,
+        "VIRA_PRIMARY_ROOT": primary,
+        "VIRA_SERVICE_LABEL": label,
+        "PYTHONPATH": os.pathsep.join(filter(None, [
+            os.path.join(workdir, ".test-instance.packages"), python_path])),
+        "PATH": path_env,
+    },
     "RunAtLoad": True,
     "KeepAlive": True,
     "AbandonProcessGroup": False,
@@ -298,7 +307,10 @@ PY
     print -r -- "{\"pid\": $pid, \"port\": $port, \"label\": \"$label\"}" > "$dir/$PIDFILE"
   else
     cd "$dir"
-    VIRA_PASSIVE=1 nohup "$LIVE/.venv/bin/uvicorn" server.main:app \
+    VIRA_INSTANCE_ID="branch:$slug" VIRA_INSTANCE_URL="http://localhost:$port" \
+      VIRA_PRIMARY_ROOT="$LIVE" VIRA_SERVICE_LABEL="" \
+      PYTHONPATH="$dir/.test-instance.packages${PYTHONPATH:+:$PYTHONPATH}" \
+      nohup "$LIVE/.venv/bin/python" -m uvicorn server.main:app \
       --host 127.0.0.1 --port "$port" >> "$dir/.test-instance.log" 2>&1 &
     pid=$!
     print -r -- "{\"pid\": $pid, \"port\": $port}" > "$dir/$PIDFILE"
@@ -314,8 +326,21 @@ stop_test_process() {
   pid=$(instance_pid "$dir")
   if [[ -n "$label" && "$(uname -s)" == "Darwin" ]]; then
     launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    launchd_wait_gone "$label" || {
+      echo "error: branch service is still stopping; snapshot unchanged" >&2
+      return 1
+    }
   elif [[ -n "$pid" ]]; then
     kill "$pid" 2>/dev/null || true
+    local attempt
+    for attempt in $(seq 1 40); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "error: branch process is still stopping; snapshot unchanged" >&2
+      return 1
+    fi
   fi
   tailnet_unserve "$port"
   rm -f "$dir/$PIDFILE" "$dir/.test-instance.plist"
@@ -327,7 +352,7 @@ stop_test_process() {
 
 print_instance_urls() {
   local port=$1 host
-  echo "test instance up:  http://localhost:$port  (passive, cloned data)"
+  echo "test instance up:  http://localhost:$port  (branch, cloned data)"
   echo "local stage:       http://localhost:$port/stage.html"
   host=$(tailnet_host)
   if [[ -n "$host" ]]; then
@@ -384,10 +409,27 @@ cmd_adopt() {
   fi
 }
 
+# Replace a completed branch snapshot without discarding its prior history.
+# The root name is covered by the existing .test-instance.* ignore rule.
+promote_snapshot() {
+  local stage=$1 dst=$2 saved="" history="${2:h}/.test-instance.history"
+  if [[ -e "$dst" ]]; then
+    mkdir -p "$history"
+    saved=$(mktemp -d "$history/$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
+    mv "$dst" "$saved/data"
+  fi
+  if ! mv "$stage" "$dst"; then
+    [[ -n "$saved" ]] && mv "$saved/data" "$dst"
+    return 1
+  fi
+  [[ -z "$saved" ]] || echo "previous snapshot preserved: $saved/data"
+  return 0
+}
+
 # clone_data <src-data-dir> <dst-data-dir>
 #
-# An instant APFS clone of live data. Disposable; never shared. The source is
-# a RUNNING server, so it churns while the copy walks it — three rules keep
+# An instant APFS clone of live data. Previous versions are retained.
+# The source is a RUNNING server, so it churns while the copy walks it — three rules keep
 # that from killing the clone:
 #
 #   - sqlite sidecars (-shm/-wal) are never copied. They appear and vanish as
@@ -407,10 +449,10 @@ cmd_adopt() {
 # a real snapshot from a stray data/ created by module imports (e.g. running
 # the test suite), and it only ever appears on a complete clone.
 clone_data() {
-  local src=$1 dst=$2 stage="${2:h}/.data-snapshot.tmp" name churn=0
+  local src=$1 dst=$2 stage name churn=0
   local -a entries
-  rm -rf "$dst" "$stage"
-  mkdir -p "$stage"
+  mkdir -p "${dst:h}"
+  stage=$(mktemp -d "${dst:h}/.test-instance.snapshot.XXXXXXXX")
   entries=("$src"/*(DN:t))
   for name in $entries; do
     [[ "$name" == *-shm || "$name" == *-wal ]] && continue
@@ -428,8 +470,7 @@ clone_data() {
   find "$stage" \( -name '*-shm' -o -name '*-wal' \) -delete
   rm -f "$stage/launchd.log"
   date > "$stage/.test-snapshot"
-  rm -rf "$dst"
-  mv "$stage" "$dst"
+  promote_snapshot "$stage" "$dst"
 }
 
 # A neutral preview for cases where publishing a personal data clone has not
@@ -437,8 +478,9 @@ clone_data() {
 # vault, so Find chat and its companion windows are testable without exposing
 # any owner data to another device or network transport.
 fixture_data() {
-  local dir=$1 dst="$1/data" stage="$1/.data-snapshot.tmp"
-  rm -rf "$dst" "$stage"
+  local dir=$1 dst="$1/data" stage
+  mkdir -p "$dir"
+  stage=$(mktemp -d "$dir/.test-instance.snapshot.XXXXXXXX")
   mkdir -p "$stage/test-vault/wiki" "$stage/test-vault/Sessions" \
     "$stage/test-vault/Projects"
   python3 - "$stage/config.json" "$dst/test-vault" <<'PY'
@@ -544,9 +586,46 @@ tags: [local-first]
 Software whose canonical data stays under owner control. It informs
 [[Durable previews]], [[Vira]], and [[Find integration]].' > "$stage/test-vault/wiki/Local-first software.md"
   date > "$stage/.test-snapshot"
-  mv "$stage" "$dst"
-  (cd "$dir" && VIRA_PASSIVE=1 "$LIVE/.venv/bin/python" -c \
+  promote_snapshot "$stage" "$dst"
+  (cd "$dir" && "$LIVE/.venv/bin/python" -c \
     'from server import vault; print(vault.scan_once())') >/dev/null
+}
+
+# Detached runners survive the web server. Moving their job directories
+# while they write would strand controls and transcripts in different copies.
+assert_refresh_idle() {
+  local dir=$1 slug=$2
+  python3 - "$dir" "branch:$slug" <<'PYTHON'
+import json
+import os
+import sys
+from pathlib import Path
+
+root, owner = Path(sys.argv[1]), sys.argv[2]
+active = []
+for job_dir in (root / "data" / "jobs").glob("*"):
+    try:
+        spec = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        state = json.loads((job_dir / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        continue
+    if spec.get("instance_id", "primary") != owner:
+        continue
+    if state.get("status") != "running":
+        continue
+    try:
+        pid = int(state.get("pid") or 0)
+        if pid <= 0:
+            continue
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        continue
+    active.append(str(spec.get("subject") or spec.get("title") or job_dir.name))
+if active:
+    print("error: finish or close this branch's running sessions before refreshing: "
+          + ", ".join(active), file=sys.stderr)
+    sys.exit(1)
+PYTHON
 }
 
 # EVERY flag is read, and an unknown one is refused.
@@ -584,7 +663,18 @@ cmd_serve() {
   [[ "$dir" == "$LIVE" ]] && { echo "error: refusing to serve the live tree" >&2; exit 1; }
   provision "$dir"          # a worktree from elsewhere may still lack the venv
   pid=$(instance_pid "$dir")
-  [[ -n "$pid" ]] && { echo "already running (pid $pid, port $(instance_port "$dir"))"; exit 0; }
+  if [[ -n "$data_mode" ]]; then
+    assert_refresh_idle "$dir" "$slug" || return 1
+  fi
+  if [[ -n "$pid" ]]; then
+    if [[ -z "$data_mode" ]]; then
+      echo "already running (pid $pid, port $(instance_port "$dir"))"
+      return 0
+    fi
+    # Refresh is explicit. Stop only this branch before replacing its state;
+    # the previous snapshot is retained by promote_snapshot below.
+    stop_test_process "$dir" || return 1
+  fi
 
   if [[ "$data_mode" == "--fixture" ]]; then
     echo "building synthetic fixture snapshot..."
@@ -601,7 +691,7 @@ cmd_serve() {
   done
   [[ -n "$port" ]] || { echo "error: no free port in $PORT_MIN-$PORT_MAX" >&2; exit 1; }
 
-  # Passive: no background workers, no outbound sends (server-side gate).
+  # Normal application workers, with explicit branch identity.
   # Uvicorn stays loopback-only; Tailscale Serve is the authenticated bridge.
   # launchd keeps Mac previews alive after the agent terminal goes away and
   # restarts them on a crash. Other platforms retain the nohup fallback.
@@ -625,7 +715,7 @@ cmd_serve() {
   # Health checks stay numeric and local. Human links use localhost on this
   # Mac (Browser allows it) and MagicDNS everywhere else.
   if [[ "$local_only" -eq 1 ]]; then
-    echo "test instance up:  http://localhost:$port  (passive, LOCAL ONLY)"
+    echo "test instance up:  http://localhost:$port  (branch, LOCAL ONLY)"
     echo "local stage:       http://localhost:$port/stage.html"
   else
     print_instance_urls "$port"

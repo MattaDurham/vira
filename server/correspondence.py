@@ -8,7 +8,6 @@ the governed vault writer. Nothing is enabled merely by installing the code.
 from . import modulemodels
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import threading
@@ -38,7 +37,7 @@ def _now():
 
 
 def _guard():
-    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
+    if settings.sandboxed() or settings.fixture_mode():
         raise ValueError("correspondence writes are disabled in this preview")
 
 
@@ -517,12 +516,19 @@ def _process(ident, automatic=True):
             return _set(ident, state="error", error=str(exc)[:500], attempts=item.get("attempts", 0) + 1)
 
 
-def tick():
+def tick(*, automatic=False):
+    """Refresh this inbox; only one instance applies automatic shared writes."""
     global _worker_error
     if not enabled() or not _tick_lock.acquire(blocking=False):
         return
     try:
+        from . import instance
+        apply_shared = not automatic or instance.owns_automation()
         catch_up()
+        _change(lambda state: state.update(automatic_actions_here=apply_shared))
+        if not apply_shared:
+            _worker_error = None
+            return
         items = sorted(_state()["items"].values(), key=lambda i: i["updated"])
         pending = [i for i in items if i["state"] in ("queued", "saving", "processing")]
         for item in pending[:3]:
@@ -552,7 +558,7 @@ def start():
         pause = threading.Event()
         while True:
             try:
-                tick()
+                tick(automatic=True)
             except Exception:
                 pass  # a malformed optional config must not kill the server
             pause.wait(30)
@@ -576,9 +582,10 @@ def status():
         counts[item["state"]] = counts.get(item["state"], 0) + 1
     active = [i for i in items if i["state"] not in ("processed", "ignored")]
     recent = [i for i in items if i["state"] in ("processed", "ignored")][:50]
-    return {"enabled": enabled(), "passive": bool(os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode()), "counts": counts,
+    return {"enabled": enabled(), "read_only": bool(settings.sandboxed() or settings.fixture_mode()), "counts": counts,
             "items": [_public(i) for i in (active + recent)[:300]],
             "coverage": state.get("coverage", {}), "last_run": state.get("last_run"),
+            "automatic_actions_here": state.get("automatic_actions_here"),
             "last_error": _worker_error, "destinations": vaultwrite.destinations(), "routes": routes()}
 
 

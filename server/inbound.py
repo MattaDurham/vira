@@ -39,7 +39,7 @@ same thread — so a clarification is a text, and the answer to it is a
 text. That loop is the whole point.
 """
 
-from . import modulemodels
+from . import instance, modulemodels
 import os
 import re
 import threading
@@ -89,8 +89,6 @@ def _cfg(key, default):
 def enabled():
     """Dormant unless a handle is configured and the owner has not turned it
     off — the notify/mail dormancy pattern."""
-    if os.environ.get("VIRA_PASSIVE"):
-        return False
     if not notify.config()["handle"]:
         return False
     return bool(_cfg("imessage_reply_enabled", True))
@@ -398,7 +396,7 @@ You are Vira, answering on the iMessage thread you notify him on. Rules for
 this channel:
 
 * Act freely INSIDE this machine — read anything, and use Vira's own API on
-  http://localhost:8377 for things Vira already does.
+  {api_url} for things Vira already does.
 * Anything that LEAVES this machine — sending mail, answering an invitation,
   posting, spending, messaging anyone else — is not yours to decide. Ask
   first with mcp__vira__ask_owner; the question is texted to him and his
@@ -423,7 +421,7 @@ def _dispatch(text):
                    f"    {refs[0]['text']}\n\n")
         t = " ".join((text or "").split())
         jid = session.sessions.launch(
-            PROMPT.format(text=text, context=ctx),
+            PROMPT.format(api_url=instance.api_url(), text=text, context=ctx),
             cwd=str(settings.ROOT),
             meta={"channel": "imessage", "kind": "text-reply"},
             subject=t[:140],

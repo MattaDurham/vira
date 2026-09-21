@@ -416,8 +416,6 @@ def login_start(pid):
     the same trick the Full Disk Access assist uses. The account boundary
     holds: Vira drives the plumbing, the OWNER approves in the browser and
     pastes the code."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError("passive test instance — sign in on the live Vira")
     spec = PROVIDERS.get(pid)
     if not spec or not spec.get("login_args"):
         raise ValueError(f"{pid}: no sign-in flow — connect with an API key")

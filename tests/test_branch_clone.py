@@ -110,13 +110,31 @@ class CloneDataTests(unittest.TestCase):
         self.assertFalse(self.dst.exists())
         self.assertFalse(self.stage.exists())
 
-    def test_stale_destination_is_replaced_wholesale(self):
+    def test_previous_destination_is_preserved_when_replaced(self):
         self.dst.mkdir(parents=True)
         (self.dst / "leftover.json").write_text("stale")
         r = run_clone(f'clone_data "{self.src}" "{self.dst}"')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((self.dst / "leftover.json").exists())
         self.assertTrue((self.dst / ".test-snapshot").exists())
+        saved = list((self.wt / ".test-instance.history").glob("*/data/leftover.json"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(encoding="utf-8"), "stale")
+
+    def test_failed_refresh_keeps_existing_snapshot_in_place(self):
+        self.dst.mkdir(parents=True)
+        evidence = self.dst / "branch-session.json"
+        evidence.write_text('{"history": true}', encoding="utf-8")
+        stub = '''
+        cp() {
+          [[ "$2" == */config.json ]] && return 1
+          command cp "$@"
+        }
+        '''
+        result = run_clone(f'{stub}\nclone_data "{self.src}" "{self.dst}"')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(evidence.read_text(encoding="utf-8"), '{"history": true}')
+        self.assertFalse(list(self.wt.glob(".test-instance.snapshot.*")))
 
 
 if __name__ == "__main__":

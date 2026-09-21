@@ -385,7 +385,7 @@ class PollDiffAndNotify(unittest.TestCase):
     def test_arm_if_stale(self):
         """Opening the module asks for a sweep only when the last one has
         aged out, and never claims to have armed one on an instance that
-        runs no poller (a passive test clone) — the caller would wait
+        runs no poller (an instance without a poller) — the caller would wait
         forever on a sweep that cannot happen."""
         class FakePoller:
             def __init__(self, alive):
@@ -415,7 +415,7 @@ class PollDiffAndNotify(unittest.TestCase):
         self.assertTrue(r2["armed"])
         self.assertTrue(p2.armed)
 
-        # no poller (passive): stale, but honestly not armed
+        # no poller: stale, but honestly not armed
         r3 = jobboards.arm_if_stale(FakePoller(False))
         self.assertTrue(r3["stale"])
         self.assertFalse(r3["armed"])

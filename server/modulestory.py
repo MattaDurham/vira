@@ -35,7 +35,7 @@ payload as `hit: false`, which is what lets the surface offer the WHOLE
 change log with this module's part of it lit — the owner's ask that
 nothing in the changelog be missing.
 
-Read-only; no store of its own; nothing here needs a passive guard.
+Read-only; no store of its own.
 """
 from __future__ import annotations
 

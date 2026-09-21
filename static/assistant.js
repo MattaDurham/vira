@@ -221,7 +221,7 @@ window.ViraAssistant = (() => {
     const actions = node("div", "assistant-actions");
     const save = node("button", "btn primary", "Save assistant settings");
     save.type = "submit";
-    save.disabled = !!(data.passive || data.fixture);
+    save.disabled = !!data.fixture;
     actions.appendChild(save);
     actions.appendChild(button("Cancel edits", () => {
       dirty = false;
@@ -447,7 +447,7 @@ window.ViraAssistant = (() => {
     section.appendChild(node(resources.length ? "h6" : "summary", "assistant-resource-title",
       resources.length ? "Take action" : "More details"));
     resourceList(section, resources, reminder.id, (resource) => resource.url
-      ? resourceLink(resource) : emailResource(resource, reminder.id, !!(data.passive || data.fixture)));
+      ? resourceLink(resource) : emailResource(resource, reminder.id, !!data.fixture));
     notice(section, plain(reminder.resources_note));
     copyDetails(section, reminder);
     card.appendChild(section);
@@ -465,7 +465,7 @@ window.ViraAssistant = (() => {
     input.addEventListener("input", () => dateEdits.set(row.id, input.value));
     const save = node("button", "btn small", "Set due date");
     save.type = "submit";
-    save.disabled = !!(data.passive || data.fixture);
+    save.disabled = !!data.fixture;
     form.appendChild(save);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -516,7 +516,7 @@ window.ViraAssistant = (() => {
       [ ["Done", { action: "done" }], ["Snooze 1 day", { action: "snooze", hours: 24 }] ]
         .forEach(([label, payload]) => {
           const b = button(label, () => act(b, "/api/assistant/reminders/"
-            + encodeURIComponent(r.id), payload, card), !!(data.passive || data.fixture));
+            + encodeURIComponent(r.id), payload, card), !!data.fixture);
           actions.appendChild(b);
         });
       card.appendChild(actions);
@@ -561,7 +561,7 @@ window.ViraAssistant = (() => {
       const path = "/api/assistant/calendar/" + encodeURIComponent(d.id);
       if (d.can_create) {
         const create = button("Create my event", () => act(create, path,
-          { action: "create" }, card), !!(data.passive || data.fixture));
+          { action: "create" }, card), !!data.fixture);
         actions.appendChild(create);
       }
       if (d.can_export) {
@@ -572,7 +572,7 @@ window.ViraAssistant = (() => {
       }
       if (!["created", "creating"].includes(d.status)) {
         const dismiss = button("Dismiss", () => act(dismiss, path,
-          { action: "dismiss" }, card), !!(data.passive || data.fixture));
+          { action: "dismiss" }, card), !!data.fixture);
         actions.appendChild(dismiss);
       }
       if (actions.childElementCount) card.appendChild(actions);
@@ -641,7 +641,7 @@ window.ViraAssistant = (() => {
     body.replaceChildren();
     const head = node("div", "assistant-head");
     head.appendChild(node("h3", "", "Reminders & follow-through"));
-    const state = data.passive || data.fixture ? "Preview instance"
+    const state = data.fixture ? "Sample data"
       : !data.enabled ? "Paused" : data.last_error || data.contact?.last_error || data.contact?.errors?.length
         || data.calendar?.error || data.calendar?.last_error
       ? "Needs attention" : !data.worker_running ? "Worker not running"
@@ -654,13 +654,13 @@ window.ViraAssistant = (() => {
       message.setAttribute("role", "status");
       body.appendChild(message);
     }
-    if (data.passive || data.fixture) notice(body,
-      "This preview does not process messages, send texts, or create calendar events.");
+    if (data.fixture) notice(body,
+      "Sample data does not process messages, send texts, or create calendar events.");
     notice(body, data.last_error, true);
     notice(body, data.contact?.last_error, true);
     if (data.contact?.errors?.length) notice(body,
       data.contact.errors.length + " contact update(s) are waiting to retry. Details are in Coverage and recent activity.", true);
-    if (data.enabled && !data.worker_running && !data.passive && !data.fixture)
+    if (data.enabled && !data.worker_running && !data.fixture)
       notice(body, "The assistant worker is not running. Review server health before relying on reminders.", true);
     if (data.settings?.assistant_notify && !data.notification_ready)
       notice(body, "Reminder texts are enabled, but the owner notification channel is not ready. Configure it in Config.", true);

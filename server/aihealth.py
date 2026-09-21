@@ -420,7 +420,7 @@ def summary():
             "checked_at": s.get("checked_at", "")}
 
 
-# ---------- rung 2 (passive) + rung 4 (alert) ----------
+# ---------- rung 2 (diagnostic) + rung 4 (alert) ----------
 
 def note_failure(text, source="model-call"):
     """Any in-server model-call failure path can report its raw error here. An
@@ -457,7 +457,9 @@ def maybe_alert(result):
         return
     state, prev = result.get("state"), result.get("prev_state")
     try:
-        from . import notify
+        from . import notify, instance
+        if not instance.owns_automation():
+            return
         if state == "red" and prev != "red":
             notify.agent_ping(
                 "Vira: AI backend is DOWN. "
@@ -472,8 +474,7 @@ def maybe_alert(result):
 
 class Watcher:
     """Rung 4: probe the AI backend on a cadence and alert the owner on the
-    green->red edge. Runs only in the live server (VIRA_PASSIVE skips it, like
-    every other worker). Deterministic end to end — the one thing guaranteed to
+    green->red edge. Deterministic end to end — the one thing guaranteed to
     still work when the model itself cannot."""
 
     def __init__(self):

@@ -29,7 +29,7 @@ class Resources(unittest.TestCase):
         for patcher in self.patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def test_legacy_evidence_recovers_exact_email_account_and_body_links(self):
         resources.textindex.lookup_sources.return_value = {SOURCE_ID: {
@@ -154,8 +154,7 @@ class Resources(unittest.TestCase):
 
     def test_preview_never_reads_accounts_index_or_live_feed(self):
         for patcher in (mock.patch.object(resources.settings, "fixture_mode", return_value=True),
-                        mock.patch.object(resources.settings, "sandboxed", return_value=True),
-                        mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"})):
+                        mock.patch.object(resources.settings, "sandboxed", return_value=True)):
             with patcher:
                 row = reminder()
                 resources.enrich([row], [{"channel": "email", "message_id": MID,

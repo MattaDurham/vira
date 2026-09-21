@@ -7,7 +7,6 @@ This local store gives those commitments the same evidence and lifecycle.
 import copy
 import hashlib
 import json
-import os
 from datetime import datetime, timezone
 
 from . import jsonstore, settings
@@ -110,7 +109,7 @@ def _newest(evidence):
 
 
 def merge(subject_key, person_name, update, expected=None):
-    if os.environ.get("VIRA_PASSIVE") or settings.sandboxed() or settings.fixture_mode():
+    if settings.sandboxed() or settings.fixture_mode():
         raise ValueError("Automatic commitments are disabled on a test instance")
     if not isinstance(subject_key, str) or not subject_key or len(subject_key) > 1000:
         raise ValueError("A stable subject is required")

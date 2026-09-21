@@ -4,7 +4,7 @@ The decisions worth pinning:
   1. The anonymization gate FAILS CLOSED — a scanner that cannot run blocks
      the publish exactly like a scanner hit, and nothing lands in the site
      repo when it does.
-  2. Passive instances cannot publish (site-repo write + push).
+  2. Publishing applies the same scanner to every instance.
   3. The markdown renderer is a deterministic minimal subset with HTML
      escaping everywhere text flows in.
 """
@@ -252,12 +252,6 @@ class PublishTests(StoreBase):
         self.assertFalse(ok)
         self.assertIn("scanner failed to run", report)
 
-    def test_passive_refuses(self):
-        blog.add_post("Nope", "Body.")
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(RuntimeError) as ctx:
-                blog.publish("nope")
-        self.assertIn("passive", str(ctx.exception))
 
     def test_unknown_slug_and_missing_site(self):
         with self.assertRaises(ValueError):

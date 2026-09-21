@@ -82,7 +82,7 @@ window.ViraIntake = (() => {
     tools.appendChild(node("span", "intake-status", snapshot.enabled ? "Filing enabled" : "Filing is paused"));
     tools.appendChild(button("Open incoming messages", () => openApp("feed")));
     tools.appendChild(button("Refresh", load)); host.appendChild(tools);
-    if (snapshot.passive) host.appendChild(node("p", "hint", "Preview instance. Incoming messages and vault writes are paused."));
+    if (snapshot.read_only) host.appendChild(node("p", "hint", "This sample-data environment does not process incoming messages or write to vaults."));
     if (snapshot.last_error) error(host, snapshot.last_error);
     const settings = node("details", "intake-config"); settings.open = !!configOpen;
     settings.appendChild(node("summary", "", "Filing preferences and destinations"));
@@ -133,7 +133,7 @@ window.ViraIntake = (() => {
       (cfg.routes || []).forEach(routeEditor);
       form.appendChild(button("Manage vault connections",()=>{openApp("setup");if(typeof dashJump==="function")dashJump("brain");}));
       form.appendChild(button("Add a route",()=>{routeEditor();configEditing=true;}));
-      const foot=node("div","workspace-toolbar"),save=node("button","btn small","Save preferences");save.type="submit";save.disabled=!!snapshot?.passive;
+      const foot=node("div","workspace-toolbar"),save=node("button","btn small","Save preferences");save.type="submit";save.disabled=!!snapshot?.read_only;
       foot.append(save,button("Cancel",()=>{configEditing=false;renderInbox();}));form.appendChild(foot);
       form.addEventListener("submit",async(e)=>{
         e.preventDefault();save.disabled=true;
@@ -142,7 +142,7 @@ window.ViraIntake = (() => {
             destination:x.dest.value,folder:x.folder.value.trim(),sender:x.sender.value.trim(),purpose:x.purpose.value.trim(),account:x.account.value.trim(),
             terms:x.terms.value.split(",").map((t)=>t.trim()).filter(Boolean),automatic:x.automatic.checked}));
           await request("/api/correspondence/config",{...cfg,enabled:enabled.checked,model_classification:model.checked,routes},"PATCH");configEditing=false;await load();
-        }catch(e){error(form,e);}finally{save.disabled=!!snapshot?.passive;}
+        }catch(e){error(form,e);}finally{save.disabled=!!snapshot?.read_only;}
       });host.appendChild(form);
     }catch(e){error(host,e);}finally{delete host.dataset.loading;}
   }
@@ -169,7 +169,7 @@ window.ViraIntake = (() => {
       if(["error","saved","processing"].includes(item.state)) {
         const retry=button(item.limitations?.length?"Retry missing source material":"Retry",async()=>{retry.disabled=true;try{
           await request("/api/correspondence/"+encodeURIComponent(id)+"/retry",{});await load();await open(id);
-        }catch(e){error(body,e);retry.disabled=!!snapshot?.passive;}});retry.disabled=!!snapshot?.passive;body.appendChild(retry);
+        }catch(e){error(body,e);retry.disabled=!!snapshot?.read_only;}});retry.disabled=!!snapshot?.read_only;body.appendChild(retry);
       }
       if(item.task_status && item.task_status!=="none")body.appendChild(node("p","hint","Reminder: "+item.task_status));
       if(item.task_ids?.length)body.appendChild(button("Open reminder",()=>{close();openApp("brief");window.ViraAssistant?.reveal(item.task_ids[0]);}));
@@ -179,12 +179,12 @@ window.ViraIntake = (() => {
         const form=node("form","intake-decision");
         const disposition=selectField(form,"What should happen?",[["keep","Save as reference"],["task","Create or link a reminder"],["both","Save and create a reminder"],["ignore","Dismiss"]],item.disposition || "keep");
         const dest=selectField(form,"Vault",destinations(),item.destination),folder=textField(form,"Category",item.folder,"Optional category");
-        const foot=node("div","workspace-toolbar"),approve=node("button","btn small","Confirm choice");approve.type="submit";approve.disabled=!!snapshot?.passive;
+        const foot=node("div","workspace-toolbar"),approve=node("button","btn small","Confirm choice");approve.type="submit";approve.disabled=!!snapshot?.read_only;
         foot.appendChild(approve);form.appendChild(foot);
         form.addEventListener("submit",async(e)=>{e.preventDefault();approve.disabled=true;try{
           await request("/api/correspondence/"+encodeURIComponent(id)+"/review",{action:disposition.value==="ignore"?"dismiss":"approve",disposition:disposition.value,destination:dest.value,folder:folder.value.trim()});
           await load();await open(id);
-        }catch(e){error(form,e);approve.disabled=!!snapshot?.passive;}});body.appendChild(form);
+        }catch(e){error(form,e);approve.disabled=!!snapshot?.read_only;}});body.appendChild(form);
       }
       if(item.person_id)body.appendChild(button("Open conversation",()=>{close();openPerson(item.person_id);}));
     }catch(e){body.replaceChildren();error(body,e);}

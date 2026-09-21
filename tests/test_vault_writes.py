@@ -41,7 +41,6 @@ class VaultWriteTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {}, clear=False)):
             patcher.start()
             self.addCleanup(patcher.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
         self.addCleanup(lambda: vault._active.update(key=None, vault=None, rows=[]))
 
     def save_config(self):
@@ -194,10 +193,7 @@ class VaultWriteTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=4) as pool:
             self.assertEqual(sum(pool.map(update, range(4))), 1)
 
-    def test_passive_and_provider_neutral_readonly_gates(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaisesRegex(ValueError, "passive"):
-                vaultwrite.capture("Title", "Text", "profile")
+    def test_provider_neutral_readonly_gates(self):
         args = {"title": "Title", "text": "Text", "destination": "profile"}
         result = asyncio.run(viratools.invoke("vault_capture", args, read_only=True))
         self.assertIn("read-only", result["content"][0]["text"])
@@ -274,7 +270,7 @@ class VaultWriteTests(unittest.TestCase):
 
 
 class VaultMutationRouteTests(VaultWriteTests):
-    def test_capture_update_reopen_and_passive(self):
+    def test_branch_capture_update_and_reopen(self):
         from fastapi.testclient import TestClient
         from server import main
         client = TestClient(main.app)
@@ -287,10 +283,11 @@ class VaultMutationRouteTests(VaultWriteTests):
         edited = client.post("/api/vault/update", json={"path": result["path"],
                               "text": "# Revised\n", "expected_hash": result["sha256"]})
         self.assertEqual(edited.status_code, 200, edited.text)
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            refused = client.post("/api/vault/capture", json={
-                "title": "No write", "text": "Text", "destination": "family"})
-            self.assertEqual(refused.status_code, 400)
+        with mock.patch.dict(os.environ, {"VIRA_INSTANCE_ID": "branch:test",
+                "VIRA_INSTANCE_URL": "http://localhost:8391"}):
+            branch = client.post("/api/vault/capture", json={
+                "title": "Branch write", "text": "Text", "destination": "family"})
+            self.assertEqual(branch.status_code, 200, branch.text)
 
 
 if __name__ == "__main__":

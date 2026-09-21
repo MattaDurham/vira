@@ -59,7 +59,7 @@ class JsonRpcClient:
                 "-c", "mcp_servers={}",
                 # A placed session runs workspace-write (see
                 # agentbackend.sandbox_for), whose default cuts the network -
-                # and Vira's own HTTP API on :8377 is the session's whole-store
+                # and the owning Vira instance's HTTP API is the session's whole-store
                 # fallback. Loopback reach is part of the contract, not a
                 # sandbox escalation.
                 "-c", "sandbox_workspace_write.network_access=true",

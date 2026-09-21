@@ -130,7 +130,7 @@ class PendingAllTests(unittest.TestCase):
                          ["ok"])
 
     def test_state_is_read_fresh_from_disk(self):
-        # the supervisor's cache does not run on a passive instance, and a
+        # the supervisor's cache can lag between ticks, and a
         # decision list that silently stops updating is the one thing this
         # surface must not do
         reg = make_registry()
@@ -535,15 +535,14 @@ class ResumeTests(unittest.TestCase):
         self.assertIn(gone, str(caught.exception))
         self.assertEqual(self.calls, [])
 
-    def test_passive_instances_refuse_to_resume(self):
-        reg = self._reg(self._row())
+    def test_branch_instances_resume_their_conversations(self):
+        reg = self._reg(self._row(instance_id="branch:test"))
         h = make_detached(reg, self.tmp.name, status="error")
-        with self.launch_patch, self.ledger_patch, \
-             mock.patch.dict(session.os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(ValueError) as caught:
-                reg.say(h.id, "hello?")
-        self.assertIn("passive", str(caught.exception))
-        self.assertEqual(self.calls, [])
+        with self.launch_patch, self.ledger_patch, mock.patch.dict(session.os.environ, {
+                "VIRA_INSTANCE_ID": "branch:test", "VIRA_INSTANCE_URL": "http://localhost:8391"}):
+            result = reg.say(h.id, "hello?")
+        self.assertTrue(result["resumed"])
+        self.assertEqual(self.calls[0]["resume_session"], "sess-abc-123")
 
     def test_resume_session_reaches_the_launch_data(self):
         """The JOIN, not the halves. The branch guard shipped dead for four

@@ -84,7 +84,7 @@ class Base(unittest.TestCase):
             self.addCleanup(patch.stop)
         resumeview._corpus_cache.update({"key": None})
         self.addCleanup(resumeview._corpus_cache.update, {"key": None})
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
         self.role = {"uid": "t-1", "company": "Acme AI",
                      "title": "Staff Engineer",
@@ -300,6 +300,8 @@ class SavingBeside(Base):
             encoding="utf-8")
         return pkg
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_the_marked_copy_lands_in_the_package_folder(self):
         pkg = self._package()
         applicationmap._package_cache.clear() if hasattr(
@@ -316,12 +318,6 @@ class SavingBeside(Base):
         feature is FOR - refusing it for want of a folder is backwards."""
         self.assertIsNone(dc.save_beside_package(self.role, b"x", "a.docx"))
 
-    def test_a_passive_instance_refuses_the_write_by_name(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(os.environ.pop, "VIRA_PASSIVE", None)
-        with self.assertRaises(PermissionError) as e:
-            dc.save_beside_package(self.role, b"x", "a.docx")
-        self.assertIn("test copy", str(e.exception))
 
     def test_a_dropped_name_cannot_address_anything_outside_the_folder(self):
         for hostile in ("../../etc/passwd", "/etc/passwd", "..\\..\\win.ini"):

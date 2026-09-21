@@ -842,7 +842,7 @@ class Runner:
                                      + (out.stderr or "")).strip()
 
     def _serve_instance(self):
-        """Serve the branch as a passive, LOCAL-ONLY test instance and return
+        """Serve the branch as a LOCAL-ONLY branch instance and return
         (url, note). --local is not optional: the snapshot behind a test
         instance is the owner's personal data, and bridging it to the tailnet
         needs his explicit approval per instance (the standing rule in
@@ -955,7 +955,7 @@ class Runner:
             test_url, serve_note = await asyncio.to_thread(self._serve_instance)
         pr_url, pr_note = await asyncio.to_thread(self._ensure_pr)
         if test_url:
-            self.append(f"[vira] test instance: {test_url}  (passive, "
+            self.append(f"[vira] test instance: {test_url}  ("
                         f"local only)\n")
         elif serve_note:
             self.append(f"[vira] test instance could not start: "

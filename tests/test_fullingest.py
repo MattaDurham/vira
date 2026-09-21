@@ -214,11 +214,6 @@ class StageItemTests(Base):
 
 
 class StageSweepTests(Base):
-    def test_passive_refuses(self):
-        self.room([item()])
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(fullingest.StageError):
-                fullingest.stage("demo")
 
     def test_unknown_room_raises(self):
         with self.assertRaises(fullingest.StageError):
@@ -261,10 +256,6 @@ class StageSelectionTests(Base):
                          ["src-a", "src-b"])
         self.assertNotIn("private_owner_note", seen[0])
 
-    def test_passive_refuses_selection(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(fullingest.StageError):
-                fullingest.stage_items([item()], "anthropic-universe", self.vault)
 
 
 class SelectionManifestTests(unittest.TestCase):
@@ -371,11 +362,6 @@ class ReconcileTests(Base):
         self.assertEqual((retire / "the-pointer.md").read_text(encoding="utf-8"),
                          "older")
 
-    def test_passive_refuses(self):
-        self.room([item()])
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(fullingest.StageError):
-                fullingest.reconcile("demo")
 
 
 class StatusTests(Base):
@@ -398,9 +384,6 @@ class StatusTests(Base):
 
 
 class SyncTests(Base):
-    def test_passive_returns_none(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            self.assertIsNone(fullingest.sync("demo"))
 
     def test_runs_stage_then_reconcile_off_thread(self):
         calls = []

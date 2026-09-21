@@ -17,7 +17,6 @@ import fnmatch
 import hashlib
 import json
 import math
-import os
 import re
 import zipfile
 from datetime import datetime
@@ -985,13 +984,6 @@ def build(role):
 #     rewriting the owner's resume.
 
 
-def _refuse_if_passive():
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError(
-            "passive instance: application packages are the owner's real "
-            "files, outside this clone")
-
-
 def _version_names(lane):
     """Every canonical V<N>/ filename this lane reads, in read order."""
     return [name for _root, names in LANE_ARTIFACTS.get(lane, ())
@@ -1081,7 +1073,6 @@ def attach_material(role, lane, filename, text, confirm=False):
     `prompt` means the caller should dispatch a session (the route owns the
     launch, exactly as the Apply route does).
     """
-    _refuse_if_passive()
     name = _safe_drop(lane, filename, text)
     package = find_package(role)
     if package is None:

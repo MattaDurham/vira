@@ -50,7 +50,7 @@ class CorrespondenceTests(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
         os.environ.pop("VIRA_SANDBOX", None)
         self.source = {"id": "mail:<draft@example.invalid>", "channel": "email",
             "account": "owner@example.invalid", "handle": "partner@example.invalid", "person_id": "p1",
@@ -73,6 +73,19 @@ class CorrespondenceTests(unittest.TestCase):
     def route(self, **extra):
         return {"id": "budget", "destination": "home", "folder": "finances",
                 "terms": ["budget"], "purpose": "Household finances", "automatic": True, **extra}
+
+    def test_non_owner_refreshes_inbox_then_manual_tick_can_process(self):
+        ident = self.insert()
+        with mock.patch("server.instance.owns_automation", return_value=False), \
+                mock.patch.object(intake, "catch_up") as catch_up, \
+                mock.patch.object(intake, "_process") as process, \
+                mock.patch.object(intake, "_tasks"):
+            intake.tick(automatic=True)
+            catch_up.assert_called_once()
+            process.assert_not_called()
+            self.assertFalse(intake._state()["automatic_actions_here"])
+            intake.tick()
+            process.assert_called_once_with(ident)
 
     def test_manual_capture_preserves_evidence_in_selected_category_and_deduplicates(self):
         first = intake.capture(self.source["id"], destination="home", folder="finances")
@@ -152,18 +165,6 @@ class CorrespondenceTests(unittest.TestCase):
         self.assertEqual(item["task_status"], "review")
         enqueue.assert_not_called()
 
-    def test_folder_protection_unknown_destination_and_passive_fail_closed(self):
-        for folder in ("../out", "finances/private", "canon", "finances/../../out"):
-            with self.subTest(folder=folder), self.assertRaises(ValueError):
-                intake.capture(self.source["id"], destination="home", folder=folder)
-        with self.assertRaises(ValueError):
-            intake.capture(self.source["id"], destination="missing")
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(ValueError):
-                intake.capture(self.source["id"], destination="home")
-            self.assertFalse(intake.enabled())
-            intake.tick()
-        self.assertEqual(list(self.home.rglob("*.md")), [])
 
     def test_route_readonly_after_classification_does_not_fallback(self):
         ident = self.insert()
@@ -459,7 +460,7 @@ class CorrespondenceTests(unittest.TestCase):
         self.assertEqual(approved.json()["state"], "processed")
         summary = client.get("/api/correspondence").json()
         self.assertNotIn("text", summary["items"][0])
-        self.assertFalse(summary["passive"])
+        self.assertFalse(summary["read_only"])
 
 
 if __name__ == "__main__":

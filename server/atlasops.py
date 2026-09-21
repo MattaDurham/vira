@@ -8,7 +8,7 @@ approve it, and the files move. Three disciplines meet here:
 
 - **chaska never writes the vault** (its own AGENTS.md invariant), so the
   mutation layer lives in VIRA, beside plans.py / vaultpeople / fullingest —
-  the modules that already write vaults, with the same VIRA_PASSIVE guard.
+  the modules that already write vaults with destination validation.
 - **A plan is DETERMINISTIC and the model is nowhere in it.** plan_move()
   reads the vault conventions chaska scans (raw/<sha> pairs, wiki/assets
   anchor pages, loose files), derives every companion note, every shared-
@@ -33,7 +33,6 @@ Store: data/atlas-ops.json (jsonstore discipline), plans pruned at 100.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import threading
@@ -63,10 +62,6 @@ MAX_FILES = 4000
 SAMPLE_LINKS = 20
 
 _apply_lock = threading.Lock()
-
-
-def _passive() -> bool:
-    return bool(os.environ.get("VIRA_PASSIVE"))
 
 
 def _now() -> str:
@@ -369,12 +364,9 @@ def _planned_new_root(new_vault):
 
 
 def apply_plan(pid: str) -> dict:
-    """Execute an approved plan. Refused on passive instances (the moves
-    land in the real vaults). Verifies the disk still matches the plan —
+    """Execute an approved plan. Verifies the disk still matches the plan —
     a drifted file refuses the whole apply rather than moving unlisted
     state."""
-    if _passive():
-        raise PermissionError("passive instance — vault moves run on the live Vira only")
     with _apply_lock:
         plan = get_plan(pid)
         if plan is None:
@@ -463,8 +455,6 @@ def apply_plan(pid: str) -> dict:
 def undo_plan(pid: str) -> dict:
     """Replay an applied plan's receipt backwards. Refuses when the source
     path has been re-occupied since — never overwrites."""
-    if _passive():
-        raise PermissionError("passive instance — vault moves run on the live Vira only")
     with _apply_lock:
         plan = get_plan(pid)
         if plan is None:

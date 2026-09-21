@@ -90,9 +90,7 @@ class ScriptTest(unittest.TestCase):
 
 
 class GateTest(unittest.TestCase):
-    def test_passive_and_sandbox_refuse(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            self.assertFalse(ac.enabled())
+    def test_sandbox_refuse(self):
         with mock.patch.dict(os.environ, {"VIRA_SANDBOX": "1"}):
             self.assertFalse(ac.enabled())
 
@@ -105,7 +103,7 @@ class GateTest(unittest.TestCase):
                                side_effect=lambda k: False):
             with mock.patch.object(ac.settings, "IS_MAC", True):
                 with mock.patch.dict(os.environ, {}, clear=False):
-                    os.environ.pop("VIRA_PASSIVE", None)
+
                     os.environ.pop("VIRA_SANDBOX", None)
                     self.assertFalse(ac.enabled())
 

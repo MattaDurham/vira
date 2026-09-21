@@ -61,7 +61,7 @@ class ExecutiveTests(unittest.TestCase):
             self.addCleanup(p.stop)
             if getattr(p, "attribute", None) == "assistant_send":
                 self.send = value
-        for key in ("VIRA_PASSIVE", "VIRA_SANDBOX"):
+        for key in ("VIRA_SANDBOX",):
             os.environ.pop(key, None)
 
     def test_date_only_due_ends_in_owner_timezone(self):
@@ -183,9 +183,7 @@ class ExecutiveTests(unittest.TestCase):
         executive._notify(NOW)
         self.assertEqual(self.send.call_count, 1)
 
-    def test_passive_fixture_disabled_and_quiet_prevent_send(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            executive._notify(NOW)
+    def test_fixture_disabled_and_quiet_prevent_send(self):
         with mock.patch.object(executive.settings, "fixture_mode", return_value=True):
             executive._notify(NOW)
         self.cfg["assistant_enabled"] = False
@@ -287,6 +285,28 @@ class ExecutiveTests(unittest.TestCase):
         self.assertEqual((row["stage"], row["priority"]), ("review", "high"))
         executive._notify(NOW)
         self.send.assert_not_called()
+
+    def test_automatic_non_owner_keeps_local_planning_without_duplicate_actions(self):
+        from server import calendarplan, contactintel
+        self.cfg["assistant_calendar_auto_create"] = True
+        with mock.patch("server.instance.owns_automation", return_value=False), \
+                mock.patch.object(contactintel, "catch_up") as catch_up, \
+                mock.patch.object(contactintel, "tick") as learn, \
+                mock.patch.object(calendarplan, "destinations", return_value={"selected": {"id": "local"}}), \
+                mock.patch.object(calendarplan, "list_drafts", return_value=[]), \
+                mock.patch.object(executive, "_calendar_plan_queue", return_value=[("local", {
+                    "loop": {}, "subject_key": "contact", "person_name": "Example"})]), \
+                mock.patch.object(calendarplan, "plan_commitment") as plan, \
+                mock.patch.object(calendarplan, "create_owner_event") as create, \
+                mock.patch.object(executive, "_notify") as notify:
+            executive.tick(automatic=True)
+        catch_up.assert_called_once()
+        plan.assert_called_once()
+        learn.assert_not_called()
+        create.assert_not_called()
+        notify.assert_not_called()
+        self.assertIsNotNone(executive._state()["last_success"])
+        self.assertFalse(executive._state()["automatic_actions_here"])
 
     def test_calendar_filters_eligible_drafts_before_the_batch_limit(self):
         from server import calendarplan, contactintel

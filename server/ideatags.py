@@ -1031,8 +1031,7 @@ class Indexer(threading.Thread):
     """Keeps the derived layer close behind the store. Vectors every tick
     (local, seconds); tagging one batch per tick, because it is a model
     call and a backlog that tags itself over an hour is fine — nothing
-    waits on it. Started outside VIRA_PASSIVE only, like every other
-    worker; a test clone tags on demand through the route instead.
+    waits on it. Explicit refreshes can also tag on demand through the route.
 
     This thread now only SUPERVISES: the pass itself runs out-of-process
     (see run_pass), so the thread spends its life in subprocess.run and

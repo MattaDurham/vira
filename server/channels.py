@@ -51,8 +51,9 @@ def push_feed_item(shared, item):
     # Local assistance is queued after the feed lock; no model or CRM write
     # runs in the connector. Its durable index scan also repairs missed ticks.
     try:
-        from . import contactintel
-        contactintel.enqueue([dict(item, is_preview=True)])
+        from . import contactintel, instance
+        if instance.owns_automation():
+            contactintel.enqueue([dict(item, is_preview=True)])
     except Exception:  # noqa: BLE001 — a queue failure must not stop mail
         pass
     return True

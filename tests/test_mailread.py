@@ -141,7 +141,7 @@ class SmtpReplyTests(unittest.TestCase):
         ]
         for p in self._patches:
             p.start()
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def tearDown(self):
         for p in self._patches:
@@ -165,12 +165,6 @@ class SmtpReplyTests(unittest.TestCase):
                          ("smtp.example.com", 465, mailread.SMTP_TIMEOUT))
         self.assertEqual(self.login_args, ("owner@example.com", "app-pw"))
 
-    def test_passive_blocks_the_send(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(RuntimeError):
-                mailread.send_reply("owner@example.com", "hi",
-                                    to="pat@example.com")
-        self.assertEqual(self.sent, [])
 
     def test_empty_reply_refused(self):
         with self.assertRaises(RuntimeError):
@@ -187,7 +181,7 @@ class GraphReplyTests(unittest.TestCase):
         p = _accounts_patch()
         p.start()
         self.addCleanup(p.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def test_sent_when_scope_consented(self):
         calls = []
@@ -298,15 +292,10 @@ class RouteTests(unittest.TestCase):
                                         "mid": "<a@b>"})
         self.assertEqual(r.json()["subject"], "ok")
 
-    def test_reply_route_passive_403(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            r = self.client.post("/api/mail/reply", json={
-                "account": "x@example.com", "text": "hi"})
-        self.assertEqual(r.status_code, 403)
 
     def test_reply_route_passes_through(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VIRA_PASSIVE", None)
+
             with mock.patch.object(self.main.mailread, "send_reply",
                                    return_value={"sent": True}) as sr:
                 r = self.client.post("/api/mail/reply", json={

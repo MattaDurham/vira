@@ -44,7 +44,9 @@ class SrcRoot(unittest.TestCase):
         self.p.start()
         self.env = mock.patch.dict(os.environ, {}, clear=False)
         self.env.start()
-        os.environ.pop("VIRA_PASSIVE", None)
+        supervisor = mock.patch("server.update.supervisor", return_value=("launchd", "test.service"))
+        supervisor.start()
+        self.addCleanup(supervisor.stop)
         os.environ.pop("VIRA_SANDBOX", None)
 
     def tearDown(self):
@@ -153,19 +155,15 @@ class Write(SrcRoot):
         with self.assertRaises(routinesrc.EditError):
             routinesrc.write_symbol("sample", "alpha", "x" * (400 * 1024 + 1))
 
-    def test_a_passive_instance_edits_its_own_checkout_but_never_restarts(self):
-        # the outbound guards refuse because a clone must not act on the
-        # WORLD; its own source is not the world, and branch.sh merge
-        # preflights a clean tree so a stray edit blocks its own merge
-        os.environ["VIRA_PASSIVE"] = "1"
-        w = routinesrc.writable()
-        self.assertTrue(w["ok"])
-        self.assertFalse(w["restart"])
-        self.assertIn(str(self.tmp), w["reason"])
-        res = routinesrc.write_symbol(
-            "sample", "alpha", "def alpha(x):\n    return 1\n")
+    def test_branch_edits_its_checkout_and_uses_its_supervisor(self):
+        with mock.patch("server.update.supervisor", return_value=("launchd", "vira.branch.test")):
+            w = routinesrc.writable()
+            self.assertTrue(w["ok"])
+            self.assertTrue(w["restart"])
+            self.assertIn(str(self.tmp), w["reason"])
+            res = routinesrc.write_symbol("sample", "alpha", "def alpha(x):\n    return 1\n")
         self.assertTrue(res["changed"])
-        self.assertFalse(res["restart"])
+        self.assertTrue(res["restart"])
 
 
 class Revert(SrcRoot):

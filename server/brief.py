@@ -15,7 +15,6 @@ Calendar.app and they appear here automatically. Calendars named in the
 from . import modulemodels
 import datetime as dt
 import json
-import os
 import sqlite3
 import time
 from pathlib import Path
@@ -666,9 +665,6 @@ def generate_narrative(feed_items=None, force=False):
     if settings.fixture_mode():
         return {"text": "This is a fixture preview. Connect your sources to build a personal daily brief.",
                 "generated_at": dt.datetime.now().isoformat(), "status": "fixture"}
-    if os.environ.get("VIRA_PASSIVE"):
-        return cached_narrative() or {"text": "Narration is paused in this preview.",
-                                       "generated_at": None, "status": "passive"}
     if not force:
         hit = cached_narrative()
         if hit and hit.get("text"):

@@ -314,7 +314,7 @@ DEFAULT_MODULES = [
              "and what state it is in (a Vira-written blurb over the "
              "sweeper's evidence and the pull request), banded as a live "
              "session, unlanded work, or landed-and-never-cleaned-up. Each "
-             "card launches its own passive test instance in a fresh tab, "
+             "card launches its own branch instance in a fresh tab, "
              "expands to the full read, and carries the verdict buttons - "
              "Land / Resume / Discard through the orphan-work sweeper, "
              "Clean up for a landed worktree. It builds nothing.",

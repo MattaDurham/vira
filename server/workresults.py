@@ -9,10 +9,11 @@ provider seam without becoming another queue or a copy of the canonical vault.
 """
 from __future__ import annotations
 
+from . import instance
+
 import hashlib
 import logging
 import math
-import os
 from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import quote
@@ -258,7 +259,7 @@ def _fixture():
         item["fixture"] = True
         item["sources"] = ["example"]
     return {"items": items, "counts": {"job": 2, "receipt": 1}, "total": len(items),
-            "errors": {}, "fixture": True, "passive": bool(os.environ.get("VIRA_PASSIVE")),
+            "errors": {}, "fixture": True, "instance": instance.metadata(),
             "last_sweep": None, "flow_limit": None}
 
 
@@ -288,7 +289,7 @@ def compose():
     for item in items:
         counts[item["kind"]] = counts.get(item["kind"], 0) + 1
     return {"items": items, "counts": counts, "total": len(items), "errors": errors,
-            "passive": bool(os.environ.get("VIRA_PASSIVE")),
+            "instance": instance.metadata(),
             "last_sweep": gallery.get("last_sweep"),
             "flow_limit": 200 if len(flows) == 200 else None}
 

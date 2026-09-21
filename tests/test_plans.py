@@ -196,22 +196,6 @@ class FinalizeTests(_VaultCase):
         self.assertIsNone(res["plan_id"])
 
 
-class PassiveGuardTests(_VaultCase):
-    def setUp(self):
-        super().setUp()
-        # even with the hook "present", passive must publish/save nothing
-        p = mock.patch.object(session, "_publish_plan",
-                              return_value="https://x/plans/y.html")
-        p.start()
-        self.addCleanup(p.stop)
-
-    def test_finalize_is_noop_on_a_passive_instance(self):
-        with mock.patch.dict("os.environ", {"VIRA_PASSIVE": "1"}):
-            res = session._finalize_plan("# P\n\nbody",
-                                         idea_id="i", job_id="j")
-        self.assertIsNone(res["plan_id"])
-        self.assertIsNone(res["url"])
-        self.assertEqual(plans.list_plans(), [])     # real vault untouched
 
 
 class PlanRefTests(unittest.TestCase):

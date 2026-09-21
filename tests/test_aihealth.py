@@ -207,6 +207,9 @@ class ProbeTests(Base):
 class AlertTests(Base):
     def setUp(self):
         super().setUp()
+        patcher = mock.patch("server.instance.owns_automation", return_value=True)
+        self.owner = patcher.start()
+        self.addCleanup(patcher.stop)
         import server.notify as notify
         self._notify = notify
         self._pings = []
@@ -216,6 +219,13 @@ class AlertTests(Base):
     def tearDown(self):
         self._notify.agent_ping = self._real
         super().tearDown()
+
+    def test_non_owner_records_failure_without_duplicate_notification(self):
+        self.owner.return_value = False
+        with mock.patch.object(aihealth, "_api_key", return_value=None):
+            aihealth.note_failure("Invalid API key", source="branch-model-call")
+        self.assertEqual(aihealth.last_state()["state"], "red")
+        self.assertEqual(self._pings, [])
 
     def test_alert_only_on_green_to_red_edge(self):
         aihealth.maybe_alert({"state": "red", "prev_state": "green",

@@ -14,11 +14,8 @@ against the vault, because nothing here persists.
 
 The one write — `create_stub` — mints a minimal person page for a name
 the index cannot resolve, so curating a room grows the people graph as a
-side effect. Passive instances refuse it outright: vault_root lives
-outside a test clone's data/, so the write would land in the live
-Obsidian vault (the plans.py / roomvault precedent).
+side effect. Writes use the connected vault and preserve existing pages.
 """
-import os
 import re
 from datetime import date
 from pathlib import Path
@@ -142,12 +139,8 @@ def search(q, limit=8, root=None):
 def create_stub(name, qualifier="", root=None, destination=None):
     """Mint a minimal person page for a name the index cannot resolve.
 
-    Refuses an existing page rather than touching it — an existing page is
-    the owner's — and refuses under VIRA_PASSIVE (the write lands in the
-    real vault). Returns the new entry, index-shaped."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError(
-            "passive instance: person pages write the live vault")
+    Refuses an existing page rather than touching it. Returns the new
+    entry, index-shaped."""
     name = " ".join((name or "").split())
     if not name:
         raise ValueError("name required")

@@ -7,6 +7,7 @@ dropped --local silently and bridged a personal-data snapshot to the tailnet
 and assert the EFFECT — whether the bridge was opened, which snapshot ran —
 rather than grepping the source for a spelling.
 """
+import json
 import os
 import subprocess
 import tempfile
@@ -34,7 +35,7 @@ class ServeFlagParsing(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def serve(self, *args):
+    def serve(self, *args, running=False, stop_fails=False):
         """Run cmd_serve with everything that touches the machine stubbed.
 
         The stubs are defined AFTER sourcing, so they replace branch.sh's own
@@ -45,11 +46,12 @@ class ServeFlagParsing(unittest.TestCase):
 source "{BRANCH_SH}"
 wt_dir() {{ echo "{self.wt}"; }}
 provision() {{ :; }}
-instance_pid() {{ echo ""; }}
+instance_pid() {{ echo "{4242 if running else ""}"; }}
+instance_port() {{ echo 8381; }}
 clone_data() {{ echo "STUB clone_data"; }}
 fixture_data() {{ echo "STUB fixture_data"; }}
 start_test_process() {{ echo 99999; }}
-stop_test_process() {{ :; }}
+stop_test_process() {{ echo "STUB stop_test_process"; return {1 if stop_fails else 0}; }}
 tailnet_serve() {{ echo "STUB tailnet_serve $1"; }}
 print_instance_urls() {{ echo "STUB print_instance_urls"; }}
 curl() {{ return 0; }}
@@ -92,6 +94,49 @@ cmd_serve {" ".join(args)}
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertNotIn("tailnet_serve", out.stdout)
         self.assertIn("STUB fixture_data", out.stdout)
+
+    def test_explicit_refresh_replaces_running_branch_snapshot(self):
+        out = self.serve("demo", "--fresh", "--local", running=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("STUB stop_test_process", out.stdout)
+        self.assertIn("STUB clone_data", out.stdout)
+        self.assertLess(out.stdout.index("STUB stop_test_process"),
+                        out.stdout.index("STUB clone_data"))
+
+    def test_refresh_refuses_own_live_runner_before_stopping_server(self):
+        job = self.wt / "data" / "jobs" / "owned-run"
+        job.mkdir(parents=True)
+        (job / "job.json").write_text(json.dumps({
+            "instance_id": "branch:demo", "subject": "Active branch task"}), encoding="utf-8")
+        (job / "state.json").write_text(json.dumps({
+            "status": "running", "pid": os.getpid()}), encoding="utf-8")
+        out = self.serve("demo", "--fresh", "--local", running=True)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("Active branch task", out.stderr)
+        self.assertNotIn("STUB stop_test_process", out.stdout)
+        self.assertNotIn("STUB clone_data", out.stdout)
+
+    def test_imported_running_job_does_not_block_branch_refresh(self):
+        job = self.wt / "data" / "jobs" / "copied-run"
+        job.mkdir(parents=True)
+        (job / "job.json").write_text('{"subject": "Primary task"}', encoding="utf-8")
+        (job / "state.json").write_text(json.dumps({
+            "status": "running", "pid": os.getpid()}), encoding="utf-8")
+        out = self.serve("demo", "--fresh", "--local", running=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("STUB clone_data", out.stdout)
+
+    def test_refresh_does_not_replace_state_before_branch_stops(self):
+        out = self.serve("demo", "--fresh", "--local", running=True, stop_fails=True)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertNotIn("STUB clone_data", out.stdout)
+
+    def test_plain_serve_keeps_running_branch(self):
+        out = self.serve("demo", "--local", running=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("already running", out.stdout)
+        self.assertNotIn("STUB stop_test_process", out.stdout)
+        self.assertNotIn("STUB clone_data", out.stdout)
 
     def test_an_unknown_flag_is_refused_rather_than_ignored(self):
         """A misspelled --local must never read as 'bridge it'."""

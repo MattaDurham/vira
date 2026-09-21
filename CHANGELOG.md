@@ -4,6 +4,14 @@ All notable changes to Vira. The format follows [Keep a Changelog](https://keepa
 
 Since 2026-08-27 every branch lands through a [pull request](https://github.com/MattaDurham/vira/pulls?q=is%3Apr), which carries its write-up. Entries before that link their `--no-ff` merge commit, each of which carries a backfilled PR-style write-up as a commit comment.
 
+## Unreleased
+
+### Changed
+
+- Branch instances run the full Vira application, including models, sessions,
+  vault operations, and background workers. Explicit instance metadata keeps
+  the UI, agent prompts, and lifecycle controls attached to the right server.
+
 ## 2026-08-27
 
 ### Added
@@ -195,7 +203,7 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Changed
 
-- `test-tailnet-access` - Expose passive test instances over tailnet ([`027a722df`](https://github.com/MattaDurham/vira/commit/027a722df8341b36efd871c9912166973a71d700))
+- `test-tailnet-access` - Expose branch instances over tailnet ([`027a722df`](https://github.com/MattaDurham/vira/commit/027a722df8341b36efd871c9912166973a71d700))
 
 ### Fixed
 
@@ -275,7 +283,7 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 ### Fixed
 
 - `parked-complete` - A parked session reads as complete; fix three lines that lied about state ([`d93793fd0`](https://github.com/MattaDurham/vira/commit/d93793fd04b98fcd8c15c2afeb127b9bd6eca25a))
-- `apps-availability` - Pin the open-the-module sweep: stale-only, and honest on a passive instance ([`3fdaae54d`](https://github.com/MattaDurham/vira/commit/3fdaae54d9020f68e226960760ac3511e62d7df4))
+- `apps-availability` - Pin the open-the-module sweep: stale-only, and honest on a branch instance ([`3fdaae54d`](https://github.com/MattaDurham/vira/commit/3fdaae54d9020f68e226960760ac3511e62d7df4))
 
 ## 2026-07-28
 

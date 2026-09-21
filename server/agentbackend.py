@@ -467,7 +467,7 @@ async def run_cliexec(runner):
                   f"--sandbox {sandbox}\n")
 
     # The deep Vira connection, HTTP flavor: no in-process MCP tools here,
-    # so the preamble names the API on :8377 instead. Held separately
+    # so the preamble names the owning instance API instead. Held separately
     # because continuity on this path is `exec resume <thread_id>` — when
     # the thread is lost, a steering/reply turn starts a FRESH conversation
     # and must re-carry the preamble or that turn runs with no Vira context

@@ -73,6 +73,13 @@ class TheStore(ChatBase):
 
 
 class SendingATurn(ChatBase):
+    def test_http_context_stays_on_the_owning_instance(self):
+        with mock.patch("server.instance.api_url", return_value="http://localhost:8392"):
+            for native in (True, False):
+                prompt = virachat._launch_prompt("hello", native=native)
+                self.assertIn("http://localhost:8392", prompt)
+                self.assertNotIn("localhost:8377", prompt)
+
     def test_the_first_turn_launches_a_session_on_the_tools_at_the_default_rung(self):
         s = virachat.send("What is on my calendar tomorrow?")
         self.assertEqual(len(self.launched), 1)

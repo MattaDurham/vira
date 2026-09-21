@@ -315,12 +315,6 @@ def rescore(uid, mode="current"):
         raise RescoreError(f"mode must be one of: {', '.join(MODES)}")
     if settings.fixture_mode():
         return {"status": "empty", "note": "fixture mode"}
-    # Refused BEFORE the model call, not after: scores live in the owner's
-    # real self-record, outside the cloned data/ a branch instance gets, so
-    # a passive rescore could never land — and spending the call to find
-    # that out would be a refusal the owner paid for.
-    jobscores._refuse_if_passive()
-
     from . import applications, jobdesc
     role = applications.find_role(uid)
     if role is None:
@@ -408,8 +402,6 @@ def bulk_start(uids, mode="current"):
         raise RescoreError(f"mode must be one of: {', '.join(MODES)}")
     if settings.fixture_mode():
         raise RescoreError("fixture mode: there is nothing real to rescore")
-    # Refused before the first model call, for the reason `rescore` states.
-    jobscores._refuse_if_passive()
 
     ordered, seen = [], set()
     for u in uids or []:

@@ -35,14 +35,12 @@ attachment — so both rungs have a real foundation here.
 
 RSVPing is an OUTWARD action: it tells another person you are coming. It is
 therefore never taken on a bare texted instruction; server/inbound.py holds
-it and confirms first. VIRA_PASSIVE refuses outright — a branch instance
-must never answer the owner's real invitations (the send.py precedent).
+it and confirms first.
 """
 import email
 import email.utils
 import html
 import imaplib
-import os
 import re
 import smtplib
 import urllib.error
@@ -277,9 +275,6 @@ def rsvp(account, rowid, answer, *, dry_run=False):
     """
     if answer not in ANSWERS:
         raise RsvpError(f"answer must be one of {', '.join(ANSWERS)}")
-    if os.environ.get("VIRA_PASSIVE") and not dry_run:
-        raise RsvpError("passive test instance — RSVP is blocked here so a "
-                        "branch copy can never answer a real invitation")
     acct = mailread._account(account)
     if not acct:
         raise RsvpError(f"no mail account configured for {account}")

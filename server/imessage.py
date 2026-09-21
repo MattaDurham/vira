@@ -5,7 +5,6 @@ The typedstream decoder is the proven one from
 ~/workspace/crm/scripts/export_imessage_content.py.
 """
 import json
-import os
 import re
 import sqlite3
 import threading
@@ -246,12 +245,8 @@ class Watcher:
             self.watermark = None
 
     def _save_state(self):
-        if os.environ.get("VIRA_PASSIVE"):
-            # Passive instance shares data/ with the primary — never advance
-            # the primary's watermark from here.
-            return
         STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps({"watermark": self.watermark}))
+        STATE.write_text(json.dumps({"watermark": self.watermark}), encoding="utf-8")
 
     def _fetch_since(self, rowid, limit=500):
         con = _connect()
@@ -362,13 +357,15 @@ class Watcher:
                     # Outside the lock, and it never raises: a reply that
                     # cannot be routed must not stop the feed.
                     try:
-                        from . import contactintel
-                        contactintel.enqueue([dict(item, is_preview=True) for item in new])
+                        from . import contactintel, instance
+                        if instance.owns_automation():
+                            contactintel.enqueue([dict(item, is_preview=True) for item in new])
                     except Exception:  # noqa: BLE001 — index scan repairs it
                         pass
                     try:
-                        from . import inbound
-                        inbound.consume(new)
+                        from . import inbound, instance
+                        if instance.owns_automation():
+                            inbound.consume(new)
                     except Exception:  # noqa: BLE001
                         pass
             except sqlite3.OperationalError:

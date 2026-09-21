@@ -43,7 +43,7 @@ class Destinations(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
         fullingest._summaries_cache.clear()
         roomvault._notes_cache.clear()
 
@@ -227,10 +227,7 @@ class Destinations(unittest.TestCase):
             fullingest.stage_items([item()], "garden", root=self.primary)
         self.assertEqual(list(self.primary.rglob("*.md")), [])
 
-    def test_passive_and_symlink_gates_apply_to_direct_ingest(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(fullingest.StageError):
-                fullingest.stage_item(item(), "garden", self.extra)
+    def test_symlink_gates_apply_to_direct_ingest(self):
         (self.extra / "notes").mkdir()
         try:
             (self.extra / "notes/inbox").symlink_to(self.primary, target_is_directory=True)
@@ -285,7 +282,7 @@ class Destinations(unittest.TestCase):
         self.assertEqual(launch.call_args.kwargs["vault_context"], "family")
         self.assertIn("@household/notes/inbox/definitions/", launch.call_args.args[0])
 
-    def test_room_api_persists_destination_and_passive_refuses_ingest(self):
+    def test_room_api_persists_destination_and_ingests(self):
         from fastapi.testclient import TestClient
         from server import main
         self.room()
@@ -293,10 +290,9 @@ class Destinations(unittest.TestCase):
         response = client.post("/api/reading/rooms/garden/destination", json={"destination": "household"})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["source_id"], "household")
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            denied = client.post("/api/reading/rooms/garden/ingest", json={"destination": "household"})
-        self.assertEqual(denied.status_code, 400)
-        self.assertEqual(list(self.extra.rglob("*.md")), [])
+        ingested = client.post("/api/reading/rooms/garden/ingest", json={"destination": "household"})
+        self.assertEqual(ingested.status_code, 200, ingested.text)
+        self.assertTrue(list(self.extra.rglob("*.md")))
 
 
 if __name__ == "__main__":

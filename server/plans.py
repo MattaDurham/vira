@@ -148,7 +148,6 @@ def destination_spec(destination=None, context=None):
             and not settings.get("vault_root")
             and not settings.get("vault_sources")
             and not settings.get("vault_dirs")):
-        vaultwrite.assert_mutation_allowed()
         ensure_vault()
     return vaultwrite.resolve_destination(destination, context, operation="plan")
 
@@ -288,7 +287,6 @@ def get_plan(pid):
 
 def delete_plan(pid):
     """Remove a plan only while its connected source still permits that write."""
-    vaultwrite.assert_mutation_allowed()
     with _lock, locked(REG_PATH):
         s = _load()
         gone = next((p for p in s["plans"] if p["id"] == pid), None)

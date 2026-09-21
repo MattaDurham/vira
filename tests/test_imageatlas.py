@@ -2,7 +2,7 @@
 
 The engine itself is chaska's to test; these cover the ADAPTER contract:
 dormancy honesty, the settings re-key, path containment on every serving
-route, the passive refusals, and the viewer-facing API mirror. A tiny real
+route, the viewer-facing API mirror. A tiny real
 atlas is built in a tmp vault with a fake embedder — the real code path,
 no torch.
 """
@@ -146,17 +146,9 @@ class ConfigTest(Base):
         self.assertEqual(imageatlas.viewer_config_get("atlas-3d"),
                          {"cluster_labels": {"A": "B"}})
 
-    def test_put_refused_on_passive(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                imageatlas.viewer_config_put("atlas-3d", {})
 
 
 class BuildTest(Base):
-    def test_build_refused_on_passive(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                imageatlas.start_build()
 
     def test_build_refused_when_dormant(self):
         with mock.patch.object(imageatlas, "atlas_for", return_value=None):
@@ -290,20 +282,7 @@ class RouteTest(Base):
                              json={"src": "primary", "paths": [], "dest": "x"})
         self.assertEqual(r.status_code, 400)
 
-    def test_ops_apply_passive_403(self):
-        from server import atlasops
-        with tempfile.TemporaryDirectory() as td:
-            with mock.patch.object(atlasops, "STORE", Path(td) / "ops.json"):
-                with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-                    r = self.client.post("/imageatlas/api/ops/apply",
-                                         json={"plan_id": "ap_x"})
-        self.assertEqual(r.status_code, 403)
 
-    def test_vault_create_passive_403(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            r = self.client.post("/imageatlas/api/vaults/create",
-                                 json={"name": "Personal"})
-        self.assertEqual(r.status_code, 403)
 
     def test_traversal_refused(self):
         r = self.client.get("/imageatlas/data/%2e%2e/atlas.sqlite")
@@ -335,10 +314,6 @@ class RouteTest(Base):
     def test_me_is_admin(self):
         self.assertTrue(self.client.get("/imageatlas/api/me").json()["admin"])
 
-    def test_build_route_passive_403(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            r = self.client.post("/api/imageatlas/build", json={})
-        self.assertEqual(r.status_code, 403)
 
 
 class RegistryTest(unittest.TestCase):
@@ -379,9 +354,6 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual([v["id"] for v in imageatlas.vaults()], ["primary"])
 
     def test_register_refusals(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                imageatlas.register_vault("X", "")
         with self.assertRaises(ValueError):        # duplicate id
             imageatlas.register_vault("Personal", str(self.extra))
         with self.assertRaises(ValueError):        # inside the primary vault

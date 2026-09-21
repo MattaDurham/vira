@@ -135,9 +135,9 @@ class ReadSurface(unittest.TestCase):
         self.assertEqual(result["item"]["id"], "branch:codex/a")
         self.assertEqual(result["jobs"][0]["transcript"], "/synthetic/session.jsonl")
 
-    def test_passive_inventory_is_readable(self):
-        with mock.patch.dict("os.environ", {"VIRA_PASSIVE": "1"}):
-            self.assertTrue(self.client.get("/api/work/results").json()["passive"])
+    def test_inventory_is_readable(self):
+        with mock.patch("server.instance.metadata", return_value={"kind": "branch", "id": "sample"}):
+            self.assertEqual(self.client.get("/api/work/results").json()["instance"]["kind"], "branch")
 
     def test_fixture_never_reads_machine_work_or_external_provider(self):
         with mock.patch.object(workresults.settings, "fixture_mode", return_value=True):

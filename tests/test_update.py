@@ -8,6 +8,7 @@ install blocks the restart instead of booting onto broken deps.
 
 Run: .venv/bin/python -m unittest discover tests
 """
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -292,6 +293,68 @@ class PullApplySplitTests(NoSandboxLoop):
             with self.assertRaises(ValueError) as ctx:
                 update.pull()
         self.assertNotIsInstance(ctx.exception, update.DepsError)
+
+
+class BranchSupervisorTests(NoSandboxLoop):
+    def test_runtime_label_overrides_cloned_live_label(self):
+        with mock.patch.object(update.instance, "service_label", return_value="com.vira.branch.demo"), \
+             mock.patch.object(update.instance, "is_branch", return_value=True), \
+             mock.patch.object(update.settings, "IS_WIN", False), \
+             mock.patch.object(update.settings, "raw", return_value={"launchd_label": "com.vira.live"}), \
+             mock.patch.object(update.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            update._restart()
+        self.assertEqual(run.call_args.args[0][-1],
+                         f"gui/{update.os.getuid()}/com.vira.branch.demo")
+
+    def test_unsupervised_branch_never_uses_copied_primary_label(self):
+        with mock.patch.object(update.instance, "service_label", return_value=""), \
+             mock.patch.object(update.instance, "is_branch", return_value=True), \
+             mock.patch.object(update.settings, "IS_WIN", False), \
+             mock.patch.object(update.settings, "raw", return_value={"launchd_label": "com.vira.live"}):
+            self.assertEqual(update.supervisor(), ("launchd", ""))
+            with self.assertRaisesRegex(ValueError, "no supervisor configured"):
+                update.apply()
+
+
+class BranchDependenciesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.req = self.root / "requirements.txt"
+        self.req.write_text("example-library==1.0\n", encoding="utf-8")
+        self.target = self.root / ".test-instance.packages"
+        self.target.mkdir()
+        (self.target / "prior.py").write_text("prior = True\n", encoding="utf-8")
+        patch = mock.patch.object(update, "ROOT", self.root)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_branch_pip_installs_in_overlay_preserving_prior_version(self):
+        def install(cmd, **kwargs):
+            self.assertEqual(cmd[:4], [update.sys.executable, "-m", "pip", "install"])
+            stage = Path(cmd[cmd.index("--target") + 1])
+            self.assertTrue(stage.is_relative_to(self.root))
+            self.assertNotEqual(stage, self.target)
+            stage.mkdir()
+            (stage / "updated.py").write_text("updated = True\n", encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(update.instance, "is_branch", return_value=True), \
+             mock.patch.object(update, "_editable", return_value=False), \
+             mock.patch.object(update.subprocess, "run", side_effect=install):
+            update._install_deps()
+        self.assertTrue((self.target / "updated.py").is_file())
+        saved = list(self.root.glob(".test-instance.packages.previous.*/prior.py"))
+        self.assertEqual(len(saved), 1)
+
+    def test_failed_install_retains_current_overlay(self):
+        with mock.patch.object(update.subprocess, "run",
+                               return_value=mock.Mock(returncode=1, stdout="", stderr="offline")):
+            with self.assertRaisesRegex(RuntimeError, "offline"):
+                update._install_branch_deps(str(self.req))
+        self.assertTrue((self.target / "prior.py").is_file())
+        self.assertFalse(list(self.root.glob(".test-instance.packages.previous.*")))
 
 
 if __name__ == "__main__":

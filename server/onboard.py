@@ -25,7 +25,6 @@ from . import modulemodels
 import csv
 import io
 import json
-import os
 import re
 import sqlite3
 import subprocess
@@ -388,11 +387,7 @@ def _mark_active(pids_counts):
 
 def start_dossiers(limit=25):
     """Kick the builder thread. Refused in fixture mode (nothing real to
-    build from), under VIRA_PASSIVE (a test copy must not spend the model),
-    and while a build is already running."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError("passive test instance — dossier builds run on "
-                           "the live Vira only")
+    build from) and while a build is already running."""
     if settings.fixture_mode():
         raise RuntimeError("connect your contacts first — dossiers are "
                            "built from your real data")
@@ -816,9 +811,6 @@ def fda_assist():
     copy carries the rest."""
     if not settings.IS_MAC:
         raise ValueError("Full Disk Access is a macOS grant")
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError("passive test instance — not opening windows "
-                           "on the owner's desktop")
     py = sys.executable
     if settings.demo():
         # `open` does not follow $HOME — this would put System Settings and a

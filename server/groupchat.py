@@ -590,8 +590,7 @@ def brief(chat_ids, force=False):
 
 def send(chat_ids, text):
     """Send to the merged group's active leg. Resolution is server-side so
-    the client only ever names the group; the passive guard lives in
-    send.send_to_group with the rest of the outbound discipline."""
+    the client only ever names the group. send.send_to_group validates delivery."""
     group = resolve_by_ids(chat_ids)
     if not group:
         raise ValueError("not a known group chat")

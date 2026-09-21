@@ -31,6 +31,19 @@ def _item(rowid, when):
 
 
 class PushFeedItemTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch("server.instance.owns_automation", return_value=False)
+        self.owner = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_every_instance_gets_feed_but_only_owner_queues_automatic_work(self):
+        with mock.patch("server.contactintel.enqueue") as enqueue:
+            channels.push_feed_item(FakeShared(), _item("a", "2026-01-01"))
+            enqueue.assert_not_called()
+            self.owner.return_value = True
+            channels.push_feed_item(FakeShared(), _item("a", "2026-01-01"))
+            enqueue.assert_called_once()
+
     def test_append_and_return_value(self):
         s = FakeShared()
         self.assertTrue(channels.push_feed_item(s, _item("a", "2026-01-01")))

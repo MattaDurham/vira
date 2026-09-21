@@ -15,7 +15,7 @@ class Folders(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.vault = self.root / "Vault"
         self.vault.mkdir()
-        self.environ = patch.dict(os.environ, {"VIRA_PASSIVE": "", "VIRA_SANDBOX": ""})
+        self.environ = patch.dict(os.environ, {"VIRA_SANDBOX": ""})
         self.environ.start()
         self.addCleanup(self.environ.stop)
 
@@ -169,8 +169,8 @@ class Folders(unittest.TestCase):
             folders.create(str(unsupported), "Ordinary name", str(self.vault))
         self.assertFalse((unsupported / "Ordinary name").exists())
 
-    def test_passive_and_sandbox_browse_but_do_not_create(self):
-        for flag in ["VIRA_PASSIVE", "VIRA_SANDBOX"]:
+    def test_sandbox_browse_but_do_not_create(self):
+        for flag in ["VIRA_SANDBOX"]:
             with self.subTest(flag=flag), patch.dict(os.environ, {flag: "1"}):
                 result = self.browse()
                 self.assertFalse(result["can_create"])
@@ -195,7 +195,7 @@ class FolderRoutes(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.vault = self.root / "Vault"
         self.vault.mkdir()
-        env = patch.dict(os.environ, {"VIRA_PASSIVE": "", "VIRA_SANDBOX": ""})
+        env = patch.dict(os.environ, {"VIRA_SANDBOX": ""})
         env.start()
         self.addCleanup(env.stop)
 
@@ -250,17 +250,6 @@ class FolderRoutes(unittest.TestCase):
         response = self.client.post("/api/folders", json={"parent": str(self.vault)})
         self.assertEqual(response.status_code, 422)
 
-    def test_passive_http_listing_remains_usable_and_creation_is_forbidden(self):
-        with patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            response = self.client.get("/api/folders", params={"root": str(self.vault)})
-            self.assertEqual(response.status_code, 200)
-            self.assertFalse(response.json()["can_create"])
-            reason = response.json()["create_disabled_reason"]
-            response = self.client.post("/api/folders", json={
-                "parent": str(self.vault), "name": "Blocked", "root": str(self.vault)})
-            self.assertEqual(response.status_code, 403)
-            self.assertEqual(response.json()["detail"], reason)
-        self.assertFalse((self.vault / "Blocked").exists())
 
     def test_scoped_create_http_rejects_nonportable_names_without_writing(self):
         response = self.client.post("/api/folders", json={

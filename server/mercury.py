@@ -177,8 +177,9 @@ class Poller(threading.Thread):
                     self.status = (f"ok — {n} charges ingested at "
                                    f"{datetime.now().strftime('%H:%M')}")
                     try:                     # renewal radar rides the poll
-                        from . import notify
-                        notify.subs_renewals()
+                        from . import notify, instance
+                        if instance.owns_automation():
+                            notify.subs_renewals()
                     except Exception:  # noqa: BLE001 — never break the poll
                         pass
             except urllib.error.HTTPError as e:

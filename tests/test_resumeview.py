@@ -124,7 +124,7 @@ class Base(unittest.TestCase):
         # fixture per test must not inherit the previous one's tokens.
         resumeview._corpus_cache.update({"key": None, "nodes": [],
                                          "tokens": [], "idf": {}})
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
 
 class DocumentTests(Base):
@@ -501,15 +501,10 @@ class FeedbackTests(Base):
                          .read_text(encoding="utf-8"), MASTER,
                          "the career record is never written here")
 
-    def test_a_passive_instance_refuses_a_broader_note(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(os.environ.pop, "VIRA_PASSIVE", None)
-        with self.assertRaises(resumeview.ViewError):
-            resumeview.feedback("a-1", "broader", "something durable")
 
-    def test_a_passive_instance_still_takes_role_feedback(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(os.environ.pop, "VIRA_PASSIVE", None)
+    def test_role_feedback_is_saved(self):
+
+
         out = resumeview.feedback("a-1", "role", "tighten the opening")
         self.assertEqual(out["routed"], "application")
 
