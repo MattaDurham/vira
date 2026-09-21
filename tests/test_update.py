@@ -51,7 +51,7 @@ class InstallDepsTests(unittest.TestCase):
         seen = {}
 
         def fake_run(cmd, **kw):
-            seen["req"] = Path(cmd[-1]).read_text()
+            seen["req"] = Path(cmd[-1]).read_text(encoding="utf-8")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(update, "_editable",
@@ -67,7 +67,7 @@ class InstallDepsTests(unittest.TestCase):
         seen = {}
 
         def fake_run(cmd, **kw):
-            seen["req"] = Path(cmd[-1]).read_text()
+            seen["req"] = Path(cmd[-1]).read_text(encoding="utf-8")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(update, "_editable", return_value=False), \
