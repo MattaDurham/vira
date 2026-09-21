@@ -20,6 +20,8 @@ Deterministic movers, one model seam:
   reading, writing, model exposure, and destination policies.
 
 Never touches the fixture copy: all writes go to the real crm_root."""
+
+from . import modulemodels
 import csv
 import io
 import json
@@ -324,6 +326,7 @@ def _profile_from(pid, name, parsed, n_msgs):
     }
 
 
+@modulemodels.scoped("setup")
 def _build_one(pid, name, prof_dir, owner):
     """One dossier: the conversation in, a validated profile out.
 

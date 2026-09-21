@@ -489,6 +489,20 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
   display: flex; flex-direction: column; gap: 8px;
 }
 .ctx-pop .ctx-head { padding: 0 2px; }
+.module-model-button {
+  max-width: 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; flex-shrink: 1;
+}
+.module-model-pop { width: 420px; max-height: calc(100dvh - 16px); overflow-y: auto; }
+.module-model-pop .field { margin: 0; }
+.module-model-pop select { width: 100%; min-width: 0; }
+.module-model-pop .row-end { flex-wrap: wrap; }
+.module-model-error { color: var(--danger, #b84040); font-size: 12px; }
+.chat-model-change { padding: 8px 0; border-top: 1px solid var(--line); }
+@media (min-width: 1100px) {
+  #view-work > .section-head:has(.module-model-button) { display: flex; padding-bottom: 0; }
+  #view-work > .section-head:has(.module-model-button) > .hint { display: none; }
+}
 .ctx-note {
   font-size: 11px; color: var(--text-faint); line-height: 1.45; padding: 0 2px;
 }

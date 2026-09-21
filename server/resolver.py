@@ -23,6 +23,8 @@ crm.add_fact (source:"vira", which survives profile re-synthesis). `how_we_met`
 is deliberately untouched — it is model-synthesized and not writable through
 any durable path (see docs/data-map.md + PROFILE_EDITABLE_FIELDS).
 """
+
+from . import modulemodels
 import re
 from pathlib import Path
 
@@ -364,6 +366,7 @@ def _finalize(data, ev, memory):
     }
 
 
+@modulemodels.scoped("people")
 def resolve(handle, person_id=None, memory=""):
     """Gather evidence, run one model pass, verify grounded-or-held, and
     return the proposal. Writes nothing."""

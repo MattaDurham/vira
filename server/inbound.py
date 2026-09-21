@@ -38,6 +38,8 @@ needs a decision, and rung 2 is what carries that question back down the
 same thread — so a clarification is a text, and the answer to it is a
 text. That loop is the whole point.
 """
+
+from . import modulemodels
 import os
 import re
 import threading
@@ -410,6 +412,7 @@ this channel:
 """
 
 
+@modulemodels.scoped("work")
 def _dispatch(text):
     try:
         from . import session

@@ -16,6 +16,7 @@ from pathlib import Path
 from . import data as crm
 from . import imessage
 from . import settings
+from . import jsonstore, modulemodels
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 
@@ -50,6 +51,7 @@ DEFAULTS = {
     # "everything the catalog offers" — so a fresh install shows all, and a
     # future model arrives enabled unless the owner has curated.
     "model_roster": [],
+    "module_models": {},
     "timeout": 120,
 }
 
@@ -57,21 +59,25 @@ DEFAULTS = {
 API_ONLY = ("google", "xai")
 
 
-def config():
+def base_config():
     cfg = dict(DEFAULTS)
     try:
-        cfg.update(json.loads(CONFIG_PATH.read_text()))
+        cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         pass
     return cfg
 
 
+def config():
+    return modulemodels.apply(base_config())
+
+
 def save_config(updates):
-    cfg = config()
-    cfg.update({k: v for k, v in updates.items() if k in DEFAULTS})
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
-    return cfg
+    def update(stored):
+        stored.update({k: v for k, v in updates.items() if k in DEFAULTS})
+        return stored
+    jsonstore.mutate(CONFIG_PATH, update, {}, indent=2)
+    return base_config()
 
 
 PROMPT = """You are drafting reply suggestions for {owner}.
@@ -359,6 +365,9 @@ def effective_backend(cfg):
         raise provider.ProviderDisabled(pid, role="the configured go-to")
     # The key may come from the env (existing installs) or the Keychain
     # (pasted in Setup by someone with no shell profile to edit).
+    if cfg.get("_module_model_explicit"):
+        # An explicit module pick must either run as selected or fail by name.
+        return pid, backend
     key = provider.api_key(pid)
     if pid in API_ONLY:
         # No CLI to fall back to: the API is the only path, and a missing
@@ -439,6 +448,7 @@ def _extract_json(text):
     return json.loads(m.group(0))
 
 
+@modulemodels.scoped("people")
 def suggest(person_id, channel="imessage", extra="", mode="replies"):
     cfg = config()
     detail = crm.get_person(person_id)

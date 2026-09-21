@@ -45,6 +45,8 @@ corrections live on the reading-list entry (`tags_add` / `tags_drop`), never
 here — a correction written into a field the next pass rewrites is a correction
 with a shelf life.
 """
+
+from . import modulemodels
 import json
 import os
 import re
@@ -414,6 +416,7 @@ def _pending(items, s):
     return out
 
 
+@modulemodels.scoped("reader")
 def tag_pending(items=None, batches=1):
     """Tag up to `batches` batches. Rung 1 first for everything pending (free),
     then rung 2 on what is left over — so a model outage still improves the

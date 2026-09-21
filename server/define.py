@@ -28,6 +28,8 @@ does not reliably know a URL, a date, or who said it first.  So rung 3 emits
 prose and NO links, and `_validate` strips any it invents.  Only rung 4,
 which actually browses, may write the `links` list.
 """
+
+from . import modulemodels
 import hashlib
 import json
 import os
@@ -522,6 +524,7 @@ def _validate(raw, term):
     }
 
 
+@modulemodels.scoped("find-define")
 def _compose(term, context):
     block = ""
     if context:

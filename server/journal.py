@@ -24,6 +24,8 @@ Cross-process discipline matches the other JSON stores (fresh reads,
 fcntl-locked mutations, atomic writes); integration runs on a daemon
 thread so the POST returns instantly.
 """
+
+from . import modulemodels
 import datetime as dt
 import json
 import os
@@ -272,6 +274,7 @@ def _integrate(eid):
                               "actions": []})
 
 
+@modulemodels.scoped("journal")
 def _plan(entry):
     from . import modelbudget, settings, suggest
     # One share for the roster, one for the loops. Whatever is left over
@@ -798,6 +801,7 @@ def instruction_prompt(entry, u, cwd=None):
     return "\n".join(parts)
 
 
+@modulemodels.scoped("journal")
 def _stage_one(entry, u):
     """Stage one instruction as a Queue idea, dispatching it when its area
     is inside the blast radius Vira is willing to act in unattended.

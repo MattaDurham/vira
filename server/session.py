@@ -39,7 +39,7 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-from . import (agentbackend, ideas, jobfiles, joblog, plans, settings,
+from . import (agentbackend, ideas, jobfiles, joblog, modulemodels, plans, settings,
                viratools, worktree)
 from .suggest import config
 
@@ -564,6 +564,29 @@ def _resume_meta(row, jid):
     return meta
 
 
+def module_session_model(choice):
+    """Validate a module choice against the transport sessions really use.
+
+    A completion can use an API key where the live session adapter uses a
+    CLI login. Refuse an incompatible choice rather than charging a
+    different account behind a picker that promised the selected one.
+    """
+    provider = str(choice.get("provider") or "").strip().lower()
+    backend = str(choice.get("backend") or "").strip().lower()
+    expected = "cli" if provider in ("anthropic", "openai") else "api"
+    if not agentbackend.sessions_quality(provider):
+        raise ValueError(f"{provider or 'This provider'} cannot host live agent sessions")
+    if backend != expected:
+        raise ValueError(
+            f"{provider} conversations use the {expected.upper()} connection; "
+            f"choose its {expected.upper()} model for this module")
+    model = str(choice.get("model") or "").strip() or None
+    # Includes the owner's provider-disable decision even when a caller
+    # continues a parked session rather than dispatching a new runner.
+    provider = agentbackend.session_provider(model=model, provider=provider)
+    return provider, model
+
+
 class Sessions:
     """Registry of runs. SDK path: detached runner process per job,
     supervised through its job dir. Fallback path (SDK missing): the legacy
@@ -647,6 +670,12 @@ class Sessions:
             cwd = str(Path(cwd).expanduser())
             if not Path(cwd).is_dir():
                 cwd = None
+        # Module defaults fill an unpinned dispatch. A run sheet, saved flow
+        # stage, or resumed session already names its own engine and wins.
+        if not model and not provider and not resume_session:
+            choice = config().get("_module_model_explicit")
+            if choice:
+                provider, model = module_session_model(choice)
         # Which engine drives this session: an explicit provider wins, else
         # the model names it, else the configured session-capable go-to. A
         # CLI-exec provider runs the detached runner even without the SDK.
@@ -821,14 +850,18 @@ class Sessions:
         # diagnosed 2026-07-29). A new launch input now rides along by
         # default; dropping one takes an explicit entry below.
         spec = {k: v for k, v in data.items() if k not in RUNNER_OWNED}
+        # A module preference was already applied at launch when appropriate.
+        # Resolve a provider's empty model against its own default so an
+        # explicit run-level provider never inherits another module's model.
+        with modulemodels.scope(None):
+            default_model = (resolve_model(config()["cli_model"])
+                             if prov == "anthropic"
+                             else agentbackend.default_model(prov))
         spec.update({
             "provider": prov,
             # A launch that names no model runs the PROVIDER's configured
             # default, not anthropic's.
-            "model_resolved": (data["model"]
-                               or (resolve_model(config()["cli_model"])
-                                   if prov == "anthropic"
-                                   else agentbackend.default_model(prov))),
+            "model_resolved": data["model"] or default_model,
             "auto_allow": list(_scfg("session_auto_allow")),
             "permission_timeout": float(_scfg("session_permission_timeout")),
             "reply_window": float(_scfg("session_reply_window_hours")) * 3600,

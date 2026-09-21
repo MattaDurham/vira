@@ -45,6 +45,8 @@ worktree.is_worktree(root) to arm the same guard fields for this path too
 — see server/session.py and tests/test_branch_guard_wiring.py's
 ReentryIntoExistingWorktree.
 """
+
+from . import modulemodels
 import hashlib
 import json
 import mimetypes
@@ -949,6 +951,7 @@ def branch_about(item, act):
     return "\n".join(bits)
 
 
+@modulemodels.scoped("work")
 def resume(item, *, prompt=None, model=None, provider=None, mode=None,
            read_only=False):
     """Dispatch a session to resume stalled work in ITEM's worktree.
@@ -1258,6 +1261,7 @@ def norm_land_mode(mode):
     return m if m in LAND_MODES else "diagnose"
 
 
+@modulemodels.scoped("work")
 def _launch_land_session(item, mode="diagnose"):
     wt = item.get("worktree")
     if not wt:
@@ -1478,6 +1482,7 @@ def _evidence_lines(it):
     return "\n".join(out)
 
 
+@modulemodels.scoped("work")
 def assess_missing():
     """ONE suggest.complete pass over every item whose key has no cached
     read. Grounded-or-dropped (the evidence.py discipline): a row naming

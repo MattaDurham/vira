@@ -15,6 +15,8 @@ the constraints relax one at a time — wrong-memory questions ("didn't
 X send me…" when it was actually Y) get a near-miss answer
 instead of a bare no.
 """
+
+from . import modulemodels
 import json
 import re
 import sqlite3
@@ -306,6 +308,7 @@ def _ns(iso):
         return None
 
 
+@modulemodels.scoped("find")
 def ask(question, plan=None):
     """plan: a parse the caller already paid for (find.py hands its own
     plan over rather than making a second model call for the same

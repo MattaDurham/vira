@@ -424,6 +424,16 @@ model ID confirmed at startup. A curated model roster in Config can hide new
 models; the preparation window reports that filtering. Custom IDs remain
 available, and selecting a model for one run does not change saved defaults.
 
+Modules that use a model have a **Model** button beside their heading and a
+**Choose model...** right-click action. Choose from the connected model catalog
+and save a default for that module, or choose **Use app default** to inherit
+the global setting again. These choices persist locally across reloads;
+explicit model choices for individual runs or flow stages take precedence.
+Incoming and People share their model setting, as do Find and its chat
+companions. In Find chat, changing models starts a new model session on the
+next message and carries the saved conversation forward; the visible chat
+history stays in place. A notice identifies the switch and any context limit.
+
 Coding jobs (Ideas > Plan / Implement, the Actions run buttons, the free
 prompt) run as persistent sessions on the selected provider. Claude uses
 the Claude Agent SDK; OpenAI uses Codex App Server. Gemini and Grok use

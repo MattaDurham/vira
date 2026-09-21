@@ -33,6 +33,8 @@ Design:
   one batched message per poll cycle, deduped per-uid in state so a
   restart never re-pings.
 """
+
+from . import modulemodels
 import json
 import re
 import threading
@@ -1344,6 +1346,7 @@ def _record_score(entry):
         _write_json(_state_path(), state)
 
 
+@modulemodels.scoped("applications")
 def maybe_auto_score():
     """Dispatch the scoring session for unscored eligible roles, unasked.
 

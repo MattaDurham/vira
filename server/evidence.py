@@ -32,6 +32,8 @@ spends model tokens the same way a reply draft does, and passive instances
 already allow that class of call — so there is nothing here for
 VIRA_PASSIVE to refuse.
 """
+
+from . import modulemodels
 import itertools
 import re
 import subprocess
@@ -495,6 +497,7 @@ def _clean_case(raw, episode):
     return out
 
 
+@modulemodels.scoped("evidence")
 def compose_episode(key, force=False):
     """One suggest.complete() call, validated, saved as a draft case.
     Raises KeyError on an unknown episode, ValueError("already composed")

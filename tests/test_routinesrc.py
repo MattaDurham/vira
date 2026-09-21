@@ -3,6 +3,7 @@ import ast
 import os
 import shutil
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -58,6 +59,18 @@ class Locate(SrcRoot):
         self.assertTrue(text.startswith("def alpha(x):"))
         self.assertIn("return x * 2", text)
         self.assertNotIn("class Box", text)
+
+    def test_decorated_source_keeps_its_execution_scope(self):
+        decorated = SAMPLE.replace("def alpha(x):", '@modulemodels.scoped("work")\ndef alpha(x):')
+        self.file.write_text(decorated, encoding="utf-8")
+        text = routinesrc.read_symbol("sample", "alpha")
+        self.assertTrue(text.startswith('@modulemodels.scoped("work")'))
+        node = ast.parse(text).body[0]
+        self.assertEqual(node.name, "alpha")
+        self.assertEqual(len(node.decorator_list), 1)
+        result = routinesrc.write_symbol("sample", "alpha", text)
+        self.assertFalse(result["changed"])
+        self.assertEqual(self.file.read_text(encoding="utf-8"), decorated)
 
     def test_reads_a_method_by_dotted_name(self):
         text = routinesrc.read_symbol("sample", "Box.tick")
@@ -236,8 +249,11 @@ class Explain(unittest.TestCase):
             self.assertTrue(chain, f"{tok} has no chain")
             for mod, sym, title, _note in chain:
                 text = routinesrc.read_symbol(mod, sym)
-                self.assertTrue(text.strip().startswith(("def ", "async def ")),
-                                f"{tok} -> {mod}.{sym}")
+                nodes = ast.parse(textwrap.dedent(text)).body
+                self.assertEqual(len(nodes), 1, f"{tok} -> {mod}.{sym}")
+                self.assertIsInstance(nodes[0], (ast.FunctionDef, ast.AsyncFunctionDef),
+                                      f"{tok} -> {mod}.{sym}")
+                self.assertEqual(nodes[0].name, sym.rsplit(".", 1)[-1])
                 self.assertTrue(title.strip(), f"{tok} -> {mod}.{sym} unnamed")
 
     def test_a_trampoline_shows_the_function_it_starts(self):

@@ -59,6 +59,8 @@ instrument; regenerable in shape, canonical in role.
 """
 from __future__ import annotations
 
+from . import modulemodels
+
 import base64
 import binascii
 import colorsys
@@ -402,6 +404,7 @@ Rules:
   this image that has nowhere else to go."""
 
 
+@modulemodels.scoped("design")
 def vision_status() -> dict:
     """Can rung 2 actually SEE an image right now? Reported before it is needed
     rather than discovered as a silent empty result.
@@ -418,18 +421,17 @@ def vision_status() -> dict:
       with its own file tools.
     """
     try:
-        from . import models, settings as st
+        from . import models, suggest
+        active, backend = suggest.effective_backend(suggest.config())
         opts = models.options()
-        active = opts.get("active")
         row = next((p for p in opts.get("providers") or []
                     if p.get("id") == active), None)
         if not row or not row.get("connected"):
             return {"ok": False, "reason": "no model is connected"}
-        cfg = st.get("ai_backend") if hasattr(st, "get") else None
-        if cfg == "api" and row.get("has_key"):
+        if backend != "cli":
             return {"ok": False,
                     "reason": "the API backend cannot send images - switch to "
-                              "the CLI backend in Setup to read references"}
+                              "a connected CLI model in Design Studio to read references"}
         return {"ok": True, "reason": ""}
     except Exception as e:
         return {"ok": False, "reason": str(e)[:120]}
@@ -439,6 +441,7 @@ def vision_available() -> bool:
     return bool(vision_status()["ok"])
 
 
+@modulemodels.scoped("design")
 def analyze_vision(path: Path) -> dict:
     """The interpretive pass. Never raises - a failure degrades to the palette
     with the reason named."""

@@ -29,6 +29,8 @@ Stores:
   data/circuits.json      — definitions (seeded with builtin templates)
   data/circuit-runs.json  — runs; stages_def frozen per run at start
 """
+
+from . import modulemodels
 import json
 import re
 import threading
@@ -1513,6 +1515,7 @@ class Driver(threading.Thread):
                 "provider": row.get("provider") or snap.get("provider") or None,
                 "model": row.get("model") or snap.get("model") or None}
 
+    @modulemodels.scoped("work")
     def _launch_stage(self, run, st_def):
         from . import session
         sid = st_def["id"]

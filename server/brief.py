@@ -11,6 +11,8 @@ default; enable their shared calendars under the Google account in
 Calendar.app and they appear here automatically. Calendars named in the
 `family_calendars` config list get the family tag.
 """
+
+from . import modulemodels
 import datetime as dt
 import json
 import os
@@ -659,6 +661,7 @@ def cached_narrative():
     return {"text": cache.get("text"), "generated_at": cache.get("at")}
 
 
+@modulemodels.scoped("attention")
 def generate_narrative(feed_items=None, force=False):
     if settings.fixture_mode():
         return {"text": "This is a fixture preview. Connect your sources to build a personal daily brief.",

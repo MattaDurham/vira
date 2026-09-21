@@ -4,6 +4,8 @@ The body/media indexes remain the source readers. The existing contact assistant
 owns task extraction. This module decides what deserves preservation, then uses
 the governed vault writer. Nothing is enabled merely by installing the code.
 """
+
+from . import modulemodels
 import hashlib
 import json
 import os
@@ -228,6 +230,7 @@ def catch_up():
     _change(merge)
 
 
+@modulemodels.scoped("attention")
 def _classify(item):
     from . import modelbudget, suggest
     source = item["source"]

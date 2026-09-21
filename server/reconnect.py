@@ -24,6 +24,8 @@ quiet again shows up as a fresh candidate). Dormant by construction when
 the Applications universe is empty or absent — this module never invents
 a target picture.
 """
+
+from . import modulemodels
 import json
 import re
 import threading
@@ -365,6 +367,7 @@ def _row(cd, *, why, opener, curated):
     }
 
 
+@modulemodels.scoped("people")
 def refresh():
     """Regenerate the curated reconnect list (deterministic candidates + one
     AI curation pass). Serialized; safe to fire from a thread."""

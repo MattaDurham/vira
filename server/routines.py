@@ -21,6 +21,8 @@ live, and iMessages the owner on completion when notify is set.
 
 Store: data/routines.json (atomic writes; server-only writer).
 """
+
+from . import modulemodels
 import json
 import threading
 import time
@@ -415,6 +417,7 @@ def _ai_ready():
     return ok
 
 
+@modulemodels.scoped("work")
 def dispatch(r):
     """Dispatch one routine now. Returns {job_id} or {run_id}."""
     from . import circuits
@@ -500,17 +503,20 @@ def dispatch(r):
             return {"internal": "no_rooms"}
     if not prompt.strip():
         raise ValueError("routine has no prompt")
-    jid = session.sessions.launch(prompt, cwd=r.get("cwd") or None,
-                                  model=r.get("model") or None,
-                                  # no stored mode -> the session_default_mode
-                                  # config default, same as every dispatch
-                                  mode=session.norm_mode(r.get("mode")),
-                                  vault_destination=r.get("vault_destination"),
-                                  vault_context=r.get("vault_context"),
-                                  meta={"routine_id": r["id"],
-                                        "kind": r["kind"]},
-                                  subject=r.get("name") or r["id"],
-                                  about=_about(r))
+    model_module = {"__module_map__": "map", "__room_scout__": "reader"}.get(
+        r.get("prompt"), modulemodels.current() or "work")
+    with modulemodels.scope(model_module):
+        jid = session.sessions.launch(prompt, cwd=r.get("cwd") or None,
+                                      model=r.get("model") or None,
+                                      # no stored mode -> the session_default_mode
+                                      # config default, same as every dispatch
+                                      mode=session.norm_mode(r.get("mode")),
+                                      vault_destination=r.get("vault_destination"),
+                                      vault_context=r.get("vault_context"),
+                                      meta={"routine_id": r["id"],
+                                            "kind": r["kind"]},
+                                      subject=r.get("name") or r["id"],
+                                      about=_about(r))
     _stamp(r["id"], last_run=_now_iso(), last_job=jid,
            last_run_id=None, last_status="running")
     return {"job_id": jid}

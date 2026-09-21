@@ -18,6 +18,8 @@ the judged job's ledger record (joblog.record_judge) and, when the job
 was idea-linked, the idea's note. Circuits parse verdicts through the
 same helpers for judge stages and grade gates.
 """
+
+from . import modulemodels
 import json
 import re
 import subprocess
@@ -262,6 +264,11 @@ def prompt_for_job(jid):
 
 
 def judge_model():
+    # A module pick replaces the inherited judge default. Returning no pin
+    # lets the shared session resolver carry both provider and model; a
+    # circuit stage or Judge action naming its own model still wins.
+    if modulemodels.selection(modulemodels.current() or "work"):
+        return None
     return settings.get("judge_model") or "opus"
 
 
@@ -288,6 +295,7 @@ def record_and_close(target_jid, verdict, judge_jid=None, idea_id=None):
     return v
 
 
+@modulemodels.scoped("work")
 def launch_judge(jid, model=None):
     """Spawn a fresh judge session over a finished job; returns the judge's
     job id. A watcher thread parses the verdict when it lands and writes it
