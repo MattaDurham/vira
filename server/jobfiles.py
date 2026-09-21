@@ -105,13 +105,47 @@ def tail_output(jdir, cap):
         return ""
 
 
-def pid_alive(pid):
-    if not pid:
-        return False
+def _windows_pid_alive(pid):
+    """Query a process handle without sending signals or requesting termination."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
+    if not handle:
+        # ERROR_INVALID_PARAMETER means the PID does not identify a process.
+        # Access denied and other query failures do not prove a runner died.
+        return ctypes.get_last_error() != 87
     try:
-        os.kill(int(pid), 0)
+        # A process handle is signaled only after exit. Timeout or a failed
+        # query conservatively keeps the runner alive for the next heartbeat.
+        return kernel.WaitForSingleObject(handle, 0) != 0  # WAIT_OBJECT_0
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def pid_alive(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # Windows os.kill(pid, 0) calls TerminateProcess; it is never a probe.
+        return _windows_pid_alive(pid) if pid <= 0xFFFFFFFF else False
+    try:
+        os.kill(pid, 0)
         return True
-    except (OSError, ValueError):
+    except PermissionError:
+        return True  # The process exists but belongs to another user.
+    except (OSError, OverflowError):
         return False
 
 

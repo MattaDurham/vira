@@ -141,7 +141,9 @@ class OwnershipTests(unittest.TestCase):
             jobfiles.write_json_atomic(directory / "state.json", {
                 "id": jid, "status": "running", "pid": os.getpid(), "heartbeat": 0})
         registry = session.Sessions()
-        self.assertEqual(registry._boot_reattach(), ["local"])
+        with mock.patch.object(jobfiles, "pid_alive", return_value=True) as alive:
+            self.assertEqual(registry._boot_reattach(), ["local"])
+        alive.assert_called_once_with(os.getpid())
         self.assertNotIn("copied", registry.sessions)
         self.assertEqual(jobfiles.read_json(jobfiles.job_dir("copied") / "state.json")["status"], "running")
 
