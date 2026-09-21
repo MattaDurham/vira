@@ -11,8 +11,10 @@ So a chat that must reach everything IS a live agent session on those
 tools, and this module is the thin layer that makes a session read as a
 conversation: one turn in, one answer out, what it looked at beside it.
 
-- THE ENGINE IS THE SESSION HARNESS, unchanged. `send` launches ONE
-  session per chat and every later turn is `sessions.say` into it. A
+- THE ENGINE IS THE SESSION HARNESS. `send` launches a session per chat
+  and later turns use `sessions.say` until the module's model changes. A
+  model change starts a new session with the saved conversation as context.
+  The visible chat and prior job records remain available. A
   finished turn PARKS in the reply window, which is exactly the state a
   conversation wants; a chat resumed after the window closed continues
   through `_resume_ended` by session id, so the transcript is never lost.
@@ -55,7 +57,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import agentbackend, jsonstore, settings
+from . import agentbackend, jsonstore, modelbudget, modulemodels, settings
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "vira-chat.json"
 MAX_SESSIONS = 20
@@ -250,21 +252,93 @@ def chat_provider():
     return None, False
 
 
-def _open_session(job_id, question):
-    """Start the chat's session or continue it. Returns the job id the
-    conversation lives under now (say() may resume under a NEW id)."""
+def _chat_model():
+    """The Find pick is read for every message, including existing chats."""
     from . import session
-    if not job_id:
-        model = (settings.get("chat_model") or "").strip() or None
-        provider, native = chat_provider()
+    choice = modulemodels.selection("find")
+    if choice:
+        provider, model = session.module_session_model(choice)
+        return {"provider": provider, "model": model or "",
+                "backend": choice["backend"]}
+    return default_model_selection()
+
+
+def default_model_selection():
+    """Find's inherited choice, shared with the picker status readout."""
+    model = (settings.get("chat_model") or "").strip() or None
+    if model:
+        provider = agentbackend.session_provider(model=model)
+    else:
+        provider, _native = chat_provider()
+        provider = provider or agentbackend.default_session_provider()
+        with modulemodels.scope(None):
+            model = agentbackend.default_model(provider)
+    return {"provider": provider, "model": model or "",
+            "backend": "cli" if provider in ("anthropic", "openai") else "api"}
+
+
+def _conversation_context(turns, route):
+    """Carry saved messages across engines, with any bound stated plainly."""
+    with modulemodels.scope("find"):
+        remaining = modelbudget.context_chars(
+            BUDGET, route["provider"], route["backend"], model=route["model"])
+    pieces = []
+    truncated = False
+    completed = [turn for turn in turns or [] if turn.get("status") == "done"]
+    for index, turn in enumerate(reversed(completed)):
+        piece = ("Owner: " + (turn.get("question") or "")
+                 + "\nVira: " + (turn.get("answer") or ""))
+        if len(piece) > remaining:
+            pieces.append("[Earlier text omitted]\n" + piece[-remaining:])
+            truncated = True
+            break
+        pieces.append(piece)
+        remaining -= len(piece) + 2
+        if remaining <= 0:
+            truncated = index + 1 < len(completed)
+            break
+    return "\n\n".join(reversed(pieces)), truncated
+
+
+def _open_session(job_id, question, route=None, prior_route=None, turns=()):
+    """Return (job id, model changed, carried context truncated).
+
+    A resumed job can change its id without changing the selected engine;
+    report those events separately so the chat never invents a model switch.
+    """
+    from . import session
+    route = route or _chat_model()
+    changed = bool(job_id and prior_route is not None and route != prior_route)
+    if job_id and prior_route is None and modulemodels.selection("find"):
+        # Older chats predate the saved choice marker. Read the recorded
+        # session rather than assume a model that the chat never stored.
+        snap = _session_snapshot(job_id) or {}
+        changed = (snap.get("provider") != route["provider"]
+                   or (snap.get("model") or "") != route["model"])
+    if not job_id or changed:
+        provider, model = route["provider"], route["model"] or None
+        native = bool(agentbackend.capabilities(provider).get("native_tools"))
         q = " ".join((question or "").split())
-        return session.sessions.launch(
-            _launch_prompt(question, native, provider or ""), model=model,
+        message = question
+        truncated = False
+        if changed:
+            transcript, truncated = _conversation_context(turns, route)
+            message = (
+                "The owner changed the model for this chat. Continue the same "
+                "conversation using these saved messages as context. Prior "
+                "actions are history; do not repeat them. Only the visible "
+                "messages are carried across, not the prior engine's hidden "
+                "state.\n\nPRIOR CONVERSATION:\n"
+                + (transcript or "(no completed messages)")
+                + "\n\nCURRENT MESSAGE:\n" + question)
+        new_job = session.sessions.launch(
+            _launch_prompt(message, native, provider or ""), model=model,
             provider=provider, meta={"kind": "chat"},
             subject=q[:140],
             about=f"A conversation with Vira, opened with: {q[:600]}")
+        return new_job, changed, truncated
     out = session.sessions.say(job_id, question)
-    return out.get("job") or job_id
+    return out.get("job") or job_id, False, False
 
 
 def send(question, session_id=None):
@@ -294,7 +368,20 @@ def send(question, session_id=None):
     job_id = s.get("job_id") or ""
     error = ""
     try:
-        job_id = _open_session(job_id, question)
+        route = _chat_model()
+        previous_job = job_id
+        job_id, changed, truncated = _open_session(
+            job_id, question, route, s.get("model_selection"), s.get("turns") or [])
+        turn["provider"] = route["provider"]
+        turn["model"] = route["model"]
+        turn["job_id"] = job_id
+        turn["model_changed"] = changed
+        if turn["model_changed"]:
+            turn["context_truncated"] = truncated
+            prior = ""  # a new engine has no previous parked answer to skip
+        if previous_job and job_id != previous_job:
+            s.setdefault("previous_jobs", []).append(previous_job)
+        s["model_selection"] = route
     except Exception as e:  # noqa: BLE001 - the refusal is the turn's answer
         error = str(e)[:400]
     if error:
@@ -542,6 +629,7 @@ Never invent a note path.
 """
 
 
+@modulemodels.scoped("find")
 def _concepts(sid, answer, cites):
     from . import modelbudget, suggest
     state = _load()

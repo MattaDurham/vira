@@ -64,6 +64,8 @@ does not run on a passive instance anyway.
 """
 from __future__ import annotations
 
+from . import modulemodels
+
 import hashlib
 import json
 import re
@@ -464,6 +466,7 @@ def _clean_verdicts(raw, cands):
     return out, ungrounded
 
 
+@modulemodels.scoped("work")
 def _adjudicate(rule, cands):
     from . import suggest
     raw = suggest._extract_json(
@@ -519,6 +522,7 @@ def _verified_citations(rows):
     return sorted(set(cites))
 
 
+@modulemodels.scoped("work")
 def _mechanism_line(rule, rows):
     """Rung 2 of the proposal: one model call recommending the mechanism
     family. Validated (non-trivial, capped); any failure falls back to a

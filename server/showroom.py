@@ -54,6 +54,8 @@ passive instance - reviewing before deciding is what a test clone is for -
 and every action that touches the real repo (serve, stop, cleanup)
 refuses there by name, as orphanwork's do.
 """
+
+from . import modulemodels
 import json
 import os
 import re
@@ -957,6 +959,7 @@ def pending_reads(s=None):
             and it.get("key") not in reads]
 
 
+@modulemodels.scoped("work")
 def describe_missing():
     """ONE suggest.complete pass over up to DESCRIBE_BATCH undescribed
     cards. Grounded-or-dropped: an unknown branch or an empty blurb is

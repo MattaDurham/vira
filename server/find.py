@@ -31,6 +31,8 @@ for. run() fans the plan out concurrently and returns the groups
 SEPARATELY: an RRF score from the media index and one from the vault
 are not comparable, and blending them buries exact hits.
 """
+
+from . import modulemodels
 import concurrent.futures as futures
 import json
 import re
@@ -544,6 +546,7 @@ Reply with ONLY a JSON object, no prose:
 Rules: dates belong in since/until, never in query. "recently", "lately", "this month" and similar mean a TRAILING window measured back from today (since about 30-45 days ago, until null) - never the start of the current calendar week/month, which is a near-empty window early in the period. Omit people's names from query when person, sender or face_person already covers them. face_person is only for people visible in an image, never the sender. Put the best database first; ordering expresses preference, and every database is still searched."""
 
 
+@modulemodels.scoped("find")
 def plan_llm(q, today=None):
     """Rung 2. Only for question-shaped input the user committed to. A
     dead backend is not an error here: the rung-1 plan still stands."""
@@ -851,6 +854,7 @@ def _row_line(i, r):
 SIBLING_ROWS = 6
 
 
+@modulemodels.scoped("find")
 def _answer_rows(question, rows, relaxed, groups=None, primary=None):
     """One grounded model pass over the filtered rows - the answer
     contract messages and people never had (ask() used to return
@@ -905,6 +909,7 @@ def _no_hits_text(p, relaxed, orig_filters=None):
     return msg
 
 
+@modulemodels.scoped("find")
 def ask(question, limit=ASK_LIMIT, today=None):
     """The answer path: rung 2, then the owning corpus's own ask.
 

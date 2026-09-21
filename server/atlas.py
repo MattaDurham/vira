@@ -30,6 +30,8 @@ contact with sips (native HEIC, no model inference — the builder only
 reads existing faces rows) into data/atlas-faces/, for nodes that have
 no AddressBook contact photo.
 """
+
+from . import modulemodels
 import json
 import re
 import sqlite3
@@ -627,6 +629,7 @@ Pairs:
 """
 
 
+@modulemodels.scoped("atlas")
 def narrate_edges(graph, c=None, top_n=NARRATE_TOP):
     """ONE suggest.complete pass over the strongest cross-cluster edges that
     have no narration yet. Mutates and returns the graph; deterministic

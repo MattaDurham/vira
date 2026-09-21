@@ -55,6 +55,8 @@ the store onto a composed graph at read time — the contactcard.py pattern —
 so the graph cache stays pristine-derived and the atlas-groups override
 layer (promote / dissolve / assign) works on top of it unchanged.
 """
+
+from . import modulemodels
 import hashlib
 import json
 import re
@@ -668,6 +670,7 @@ def clean_read(parsed, ev):
             "whats_new": _s(parsed.get("whats_new"), 300)}
 
 
+@modulemodels.scoped("atlas")
 def read_circle(ev, rec=None, changes=None, taken=()):
     """ONE model call. Raises on a backend or contract failure; the caller
     keeps the fallback label and records the error."""

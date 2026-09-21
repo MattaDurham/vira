@@ -19,6 +19,8 @@ unknown. Two modes behind one button on the person page:
 Both write through data.save_profile_refresh: quarantined read-modify-
 write, previous summary kept one deep, refresh provenance stamped.
 """
+
+from . import modulemodels
 import json
 
 from . import data as crm
@@ -193,6 +195,7 @@ def _clean(raw, prof):
     return summary, how
 
 
+@modulemodels.scoped("people")
 def refresh_current(pid):
     """The one-pass mode. Returns the updated profile fields."""
     if settings.fixture_mode():
@@ -259,6 +262,7 @@ def explore_prompt(pid):
         "No emojis anywhere.")
 
 
+@modulemodels.scoped("people")
 def explore(pid):
     """Dispatch the explore session. Returns {job_id}."""
     if settings.fixture_mode():

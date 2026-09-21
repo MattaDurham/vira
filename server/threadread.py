@@ -21,6 +21,8 @@ non-response, and every payload carries `colocation_caveat` so no surface can
 quietly present it as one.
 """
 
+from . import modulemodels
+
 import re
 import statistics
 from collections import Counter
@@ -331,6 +333,7 @@ Return ONLY JSON:
 """
 
 
+@modulemodels.scoped("people")
 def brief(pid, window_days=DEFAULT_WINDOW_D, extra=""):
     """Decision brief: computed facts first, model reasoning second."""
     from . import suggest

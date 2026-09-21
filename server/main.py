@@ -61,7 +61,7 @@ from . import (
                mailread,
                media,
                mediaarchive,
-               mediaindex, mercury, models, modulemap, modulestory, msgraph,
+               mediaindex, mercury, models, modulemap, modulemodels, modulestory, msgraph,
                notify, onboard,
                orphanwork,
                showroom,
@@ -133,6 +133,12 @@ async def _cpu_gate_full(request: Request, exc: admission.Full):
         content={"error": "server busy", "detail": str(exc),
                  "waited_s": round(exc.waited, 2), "queue_depth": exc.depth,
                  "path": request.url.path})
+
+
+@app.middleware("http")
+async def _module_model_scope(request, call_next):
+    with modulemodels.scope(modulemodels.module_for_path(request.url.path)):
+        return await call_next(request)
 
 
 @app.middleware("http")
@@ -4787,6 +4793,33 @@ def api_config_set(req: ConfigReq):
         # the next picker paint, not the one after.
         models.options(refresh=True)
     return out
+
+
+class ModuleModelReq(BaseModel):
+    provider: str
+    backend: str
+    model: str
+
+
+@app.get("/api/module-models")
+def api_module_models():
+    return modulemodels.snapshot()
+
+
+@app.put("/api/module-models/{module_id}")
+def api_module_model_set(module_id: str, req: ModuleModelReq):
+    try:
+        return modulemodels.save(module_id, req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/module-models/{module_id}")
+def api_module_model_reset(module_id: str):
+    try:
+        return modulemodels.save(module_id, None)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.get("/api/models")

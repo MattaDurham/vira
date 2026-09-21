@@ -38,6 +38,8 @@ Cached in data/radar-groupings.json (the grouping-scout routine refreshes
 weekly; a button refreshes on demand); dismissals persist, and a legacy
 data/radar-intros.json seeds the store once so old dismissals carry over.
 """
+
+from . import modulemodels
 import datetime as dt
 import json
 import re
@@ -779,6 +781,7 @@ def candidates():
     return merged, markers
 
 
+@modulemodels.scoped("people")
 def refresh_groupings():
     """Regenerate the curated grouping list (deterministic candidates +
     one AI curation pass). Serialized; safe to fire from a thread."""

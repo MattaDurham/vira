@@ -45,6 +45,8 @@ the exact case that trap was built for: a model that could claim its own
 provenance could claim to be newer than it is, and the whole staleness
 report reads off those two fields.
 """
+
+from . import modulemodels
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -306,6 +308,7 @@ def _clean(raw, uid, prior, mode):
     return entry
 
 
+@modulemodels.scoped("applications")
 def rescore(uid, mode="current"):
     """Re-judge one role. Returns the stored record plus what it read."""
     if mode not in MODES:

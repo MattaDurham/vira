@@ -7,6 +7,8 @@ Concept Cloud and Related cards derived from that same conversation.
 Model calls happen outside the JSON-store lock.  The short compare-and-append
 at the end rejects overlapping turns rather than silently interleaving them.
 """
+
+from . import modulemodels
 import json
 import re
 import secrets
@@ -296,6 +298,7 @@ def _merge_cited(prior, citations, turn_number):
                   key=lambda c: c.get("last_cited_in_turn", 0), reverse=True)
 
 
+@modulemodels.scoped("find")
 def ask(question, session_id=None):
     question = (question or "").strip()
     if not question:

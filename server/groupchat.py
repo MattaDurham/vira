@@ -16,6 +16,8 @@ item knows to the full merged group.
 Sending: a reply goes to the LEG WHERE THE CONVERSATION IS — the chat row
 with the newest message — addressed by its guid (send.send_to_group).
 """
+
+from . import modulemodels
 import hashlib
 from pathlib import Path
 
@@ -545,6 +547,7 @@ def _clean_brief(raw):
     return out
 
 
+@modulemodels.scoped("people")
 def brief(chat_ids, force=False):
     """The one model pass, cached until the group has a newer message.
     Returns {status, brief, cached, generated}."""

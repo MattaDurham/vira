@@ -19,6 +19,8 @@ seams exactly as they were:
 
 Everything else delegates to a lazily (re)built qocha.Vault.
 """
+
+from . import modulemodels
 import hashlib
 import re
 import threading
@@ -252,6 +254,7 @@ class _ViraEmbedder:
         return vecs[0] if vecs else None
 
 
+@modulemodels.scoped("find")
 def _answer(prompt):
     from . import suggest
     return suggest.complete(prompt)
@@ -594,6 +597,7 @@ def ask_hits(kind="standard"):
     return max(1, int(room // (ENGINE_CHUNK_CHARS + ENGINE_BLOCK_OVERHEAD)))
 
 
+@modulemodels.scoped("find")
 def ask(question, k=None, hits=None):
     """Grounded answer over the vault.
 

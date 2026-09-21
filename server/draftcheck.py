@@ -40,6 +40,8 @@ role as a new file.
 
 from __future__ import annotations
 
+from . import modulemodels
+
 import io
 import re
 import zipfile
@@ -587,6 +589,7 @@ def jd_chars():
         return JD_FLOOR
 
 
+@modulemodels.scoped("applications")
 def model_findings(lines, role, kind, hiring=""):
     """One pass. Returns ([], {"unavailable": 1}) when no backend answers."""
     try:

@@ -201,8 +201,9 @@ def capability(provider=None, backend=None, model=""):
         provider, backend = effective()
     cfg = _cfg()
     if not model:
-        model = (cfg.get("cli_model") if backend == "cli"
-                 else cfg.get("api_model")) or ""
+        from . import models
+        key = models.PROVIDERS.get(provider, {}).get("config_keys", {}).get(backend)
+        model = cfg.get(key, "") if key else ""
 
     hit = _learned(provider, backend, model)
     if hit and hit.get("context_tokens"):
@@ -237,9 +238,9 @@ def has_tools(provider=None, backend=None):
     return provider == "anthropic" and backend == "cli"
 
 
-def context_chars(kind=DEFAULT_CLASS, provider=None, backend=None):
+def context_chars(kind=DEFAULT_CLASS, provider=None, backend=None, model=""):
     """Characters of retrieved material this surface may put in a prompt."""
-    cap = capability(provider, backend)
+    cap = capability(provider, backend, model)
     share = CLASSES.get(kind, CLASSES[DEFAULT_CLASS])
     usable = cap["context_tokens"] - TEMPLATE_RESERVE_TOKENS \
         - OUTPUT_RESERVE_TOKENS

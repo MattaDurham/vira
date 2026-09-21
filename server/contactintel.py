@@ -5,6 +5,8 @@ index, coalesces conversations, and processes a small batch with a tool-free
 model call. Pending evidence survives failures and restarts. Private queue
 state lives under data; public code contains no owner-specific rules.
 """
+
+from . import modulemodels
 import hashlib
 import json
 import os
@@ -527,6 +529,7 @@ def _details(pid, sources):
     return detail
 
 
+@modulemodels.scoped("people")
 def _process(pid, sources):
     detail = _details(pid, sources)
     if not detail:

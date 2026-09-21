@@ -3103,6 +3103,13 @@ function renderFindChat() {
   });
   findChatRefs.log.innerHTML = "";
   turns.forEach((turn) => {
+    if (turn.model_changed) {
+      const model = [turn.provider, turn.model].filter(Boolean).join(" · ");
+      findChatRefs.log.appendChild(el("div", "hint chat-model-change",
+        "Model changed" + (model ? " to " + model : "") + ". "
+        + (turn.context_truncated ? "Recent messages carried forward; full history stays here."
+          : "Saved messages carried forward.")));
+    }
     findChatRefs.log.appendChild(el("div", "brain-msg you", turn.question || ""));
     findChatRefs.log.appendChild(chatAnswer(turn, findChatSession));
   });
@@ -5157,7 +5164,8 @@ function ideaRow(it) {
         if (r && r.idea) Object.assign(it, r.idea);
         const { jid, plan } = await dispatchIdeaRun(it, "implement", {
           cwd: ideaRunCwd(it),
-          model: localStorage.getItem("vira-idea-model") || "",
+          model: window.ModuleModels?.selectionFor("work")
+            ? "" : localStorage.getItem("vira-idea-model") || "",
           provider: null, extra: "", perm: savedPermMode(), fold: [],
         });
         toast(jid
@@ -6927,7 +6935,8 @@ function openIdeaRun(it, mode) {
   // markup — the same source Setup's defaults and circuit stages read.
   modelCatalog().then((cat) => fillModelSelect(
     $("#idea-run-model"), sessionModels(cat),
-    localStorage.getItem("vira-idea-model") || "", "Default (config)"));
+    window.ModuleModels?.selectionFor("work") ? "" : localStorage.getItem("vira-idea-model") || "",
+    "Work module default"));
   $("#idea-run-extra").value = "";
   // Plan is read-only by construction, so the ladder has nothing to say
   // there; Implement opens on whichever rung was used last.
@@ -7154,12 +7163,15 @@ function reviewSessionLaunch(initial) {
           option.value = p.id;
           provider.appendChild(option);
         });
+        const moduleChoice = !initial.model && !initial.provider
+          ? cfg.module_models?.[initial.modelModule || "work"] : null;
         const wanted = previousProvider || initial.provider
-          || (initial.model ? providerOfModel(initial.model) : (cfg.ai_provider || cat.active));
+          || (initial.model ? providerOfModel(initial.model)
+            : moduleChoice?.provider || cfg.ai_provider || cat.active);
         if (wanted) provider.value = wanted;
         const p = available.find((p) => p.id === provider.value);
         const saved = config[p?.config_keys?.cli || p?.config_keys?.api] || "";
-        fillModels(previousProvider ? previousModel : (initial.model || saved));
+        fillModels(previousProvider ? previousModel : (initial.model || moduleChoice?.model || saved));
       } catch (e) {
         if (!closed) source.textContent = "Could not check models: " + e.message;
       } finally {
@@ -21170,7 +21182,8 @@ function appApply(r) {
   // catalog exists to prevent, in the one picker it had never reached.
   modelCatalog().then((cat) => fillModelSelect(
     $("#app-run-model"), sessionModels(cat),
-    localStorage.getItem("vira-app-model") || "", "Default (config)"));
+    window.ModuleModels?.selectionFor("applications") ? "" : localStorage.getItem("vira-app-model") || "",
+    "Applications module default"));
   $("#app-run-extra").value = "";
   appRunSheet.open();
   $("#app-run-extra").focus();
@@ -22881,6 +22894,8 @@ document.addEventListener("contextmenu", (e) => {
   // captures every open window and records the closed ones as closed.
   const fwin = t.closest(".fwin");
   const fid = fwin?.dataset.wid;
+  const modelItem = window.ModuleModels?.contextItem(t, e.clientX, e.clientY);
+  if (modelItem) items.push(modelItem, { sep: true });
   if (fid && !ctx.target && editing && fid !== "palette") {
     if (winState[fid]?.open) {
       items.push({ label: "Remove from this layout",
@@ -30253,6 +30268,9 @@ async function boot() {
     else openApp("launchpad");
   });
   initFindView();
+  window.ModuleModels?.load().catch((e) => {
+    toast("Module model controls could not load: " + e.message);
+  });
   initResumeView();
   window.initForge?.();
   initIdeas();

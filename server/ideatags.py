@@ -36,6 +36,8 @@ ideas.json (`tags_add` / `tags_drop`) and are overlaid at read time, the
 contactcard.py pattern: a correction written into a derived field is a
 correction with a shelf life.
 """
+
+from . import modulemodels
 import base64
 import hashlib
 import json
@@ -796,6 +798,7 @@ def _pending(items, s):
     return out
 
 
+@modulemodels.scoped("work")
 def tag_pending(items=None, batches=1):
     """Tag up to `batches` batches of untagged/stale ideas. ONE model call
     per batch; a failed batch leaves those ideas pending rather than
@@ -899,6 +902,7 @@ Return ONLY JSON:
 "why": "<one short sentence>"}}]}}"""
 
 
+@modulemodels.scoped("work")
 def fold_analysis(idea_id, candidate_ids, items=None):
     """"There are 15 things like this — which belong in this task?" One
     model pass over the candidates the owner is looking at. It returns a

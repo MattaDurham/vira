@@ -40,6 +40,8 @@ deterministically in the role's own owner state, which is backed up and which
 """
 from __future__ import annotations
 
+from . import modulemodels
+
 import hashlib
 import json
 import math
@@ -662,6 +664,7 @@ def _anchors_for(text):
     return out
 
 
+@modulemodels.scoped("applications")
 def ask(role, kind, question, block_id="", context_lines=3):
     """One grounded pass over the owner's own record.
 

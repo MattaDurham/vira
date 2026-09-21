@@ -28,6 +28,8 @@ extraction prompt ("find what explains the $762.13 on Jul 9").
 Weekly background sweep (config `receipts_sweep_days`, dormant when no mail
 account is configured) + on-demand per-merchant sweep from the card button.
 """
+
+from . import modulemodels
 import email
 import email.utils
 import imaplib
@@ -320,6 +322,7 @@ def _extraction_prompt(merchant, candidates, anomalies):
     return "\n".join(lines)
 
 
+@modulemodels.scoped("subs")
 def extract_evidence(merchant, candidates, anomalies=()):
     """One completion over all candidates -> validated evidence rows."""
     if not candidates:

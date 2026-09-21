@@ -19,6 +19,8 @@ client machinery the deterministic rows use (OMNI_ROUTES in app.js).
 Model-call class is reply drafting, so passive instances answer too.
 """
 
+from . import modulemodels
+
 import json
 import re
 
@@ -71,6 +73,7 @@ def compose_prompt(text):
                                text=text[:TEXT_CAP])
 
 
+@modulemodels.scoped("find")
 def route(text):
     """One model call -> a validated route, or None (held). Never
     raises: a router that can fail the palette is worse than none."""

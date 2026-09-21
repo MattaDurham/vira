@@ -31,6 +31,8 @@ The apply pipeline itself is NOT reimplemented here — its captioning and
 Sage-review steps are LLM work; Vira just directs Claude to run the existing
 TC-IL command.
 """
+
+from . import modulemodels
 import json
 import mimetypes
 import threading
@@ -290,6 +292,7 @@ def _apply_prompt(batch_dir):
 
 
 @router.post("/apply")
+@modulemodels.scoped("subs")
 def apply(req: ApplyReq):
     if _jobs is None:
         raise HTTPException(503, "job runner not configured")
