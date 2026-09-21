@@ -20,7 +20,6 @@ sends; use the handle your self-thread actually lives on). State + a
 rolling log live in data/notify-log.json (surfaced in the Jobs window).
 """
 import json
-import os
 import subprocess
 import threading
 import time
@@ -382,7 +381,7 @@ def assistant_send(text, ref=None):
     """
     from . import send, settings
     cfg = config()
-    if (os.environ.get("VIRA_PASSIVE") or settings.fixture_mode() or settings.sandboxed()
+    if (settings.fixture_mode() or settings.sandboxed()
             or not cfg["enabled"] or not cfg["handle"]):
         return {"status": "blocked", "detail": "The owner notification channel is unavailable."}
     body = (text if text.startswith(VIRA_PREFIX) else VIRA_PREFIX + text)[:1400]

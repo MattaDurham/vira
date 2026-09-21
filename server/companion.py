@@ -21,9 +21,7 @@ few seconds apart. Exact re-uploads are dropped on a unique key of
 (sender, timestamp, text-hash); near-dupes are dropped when the same
 sender+text lands within NEAR_DUPE_S of a stored copy.
 
-Passive instances refuse every companion write (the send.py precedent):
-a test clone must never mint tokens into the machine-wide Keychain or
-swallow a real phone's upload into a disposable snapshot.
+Pairing, tokens and ingested messages use this instance's configured stores.
 """
 import hashlib
 import hmac
@@ -57,14 +55,6 @@ _ping_event = threading.Event()
 
 def keychain_service():
     return settings.keychain_service("vira-companion")
-
-
-def assert_active():
-    """The write gate, same shape as send.send_imessage's."""
-    import os
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError(
-            "passive test instance: companion pairing and ingest are blocked")
 
 
 # ---------- device + ping store (data/companion.json) ----------
@@ -115,7 +105,6 @@ def pair_start(url=None):
     """Mint a pairing: device id + token (secrets ladder), return the QR
     payload. The token appears exactly once, in this response — after the
     claim it lives only in the ladder and on the phone."""
-    assert_active()
     device_id = "cd_" + uuid.uuid4().hex[:12]
     token = pysecrets.token_urlsafe(32)
     secrets.set(keychain_service(), device_id, token)
@@ -143,7 +132,6 @@ def pair_start(url=None):
 def pair_complete(device_id, token, name="", platform=""):
     """The phone claims its pairing. Validates the token against the
     ladder, flips pending off, stamps the device."""
-    assert_active()
     if not _token_ok(device_id, token):
         raise PermissionError("unknown device or bad token")
     now = datetime.now().isoformat(timespec="seconds")
@@ -163,7 +151,6 @@ def pair_complete(device_id, token, name="", platform=""):
 
 def unpair(device_id):
     """Owner-side removal: forget the device and its ladder token."""
-    assert_active()
     with _lock:
         data = _load()
         before = len(data["devices"])
@@ -342,7 +329,6 @@ def ingest(device_id, messages, watcher=None):
     """A batch from the phone. Stores new messages, drops dupes, joins
     senders to CRM people, and pushes fresh inbound items into the live
     feed. Returns per-batch counts the app shows the user."""
-    assert_active()
     received = len(messages)
     new = dupes = bad = 0
     fresh_items = []

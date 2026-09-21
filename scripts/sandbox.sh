@@ -222,7 +222,7 @@ cmd_supervise() {
 
 serve_once() {
   local demo=${1:-}
-  # Real first boot: NOT passive. Background workers run, which is the point —
+  # Real first boot: background workers run —
   # they are what a new user's install actually does. The fake HOME is what
   # keeps them harmless, and VIRA_KEYCHAIN_PREFIX keeps live secrets unreachable.
   #

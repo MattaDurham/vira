@@ -28,7 +28,6 @@ thread so the POST returns instantly.
 from . import modulemodels
 import datetime as dt
 import json
-import os
 import re
 import threading
 import uuid
@@ -824,7 +823,7 @@ def _stage_one(entry, u):
             u["idea_id"] = it["id"]
             u["staged"] = _now()
             return
-    auto = (u.get("area") or "other") in AUTO_AREAS and not _passive()
+    auto = (u.get("area") or "other") in AUTO_AREAS
     note = f'from a journal note ({entry.get("created", "")[:10]})'
     item = ideas.add(text, status="open" if auto else "proposed",
                      source="journal", note=note, project="Vira")
@@ -857,13 +856,6 @@ def _stage_unapplied(entry, unapplied):
             _stage_one(entry, u)
         except Exception:  # noqa: BLE001 — one bad instruction never stops the rest
             pass
-
-
-def _passive():
-    """A test clone stages (its ideas store is cloned and disposable) but
-    never dispatches: it has no supervisor, so a launch there mints a job
-    that can never run — the documented passive seam."""
-    return bool(os.environ.get("VIRA_PASSIVE"))
 
 
 def stage_instruction(entry_id, instruction):

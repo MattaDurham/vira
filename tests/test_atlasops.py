@@ -198,14 +198,6 @@ class ApplyAndUndo(Base):
         self.assertEqual((self.src / "misc" / "loose.png").read_text(encoding="utf-8"),
                          "new occupant")
 
-    def test_passive_refuses_apply_and_undo(self):
-        plan = self.plan(["misc/loose.png"])
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                atlasops.apply_plan(plan["id"])
-            with self.assertRaises(PermissionError):
-                atlasops.undo_plan(plan["id"])
-        self.assertTrue((self.src / "misc" / "loose.png").exists())
 
     def test_new_vault_created_at_apply_not_plan(self):
         nv_root = Path(self.tmp.name) / "brand-new"

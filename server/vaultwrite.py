@@ -14,13 +14,13 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from . import settings
+from . import instance, settings
 from .filelock import locked
 
 POLICY_FIELDS = ("read_enabled", "write_enabled", "write_scope", "model_exposure", "purpose",
                  "contexts", "capture_dir", "write_dirs", "protected_dirs",
                  "allow_publish", "model_exclude_dirs")
-LOCK_ROOT = Path(__file__).resolve().parent.parent / "data" / "vault-locks"
+LOCK_ROOT = instance.primary_root() / "data" / "vault-locks"
 
 
 class VaultRoutingRequired(ValueError):
@@ -48,9 +48,6 @@ def policy(row=None, primary=False):
     }
 
 
-def assert_mutation_allowed():
-    if os.environ.get("VIRA_PASSIVE"):
-        raise ValueError("passive test instance: vault writes are disabled")
 
 
 def _specs():
@@ -66,8 +63,6 @@ def resolve_destination(destination=None, context=None, operation="capture",
     retains implicit selection; multiple writers without a default need a
     destination question. Availability never changes which route was selected.
     """
-    if operation != "read":
-        assert_mutation_allowed()
     specs = _specs()
     chosen = None
     requested = str(destination or "").strip()
@@ -146,7 +141,6 @@ def safe_path(spec, rel, operation="write"):
         if not spec.get("read_enabled"):
             raise ValueError("vault reading is disabled")
     else:
-        assert_mutation_allowed()
         if not spec.get("write_enabled"):
             raise ValueError("vault destination is read-only")
         if (spec.get("write_scope") != "all"
@@ -174,7 +168,6 @@ def authorize_existing_path(candidate, operation="write"):
     or an alternate spelling cannot turn a governed path into an unknown one.
     This authorizes scope; the caller retains its binary-file move mechanism.
     """
-    assert_mutation_allowed()
     candidate = Path(candidate).expanduser()
     if not candidate.is_absolute():
         raise ValueError("an absolute file path is required")
@@ -216,7 +209,7 @@ _DIR_FD = os.name == "posix" and hasattr(os, "O_NOFOLLOW")
 def _lock_path(path):
     # The same file may have multiple case/Unicode spellings on macOS and
     # Windows. Serializing those aliases is conservative on Linux as well.
-    canonical = unicodedata.normalize("NFC", str(path)).casefold()
+    canonical = unicodedata.normalize("NFC", str(Path(path).resolve())).casefold()
     return LOCK_ROOT / hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

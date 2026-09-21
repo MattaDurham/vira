@@ -1,8 +1,8 @@
 /*
  * Vira WhatsApp sidecar — a linked device speaking the multi-device
  * protocol (Baileys, pinned in package.json). Receive-only v1: it never
- * sends a message. The Vira server (or the owner, on a passive test
- * instance) starts this process and hands it every path on argv; the
+ * sends a message. The owning Vira instance
+ * starts this process and hands it every path on argv; the
  * sidecar itself decides nothing about where state lives.
  *
  *   node sidecar.js --port 18377 \
@@ -14,7 +14,7 @@
  *   GET /status            {connected, jid, needs_pair, logged_out, ...}
  *   GET /qr                {qr, png} while pairing; nulls once linked
  *   GET /messages?after=N  inbox NDJSON lines past byte-offset N -> {messages, cursor}
- *   POST /stop             graceful exit
+ *   POST /stop             graceful exit; X-Vira-Instance must match owner_id
  *
  * Inbound messages append to the inbox file as NDJSON; the byte offset is
  * the poll cursor, so a sidecar restart never invalidates Vira's cursor.
@@ -47,6 +47,7 @@ function arg(name, fallback) {
 }
 
 const PORT = parseInt(arg("port", "18377"), 10);
+const OWNER_ID = arg("owner-id", "primary");
 const SESSION_DIR = arg("session-dir", null);
 const INBOX = arg("inbox", null);
 const PIDFILE = arg("pidfile", null);
@@ -272,6 +273,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/status") {
       return json(res, 200, {
+        owner_id: OWNER_ID,
         connected: state.connected,
         jid: state.jid,
         needs_pair: !state.connected && !!state.qr,
@@ -315,6 +317,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { messages: rows, cursor: after + complete + 1 });
     }
     if (req.method === "POST" && url.pathname === "/stop") {
+      if (req.headers["x-vira-instance"] !== OWNER_ID) {
+        return json(res, 409, { error: "connector belongs to " + OWNER_ID });
+      }
       json(res, 200, { stopping: true });
       shutdown();
       return;

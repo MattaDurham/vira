@@ -181,9 +181,6 @@ class DossierBuilderTests(unittest.TestCase):
         self.assertEqual(prof["generated_by"], "vira-onboard")
 
     def test_guards(self):
-        with mock.patch.dict("os.environ", {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(RuntimeError):
-                onboard.start_dossiers()
         with mock.patch.dict("os.environ", {}, clear=False), \
              mock.patch.object(onboard.settings, "fixture_mode",
                                return_value=True):
@@ -505,27 +502,23 @@ class DossierCostTests(unittest.TestCase):
 class FdaAssistTest(unittest.TestCase):
     """The PermissionFlow-style Full Disk Access assist: deep-link System
     Settings to the exact pane, reveal the serving python in Finder, and
-    let the card's poll detect the grant. Mac-only, passive-refused."""
+    let the card's poll detect the grant. Mac-only."""
 
     def test_off_mac_refuses_by_name(self):
         with mock.patch.object(onboard.settings, "IS_MAC", False):
             with self.assertRaises(ValueError):
                 onboard.fda_assist()
 
-    def test_passive_instance_refuses(self):
-        # A branch test copy must never pop windows on the owner's desktop.
-        with mock.patch.object(onboard.settings, "IS_MAC", True), \
-             mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(RuntimeError):
-                onboard.fda_assist()
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_opens_the_pane_and_reveals_the_serving_python(self):
         calls = []
         with mock.patch.object(onboard.settings, "IS_MAC", True), \
              mock.patch.dict(os.environ), \
              mock.patch.object(onboard.subprocess, "run",
                                side_effect=lambda a, **k: calls.append(a)):
-            os.environ.pop("VIRA_PASSIVE", None)
+
             out = onboard.fda_assist()
         self.assertTrue(out["opened"])
         # The grant attaches to the interpreter actually serving Vira.

@@ -8,7 +8,6 @@ pidfiles, the config), so `test_an_empty_repo_shows_nothing` is the
 isolation guard (the readinglist / JournalBase lesson).
 """
 import json
-import os
 import subprocess
 import tempfile
 import unittest
@@ -17,7 +16,7 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from server import orphanwork, showroom
+from server import instance, orphanwork, showroom
 
 _REAL_KICK = showroom._kick_describe
 
@@ -76,13 +75,13 @@ class _RepoCase(unittest.TestCase):
         self.addCleanup(np.stop)
         self.prs = {}
         pin(showroom, "_gh_prs", lambda: dict(self.prs))
-        self.branch_sh = mock.Mock(return_value=(True, "test instance up:  http://localhost:8391  (passive, LOCAL ONLY)"))
+        self.branch_sh = mock.Mock(return_value=(True, "test instance up:  http://localhost:8391  (branch instance, LOCAL ONLY)"))
         pin(showroom, "_branch_sh", self.branch_sh)
         pin(showroom, "_serves", {})
         with orphanwork._actions_lock:
             orphanwork._actions.clear()
-        os.environ.pop("VIRA_PASSIVE", None)
-        self.addCleanup(lambda: os.environ.pop("VIRA_PASSIVE", None))
+        self.is_branch = False
+        pin(instance, "is_branch", lambda: self.is_branch)
 
     def make_worktree(self, slug, dirty=False, commits=0):
         branch = f"claude/{slug}"
@@ -404,13 +403,14 @@ class Describing(_RepoCase):
         with mock.patch("server.suggest.complete", side_effect=RuntimeError("down")):
             self.assertEqual(showroom.describe_missing(), 0)
 
-    def test_kick_describe_refuses_on_a_passive_instance(self):
-        os.environ["VIRA_PASSIVE"] = "1"
+    def test_branch_instance_runs_the_model_description_pass(self):
+        self.is_branch = True
         with mock.patch.object(showroom, "describe_missing") as dm, \
-                mock.patch.object(showroom, "_spawn") as sp:
+                mock.patch.object(showroom, "_describe_running", False), \
+                mock.patch.object(showroom, "_spawn", side_effect=lambda target, name: target()) as sp:
             _REAL_KICK()
-            dm.assert_not_called()
-            sp.assert_not_called()
+            dm.assert_called_once()
+            sp.assert_called_once()
 
 
 class Actions(_RepoCase):
@@ -537,15 +537,15 @@ class Actions(_RepoCase):
             with self.assertRaises(ValueError):
                 showroom.cleanup("claude/l")
 
-    def test_every_action_refuses_passive_by_name(self):
+    def test_lifecycle_actions_name_the_designated_primary(self):
         self.make_worktree("l", commits=1)
         self.land("l")
         showroom.refresh()
-        os.environ["VIRA_PASSIVE"] = "1"
+        self.is_branch = True
         for fn in (showroom.serve, showroom.stop, showroom.cleanup):
             with self.assertRaises(PermissionError) as cm:
                 fn("claude/l")
-            self.assertIn("passive", str(cm.exception))
+            self.assertIn(instance.primary_url(), str(cm.exception))
         self.assertEqual(self.branch_sh.call_count, 0)
 
     def test_an_unknown_branch_is_a_key_error_for_cleanup(self):
@@ -587,7 +587,7 @@ class RouteLayer(_RepoCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["counts"]["unlanded"], 1)
         r = self.client.get("/api/showroom")
-        self.assertEqual({"items", "counts", "running", "describing", "last_sweep", "passive",
+        self.assertEqual({"items", "counts", "running", "describing", "last_sweep", "instance",
                           "modules"},
                          set(r.json()))
 
@@ -604,10 +604,10 @@ class RouteLayer(_RepoCase):
         merge.assert_not_called()
         discard.assert_not_called()
 
-    def test_context_is_read_only_and_answers_on_passive(self):
+    def test_context_is_read_only_and_answers_on_branch(self):
         self.make_worktree("r", commits=1)
         showroom.refresh()
-        os.environ["VIRA_PASSIVE"] = "1"
+        self.is_branch = True
         r = self.client.get("/api/showroom/context", params={"branch": "claude/r"})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["branch"], "claude/r")
@@ -622,7 +622,7 @@ class RouteLayer(_RepoCase):
         self.assertEqual(r.status_code, 409)
         r = self.client.post("/api/showroom/serve", json={"branch": "main"})
         self.assertEqual(r.status_code, 409)
-        os.environ["VIRA_PASSIVE"] = "1"
+        self.is_branch = True
         for path in ("serve", "stop", "cleanup"):
             r = self.client.post(f"/api/showroom/{path}", json={"branch": "claude/u"})
             self.assertEqual(r.status_code, 403, path)
@@ -654,7 +654,7 @@ class Surface(unittest.TestCase):
         js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))
         foot = js[js.index("function shrFoot("):js.index("function shrLaunch(")]
         self.assertIn('"Launch the test"', foot)
-        self.assertNotIn("d.passive && it.worktree", foot)
+        self.assertNotIn("d.instance?.kind === \"branch\" && it.worktree", foot)
         card = js[js.index("function shrCard("):js.index("function shrFoot(")]
         self.assertIn("openShowroomCard(it)", card)
         self.assertNotIn("shr-detail", card)

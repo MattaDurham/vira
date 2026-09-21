@@ -18,7 +18,6 @@ must own an SMS-service account). When it doesn't, we say so plainly rather
 than failing quietly — the whole point here is to never fail silently.
 """
 import datetime
-import os
 import subprocess
 import time
 
@@ -197,9 +196,6 @@ def send_message(text, person_id=None, handle=None, channel=None, timeout=20):
     Raises ValueError for bad input (no handle / empty text) and RuntimeError
     when Messages refuses (automation permission, or SMS requested with no
     Text Message Forwarding account)."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError(
-            "passive test instance: outbound iMessage is blocked")
     if not settings.IS_MAC:
         raise RuntimeError(
             "iMessage sending needs macOS (Messages.app) — not available "
@@ -289,9 +285,6 @@ def send_to_group(chat_guid, text, chat_ids=None, timeout=20):
     {guid, channel, note}; note is set when the send looks undelivered.
     Raises ValueError on bad input and RuntimeError when Messages refuses
     (automation permission, or a guid Messages no longer knows)."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError(
-            "passive test instance: outbound iMessage is blocked")
     if not settings.IS_MAC:
         raise RuntimeError(
             "iMessage sending needs macOS (Messages.app) — not available "

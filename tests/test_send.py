@@ -128,7 +128,7 @@ class ResolveChannelTests(CapabilityTests):
 
 class SendMessageTests(unittest.TestCase):
     def setUp(self):
-        os.environ.pop("VIRA_PASSIVE", None)
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         st = Path(self.tmp.name) / "send-channels.json"
@@ -207,12 +207,9 @@ class SendMessageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             send.send_message("hi")
 
-    def test_passive_blocks(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(lambda: os.environ.pop("VIRA_PASSIVE", None))
-        with self.assertRaises(RuntimeError):
-            send.send_message("hi", handle="+1555")
 
+    @mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "feature-branch",
+                                  "VIRA_INSTANCE_URL": "http://localhost:8399"})
     def test_send_imessage_wrapper_returns_handle(self):
         with mock.patch.object(send, "resolve_channel", return_value="imessage"), \
              mock.patch.object(send, "_imessage_errored", return_value=False):

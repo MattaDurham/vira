@@ -74,7 +74,7 @@ class Base(unittest.TestCase):
         p = mock.patch.dict(os.environ, {}, clear=False)
         p.start()
         self.addCleanup(p.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
         p = mock.patch("server.settings.fixture_mode", return_value=False)
         p.start()
         self.addCleanup(p.stop)
@@ -253,13 +253,6 @@ class RescoreTests(Base):
         with mock.patch("server.settings.fixture_mode", return_value=True):
             self.assertEqual(jobrescore.rescore("a-1")["status"], "empty")
 
-    def test_a_passive_instance_refuses_before_it_spends_the_model_call(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(os.environ.pop, "VIRA_PASSIVE", None)
-        with mock.patch("server.suggest.complete") as complete:
-            with self.assertRaises(PermissionError):
-                jobrescore.rescore("a-1")
-        complete.assert_not_called()
 
 
 class PromptTests(Base):
@@ -686,14 +679,6 @@ class BulkRefusals(BulkBase):
             jobrescore.bulk_start(["a-1"])
         self.assertIn("already running", str(cm.exception))
 
-    def test_passive_refuses_before_any_model_call(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(lambda: os.environ.pop("VIRA_PASSIVE", None))
-        with mock.patch("server.suggest.complete") as complete:
-            with self.assertRaises(PermissionError):
-                jobrescore.bulk_start(["a-1"])
-        complete.assert_not_called()
-        self.assertFalse(jobrescore.bulk_status()["running"])
 
     def test_fixture_mode_is_dormant(self):
         with mock.patch("server.settings.fixture_mode", return_value=True):

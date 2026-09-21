@@ -49,15 +49,13 @@ branch never re-spends the call, and grounded-or-dropped: a reply naming
 an unknown branch, or an empty blurb, is discarded. Until the read lands
 the card shows the deterministic fallback, never a blank.
 
-Store data/showroom.json (jsonstore discipline). Reads are open on a
-passive instance - reviewing before deciding is what a test clone is for -
-and every action that touches the real repo (serve, stop, cleanup)
-refuses there by name, as orphanwork's do.
+Store data/showroom.json (jsonstore discipline). Every instance can read
+and describe branches. Instance lifecycle actions (serve, stop, cleanup)
+run through the designated primary, which manages the shared worktrees.
 """
 
 from . import modulemodels
 import json
-import os
 import re
 import subprocess
 import threading
@@ -65,7 +63,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import gitutil, joblog, jsonstore, orphanwork, settings, worktree
+from . import gitutil, instance, joblog, jsonstore, orphanwork, settings, worktree
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "showroom.json"
@@ -99,15 +97,10 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
-
-
-def _refuse_if_passive(act):
-    if _passive():
+def _require_primary(act):
+    if instance.is_branch():
         raise PermissionError(
-            f"this is a passive test instance - {act} runs branch.sh "
-            "against the owner's real repo, so it only runs on the live Vira")
+            f"{act} is managed by the primary Vira at {instance.primary_url()}")
 
 
 def _blank():
@@ -780,7 +773,7 @@ def serve(branch):
     work can be looked at, whatever state some other session left it in).
     An instance already up is reported as up - branch.sh prints "already
     running (pid N, port P)" and exits 0."""
-    _refuse_if_passive("launching a test instance")
+    _require_primary("launching a test instance")
     if not (branch or "").startswith(DRAFT_PREFIXES):
         raise ValueError(f"not a draft branch: {branch or 'unset'}")
     with _serves_lock:
@@ -818,7 +811,7 @@ def serve(branch):
 
 
 def stop(branch):
-    _refuse_if_passive("stopping a test instance")
+    _require_primary("stopping a test instance")
     if not (branch or "").startswith(DRAFT_PREFIXES):
         raise ValueError(f"not a draft branch: {branch or 'unset'}")
     _check_preview_target(branch, _worktree_of(branch))
@@ -838,7 +831,7 @@ def cleanup(branch):
     merged tree needs no force, and a tree that turns out dirty is refused
     by branch.sh itself rather than destroyed. Unlanded rows use the
     sweeper's own Discard, which carries the armed confirm."""
-    _refuse_if_passive("cleaning up a branch")
+    _require_primary("cleaning up a branch")
     orphanwork.require_action_branch(branch)
     it = _require(branch)
     if it.get("band") != "landed":
@@ -1013,11 +1006,8 @@ def describe_missing():
 
 
 def _kick_describe():
-    """The describe pass on a daemon thread, one at a time, never on a
-    passive instance (the orphanwork._kick_assess convention)."""
+    """Run the model describe pass on a daemon thread, one at a time."""
     global _describe_running
-    if _passive():
-        return
     with _describe_lock:
         if _describe_running:
             return
@@ -1071,13 +1061,10 @@ def compose():
         inst = r.get("instance") or {}
         if inst.get("alive") or (r.get("serving") or {}).get("status") == "starting":
             running += 1
-    # A passive instance never runs the describe pass, so it must not
-    # promise one: "Vira is reading 10" on a clone would be a count that
-    # only ever grows.
     return {"items": items, "counts": counts, "running": running,
             "modules": sorted(modules.items(), key=lambda kv: (-kv[1], kv[0])),
-            "describing": 0 if _passive() else len(pending_reads(s)),
-            "last_sweep": s.get("last_sweep"), "passive": _passive()}
+            "describing": len(pending_reads(s)),
+            "last_sweep": s.get("last_sweep"), "instance": instance.metadata()}
 
 
 def context(branch):

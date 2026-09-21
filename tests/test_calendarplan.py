@@ -227,8 +227,7 @@ class DestinationDiscovery(CalendarFixture):
     def test_preview_gates_never_read_or_expose_cached_native_metadata(self):
         plans.destinations()
         self.assertEqual(plans._metadata_native.call_count, 1)
-        for gate in (mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}),
-                     mock.patch.object(plans.settings, "fixture_mode", return_value=True),
+        for gate in (mock.patch.object(plans.settings, "fixture_mode", return_value=True),
                      mock.patch.object(plans.settings, "sandboxed", return_value=True)):
             with gate:
                 found = plans.destinations(refresh=True)
@@ -282,9 +281,8 @@ class CreationBoundary(CalendarFixture):
         self.assertEqual(out["status"], "blocked")
         self.create.assert_not_called()
 
-    def test_passive_sandbox_and_fixture_refuse_all_writes(self):
-        for gate in (mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}),
-                     mock.patch.object(plans.settings, "sandboxed", return_value=True),
+    def test_sandbox_and_fixture_refuse_all_writes(self):
+        for gate in (mock.patch.object(plans.settings, "sandboxed", return_value=True),
                      mock.patch.object(plans.settings, "fixture_mode", return_value=True)):
             with gate:
                 self.assert_refused(automatic=False)
@@ -569,9 +567,8 @@ class GeneratedWorkBlocks(CalendarFixture):
         self.assertTrue(draft["can_create"])
         self.assertEqual(draft["due"], "2030-09-13")
 
-    def test_passive_fixture_sandbox_and_nonmac_never_read_calendars_for_planning(self):
-        for gate in (mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}),
-                     mock.patch.object(plans.settings, "sandboxed", return_value=True),
+    def test_fixture_sandbox_and_nonmac_never_read_calendars_for_planning(self):
+        for gate in (mock.patch.object(plans.settings, "sandboxed", return_value=True),
                      mock.patch.object(plans.settings, "fixture_mode", return_value=True),
                      mock.patch.object(plans.settings, "IS_MAC", False)):
             with gate:

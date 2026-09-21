@@ -16,7 +16,7 @@ backend degrades to exactly what shipped before it existed.
 
 Read-only: it proposes a route; every act still runs through the same
 client machinery the deterministic rows use (OMNI_ROUTES in app.js).
-Model-call class is reply drafting, so passive instances answer too.
+Model calls use the configured reply-drafting provider.
 """
 
 from . import modulemodels

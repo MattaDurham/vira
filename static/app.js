@@ -8481,7 +8481,7 @@ function orphanBits(it) {
 //
 // Fetched on FIRST EXPAND, never with the sweep: the sweep runs on every
 // view open and this shells out to git per item. Read-only end to end, so
-// it opens on a passive instance exactly as it does on live.
+// it opens on every instance.
 function orphanContext(it, opts = {}) {
   const box = document.createElement("details");
   box.className = "run-result run-ctx";
@@ -9642,7 +9642,7 @@ function landingCard(sid, p) {
   if (p.test_url) {
     const a = el("a", "landing-link", "Open the test instance");
     a.href = p.test_url; a.target = "_blank"; a.rel = "noopener";
-    a.title = p.test_url + " (passive, local only)";
+    a.title = p.test_url + " (branch instance, local only)";
     links.appendChild(a);
   } else if (p.serve_note) {
     links.appendChild(el("span", "landing-note",
@@ -11135,7 +11135,7 @@ async function applyUpdate(btn) {
   }
 }
 
-// passive check shortly after load: a quiet toast when the remote is ahead
+// background check shortly after load: a quiet toast when the remote is ahead
 setTimeout(async () => {
   try {
     const u = await api("/api/update?fetch=1");
@@ -11605,8 +11605,6 @@ async function waTick() {
     stat.textContent = st.linked ? "Linked — sidecar not running" : "Not connected";
     if (!st.installed)
       hint.textContent = "Sidecar not installed — run: cd bridge/whatsapp && npm install";
-    else if (st.passive)
-      hint.textContent = "Test instance: start the sidecar by hand (scripts/whatsapp-sidecar.sh), then reopen Phone & channels.";
     else if (st.linked)
       hint.textContent = "The sidecar starts on its own within a few seconds.";
   }
@@ -11626,16 +11624,6 @@ async function waConnect() {
     hint.textContent = e.message || String(e);
   }
   startWaPoll();
-}
-
-// Passive test instance: the server never runs the watcher, so the browser
-// drives ingest — armed only once a hand-started sidecar is actually seen.
-async function waPassiveInit() {
-  try {
-    const st = await api("/api/whatsapp/status");
-    if (st.passive && st.sidecar)
-      startPoll(() => post("/api/whatsapp/poll", {}), 6000);
-  } catch { /* older server without the route */ }
 }
 
 // Backend + default models, saved from the AI card's model block. The
@@ -12288,7 +12276,7 @@ $("#review-refresh")?.addEventListener("click",
 // disk as a card - a title, a Vira-written blurb, what it touches, its PR
 // and its session - newest activity first, with grouping by CONTENT (the
 // module a branch is about) rather than sections by type (owner,
-// 2026-09-03). Every card launches its own passive test instance in a
+// 2026-09-03). Every card launches its own branch instance in a
 // fresh tab; clicking a card opens its full read as a focus panel; the
 // verdict buttons call the orphan-work sweeper's routes (never a second
 // implementation of landing); Clean up tears a landed worktree down. It
@@ -12301,15 +12289,11 @@ let shrHold = false;                 // an armed confirm is on the surface
 const SHR_BAND_LABEL = {
   session: "session live", unlanded: "unlanded", landed: "landed - not cleaned up",
 };
-// Launch runs on the server that CAN run branch.sh. A passive test
-// instance points its cards at the live server's copy of the launch
-// page, which starts the serve on its own origin.
-const SHR_LIVE_PORT = 8377;
+// Launch runs through the designated primary, which manages shared
+// worktrees. The launch page starts the instance on its own origin.
 
 function shrLaunchOrigin() {
-  return (shrData && shrData.passive)
-    ? `${location.protocol}//${location.hostname}:${SHR_LIVE_PORT}`
-    : location.origin;
+  return window.ViraWorkResults?.primaryOrigin(shrData?.instance) || location.origin;
 }
 
 async function loadShowroom() {
@@ -12409,9 +12393,9 @@ function renderShowroom() {
     q.type = "search"; q.placeholder = "Filter branches…"; q.value = shrQ;
     q.addEventListener("input", () => { shrQ = q.value || ""; renderShowroomGrid(); });
     bar.appendChild(q);
-    if (d.passive) {
+    if (d.instance?.kind === "branch") {
       bar.appendChild(el("span", "hint",
-        "passive test instance - Launch runs through the live Vira; stop and clean up only there"));
+        "Branch instance. Launch runs through the primary Vira; manage running instances there."));
     }
   }
   renderShowroomGrid();
@@ -12580,12 +12564,12 @@ function shrFoot(foot, it, d) {
     const a = el("a", "fchip sm primary", `Open the test :${inst.port}`);
     a.href = `http://${location.hostname}:${inst.port}/`; a.target = "_blank"; a.rel = "noopener";
     foot.appendChild(a);
-    if (!d.passive) btn("Stop", () => shrAct("/api/showroom/stop", it, "Instance stopped"));
+    if (d.instance?.kind !== "branch") btn("Stop", () => shrAct("/api/showroom/stop", it, "Instance stopped"));
   } else if (sv.status === "starting") {
     foot.appendChild(el("span", "shr-starting", "starting the test instance…"));
   } else {
     btn("Launch the test", () => shrLaunch(it), "primary",
-      "Serve this branch as a passive local instance and open it in a new tab");
+      "Serve this branch as a fully functional local instance and open it in a new tab");
   }
   if (it.band === "unlanded" && it.orphan_key) {
     const rec = it.orphan_read && it.orphan_read.verdict;
@@ -12595,7 +12579,7 @@ function shrFoot(foot, it, d) {
     btn("Resume", () => shrArm(foot, it, "resume"), rec === "resume" ? "rec" : "",
       "Dispatch an agent into this worktree - it starts editing immediately");
     btn("Discard", () => shrArm(foot, it, "discard"), rec === "discard" ? "rec" : "");
-  } else if (it.band === "landed" && !d.passive) {
+  } else if (it.band === "landed" && d.instance?.kind !== "branch") {
     btn("Clean up", () => shrArm(foot, it, "cleanup"), "",
       "Remove the worktree, the local branch and origin's copy - the merge stays on main");
   } else if (it.band === "session" && it.job && it.job.id) {
@@ -12608,7 +12592,7 @@ function shrFoot(foot, it, d) {
 
 // Launch opens the tab INSIDE the click (a tab opened after an await is
 // popup-blocked). The launch page starts the serve on ITS origin - the
-// live server when this is a passive instance - and becomes the instance
+// primary server when this is a branch instance - and becomes the instance
 // when it answers.
 function shrLaunch(it) {
   const url = shrLaunchOrigin() + "/showroom-launch.html?branch=" + encodeURIComponent(it.branch);
@@ -13055,9 +13039,7 @@ async function companionPairStart() {
   } catch (e) {
     qrBox.hidden = false;
     qrBox.innerHTML = "";
-    qrBox.appendChild(el("div", "empty", e.message.includes("passive")
-      ? "This is a passive test instance — pairing is disabled here."
-      : "Pairing failed: " + e.message));
+    qrBox.appendChild(el("div", "empty", "Pairing failed: " + e.message));
   }
 }
 // Pair / Refresh buttons are bound when cardChannels builds them (the
@@ -18486,13 +18468,12 @@ async function loadRoutines() {
 
 // api() throws the raw response body; FastAPI wraps every refusal as
 // {"detail": "..."} and the sentence inside is what the owner needs to read.
-// Only a supervised instance can load a source change, so never promise a
-// restart on one that has nowhere to restart into.
+// Offer automatic restart only when this instance has a process supervisor.
 function restartLine(h) {
   return h.writable.restart
     ? "Vira has to restart before the change takes effect."
-    : "This instance has no supervisor, so it keeps running the code it "
-      + "started with either way.";
+    : "Restart this instance to load the change. Automatic restart is "
+      + "unavailable for this launch.";
 }
 
 function errText(e) {
@@ -18653,9 +18634,8 @@ function partActions(h, p, r, reload, body, paint) {
           h.writable.restart
             ? "Vira has to restart before the change takes effect — the "
               + "button for that appears once you save."
-            : "This instance will not load the change: it has no supervisor "
-              + "to restart into. The edit is written to the file all the "
-              + "same.",
+            : "The edit is saved to the file. Restart this instance to load "
+              + "it; automatic restart is unavailable for this launch.",
         ].filter(Boolean),
         cta: "I understand — edit it",
         danger: true,
@@ -22157,7 +22137,7 @@ function ctxAskVira(x, y, ctx) {
         "",
         "Investigate with your native vira tools (crm_lookup, imessage_thread,",
         "mail_search, media_search, calendar, daily_brief) and the Vira HTTP API",
-        "on localhost:8377 where they help. Prefer read-only research. Never",
+        `on ${location.origin} where they help. Prefer read-only research. Never`,
         "restart the Vira server. Finish with a concise report of what you",
         "found or changed.");
       await launchJob(lines.join("\n"), "~/workspace/vira", {});
@@ -23818,11 +23798,11 @@ const FIND_CLUSTER = ["find", "find-related", "find-cloud", "find-define"];
 // workspace instead of receding with the desk. They do NOT have to open
 // together: each is listed only while open, and pressing either acts like
 // `standalone` — it keeps a live treatment without declaring one.
-const FIND_PASSIVE_MEMBERS = ["reader", "research"];
+const FIND_SECONDARY_WINDOWS = ["reader", "research"];
 
 function findClusterIds() {
   return [
-    ...FIND_PASSIVE_MEMBERS.filter((id) => winState[id]?.open),
+    ...FIND_SECONDARY_WINDOWS.filter((id) => winState[id]?.open),
     ...FIND_CLUSTER,
   ];
 }
@@ -23857,10 +23837,10 @@ function syncFindWorkspace() {
   const lit = findWorkspaceLit
     && FIND_COMPANIONS.some((c) => !c.standalone && winState[c.id]?.open);
   document.body.classList.toggle("find-workspace", lit);
-  // Passive members only belong while OPEN, so the class carries that test:
+  // Secondary windows only belong while OPEN, so the class carries that test:
   // a fixed forEach over member ids would never REMOVE the class from a
   // window that closed out of the set.
-  [...FIND_CLUSTER, ...FIND_PASSIVE_MEMBERS].forEach((id) =>
+  [...FIND_CLUSTER, ...FIND_SECONDARY_WINDOWS].forEach((id) =>
     winState[id]?.el.classList.toggle("find-member",
       lit && findClusterIds().includes(id)));
   dropSpawnedClear();
@@ -23883,7 +23863,7 @@ document.addEventListener("pointerdown", (e) => {
   // dropping it, which is why this returns instead of leaving.
   // READER and RESEARCH behave the same way: pressing into either keeps a
   // live workspace without declaring one from a plain desk.
-  if (FIND_PASSIVE_MEMBERS.includes(id) || findCompanion(id)?.standalone) return;
+  if (FIND_SECONDARY_WINDOWS.includes(id) || findCompanion(id)?.standalone) return;
   setFindWorkspaceLit(true);
 }, true);
 
@@ -27299,8 +27279,8 @@ function rdgMinorBand(items, bandKey) {
 }
 
 // Update = dispatch a session that re-researches the subject and rebuilds
-// the same slug (ids are URL-stable, so done-marks survive). On a passive
-// test instance the dispatch is refused — fall back to copying the prompt.
+// the same slug (ids are URL-stable, so done-marks survive). If dispatch
+// fails, preserve the request by copying the prompt.
 async function updateRoom(page, btn) {
   if (btn) btn.disabled = true;
   try {
@@ -30499,7 +30479,6 @@ async function boot() {
   loadBrief().catch(() => {});
   loadFeed().catch(() => {});
   window.ViraIntake?.load();
-  waPassiveInit();   // test instances: browser-driven WhatsApp ingest
   loadPeople().catch(() => {});
   loadActions().catch(() => {});
   refreshJobs().catch(() => {});
@@ -30529,12 +30508,12 @@ async function boot() {
       $("#triage-toggle").textContent = "Triage (" + candidates.length + ")";
   }).catch(() => {});
   // Non-live instances wear a badge with their port so they are never
-  // mistaken for live :8377: TEST for a passive branch instance
+  // mistaken for the primary instance: BRANCH for a parallel instance
   // (branch.sh serve), SANDBOX for a virgin install (sandbox.sh serve).
   instanceConfig().then((cfg) => {
-    if (!cfg.passive && !cfg.sandbox) return;
+    if (cfg.instance?.kind !== "branch" && !cfg.sandbox) return;
     const label = (cfg.demo ? "SANDBOX DEMO"
-                 : cfg.sandbox ? "SANDBOX" : "TEST")
+                 : cfg.sandbox ? "SANDBOX" : "BRANCH")
       + (location.port ? " :" + location.port : "");
     const badge = $("#inst-badge");
     badge.textContent = label;

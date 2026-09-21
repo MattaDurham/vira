@@ -38,7 +38,7 @@ from contextvars import ContextVar
 import urllib.parse
 from pathlib import Path
 
-from . import brief, data as crm, imessage, mail, msgraph, settings
+from . import brief, data as crm, imessage, instance, mail, msgraph, settings
 
 try:  # same guard as session.py — the app must boot without the SDK
     from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -135,7 +135,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             # (owner, 2026-09-02). runner.offer_landing serves the test
             # instance and raises the card the moment the turn parks.
             "WHEN YOUR TURN ENDS, VIRA HANDLES THE LANDING. It serves a "
-            "passive test instance of this branch and raises the merge / "
+            "fully functional instance of this branch and raises the merge / "
             "keep playing / discard decision card itself. Do NOT ask "
             "whether to merge, test or discard, and do not end on that "
             "question - end with what you built and what to look at on the "
@@ -199,7 +199,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         f"You are running inside Vira, {owner}'s personal AI chief-of-staff "
         f"web app, as an agent session on {owner}'s Mac.\n\n"
         + branch_para + ask_para + tools_para + visual_para + vault_para +
-        "Vira's HTTP API on http://localhost:8377 serves the same data as "
+        f"Vira's HTTP API on {instance.api_url()} serves the same data as "
         "JSON when you need it raw: GET /api/brief (calendar + who's "
         "waiting), /api/people?q=<name>, /api/person/<id>, "
         "/api/search?q=<query>, /api/ideas.\n\n"
@@ -226,7 +226,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "If none of those is true you have not finished the turn.\n\n"
         "CRITICAL: you run as a child process INSIDE the Vira server. Never "
         "restart, stop, or kill the Vira server or its launchd service (no "
-        "launchctl kickstart/bootout of nyc.durham.vira, no pkill of uvicorn "
+        f"launchctl kickstart/bootout of {instance.service_label()}, no pkill of uvicorn "
         "or python) — that kills you mid-task. If a restart is needed, put "
         "it in your final report for the owner to run.")
 
@@ -1193,11 +1193,6 @@ def _record_role_scores_text(scores_json):
     if not isinstance(rows, list) or not rows:
         return ("error: scores_json must be a non-empty JSON array of score "
                 "objects.")
-
-    try:
-        jobscores._refuse_if_passive()
-    except PermissionError as e:
-        return f"error: {e}."
 
     known = jobscores.known_uids()
     wrote, failed = [], []

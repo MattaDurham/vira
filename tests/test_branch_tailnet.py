@@ -1,4 +1,4 @@
-"""Tailnet reachability and handoff URLs for passive branch instances."""
+"""Tailnet reachability and handoff URLs for parallel branch instances."""
 import json
 import os
 import plistlib
@@ -319,6 +319,14 @@ exit 0
             payload = plistlib.load(handle)
         self.assertTrue(payload["KeepAlive"])
         self.assertFalse(payload["AbandonProcessGroup"])
+        context = payload["EnvironmentVariables"]
+        self.assertEqual(context["VIRA_INSTANCE_ID"], "branch:bounded")
+        self.assertEqual(context["VIRA_INSTANCE_URL"], "http://localhost:8381")
+        self.assertEqual(context["VIRA_PRIMARY_ROOT"], str(fake_live))
+        self.assertEqual(context["VIRA_SERVICE_LABEL"], payload["Label"])
+        self.assertEqual(context["PYTHONPATH"].split(os.pathsep)[0],
+                         str(preview / ".test-instance.packages"))
+        self.assertIn(str(python), payload["ProgramArguments"])
 
         assertion_args = self.bindir / "caffeinate-args"
         assertion_pid = self.bindir / "caffeinate-pid"

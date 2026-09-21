@@ -13,9 +13,7 @@ the same rules:
   second time.
 - The sidecar lives in the VAULT (``<vault>/.chaska``), chaska's own default,
   so a CLI build (``chaska build ~/TC-IL``) and this module see one atlas.
-  That also means the sidecar sits OUTSIDE a test clone's ``data/`` — so a
-  passive instance may READ it but never build or write viewer config into
-  it (the plans.py precedent).
+  All connected instances use the same configured vault sidecar.
 - Builds run OUT OF PROCESS (``python -m chaska build``): the projection is
   minutes of pure-numpy work whose scatter-adds hold the GIL, exactly the
   class of CPU that starves the event loop (see admission.py). A child
@@ -35,7 +33,6 @@ import time
 from collections import deque
 from pathlib import Path
 
-import os
 
 from . import settings
 
@@ -145,11 +142,8 @@ def atlas():
 def register_vault(name: str, root: str, create: bool = False) -> dict:
     """Add a vault to the registry (and optionally create its skeleton).
     Config is the store (atlas_vaults), written through onboard.config_set —
-    the sanctioned identity-key writer. Refused on passive instances: the
-    directory creation lands on the real filesystem and the config write
-    belongs to the live install."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError("passive instance — vault registration runs on the live Vira only")
+    the sanctioned identity-key writer. Directory creation lands in the
+    selected destination, and configuration belongs to this instance."""
     name = (name or "").strip()
     if not name:
         raise ValueError("a vault needs a name")
@@ -198,8 +192,6 @@ def building() -> bool:
 
 
 def start_build(limit: int | None = None, vault: str = PRIMARY) -> dict:
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError("passive instance — builds run on the live Vira only")
     a = atlas_for(vault)
     if a is None:
         raise RuntimeError("image atlas is dormant: " + (dormant_reason() or f"unknown vault '{vault}'"))
@@ -319,8 +311,7 @@ def note_text(rel: str, vid: str = PRIMARY) -> str | None:
 
 # viewer overlay config (renamed labels, hidden images, custom clusters) —
 # stored in the SIDECAR's viewer-config.json so the chaska CLI server and
-# Vira serve one truth. Writes refuse on passive: the sidecar is the real
-# vault's, not the clone's.
+# Vira serve one truth. The sidecar belongs to the connected vault.
 
 _cfg_lock = threading.Lock()
 
@@ -338,8 +329,6 @@ def viewer_config_get(row: str, vid: str = PRIMARY):
 
 
 def viewer_config_put(row: str, content, vid: str = PRIMARY) -> None:
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError("passive instance — viewer config writes land in the real vault sidecar")
     a = atlas_for(vid)
     if a is None:
         raise RuntimeError("image atlas is dormant")

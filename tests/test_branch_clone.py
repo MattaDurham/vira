@@ -76,6 +76,41 @@ class CloneDataTests(unittest.TestCase):
         self.assertTrue((self.dst / ".test-snapshot").read_text().strip())
         self.assertFalse(self.stage.exists())
 
+    def test_model_admission_starts_empty_without_losing_previous_history(self):
+        from server import modeladmission
+
+        name = "model-admission.sqlite3"
+        source_db = self.src / name
+        running = modeladmission.Lease("primary running", "foreground",
+                                       capacity=1, path=source_db)
+        queued = modeladmission.Lease("primary queued", "foreground",
+                                      capacity=1, path=source_db)
+        self.assertEqual(running.poll()["status"], "running")
+        self.assertEqual(queued.poll()["status"], "queued")
+        original = source_db.read_bytes()
+        for suffix in ("-wal", "-shm", "-journal"):
+            (self.src / (name + suffix)).write_bytes(b"primary sidecar")
+
+        self.dst.mkdir()
+        previous = self.dst / name
+        previous.write_bytes(b"previous branch admission history")
+        result = run_clone(f'clone_data "{self.src}" "{self.dst}"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(list(self.dst.glob(name + "*")))
+        self.assertEqual(source_db.read_bytes(), original)
+        for suffix in ("-wal", "-shm", "-journal"):
+            self.assertEqual((self.src / (name + suffix)).read_bytes(), b"primary sidecar")
+        saved = list((self.wt / ".test-instance.history").glob("*/data/" + name))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_bytes(), b"previous branch admission history")
+
+        # A real branch lease gets its slot immediately despite both source
+        # tickets still naming this live process. No model is invoked.
+        branch = modeladmission.Lease("branch foreground", "foreground",
+                                      capacity=1, path=self.dst / name)
+        self.assertEqual(branch.poll()["status"], "running")
+        branch.release()
+
     def test_entry_that_vanishes_mid_clone_is_skipped_not_fatal(self):
         # the real failure: a file listed by the walk is gone by the time cp
         # reaches it, and `set -eu` turned that into a hard abort
@@ -110,13 +145,31 @@ class CloneDataTests(unittest.TestCase):
         self.assertFalse(self.dst.exists())
         self.assertFalse(self.stage.exists())
 
-    def test_stale_destination_is_replaced_wholesale(self):
+    def test_previous_destination_is_preserved_when_replaced(self):
         self.dst.mkdir(parents=True)
         (self.dst / "leftover.json").write_text("stale")
         r = run_clone(f'clone_data "{self.src}" "{self.dst}"')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((self.dst / "leftover.json").exists())
         self.assertTrue((self.dst / ".test-snapshot").exists())
+        saved = list((self.wt / ".test-instance.history").glob("*/data/leftover.json"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(encoding="utf-8"), "stale")
+
+    def test_failed_refresh_keeps_existing_snapshot_in_place(self):
+        self.dst.mkdir(parents=True)
+        evidence = self.dst / "branch-session.json"
+        evidence.write_text('{"history": true}', encoding="utf-8")
+        stub = '''
+        cp() {
+          [[ "$2" == */config.json ]] && return 1
+          command cp "$@"
+        }
+        '''
+        result = run_clone(f'{stub}\nclone_data "{self.src}" "{self.dst}"')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(evidence.read_text(encoding="utf-8"), '{"history": true}')
+        self.assertFalse(list(self.wt.glob(".test-instance.snapshot.*")))
 
 
 if __name__ == "__main__":

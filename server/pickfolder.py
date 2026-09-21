@@ -23,7 +23,6 @@ cases where that fails, all refused rather than half-served:
 
   * **demo mode** — a sandbox walkthrough must never put a real window on
     the real desktop (learned 2026-07-30, the whole reason `--demo` exists).
-  * **VIRA_PASSIVE** — a test clone acting on the world.
   * **a remote browser** — the phone over Tailscale. The caller passes
     `local=False` and gets `unavailable` with a reason, so the UI can fall
     back to the text field instead of popping a panel on a Mac nobody is
@@ -32,7 +31,6 @@ cases where that fails, all refused rather than half-served:
 Callers must handle `unavailable`: this is an ENHANCEMENT over the text
 field, never a replacement for it.
 """
-import os
 import subprocess
 
 from . import settings
@@ -92,8 +90,6 @@ def available(local=True):
                        "a folder window would open on the wrong screen")
     if settings.demo():
         return False, "demo mode — the real flow opens a folder window here"
-    if os.environ.get("VIRA_PASSIVE"):
-        return False, "test instance — not opening windows on your desktop"
     if settings.IS_MAC or settings.IS_WIN:
         return True, ""
     return False, "no folder window on this platform — type the path instead"

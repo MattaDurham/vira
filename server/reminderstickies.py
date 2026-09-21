@@ -7,7 +7,6 @@ canonical reminder sources are read without changing their task state.
 """
 import json
 import math
-import os
 import re
 
 from fastapi import APIRouter, HTTPException
@@ -26,7 +25,7 @@ BOUNDS = {"x": (0, 20000), "y": (0, 20000),
 
 
 def isolated():
-    return bool(os.environ.get("VIRA_PASSIVE") or settings.sandboxed())
+    return bool(settings.sandboxed())
 
 
 def _snapshot_layout():

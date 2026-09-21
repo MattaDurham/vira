@@ -50,7 +50,7 @@ class DestinationCase(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
 
 class PlanRoutingTests(DestinationCase):
@@ -136,14 +136,6 @@ class PlanRoutingTests(DestinationCase):
             plans.delete_plan(entry["id"])
         self.assertTrue(outside.exists())
 
-    def test_passive_blocks_direct_save_and_delete(self):
-        entry = plans.save_plan("# Keep", destination="home")
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(ValueError):
-                plans.save_plan("# Block", destination="home")
-            with self.assertRaises(ValueError):
-                plans.delete_plan(entry["id"])
-        self.assertTrue(Path(entry["path"]).exists())
 
 
 class PlanPublicationTests(DestinationCase):

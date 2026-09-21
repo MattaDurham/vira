@@ -332,14 +332,10 @@ class SendTests(GroupChatBase):
         with self.assertRaises(ValueError):
             groupchat.send([999], "hello?")
 
-    def test_passive_instance_blocks_group_sends(self):
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(RuntimeError):
-                sender.send_to_group("iMessage;+;chat100", "hi")
 
     def test_empty_and_guidless_sends_are_bad_input(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VIRA_PASSIVE", None)
+
             with mock.patch.object(sender.settings, "IS_MAC", True):
                 with self.assertRaises(ValueError):
                     sender.send_to_group("", "hi")
@@ -376,11 +372,11 @@ class RouteTests(unittest.TestCase):
 
     def test_send_route_maps_runtime_errors_to_400(self):
         with mock.patch("server.groupchat.send",
-                        side_effect=RuntimeError("passive test instance")):
+                        side_effect=RuntimeError("Messages unavailable")):
             r = self.client.post("/api/group/send",
                                  json={"ids": [2], "text": "hi"})
         self.assertEqual(r.status_code, 400)
-        self.assertIn("passive", r.json()["detail"])
+        self.assertIn("Messages unavailable", r.json()["detail"])
 
     def test_send_route_passes_through_result(self):
         with mock.patch("server.groupchat.send",

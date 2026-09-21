@@ -189,9 +189,9 @@ class JournalBase(BriefEditBase):
         self.spatch = mock.patch("server.session.sessions.launch",
                                  side_effect=fake_launch)
         self.spatch.start()
-        # dispatch is decided by journal._passive, which reads the env; pin
+        # Dispatch uses the allowed instruction areas; fixture launches are mocked.
         # it so a case means the same thing under `branch.sh serve`
-        self.ppatch = mock.patch.object(journal, "_passive", return_value=False)
+        self.ppatch = mock.patch.object(journal, "AUTO_AREAS", {"app", "config", "contacts", "data"})
         self.ppatch.start()
 
     def tearDown(self):
@@ -471,14 +471,6 @@ class TestJournalStaging(JournalBase):
         self.assertEqual(it["status"], "proposed")
         self.assertEqual(self.launched, [])
 
-    def test_a_passive_instance_stages_but_never_dispatches(self):
-        # a test clone has no supervisor, so a launch there mints a job that
-        # can never run
-        with mock.patch.object(journal, "_passive", return_value=True):
-            _, u = self.stage("Rename something", "app")
-        self.assertTrue(u["idea_id"])
-        self.assertNotIn("job_id", u)
-        self.assertEqual(self.launched, [])
 
     def test_a_failed_dispatch_keeps_the_work_on_the_queue(self):
         with mock.patch("server.session.sessions.launch",

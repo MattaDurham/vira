@@ -54,7 +54,7 @@
     <h1 id="title">Launching…</h1>
     <div class="status" id="status">Cloning a snapshot of your data and booting the branch. A minute or so.</div>
     <div class="bar" id="bar"><i></i></div>
-    <div class="hint" id="hint">This tab becomes the test the moment it answers. Passive, local only — it never sends anything.</div>
+    <div class="hint" id="hint">This tab becomes the test the moment it answers. Fully functional branch instance, available locally.</div>
   </div>
 </main>
 <script>
@@ -69,8 +69,8 @@
   var started = Date.now();
   var LIMIT_MS = 12 * 60 * 1000;
   // The page starts the serve ITSELF (same origin as the server that can
-  // run branch.sh), so a card on a passive test instance can point at the
-  // live server's copy of this page and still launch. Idempotent: an
+  // run branch.sh), so a card on a branch instance can point at the
+  // primary server's copy of this page and still launch. Idempotent: an
   // instance already up is reported up, one already starting says so.
   fetch("/api/showroom/serve", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ branch: branch }) })

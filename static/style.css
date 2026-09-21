@@ -105,7 +105,7 @@ body {
 }
 .topbar-sub { flex: 1; font-size: 12px; color: var(--text-faint); }
 
-/* passive test instance marker (branch.sh serve) — loud on purpose, so a
+/* branch instance marker (branch.sh serve) — loud on purpose, so a
    test Vira is never mistaken for live */
 .inst-badge {
   align-self: center; flex: none;

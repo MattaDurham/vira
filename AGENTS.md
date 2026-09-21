@@ -214,15 +214,19 @@ section is the portable minimum that holds for any agent, any harness:
 - **Address instances as `localhost:<port>`, never `127.0.0.1`** — some
   agent harnesses block the numeric loopback form. Live owns 8377; test
   instances (`scripts/branch.sh serve <slug>`) take 8378–8399 and run
-  passive: background workers off, outbound messaging hard-blocked.
+  as fully functional parallel instances with their own runtime state. They
+  use the same provider credentials and configured local sources. Branch
+  identity is metadata, never a restriction on models, vaults, or workers.
 - **Owner review uses the full current app.** Before handing over a preview,
   update the feature worktree onto the latest local `main` and refresh its
   private snapshot with `scripts/branch.sh serve <slug> --fresh --local`.
   Use the owner's actual data, configuration, and saved layout. Preserve the
   desktop arrangement and open the changed features so they are immediately
-  visible. Verify the fresh snapshot is actually running: `serve` does not
-  refresh an already-running instance. Rebuilding a requested test instance
-  never authorizes restarting live. Synthetic `--fixture` previews are for
+  visible. Verify the fresh snapshot is running. Plain `serve` reuses an
+  already-running instance; `--fresh` stops and refreshes only that branch,
+  preserving its previous snapshot. Finish or close that branch's running
+  sessions before refreshing. Never refresh the instance hosting the current
+  agent session or restart live. Synthetic `--fixture` previews are for
   isolated testing or an explicit sample-data request, not the owner-review
   handoff. Keep snapshots git-ignored and never replace live state.
 - **Text IO carries `encoding="utf-8"` on both ends** — Windows defaults

@@ -30,7 +30,7 @@ Stores:
   data/circuit-runs.json  — runs; stages_def frozen per run at start
 """
 
-from . import modulemodels
+from . import instance, modulemodels
 import json
 import re
 import threading
@@ -804,12 +804,13 @@ def _mutate_runs(fn):
 
 def list_runs(limit=40):
     with _rlock, locked(RUNS):
-        return list(reversed(_load_runs()["runs"]))[:max(1, min(limit, 200))]
+        return [instance.record_view(r) for r in
+                list(reversed(_load_runs()["runs"]))[:max(1, min(limit, 200))]]
 
 
 def get_run(run_id):
     with _rlock, locked(RUNS):
-        return next((r for r in _load_runs()["runs"]
+        return next((instance.record_view(r) for r in _load_runs()["runs"]
                      if r["id"] == run_id), None)
 
 
@@ -847,6 +848,7 @@ def start_run(cid, input_text, cwd=None, notify=False, source="manual",
     run = {
         "id": "run_" + uuid.uuid4().hex[:10],
         "circuit_id": cid, "circuit_name": circ["name"],
+        "instance_id": instance.id(), "instance_url": instance.api_url(),
         "input": input_text, "cwd": cwd or None, "idea_id": idea_id,
         "provider": provider,
         "vault_destination": str(vault_destination or "").strip(),
@@ -912,6 +914,9 @@ def decide_approval(run_id, stage_id, approved, note=""):
     run = get_run(run_id)
     if not run:
         raise KeyError(run_id)
+    if not instance.owns(run):
+        raise ValueError("this flow belongs to another instance: "
+                         + (run.get("instance_url") or instance.primary_url()))
     stage_def = next((stage for stage in run.get("stages_def") or []
                       if stage.get("id") == stage_id), None)
     if not stage_def or norm_stage_mode(stage_def.get("mode")) != "approval":
@@ -1379,7 +1384,7 @@ class Driver(threading.Thread):
         while not self._stop.is_set():
             try:
                 for run in [r for r in list_runs(200)
-                            if r["status"] == "running"]:
+                            if r["status"] == "running" and instance.owns(r)]:
                     self._advance(run)
             except Exception:  # noqa: BLE001 — the driver never dies
                 pass
@@ -1391,6 +1396,8 @@ class Driver(threading.Thread):
     # -- one run, one tick --
 
     def _advance(self, run):
+        if not instance.owns(run):
+            return
         from . import session
         changed = {}
         defs = {st["id"]: st for st in run["stages_def"]}
@@ -1473,10 +1480,8 @@ class Driver(threading.Thread):
     def _maybe_timeout(self, run, sid, st, st_def, changed):
         """Interrupt a running stage past its `timeout_s` budget, once.
 
-        The mark lands whether or not the interrupt could be delivered - a
-        passive instance has no supervisor to carry the control op, and the
-        stage there will never end anyway; on live the runner sees the op
-        within ~250ms and ends the turn like a Stop from the terminal."""
+        The mark records the timeout even if delivery fails; a reachable
+        runner consumes the control operation on its next tick."""
         limit = int(st_def.get("timeout_s") or 0)
         if limit <= 0 or st.get("timed_out"):
             return

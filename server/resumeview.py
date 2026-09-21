@@ -45,7 +45,6 @@ from . import modulemodels
 import hashlib
 import json
 import math
-import os
 import re
 from pathlib import Path
 
@@ -94,10 +93,6 @@ _TABLE_RULE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
 
 class ViewError(RuntimeError):
     pass
-
-
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
 
 
 def _now():
@@ -754,9 +749,6 @@ def feedback(uid, scope, text, context=""):
         return {"routed": "application",
                 "detail": "Saved to this role. It rides into the next package "
                           "build."}
-    if _passive():
-        raise ViewError("This is a test instance — a broader note would write "
-                        "the real journal, so it is refused here.")
     from . import journal
     entry = journal.add(text, context=_clean(context, 300) or
                         "Resume viewport — broader than this application")

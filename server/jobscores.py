@@ -47,7 +47,6 @@ and a store that dropped them would lose data on migration):
    "scored_at", "canon", "source_file"?, "prev"?}
 """
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -374,11 +373,6 @@ def load(udir=None):
 
 # ----------------------------------------------------------------- write
 
-def _refuse_if_passive():
-    if os.environ.get("VIRA_PASSIVE"):
-        raise PermissionError(
-            "passive instance: scores write the owner's real self-record")
-
 
 def known_uids(udir=None):
     """Every uid this install could legitimately score: the curated universe
@@ -407,12 +401,9 @@ def write(entry, *, udir=None, known=None, source_file=None,
     save_profile_refresh precedent), so a bad rescore is visibly
     recoverable rather than silently destructive.
 
-    REFUSED ON A PASSIVE INSTANCE. Scores live in the CRM self-record,
-    which is OUTSIDE the cloned data/ a branch instance gets — so a test
-    copy writing here would edit the owner's real job-search analysis.
-    Same boundary plans.py and vaultpeople.create_stub hold.
+    Scores live in the configured CRM self-record and are shared by
+    instances connected to that record.
     """
-    _refuse_if_passive()
     clean = validate(entry, known=known, cap_text=cap_text)
     d = scores_dir(udir)
     d.mkdir(parents=True, exist_ok=True)
@@ -446,7 +437,6 @@ def migrate(udir=None, *, force=False):
     candidate. That stops being true after anything rescores, which is why
     this runs before the write path is live.
     """
-    _refuse_if_passive()
     sourced = _legacy_sourced(udir)
     seen, report = set(), {"written": 0, "existing": 0, "skipped": [],
                            "entries": 0}

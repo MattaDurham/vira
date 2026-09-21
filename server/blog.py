@@ -13,9 +13,8 @@ is PUBLIC at /blog/ (flipped 2026-08-27, public-flip wave 2); it started life
 decision in the site's flip playbook. The gate applies either way, because a
 gated post is one path-move away from public.)
 
-Passive instances refuse publish() outright (it writes a repo outside the
-cloned data/ and pushes) — the send.py precedent. Authoring (add_post) is
-allowed anywhere: it only writes this instance's own data/.
+Authoring (add_post) writes this instance's own data/. Publishing uses the
+configured site repository and applies the anonymization gate above.
 
 CLI: python -m server.blog add "<title>" <markdown-file>
      python -m server.blog add-dossier "<title>" <directory> [summary]
@@ -26,7 +25,6 @@ from __future__ import annotations
 
 import html as _html
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -428,9 +426,6 @@ def _git(repo: Path, *args, timeout=60):
 def publish(slug: str, *, push: bool = True) -> dict:
     """Render, scan, stage into the site repo, rewrite the site's blog.json,
     commit (+ push — the site Action deploys on push). Returns {url, sha}."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError("passive instance — publishing writes the site "
-                           "repo and pushes; run this on live")
     entry = get_post(slug)
     if not entry:
         raise ValueError(f"unknown post: {slug}")

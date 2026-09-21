@@ -27,11 +27,8 @@ the bytes also means the whole archive can be moved to an external drive as
 one directory — which matters, since the disk pressure that causes the
 eviction is the same disk this would otherwise fill.
 
-Reads always work. WRITES REFUSE UNDER VIRA_PASSIVE: with the default root
-a test clone would grow a duplicate archive, and with the root pointed at an
-external drive it would write into the owner's real one — the plans.py
-boundary. A passive instance still serves whatever the archive already holds,
-which is what makes the surface testable on a branch.
+Reads and writes use the configured archive root, including an external
+drive shared with another instance.
 """
 import hashlib
 import json
@@ -95,10 +92,6 @@ def max_bytes():
         return 0
 
 
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
-
-
 def _db(create=True):
     """Connection to the archive's own index, or None when the root is
     unreachable (an external drive that is not mounted). Never raises —
@@ -132,7 +125,7 @@ def blob_path(sha):
     return root() / "blobs" / sha[:2] / sha
 
 
-# ---------- reads (always available, passive included) ----------
+# ---------- reads ----------
 
 def lookup(att_id):
     """(path, mime, name) for an archived attachment, or (None, None, None).
@@ -227,9 +220,6 @@ def store(att_id, path, mime=None, name=None):
     sha when already held. Single pass — hashed while copied, then renamed
     into its content address, so identical bytes from a second conversation
     cost no extra space."""
-    if _passive():
-        raise PermissionError(
-            "passive instance — the archive is the owner's real store")
     src = Path(path)
     con = _db()
     if con is None:
@@ -335,9 +325,6 @@ def sweep(log=print, limit=None):
     since the last pass, which on a settled machine is nothing."""
     if not enabled():
         log("archive: disabled")
-        return 0
-    if _passive():
-        log("archive: passive instance — not writing")
         return 0
     con = _db()
     if con is None:

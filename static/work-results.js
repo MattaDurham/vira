@@ -50,6 +50,21 @@
     ref?.branch ? "branch:" + ref.branch : ref?.job_id ? "job:" + ref.job_id :
     ref?.flow_id ? "flow:" + ref.flow_id : ref?.session_id ? "session:" + ref.session_id : ref?.id;
 
+  function primaryOrigin(metadata) {
+    if (metadata?.kind !== "branch") return location.origin;
+    try {
+      const url = new URL(metadata.primary_url);
+      if (!["http:", "https:"].includes(url.protocol)) return location.origin;
+      // A server's loopback origin names this computer. In a remote browser,
+      // keep the reachable hostname while taking the primary's actual port.
+      if (url.hostname === "localhost" && location.hostname !== "localhost") {
+        url.hostname = location.hostname;
+        url.protocol = location.protocol;
+      }
+      return url.origin;
+    } catch (_) { return location.origin; }
+  }
+
   function mount(container, options = {}) {
     if (!container) throw new Error("Work results needs a container");
     if (current && current.container === container) {
@@ -103,7 +118,7 @@
         return link("Open preview", location.protocol + "//" + location.hostname + ":" + Number(instance.port) + "/");
       }
       const launch = button(info.serving?.status === "starting" ? "Preview starting..." : "Launch preview", () => {
-        const origin = state.data.passive ? location.protocol + "//" + location.hostname + ":8377" : location.origin;
+        const origin = primaryOrigin(state.data.instance);
         window.open(origin + "/showroom-launch.html?branch=" + encodeURIComponent(item.branch), "_blank", "noopener");
       });
       launch.disabled = info.serving?.status === "starting";
@@ -287,9 +302,9 @@
         const actions = e("div", "wr-detail-actions");
         if (row.can_preview) actions.append(previewAction(row));
         if (row.branch_info?.pr?.url) actions.append(link("Pull request #" + row.branch_info.pr.number, row.branch_info.pr.url));
-        if (row.branch_info?.instance?.alive && !state.data.passive)
+        if (row.branch_info?.instance?.alive && state.data.instance?.kind !== "branch")
           actions.append(button("Stop preview", () => action("/api/showroom/stop", { branch: row.branch }, actions)));
-        if (row.branch_info?.band === "landed" && !state.data.passive && !row.action_limit)
+        if (row.branch_info?.band === "landed" && state.data.instance?.kind !== "branch" && !row.action_limit)
           actions.append(button("Clean up branch", () => confirmCleanup(actions, row)));
         body.append(actions);
         if (row.action_limit) body.append(e("p", "wr-error", row.action_limit));
@@ -411,7 +426,7 @@
     return state;
   }
 
-  window.ViraWorkResults = { mount,
+  window.ViraWorkResults = { mount, primaryOrigin,
     open(ref) { if (current) return current.open(ref); pendingRef = ref; },
     setView(view) { current?.setView(view); },
     refresh() { return current?.refresh(); },

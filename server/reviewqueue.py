@@ -785,7 +785,7 @@ def _journal_act(raw_id, action):
       Queue idea via the same `_stage_one` the integration pass uses, so
       it inherits the dedup, the blast-radius split (an `app`/`config`/
       `contacts`/`data` instruction dispatches; anything else stages
-      `proposed` behind the approval bar), and the passive seam. If
+      `proposed` behind the approval bar). If
       staging declines to place it, the result SAYS so rather than
       pretending - the row stays in the queue.
     - **drop** - `journal.resolve_unapplied`: stamped resolved, which

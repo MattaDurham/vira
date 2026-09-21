@@ -48,7 +48,6 @@ with a shelf life.
 
 from . import modulemodels
 import json
-import os
 import re
 import threading
 import time
@@ -543,8 +542,7 @@ def refresh(batches=1):
 
 class Indexer(threading.Thread):
     """Tag at most one batch per tick, so a fresh library tags itself over an
-    hour or two and nothing ever waits on it. Skipped under VIRA_PASSIVE like
-    every worker."""
+    hour or two and nothing ever waits on it."""
 
     def __init__(self, interval_min=None):
         super().__init__(daemon=True)
@@ -554,8 +552,6 @@ class Indexer(threading.Thread):
         while True:
             time.sleep(self.interval)
             try:
-                if os.environ.get("VIRA_PASSIVE"):
-                    continue
                 tag_pending(batches=1)
             except Exception:
                 continue

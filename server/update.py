@@ -19,10 +19,11 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from importlib.metadata import distribution
 from pathlib import Path
 
-from . import gitutil, settings
+from . import gitutil, instance, settings
 
 ROOT = Path(__file__).resolve().parent.parent
 _last_fetch = {"at": 0.0}
@@ -93,6 +94,11 @@ def supervisor():
     point is to boot without one."""
     if settings.sandbox_loop():
         return "loop", "sandbox relaunch loop"
+    # Runtime identity outranks cloned settings. An unsupervised branch
+    # must never fall back to the primary instance's service label.
+    label = instance.service_label()
+    if label or instance.is_branch():
+        return ("task" if settings.IS_WIN else "launchd"), label
     cfg = settings.raw()
     if settings.IS_WIN:
         return "task", str(cfg.get("windows_task_name") or "").strip()
@@ -216,20 +222,53 @@ def _install_deps():
             skipped.append(name)
         else:
             keep.append(line)
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
         tf.write("\n".join(keep) + "\n")
         tmp = tf.name
     try:
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-r", tmp],
-                           capture_output=True, text=True, timeout=300)
+        if instance.is_branch():
+            _install_branch_deps(tmp)
+        else:
+            r = subprocess.run([sys.executable, "-m", "pip", "install", "-r", tmp],
+                               capture_output=True, text=True, encoding="utf-8",
+                               timeout=300)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or r.stdout).strip()[-300:])
     finally:
         os.unlink(tmp)
-    if r.returncode != 0:
-        raise RuntimeError((r.stderr or r.stdout).strip()[-300:])
     note = "dependencies synced"
     if skipped:
         note += " (editable, untouched: " + ", ".join(sorted(skipped)) + ")"
     return note
+
+
+def _install_branch_deps(requirements):
+    """Same FDA-granted Python, branch-owned dependency search path.
+
+    Build before replacing so a failed pip invocation leaves the running
+    branch's dependencies intact. The launcher places this directory first
+    on PYTHONPATH; shared editable packages still fall through to the venv.
+    """
+    target = ROOT / ".test-instance.packages"
+    with tempfile.TemporaryDirectory(prefix=".test-instance.packages.",
+                                     dir=ROOT) as stage_dir:
+        stage = Path(stage_dir) / "packages"
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--target", str(stage),
+             "-r", requirements], capture_output=True, text=True,
+            encoding="utf-8", timeout=300)
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or r.stdout).strip()[-300:])
+        saved = None
+        if target.exists():
+            saved = ROOT / (".test-instance.packages.previous." + uuid.uuid4().hex)
+            target.replace(saved)
+        try:
+            stage.replace(target)
+        except OSError:
+            if saved is not None:
+                saved.replace(target)
+            raise
 
 
 def _restart():

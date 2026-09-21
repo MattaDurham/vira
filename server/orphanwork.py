@@ -50,7 +50,6 @@ from . import modulemodels
 import hashlib
 import json
 import mimetypes
-import os
 import re
 import subprocess
 import threading
@@ -651,7 +650,7 @@ def _prompt_fields(item):
 
 
 def resume_prompt(item):
-    """The composed resume prompt — also servable read-only for a passive
+    """The composed resume prompt — also servable read-only for a branch
     instance to copy into another session (the apply-prompt pattern)."""
     return RESUME_PROMPT.format(**_prompt_fields(item))
 
@@ -796,7 +795,7 @@ def context(item):
     every changed file, and the exact prompt a Resume would dispatch.
 
     Nothing here launches, writes or sweeps — it is the review a decision
-    needs, and it is deliberately safe to open on a passive instance."""
+    needs, with no mutation when it is opened."""
     wt = item.get("worktree") or ""
     branch = item.get("branch") or ""
     out = {"key": item.get("key") or "", "branch": branch, "worktree": wt,
@@ -1127,7 +1126,7 @@ def land_prompt(item):
 
 def land_diagnose_prompt(item):
     """The diagnose-first landing prompt — also servable read-only, so a
-    passive instance can hand it to another session (the apply-prompt
+    branch instance can hand it to another session (the apply-prompt
     pattern)."""
     f = _prompt_fields(item)
     f["failure_block"] = _failure_block(item)
@@ -1533,14 +1532,11 @@ def assess_missing():
 
 
 def _kick_assess():
-    """Run the assessment on a daemon thread, one at a time, and never on
-    a passive instance (the worker convention — a test clone's sweep must
-    not spend model calls on every view open). refresh() calls this, so a
+    """Run the assessment on a daemon thread, one at a time. refresh()
+    calls this, so a
     row is assessed within one sweep of appearing and the cache makes
     every later sweep free."""
     global _assess_running
-    if os.environ.get("VIRA_PASSIVE"):
-        return
     with _assess_lock:
         if _assess_running:
             return

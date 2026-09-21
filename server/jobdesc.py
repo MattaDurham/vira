@@ -37,7 +37,7 @@ So this module is two things:
   IS the answer — and the payload says how old it is rather than
   implying Vira just checked.
 
-Nothing here writes the world, so a passive instance serves it in full:
+This interface reads the connected sources:
 reading a public job posting is not acting on anything.
 """
 import html as htmllib

@@ -114,11 +114,14 @@ class TestPreamble(unittest.TestCase):
         self.assertIn("mcp__vira__", native)
         self.assertNotIn("mcp__vira__", legacy)
 
-    def test_both_carry_api_and_restart_guard(self):
-        for p in (viratools.preamble(), viratools.preamble(False)):
-            self.assertIn("localhost:8377", p)
-            self.assertIn("Never restart", p)
-            self.assertIn("nyc.durham.vira", p)
+    def test_both_carry_the_owning_instance_api_and_restart_guard(self):
+        with mock.patch("server.instance.api_url", return_value="http://localhost:8392"), \
+                mock.patch("server.instance.service_label", return_value="nyc.durham.vira.test.example"):
+            for p in (viratools.preamble(), viratools.preamble(False)):
+                self.assertIn("http://localhost:8392", p)
+                self.assertNotIn("localhost:8377", p)
+                self.assertIn("Never restart", p)
+                self.assertIn("nyc.durham.vira.test.example", p)
 
     def test_both_require_visual_context_for_durable_decisions(self):
         for p in (viratools.preamble(), viratools.preamble(False)):

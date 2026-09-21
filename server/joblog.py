@@ -68,6 +68,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from . import instance
 from .filelock import locked
 
 STORE = Path(__file__).resolve().parent.parent / "data" / "jobs-log.json"
@@ -543,21 +544,24 @@ def describe(record, idea_text=None, by_branch=None):
 # ---------- ledger operations ----------
 
 def list_records():
-    return list(_read()["jobs"])
+    return [instance.record_view(row) for row in _read()["jobs"]]
 
 
 def recent(limit=100):
     """Newest-first slice for the Jobs window's History tab."""
-    return list(reversed(_read()["jobs"]))[:max(1, min(int(limit), 500))]
+    return [instance.record_view(row) for row in
+            list(reversed(_read()["jobs"]))[:max(1, min(int(limit), 500))]]
 
 
 def get_record(jid):
-    return next((r for r in _read()["jobs"] if r["id"] == jid), None)
+    return next((instance.record_view(r) for r in _read()["jobs"] if r["id"] == jid), None)
 
 
 def record_launch(job):
     row = {
         "id": job["id"], "session_id": "", "transcript": "",
+        "instance_id": job.get("instance_id") or instance.id(),
+        "instance_url": job.get("instance_url") or instance.api_url(),
         "prompt": job["prompt"], "cwd": job["cwd"],
         "model": job.get("model"),
         "effort": job.get("effort"),
@@ -773,7 +777,8 @@ def sweep_orphans(alive=()):
 
     def fn(s):
         stale = [r for r in s["jobs"]
-                 if r["status"] == "running" and r["id"] not in alive]
+                 if r["status"] == "running" and r["id"] not in alive
+                 and instance.owns(r)]
         for r in stale:
             r["status"] = "orphaned"
             r["finished"] = r["finished"] or _now()

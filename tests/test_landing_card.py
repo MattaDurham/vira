@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FAKE_BRANCH_SH = '''#!/bin/sh
 echo "$*" >> "$(dirname "$0")/../calls.log"
 case "$1" in
-  serve) echo "test instance up:  http://localhost:8391  (passive, LOCAL ONLY)";;
+  serve) echo "test instance up:  http://localhost:8391  (branch instance, LOCAL ONLY)";;
   pr)    echo "https://github.com/example/vira/pull/77";;
 esac
 exit 0

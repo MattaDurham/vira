@@ -22,7 +22,7 @@ live, and iMessages the owner on completion when notify is set.
 Store: data/routines.json (atomic writes; server-only writer).
 """
 
-from . import modulemodels
+from . import instance, modulemodels
 import json
 import threading
 import time
@@ -247,6 +247,7 @@ def save_routine(data, rid=None):
                 raise KeyError(rid)
         else:
             r = {"id": "rt_" + uuid.uuid4().hex[:8], "created": _now_iso(),
+                 "instance_id": instance.id(),
                  "last_run": None, "last_job": None, "last_run_id": None,
                  "last_status": None}
             s["routines"].append(r)
@@ -272,6 +273,9 @@ def save_routine(data, rid=None):
         if not r.get("daily_at") and not r.get("every_hours"):
             raise ValueError("a routine needs a cadence "
                              "(every_hours or daily_at)")
+        if not instance.owns(r):
+            r.update(instance_id=instance.id(), last_run=None, last_job=None,
+                     last_run_id=None, last_status=None)
         r["updated"] = _now_iso()
         _save(s)
         return r
@@ -559,6 +563,8 @@ class Scheduler(threading.Thread):
     def tick(self):
         for r in list_routines():
             try:
+                if not instance.owns(r):
+                    continue
                 self._settle(r)
                 if is_due(r) and not _previous_live(r):
                     dispatch(r)

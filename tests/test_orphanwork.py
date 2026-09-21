@@ -1,7 +1,7 @@
 """Orphan-work sweeper tests: classification (dirty/unmerged/excluded),
 stalest-first ordering, dismiss + self-re-arm, the baseline-then-ping
 notify rule, the job-ledger join for the stalled-session signal, the
-unpushed-main row, resume_prompt content, the route layer (incl. passive
+unpushed-main row, resume_prompt content, the route layer (including explicit
 403s), and the merge/discard action runner against a real (stand-in)
 scripts/branch.sh.
 
@@ -23,7 +23,7 @@ from unittest import mock
 
 from server import orphanwork
 
-# Captured BEFORE any fixture pins the name, so the passive-gate tests can
+# Captured BEFORE any fixture pins the name, so the concurrency tests can
 # drive the real function while every other test keeps the no-op pin.
 _REAL_KICK = orphanwork._kick_assess
 
@@ -431,8 +431,7 @@ class RouteLayer(_RepoCase):
 
     def setUp(self):
         super().setUp()
-        os.environ.pop("VIRA_PASSIVE", None)
-        self.addCleanup(os.environ.pop, "VIRA_PASSIVE", None)
+
 
     def test_get_shape(self):
         self.make_worktree("r1", commits=1)
@@ -471,49 +470,28 @@ class RouteLayer(_RepoCase):
         r = self.client.post("/api/orphanwork/resume", json={"key": key})
         self.assertEqual(r.status_code, 409)
 
-    def test_resume_403_when_passive(self):
-        self.make_worktree("r4", commits=1)
-        orphanwork.refresh()
-        key = orphanwork.compose()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
-        r = self.client.post("/api/orphanwork/resume", json={"key": key})
-        self.assertEqual(r.status_code, 403)
 
-    def test_merge_403_when_passive(self):
-        self.make_worktree("r5", commits=1)
-        orphanwork.refresh()
-        key = orphanwork.compose()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
-        r = self.client.post("/api/orphanwork/merge", json={"key": key})
-        self.assertEqual(r.status_code, 403)
 
-    def test_discard_403_when_passive(self):
-        self.make_worktree("r6", commits=1)
-        orphanwork.refresh()
-        key = orphanwork.compose()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
-        r = self.client.post("/api/orphanwork/discard", json={"key": key})
-        self.assertEqual(r.status_code, 403)
 
-    def test_resume_prompt_route_has_no_side_effects_and_works_passive(self):
+    def test_resume_prompt_route_has_no_side_effects_and_works_on_branches(self):
         self.make_worktree("r7", commits=1)
         orphanwork.refresh()
         key = orphanwork.compose()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
+
         r = self.client.get("/api/orphanwork/resume-prompt",
                             params={"key": key})
         self.assertEqual(r.status_code, 200)
         self.assertIn("prompt", r.json())
         self.assertIn("cwd", r.json())
 
-    def test_context_route_works_passive_and_has_no_side_effects(self):
-        """The whole point is reviewing BEFORE deciding, and a passive
+    def test_context_route_works_on_branches_and_has_no_side_effects(self):
+        """The whole point is reviewing BEFORE deciding, and a branch
         instance is where reviewing happens most — so unlike resume/land
         this route must NOT 403 there."""
         self.make_worktree("ctx-route", commits=1)
         orphanwork.refresh()
         key = self.client.get("/api/orphanwork").json()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
+
         before = self.store.read_bytes()
         with mock.patch("server.session.sessions.launch") as launch:
             r = self.client.get("/api/orphanwork/context?key=" + key)
@@ -528,7 +506,7 @@ class RouteLayer(_RepoCase):
         r = self.client.get("/api/orphanwork/context?key=nope")
         self.assertEqual(r.status_code, 404)
 
-    def test_visual_route_serves_only_a_changed_raster_on_passive(self):
+    def test_visual_route_serves_only_a_changed_raster_on_branches(self):
         wt = self.make_worktree("ctx-visual-route", commits=0)
         shot = wt / "review.png"
         shot.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
@@ -536,7 +514,7 @@ class RouteLayer(_RepoCase):
         _git("commit", "-qm", "add review visual", cwd=wt)
         orphanwork.refresh()
         key = orphanwork.compose()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
+
         r = self.client.get("/api/orphanwork/visual",
                             params={"key": key, "path": "review.png"})
         self.assertEqual(r.status_code, 200)
@@ -555,18 +533,7 @@ class RouteLayer(_RepoCase):
         r = self.client.post("/api/orphanwork/land", json={"key": "nope"})
         self.assertEqual(r.status_code, 404)
 
-    def test_land_403_when_passive(self):
-        self.make_worktree("r8", commits=1)
-        orphanwork.refresh()
-        key = orphanwork.compose()["items"][0]["key"]
-        os.environ["VIRA_PASSIVE"] = "1"
-        r = self.client.post("/api/orphanwork/land", json={"key": key})
-        self.assertEqual(r.status_code, 403)
 
-    def test_land_all_403_when_passive(self):
-        os.environ["VIRA_PASSIVE"] = "1"
-        r = self.client.post("/api/orphanwork/land-all")
-        self.assertEqual(r.status_code, 403)
 
 
 @unittest.skipUnless(os.name == "posix",
@@ -962,16 +929,6 @@ class Assessment(_RepoCase):
             self.assertEqual(orphanwork.assess_missing(), 0)
         self.assertNotIn("read", orphanwork.compose()["items"][0])
 
-    def test_kick_assess_refuses_on_a_passive_instance(self):
-        # _REAL_KICK was captured at import, before the fixture's pin —
-        # this drives the actual gate, not the no-op.
-        os.environ["VIRA_PASSIVE"] = "1"
-        self.addCleanup(os.environ.pop, "VIRA_PASSIVE", None)
-        ran = mock.MagicMock()
-        with mock.patch.object(orphanwork, "assess_missing", ran):
-            _REAL_KICK()
-            time.sleep(0.1)
-        ran.assert_not_called()
 
     def test_kick_assess_runs_the_pass_off_thread(self):
         ran = mock.MagicMock(return_value=0)

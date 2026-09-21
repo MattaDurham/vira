@@ -3,8 +3,8 @@
 What must hold: inbound rows become feed items joined to CRM people by
 phone digits; own sends and protocol noise are skipped; the first run
 baselines and emits nothing old; a re-served row never duplicates in the
-feed; and a passive instance never starts the sidecar, never touches the
-on-disk cursor, and never runs the watcher thread.
+feed; and parallel instances share a primary-owned connector while keeping
+independent durable cursors and their own polling threads.
 
 Fixtures use the UK Ofcom fictional mobile range (447700900xxx) — the PII
 guard forbids real-shaped +1 numbers.
@@ -12,14 +12,13 @@ guard forbids real-shaped +1 numbers.
 Run: .venv/bin/python -m unittest tests.test_whatsapp
 """
 import json
-import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest import mock
-
-from fastapi import HTTPException
 
 from server import main, photos, settings, whatsapp
 from server import data as crm
@@ -54,10 +53,6 @@ class FakeShared:
         self.feed = []
         self.feed_size = 200
         self.listeners = []
-
-
-def _no_passive_env():
-    return {k: v for k, v in os.environ.items() if k != "VIRA_PASSIVE"}
 
 
 class DigitsTests(unittest.TestCase):
@@ -125,7 +120,6 @@ class IngestTests(unittest.TestCase):
         self.bridge = {"/status": {"connected": True, "inbox_bytes": 0,
                                    "jid": "447700900999@s.whatsapp.net"}}
         self.patches = [
-            mock.patch.dict(os.environ, _no_passive_env(), clear=True),
             mock.patch.object(whatsapp, "STATE", self.state),
             mock.patch.object(whatsapp, "_bridge_get",
                               side_effect=lambda p, timeout=4:
@@ -137,7 +131,6 @@ class IngestTests(unittest.TestCase):
         for p in self.patches:
             p.start()
             self.addCleanup(p.stop)
-        whatsapp._mem_cursor["cursor"] = None
 
     def test_first_run_baselines_then_ingests_then_dedups(self):
         shared = FakeShared()
@@ -178,60 +171,98 @@ class IngestTests(unittest.TestCase):
             whatsapp.ingest(FakeShared())
 
 
-class PassiveTests(unittest.TestCase):
-    """A test copy must never act on the world: no sidecar spawn, no
-    watcher thread, no on-disk cursor writes."""
+class ParallelInstanceTests(unittest.TestCase):
+    """Polling and pairing work; stopping requires connector ownership."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.state = Path(self.tmp.name) / "whatsapp-state.json"
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "whatsapp-state.json"
         self.patches = [
-            mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}),
             mock.patch.object(whatsapp, "STATE", self.state),
+            mock.patch.object(whatsapp, "DATA_DIR", self.root / "connector"),
+            mock.patch.object(settings, "fixture_mode", return_value=False),
+            mock.patch.object(whatsapp.instance, "id", return_value="branch:demo"),
+            mock.patch.object(whatsapp.instance, "is_branch", return_value=True),
+            mock.patch.object(whatsapp.instance, "primary_root", return_value=self.root),
         ]
         for p in self.patches:
             p.start()
             self.addCleanup(p.stop)
-        whatsapp._mem_cursor["cursor"] = None
 
-    def test_never_spawns_sidecar(self):
-        with mock.patch.object(whatsapp, "_bridge_get", return_value=None), \
-             mock.patch.object(whatsapp.subprocess, "Popen") as popen:
-            with self.assertRaisesRegex(RuntimeError, "passive"):
-                whatsapp.ensure_sidecar()
-            popen.assert_not_called()
-
-    def test_reads_running_sidecar_without_spawning(self):
-        st = {"connected": False, "needs_pair": True}
-        with mock.patch.object(whatsapp, "_bridge_get", return_value=st), \
+    def test_reads_running_shared_sidecar_without_spawning(self):
+        st = {"connected": True, "owner_id": "primary"}
+        with mock.patch.object(whatsapp, "sidecar_status", return_value=st), \
              mock.patch.object(whatsapp.subprocess, "Popen") as popen:
             self.assertEqual(whatsapp.ensure_sidecar(), st)
             popen.assert_not_called()
 
-    def test_cursor_stays_in_memory(self):
-        bridge = {"/status": {"connected": True, "inbox_bytes": 77}}
-        with mock.patch.object(whatsapp, "_bridge_get",
-                               side_effect=lambda p, timeout=4:
-                               bridge.get(p.split("?")[0])):
+    def test_pairing_can_start_shared_connector(self):
+        st = {"connected": False, "needs_pair": True, "owner_id": "primary"}
+        with mock.patch.object(whatsapp, "sidecar_status", return_value=None), \
+             mock.patch.object(whatsapp, "_spawn_sidecar", return_value=st) as spawn:
+            self.assertEqual(whatsapp.ensure_sidecar(), st)
+        spawn.assert_called_once_with(8)
+
+    def test_waiter_rechecks_connector_before_spawning(self):
+        st = {"connected": True, "owner_id": "primary"}
+        with mock.patch.object(whatsapp, "sidecar_status", side_effect=[None, st]), \
+             mock.patch.object(whatsapp, "_spawn_sidecar") as spawn:
+            self.assertEqual(whatsapp.ensure_sidecar(), st)
+        spawn.assert_not_called()
+
+    def test_branch_cannot_stop_primary_or_legacy_connector(self):
+        for st in ({"owner_id": "primary"}, {"connected": True}):
+            with self.subTest(status=st), \
+                 mock.patch.object(whatsapp, "sidecar_status", return_value=st), \
+                 mock.patch.object(whatsapp.urllib.request, "urlopen") as urlopen:
+                with self.assertRaisesRegex(RuntimeError, "belongs to instance primary"):
+                    whatsapp.stop_sidecar()
+                urlopen.assert_not_called()
+
+    def test_owner_stop_carries_identity(self):
+        with mock.patch.object(whatsapp.instance, "id", return_value="primary"), \
+             mock.patch.object(whatsapp, "sidecar_status", return_value={"owner_id": "primary"}), \
+             mock.patch.object(whatsapp.urllib.request, "urlopen") as urlopen:
+            self.assertTrue(whatsapp.stop_sidecar())
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.get_header("X-vira-instance"), "primary")
+
+    def test_cursor_is_durable_and_instance_local(self):
+        with mock.patch.object(whatsapp, "sidecar_status", return_value={"inbox_bytes": 77}):
             res = whatsapp.ingest(FakeShared())
         self.assertTrue(res.get("baselined"))
-        self.assertEqual(whatsapp._mem_cursor["cursor"], 77)
-        self.assertFalse(self.state.exists())
+        self.assertEqual(json.loads(self.state.read_text(encoding="utf-8")), {"cursor": 77})
+        self.assertEqual(whatsapp._load_cursor(), 77)
 
-    def test_watcher_start_declines(self):
-        w = whatsapp.WhatsAppWatcher(FakeShared(), poll_seconds=1)
-        w.start()
-        self.assertEqual(w.status["state"], "passive")
-        self.assertNotIn("vira-whatsapp",
-                         [t.name for t in threading.enumerate()])
+    def test_branch_watcher_starts(self):
+        watcher = whatsapp.WhatsAppWatcher(FakeShared(), poll_seconds=1)
+        with mock.patch.object(whatsapp.threading, "Thread") as thread:
+            watcher.start()
+        thread.return_value.start.assert_called_once_with()
 
-    def test_pair_route_refuses(self):
-        with mock.patch.object(whatsapp, "_bridge_get", return_value=None):
-            with self.assertRaises(HTTPException) as ctx:
-                main.api_whatsapp_pair()
-        self.assertEqual(ctx.exception.status_code, 400)
-        self.assertIn("passive", ctx.exception.detail)
+    def test_fixture_connector_has_its_own_endpoint_and_owner(self):
+        with mock.patch.object(settings, "fixture_mode", return_value=True), \
+             mock.patch.object(whatsapp.instance, "api_url", return_value="http://localhost:8389"):
+            self.assertEqual(whatsapp.bridge_port(), 18389)
+            self.assertEqual(whatsapp.connector_owner(), "branch:demo")
+
+    def test_shared_port_comes_from_primary_configuration(self):
+        cfg = self.root / "data" / "config.json"
+        cfg.parent.mkdir()
+        cfg.write_text('{"whatsapp_bridge_port": 18391}', encoding="utf-8")
+        with mock.patch.object(settings, "get", return_value=18392):
+            self.assertEqual(whatsapp.bridge_port(), 18391)
+
+
+class SidecarProtocolTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is needed for the sidecar handler test")
+    def test_stop_requires_matching_instance_identity(self):
+        result = subprocess.run(
+            [shutil.which("node"), str(Path(__file__).with_name("whatsapp_sidecar_ownership.js"))],
+            capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class SurfaceTests(unittest.TestCase):
@@ -242,7 +273,7 @@ class SurfaceTests(unittest.TestCase):
     def test_status_route_shape(self):
         with mock.patch.object(whatsapp, "_bridge_get", return_value=None):
             st = main.api_whatsapp_status()
-        for key in ("linked", "installed", "passive", "watcher", "sidecar"):
+        for key in ("linked", "installed", "watcher", "sidecar"):
             self.assertIn(key, st)
         self.assertIsNone(st["sidecar"])
 

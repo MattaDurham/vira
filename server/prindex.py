@@ -136,8 +136,7 @@ def refresh(cwd=None, force=False):
 
 def refresh_async(cwd=None, force=False):
     """The sweep's entry point: one refresh at a time, on a thread, never
-    blocking the caller. Passive instances still read (a PR list is public
-    metadata) - there is deliberately no VIRA_PASSIVE gate here."""
+    blocking the caller. A PR list is public metadata."""
     if os.environ.get("VIRA_PR_INDEX_OFF"):
         return False
     if not force and not stale():

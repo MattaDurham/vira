@@ -16,9 +16,7 @@ a raised exception becomes an entry in `errors` and an empty list, and a
 broken store never takes the surface down with it. This module WRITES
 nothing — acting on a row happens through the surface that owns it (the
 card's own answer route, the Runs list's Land/Resume, the session
-terminal). Read-only end to end, so there is no passive guard on the
-route; the health rows alone are skipped under VIRA_PASSIVE, because they
-assert facts about workers a passive instance deliberately does not run.
+terminal). Read-only end to end, including health rows for this instance.
 
 EDGE-TRIGGERING IS THE CLIENT'S JOB, TOKENS ARE OURS. The attention window
 auto-reopens only on genuinely NEW membership (the briefstate self-re-arming
@@ -31,7 +29,6 @@ flow must not pop a window the owner just closed.
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime
 
 from . import jobfiles, joblog
@@ -45,10 +42,6 @@ BOARDS_STALE_H = 4
 # unanswered resumable session is a decision that keeps, not a live state,
 # and the compose box in its terminal still offers the resume forever.
 RESUMABLE_MAX_H = 48
-
-
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
 
 
 def _now_iso():
@@ -122,8 +115,7 @@ def _is_chat(spec):
 def _session_rows(registry, names):
     """Live sessions from the supervisor's registry, state read FRESH off
     each job dir (the pending_all discipline: the cached copy is refreshed
-    by the supervisor, which does not run on a passive instance, and a
-    surface that silently stops updating is the one thing this must not
+    by the supervisor, and a surface that silently stops updating is the one thing this must not
     be). A session whose pending list holds a card is SKIPPED here — the
     card row owns it, and one piece of work never renders twice."""
     from . import session as session_mod
@@ -299,12 +291,7 @@ def _orphan_rows():
 
 def _health_rows():
     """The silent-failure tier: states that already have a store recording
-    them and no surface announcing them. Skipped wholesale under
-    VIRA_PASSIVE — these rows assert facts about workers a passive instance
-    deliberately does not run, so on a clone they could only be false
-    alarms about the live machine's stores."""
-    if _passive():
-        return []
+    them and no surface announcing them."""
     rows = []
     from . import aihealth
     ai = aihealth.summary()

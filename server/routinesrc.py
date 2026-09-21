@@ -610,25 +610,12 @@ def hood(r) -> dict:
 # ---------------------------------------------------------------- writing
 
 def writable() -> dict:
-    """Whether source edits are allowed here, and WHICH checkout they land
-    in. Deliberately allowed on a test instance and in a sandbox, unlike
-    the outbound guards: those refusals exist because a clone must never
-    act on the WORLD, and its own source is not the world. A branch
-    instance edits the branch it is serving — which is what a branch
-    instance is for — and `branch.sh merge` preflights a clean tree, so a
-    stray edit there blocks its own merge loudly rather than riding it.
-
-    What a non-live instance does NOT get is the restart button: it has no
-    supervisor to come back from an exit."""
+    """Source edits and restart follow the checkout and supervisor serving this instance."""
+    from . import update
     root = str(ROOT)
-    if os.environ.get("VIRA_PASSIVE"):
-        return {"ok": True, "root": root, "restart": False,
-                "reason": f"Test instance — edits land in this branch's own "
-                          f"checkout ({root}), not in live Vira."}
-    if os.environ.get("VIRA_SANDBOX"):
-        return {"ok": True, "root": root, "restart": False,
-                "reason": f"Sandbox — edits land in {root}."}
-    return {"ok": True, "root": root, "restart": True, "reason": ""}
+    kind, name = update.supervisor()
+    return {"ok": True, "root": root, "restart": bool(name),
+            "reason": f"Edits land in this checkout ({root})."}
 
 
 class EditError(ValueError):

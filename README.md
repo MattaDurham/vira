@@ -257,8 +257,8 @@ In **Config > Brain**, open **Settings** on a vault to rename it, choose its
 folder, enable writing, or select where new notes go. Folder settings use the
 same navigable picker; no absolute or relative paths need to be typed. The
 picker browses folders on the computer running Vira, including from a phone.
-New folders can be created there; passive previews allow browsing but cannot
-create folders or write notes.
+New folders can be created there. Branch instances use the same configured
+vault permissions; sandboxes allow browsing but cannot create folders.
 
 New connections allow writing throughout the vault, with **Protected folders**
 as optional exceptions. Existing selected-folder limits are preserved; change
@@ -294,8 +294,7 @@ Native assistant operations are `vault_destinations`, `vault_capture`, and
 `inbox/notes`, and writable folder `inbox/notes` receives a family capture there.
 The receipt identifies the actual source and reopenable path. An update needs
 the SHA-256 from a complete `vault_note` read, and refuses a stale hash. Creates
-never overwrite existing notes. Read-only sessions and passive previews cannot
-use these mutation tools. Equivalent local APIs are `GET /api/vault/destinations`,
+never overwrite existing notes. Read-only sessions cannot use these mutation tools. Equivalent local APIs are `GET /api/vault/destinations`,
 `POST /api/vault/capture`, and `POST /api/vault/update`.
 
 Plans in explicitly configured sources use the capture folder. Definitions
@@ -384,8 +383,10 @@ Mail-body indexing must be enabled for full email evidence and sent-reply
 reconciliation; a feed preview alone does not provide that coverage. Ambiguous
 or unsupported timing remains a suggestion. The worker runs in the local Vira
 process, so the machine must be awake and sources and the selected model must
-be available. Passive and fixture previews process no messages and cannot send
-texts or create calendar events.
+be available. Fixture previews process no messages and cannot send texts or
+create calendar events. Branch instances run the application with their own
+runtime identity, queues, and indexes; shared automatic account actions are
+coordinated across instances.
 
 Reusable settings are off by default. Private queues, non-contact tasks,
 calendar drafts, and reminder delivery state live under `data/`; contact

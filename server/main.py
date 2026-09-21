@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    actions, admission, agentbackend, aihealth, applecontacts,
+    actions, admission, agentbackend, aihealth, applecontacts, instance,
                applicationmap, applications,
                atlas, attention, circles,
                backup, brainchat, brief, virachat,
@@ -178,17 +178,10 @@ media_archiver = mediaarchive.Archiver()          # Vira's own copy of every
 
 @app.on_event("startup")
 async def _startup():
-    # Before the passive check on purpose: a test instance stalls the same
-    # way a live one does, and the watchdog neither acts on the world nor
-    # costs anything while the loop is healthy.
+    # Every instance runs the complete application lifecycle.
     loopwatch.watcher.start()
-    if os.environ.get("VIRA_PASSIVE"):
-        # Passive test instance (scripts/branch.sh serve, run-taurid.sh):
-        # UI + API only, over its own data snapshot. No pollers, no
-        # schedulers, no job supervisor — a test copy must never act on
-        # the world. send.send_imessage carries the matching outbound block.
-        print("VIRA_PASSIVE: background workers disabled")
-        return
+    instance.start_automation()
+    _start_account_workers()
     # Jobs run as DETACHED runner processes that survive server restarts;
     # the supervisor re-attaches to any still running from a prior boot,
     # finalizes dead ones, sweeps the ledger, then polls job dirs for SSE
@@ -209,31 +202,24 @@ async def _startup():
     # filenames. This keeps Vira's own copy (server/mediaarchive.py).
     media_archiver.start()
     backup.start()
-    mercury_poller.start()
-    receipts_sweeper.start()
-    # The agentic OS: vault index (the brain), circuit driver (pipelines),
-    # routine scheduler (standing loops). All resume from disk state.
     vault_indexer.start()
     circuits.driver.start()
     routines.scheduler.start()
-    # The deterministic AI-backend health watcher: probes the model login on a
-    # cadence and iMessages the owner on a green->red edge, so a Claude-auth
-    # lapse surfaces out-of-band instead of as a silently dead cockpit job.
-    ai_health_watcher.start()
-    # The reply channel's card pinger: texts the owner when a session is
-    # blocked on a decision, so a card he never saw can still be answered
-    # from the thread. Reading his replies needs no thread of its own — it
-    # rides the message watcher's tick (server/inbound.py).
-    inbound.start()
-    executive.start()  # durable contact learning and commitment follow-up
-    correspondence.start()  # opt-in governed message preservation
-    # Job boards: fetch-and-diff the registered career boards on a cadence,
-    # iMessage the owner when a new eligible role appears (server/jobboards).
-    jobboards_poller.start()
     # Contact Atlas: the materialized graph builds once in the background
     # when no cached view exists yet (refresh is on-demand / weekly after).
     if not atlas.GRAPH.exists():
         atlas.refresh()
+
+
+def _start_account_workers():
+    """Start account workers; shared effects coordinate their ownership."""
+    mercury_poller.start()
+    receipts_sweeper.start()
+    ai_health_watcher.start()
+    inbound.start()
+    executive.start()
+    correspondence.start()
+    jobboards_poller.start()
 
 
 # ---------- people ----------
@@ -833,8 +819,7 @@ def api_applications_state(uid: str, req: AppStateReq):
 
 @app.get("/api/applications/{uid}/description")
 def api_applications_description(uid: str, refresh: bool = False):
-    """The posting itself, readable in Vira. Read-only and safe on a
-    passive instance — see server/jobdesc.py."""
+    """The posting itself, readable in Vira; see server/jobdesc.py."""
     role = applications.find_role(uid)
     if role is None:
         raise HTTPException(404, "unknown role")
@@ -976,14 +961,7 @@ class AppDraftCheckReq(BaseModel):
 
 @app.post("/api/applications/{uid}/draft-check")
 def api_applications_draft_check(uid: str, req: AppDraftCheckReq):
-    """Check a hand-written draft against this role and mark it up.
-
-    His words come back verbatim in black; every suggestion is a coloured
-    line of Vira's beneath them.  The marked copy is returned as bytes (the
-    deliverable) and, where the role has a package folder, also written
-    beside it - a passive instance still returns the download and refuses
-    only that write.
-    """
+    """Check a draft against its role, return the marked copy, and save it beside the package when configured."""
     role = applications.find_role(uid)
     if role is None:
         raise HTTPException(404, "unknown role")
@@ -1132,8 +1110,7 @@ class BoardResolveReq(BaseModel):
 @app.post("/api/jobboards/resolve")
 def api_jobboards_resolve(req: BoardResolveReq):
     """A careers URL -> the registry fields for it, confirmed against the
-    board. READ-ONLY: it registers nothing, so it is safe on a passive
-    instance, where reviewing what a paste would add is exactly the point."""
+    board."""
     return jobboards.resolve_board_url(req.url)
 
 
@@ -1701,7 +1678,7 @@ def api_feed_read_all(req: ReadAllReq):
 
 @app.get("/api/assistant")
 def api_assistant():
-    if settings.fixture_mode() or settings.sandboxed() or os.environ.get("VIRA_PASSIVE"):
+    if settings.fixture_mode() or settings.sandboxed():
         return executive.status()
     with watcher.lock:
         source_items = list(watcher.feed)
@@ -2185,8 +2162,7 @@ def api_reading_source_resolve(req: SourceResolveReq):
 
 @app.get("/api/reading/rooms/{name}/update-prompt")
 def api_reading_room_update_prompt(name: str):
-    """The refresh prompt for pasting into another session — no job launched.
-    The copy path also serves passive test instances, which cannot dispatch."""
+    """The refresh prompt for pasting into another session — no job launched."""
     try:
         return {"prompt": readingroom.update_prompt(name), "cwd": str(ROOT)}
     except (KeyError, ValueError):
@@ -2198,9 +2174,6 @@ def api_reading_room_update(name: str):
     """Dispatch a session that re-researches the room's subject and rebuilds
     the same slug — item ids are URL-stable, so done-marks survive. This is
     what makes a room a live tracker rather than a frozen sweep."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance — copy the prompt into a "
-                                 "session instead (update-prompt)")
     try:
         prompt = readingroom.update_prompt(name)
     except (KeyError, ValueError):
@@ -2587,7 +2560,7 @@ async def api_stream():
 # ---------- Android companion (pairing, message ingest, pings) ----------
 # The phone-facing endpoints authenticate every request with the paired
 # device's token (X-Vira-Device + Authorization: Bearer). Writes refuse on
-# passive instances — companion.assert_active, the send.py precedent.
+# the companion account and its configured device permissions.
 
 def _companion_auth(x_vira_device: str | None, authorization: str | None):
     token = ""
@@ -2755,11 +2728,7 @@ class ImapAddReq(BaseModel):
 
 @app.post("/api/mail/imap/add")
 def api_mail_imap_add(req: ImapAddReq):
-    """Add a Gmail/IMAP mailbox from the Setup window. Refused on passive
-    test instances — a clone must not write a real password into the
-    machine-wide secrets store."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(400, "passive test instance — mail isn't added here")
+    """Connect a Gmail/IMAP mailbox through the configured account store."""
     try:
         return mail.add_imap_account(req.email, req.host, req.password)
     except (ValueError, RuntimeError) as e:
@@ -2775,8 +2744,7 @@ class ImapProbeReq(BaseModel):
 @app.get("/api/mail/accounts")
 def api_mail_accounts():
     """Every configured mailbox with its classified health — the Config
-    mail card. Live watcher health first, the on-disk snapshot behind it
-    (a passive clone runs no watcher and says so via `stale`)."""
+    mail card."""
     return mail.accounts_view(mail_watcher.health, mail_watcher.poll)
 
 
@@ -2788,8 +2756,7 @@ def api_mail_imap_host(email: str = ""):
 @app.post("/api/mail/imap/test")
 def api_mail_imap_test(req: ImapProbeReq):
     """One real login, nothing written — so the form can say what is wrong
-    with a password BEFORE it is saved. Allowed on passive instances: it
-    reads the network and touches no store."""
+    with a password BEFORE it is saved."""
     return mail.probe_imap(req.email, req.host, req.password)
 
 
@@ -2802,9 +2769,6 @@ class ImapReconnectReq(BaseModel):
 
 @app.post("/api/mail/imap/reconnect")
 def api_mail_imap_reconnect(req: ImapReconnectReq):
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(400, "passive test instance — the password would "
-                                 "land in the machine-wide secrets store")
     try:
         r = mail.reconnect_imap(req.email, req.password, req.host, req.verify)
     except ValueError as e:
@@ -2825,9 +2789,6 @@ class MailRemoveReq(BaseModel):
 
 @app.post("/api/mail/account/remove")
 def api_mail_account_remove(req: MailRemoveReq):
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(400, "passive test instance — mail accounts aren't "
-                                 "removed here")
     r = mail.remove_account(req.email, req.type)
     for a in ([req.email] if r["removed"] else []):
         mail_watcher.status.pop(a, None)
@@ -2898,9 +2859,6 @@ def api_mail_reply(req: MailReplyReq):
     """Send a real threaded email reply. Gmail goes out over SMTP now;
     M365 sends via Graph once Mail.Send is consented, and until then the
     reply lands as an Outlook draft with the response saying so."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive test instance — outbound email "
-                                 "is blocked here")
     try:
         return mailread.send_reply(
             req.account, req.text, to=req.to, subject=req.subject,
@@ -2918,7 +2876,7 @@ def api_mail_reply(req: MailReplyReq):
 def api_whatsapp_status():
     return {"linked": whatsapp.linked(),
             "installed": whatsapp.installed(),
-            "passive": bool(os.environ.get("VIRA_PASSIVE")),
+            "instance": instance.metadata(),
             "watcher": whatsapp_watcher.status,
             "sidecar": whatsapp.sidecar_status()}
 
@@ -2930,9 +2888,7 @@ def api_whatsapp_qr():
 
 @app.post("/api/whatsapp/pair")
 def api_whatsapp_pair():
-    """Start (or find) the sidecar so its pairing QR becomes available.
-    Refused on passive instances — the sidecar links a device to the
-    owner's account, so a test copy may only read one started by hand."""
+    """Start (or find) the sidecar so its pairing QR becomes available."""
     try:
         return {"sidecar": whatsapp.ensure_sidecar()}
     except RuntimeError as e:
@@ -2942,7 +2898,7 @@ def api_whatsapp_pair():
 @app.post("/api/whatsapp/poll")
 def api_whatsapp_poll():
     """One explicit ingest pass. On live the watcher does this on its own;
-    this route serves the settings card's check-now and passive test
+    this route serves the settings card's check-now and branch
     instances (reads the local sidecar only — no world action)."""
     try:
         return whatsapp.ingest(watcher)
@@ -3254,7 +3210,7 @@ def api_vault_source_remove(source_id: str):
 def api_onboard_fda_assist():
     try:
         return onboard.fda_assist()
-    except RuntimeError as e:      # passive: refuse, don't pop windows
+    except RuntimeError as e:      # OS operation: refuse, don't pop windows
         raise HTTPException(403, str(e))
     except ValueError as e:        # off-Mac: the grant does not exist
         raise HTTPException(400, str(e))
@@ -3304,7 +3260,7 @@ def api_folder_create(req: FolderCreateReq):
 def api_onboard_login(req: OnboardLoginReq):
     try:
         return models.login_start(req.provider)
-    except RuntimeError as e:      # passive test instance
+    except RuntimeError as e:      # provider login unavailable
         raise HTTPException(403, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -3506,10 +3462,7 @@ def api_sessions_pending():
 
 @app.get("/api/attention")
 def api_attention():
-    """The tier-1 attention payload: everything Vira is doing right now and
-    everything waiting on the owner right now, one read (server/attention.py).
-    Read-only end to end — acting on a row goes through the surface that
-    owns it — so there is deliberately no passive guard here."""
+    """Read current work and pending decisions; actions use the owning feature."""
     return attention.compose(jobs)
 
 
@@ -3942,9 +3895,6 @@ def api_define_source(req: SourceReq):
     term = define.clean_term(req.term)
     if not term:
         raise HTTPException(400, "that selection is not a term")
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance: sourcing writes the "
-                                 "live vault")
     try:
         spec = define._destination(req.destination, req.context, "definition", for_model=True)
         jid = jobs.launch(define.source_prompt(term, spec["id"]), cwd=str(ROOT),
@@ -4223,7 +4173,7 @@ def api_restart():
     """Restart the server after a source edit. Refuses exactly where
     update.apply() refuses — an unsupervised process that exits has
     nothing to bring it back."""
-    if os.environ.get("VIRA_PASSIVE") or os.environ.get("VIRA_SANDBOX"):
+    if os.environ.get("VIRA_SANDBOX"):
         raise HTTPException(403, "this instance does not restart itself")
     kind, name = update.supervisor()
     if not name:
@@ -4326,12 +4276,7 @@ def api_orphanwork_dismiss(req: DismissGroupingReq):
 
 @app.post("/api/orphanwork/resume")
 def api_orphanwork_resume(req: OrphanResumeReq):
-    """Dispatch a session back into the item's own worktree. Refused on a
-    passive instance — it shares the live repo's worktrees, so it must
-    never dispatch a real resume."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance — copy the resume prompt "
-                                 "into a session instead (resume-prompt)")
+    """Resume the selected workstream in its worktree."""
     it = _orphan_item(req.key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4346,9 +4291,7 @@ def api_orphanwork_resume(req: OrphanResumeReq):
 
 @app.get("/api/orphanwork/context")
 def api_orphanwork_context(key: str):
-    """Everything known about one unlanded item, unsummarized. READ-ONLY —
-    nothing dispatches, writes or sweeps, so it is safe on a passive
-    instance and safe to open before deciding anything."""
+    """Everything known about one unlanded item, unsummarized."""
     it = _orphan_item(key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4357,12 +4300,7 @@ def api_orphanwork_context(key: str):
 
 @app.get("/api/orphanwork/visual")
 def api_orphanwork_visual(key: str, path: str):
-    """One real raster artifact made by an unlanded branch.
-
-    orphanwork.visual_path applies both boundaries: Git must name the file as
-    changed, and its resolved path must remain inside this item's worktree.
-    This endpoint is read-only and therefore works on passive review instances.
-    """
+    """One real raster artifact made by an unlanded branch."""
     it = _orphan_item(key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4376,11 +4314,7 @@ def api_orphanwork_visual(key: str, path: str):
 
 @app.get("/api/orphanwork/land-prompt")
 def api_orphanwork_land_prompt(key: str, mode: str = "diagnose"):
-    """The composed landing prompt with no side effects — for a passive
-    instance, or to paste into another session. Also the honest way to
-    read what a Land would actually say before running one: the diagnose
-    prompt embeds the branch's recorded failures, so this doubles as
-    "why did this stop?" without spending a session."""
+    """Orphanwork land prompt."""
     it = _orphan_item(key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4392,8 +4326,7 @@ def api_orphanwork_land_prompt(key: str, mode: str = "diagnose"):
 
 @app.get("/api/orphanwork/failures")
 def api_orphanwork_failures(key: str):
-    """Why this branch's sessions stopped — deterministic, no model call.
-    READ-ONLY and safe on a passive instance."""
+    """Why this branch's sessions stopped — deterministic, no model call."""
     it = _orphan_item(key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4408,8 +4341,7 @@ def api_orphanwork_failures(key: str):
 
 @app.get("/api/orphanwork/resume-prompt")
 def api_orphanwork_resume_prompt(key: str):
-    """The composed resume prompt with no side effects — for a passive
-    instance, or anyone who wants to paste it into another session."""
+    """Orphanwork resume prompt."""
     it = _orphan_item(key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4419,12 +4351,7 @@ def api_orphanwork_resume_prompt(key: str):
 
 @app.post("/api/orphanwork/merge")
 def api_orphanwork_merge(req: OrphanKeyReq):
-    """scripts/branch.sh owns preflight and refusals; passive is blocked
-    because a test instance shares the live repo — a merge from there would
-    mutate the real checkout."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance — merge from the live "
-                                 "checkout instead")
+    """Merge through scripts/branch.sh and its preflight checks."""
     it = _orphan_item(req.key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4443,9 +4370,6 @@ def api_orphanwork_merge(req: OrphanKeyReq):
 
 @app.post("/api/orphanwork/discard")
 def api_orphanwork_discard(req: OrphanDiscardReq):
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance — discard from the live "
-                                 "checkout instead")
     it = _orphan_item(req.key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4479,10 +4403,7 @@ def api_orphanwork_land(req: OrphanLandReq):
       finish — the old straight-to-work run, for when the owner already
         knows what stopped it.
 
-    Passive blocked — both halves act on the real repo."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance — land from the live "
-                                 "checkout instead")
+    The branch workflow owns preflight and lifecycle handling."""
     it = _orphan_item(req.key)
     if it is None:
         raise HTTPException(404, "no such orphan-work item")
@@ -4500,9 +4421,6 @@ def api_orphanwork_land_all(req: OrphanLandAllReq | None = None):
     """One serial pass over every row — see orphanwork.land_all. Carries
     the same `mode` as a single land, and defaults the same way: each
     dirty row diagnoses and asks before it changes anything."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise HTTPException(403, "passive instance — land from the live "
-                                 "checkout instead")
     n = orphanwork.land_all(mode=(req.mode if req else "diagnose"))
     return {"started": n > 0, "count": n}
 
@@ -4545,9 +4463,7 @@ class ShowroomBranchReq(BaseModel):
 
 
 def _showroom_call(fn, *args):
-    """Every Showroom action maps its refusals the same way: passive is a
-    403, an unknown branch a 404, a state refusal a 409 - each carrying
-    the engine's own named reason."""
+    """Map permission, unknown-branch and state errors to HTTP responses."""
     try:
         return fn(*args)
     except PermissionError as e:
@@ -4571,8 +4487,7 @@ def api_showroom_refresh():
 
 @app.get("/api/showroom/context")
 def api_showroom_context(branch: str):
-    """The full read behind one card. READ-ONLY, so safe on a passive
-    instance and safe to open before deciding anything."""
+    """The full read behind one card."""
     return _showroom_call(showroom.context, branch)
 
 
@@ -4818,6 +4733,12 @@ def api_update_apply():
         raise HTTPException(502, str(e)[:400])
 
 
+@app.get("/api/instance")
+def api_instance():
+    """Lightweight runtime identity, also used to coordinate account workers."""
+    return instance.metadata()
+
+
 # ---------- config ----------
 
 @app.get("/api/config")
@@ -4827,13 +4748,7 @@ def api_config():
     cfg["owner_name"] = settings.raw().get("owner_name", "")
     cfg["graph_email"] = settings.raw().get("graph_email", "")
     cfg["fixture_mode"] = settings.fixture_mode()
-    # Passive test instances (scripts/branch.sh serve) look identical to
-    # live in the header — the client renders a TEST badge off this flag.
-    cfg["passive"] = bool(os.environ.get("VIRA_PASSIVE"))
-    # A sandbox install (scripts/sandbox.sh) is NOT passive — it is a real
-    # first boot, just against a fake HOME and a namespaced Keychain. It
-    # would otherwise badge itself LIVE, which is exactly the mistake the
-    # badge exists to prevent, so it gets its own marker.
+    cfg["instance"] = instance.metadata()
     cfg["sandbox"] = settings.sandboxed()
     # Demo mode stubs the calls that reach the real OS, so what is on screen
     # is partly simulated. That MUST be visible in the badge — an unlabelled
@@ -4966,7 +4881,7 @@ if _design_root.is_dir():
 
 # ---------- Skins (genre-compiled jumping-off points the studio can wear) --
 # GET /api/skins lists them; POST /api/skins/{id}/apply rewrites style.css
-# :root + skin-active.css, then commits (unless passive). The picker sits at
+# :root + skin-active.css, then commits (when requested). The picker sits at
 # the top of the Design Studio module.
 app.include_router(skins.router)
 

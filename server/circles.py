@@ -1058,8 +1058,7 @@ def text_for_tools():
 class Watcher(threading.Thread):
     """A pass every `circle_refresh_min` (default 60). The first waits
     two minutes so a boot never competes with the atlas's own first build.
-    Started outside VIRA_PASSIVE only, like every worker; a test clone
-    syncs on demand through the route."""
+    Explicit refreshes can also sync on demand through the route."""
 
     def __init__(self, interval_min=None, first_delay_s=120):
         super().__init__(daemon=True, name="vira-circles")

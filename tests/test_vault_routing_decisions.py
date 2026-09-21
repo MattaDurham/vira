@@ -32,7 +32,6 @@ class VaultRoutingDecisionTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.dict(os.environ, {}, clear=False)):
             patcher.start()
             self.addCleanup(patcher.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
         writer = mock.patch.object(vaultwrite, "write_note", return_value={
             "source_id": "work", "path": "@work/inbox/synthetic.md", "sha256": "synthetic"})
         self.write = writer.start()

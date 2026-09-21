@@ -64,12 +64,12 @@ non-python harnesses).
   surface** and fold survivors into `data/pii-patterns.txt` (a
   capitalized word line gets a name-pool fake automatically). The gate
   enforces them forever after.
-- Capture always drives a passive branch instance
+- Capture always drives a branch instance
   (`scripts/branch.sh serve <slug>`), never live :8377.
 
 ## Verified 2026-07-16
 
-Daily Brief beat off a passive instance: injected shot + captions +
+Daily Brief beat off a branch instance: injected shot + captions +
 shots.json pass the gate (text + OCR); the un-anonymized shot FAILS via
 OCR (19 real strings read out of pixels), and a planted real string in a
 caption FAILS the text layer. Tests: `tests/test_walkthrough_anon.py`.

@@ -331,11 +331,11 @@ const submit = async (form) => { form.dispatchEvent({type: 'submit', preventDefa
   await reply(listing('/home/demo/Pending'), true, closingCreate);
   assert.equal(dialog(), undefined);
 
-  // Passive previews still browse; creation explains its disabled state.
+  // Sandboxes still browse; creation explains its disabled state.
   result = choose(); current = dialog();
-  await reply(listing('/home/demo', {can_create: false, create_disabled_reason: 'Folder creation is unavailable in this preview.'}));
+  await reply(listing('/home/demo', {can_create: false, create_disabled_reason: 'Folder creation is unavailable in this sandbox.'}));
   assert(button(current, 'New folder').disabled);
-  assert.match(current.textContent, /unavailable in this preview/);
+  assert.match(current.textContent, /unavailable in this sandbox/);
   assert(!button(current, 'Select this folder').disabled);
   button(current, 'Select this folder').click(); await result;
   assert.equal(listeners.keydown.size, 0, 'closing removes every global listener');

@@ -57,10 +57,8 @@ locked mutate, atomic write). Derived and regenerable EXCEPT owner verdict
 overrides (`owner: true`, never overwritten by a pass), rule dismissals,
 and aliases — which is why the store is in the backup rotation.
 
-No VIRA_PASSIVE guard, deliberately (the evidence.py reasoning): the pass
-is read-only against files outside data/, and its one write — a `proposed`
-idea — lands harmlessly in a test clone's cloned store. The weekly routine
-does not run on a passive instance anyway.
+The pass is read-only against files outside data/. Its one write — a
+`proposed` idea — lands in this instance's store.
 """
 from __future__ import annotations
 
@@ -793,8 +791,7 @@ def _run_pass_locked(adjudicate):
 def _ping_tier1(rule, count):
     """A tier-1 recurrence means the mechanism did not hold — the
     branch-guard failure class, rare and worth the phone. Best-effort;
-    notify's own throttles dedupe, and a passive clone's send path is
-    blocked at send_message."""
+    notify's own throttles dedupe."""
     try:
         from . import notify
         notify.agent_ping(

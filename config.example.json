@@ -67,7 +67,7 @@
   "session_landing_card": true,
   "_session_landing_card": "When a coding session you dispatched parks with work on its branch, Vira itself raises the merge / keep playing / discard decision card (in the terminal, the Attention window, and on your phone) instead of leaving that question in the transcript. false leaves the session to end however it ends.",
   "session_auto_serve": true,
-  "_session_auto_serve": "Serve a passive, local-only test instance of the branch (scripts/branch.sh serve <slug> --local) before that card goes up, so the card carries a URL to look at. It is never bridged to the tailnet automatically -- the snapshot behind it is your own data.",
+  "_session_auto_serve": "Serve a fully functional, local-only instance of the branch (scripts/branch.sh serve <slug> --local) before that card goes up, so the card carries a URL to look at. It is never bridged to the tailnet automatically -- the snapshot behind it is your own data.",
   "mercury_poll_hours": 6,
   "_mercury_poll_hours": "How often the subscriptions module polls Mercury for new charges. Dormant until a READ ONLY Mercury API token is in the Keychain: security add-generic-password -U -a mercury -s vira-mercury -w",
   "receipts_sweep_days": 7,

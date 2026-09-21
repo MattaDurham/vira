@@ -32,7 +32,6 @@ which actually browses, may write the `links` list.
 from . import modulemodels
 import hashlib
 import json
-import os
 import re
 from datetime import date
 from pathlib import Path
@@ -552,9 +551,6 @@ def _compose(term, context):
 
 # ------------------------------------------------------------- write-back
 
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
-
 
 def _write_note(path, text, spec, expected_hash=None):
     """Preserve `created:`, and make an unchanged run a true no-op."""
@@ -623,10 +619,6 @@ def _location(spec, path):
 def save(card, destination=None, context=None):
     """Write the card into the vault and index it. Returns the card, with
     `note` set. This is what makes the next lookup free."""
-    if _passive():
-        raise DefineError(
-            "passive instance: vault_root is outside the cloned data/, so "
-            "this would write the live vault. Refusing.")
     spec = _destination(destination or card.get("source_id"), context, "definition")
     provenance = set(card.get("context_sources") or [])
     if provenance - {spec["id"]}:
@@ -710,7 +702,7 @@ def _bump(term, spec):
 def lookup(term, write=True, source=None, destination=None, context=None, for_model=False):
     """The card for `term`, by the cheapest rung that can answer.
 
-    `write` is False on a passive instance and in tests that must not touch
+    `write` is False for read-only requests and in tests that must not touch
     the vault; the card still comes back, it simply is not banked.
     """
     term = clean_term(term)
@@ -742,7 +734,7 @@ def lookup(term, write=True, source=None, destination=None, context=None, for_mo
     hit = atlasterms.lookup(term)
     if hit:
         card = dict(hit, source_id=spec["id"], source_name=spec["name"])
-        if write and not _passive():
+        if write:
             try:
                 card = save(card, destination=spec["id"])
             except DefineError as exc:
@@ -759,7 +751,7 @@ def lookup(term, write=True, source=None, destination=None, context=None, for_mo
     card = _compose(term, _context(term, source, spec))
     card["context_sources"] = [spec["id"]]
     card.update(source_id=spec["id"], source_name=spec["name"])
-    if write and not _passive():
+    if write:
         try:
             card = save(card, destination=spec["id"])
         except DefineError as e:
@@ -833,5 +825,4 @@ def status():
         "terms": len(st.get("terms") or {}),
         "atlas": atlasterms.status(),
         "vault": str(vault.vault_root()),
-        "passive": _passive(),
     }

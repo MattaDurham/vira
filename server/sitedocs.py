@@ -25,17 +25,14 @@ Vira's side of that split.
 
 CLI-first: python -m server.sitedocs migrate|sweep|status. No routes.
 
-Passive note: migrate/sweep write only this checkout's static/docs/ and its
-cloned data/, which is safe on a test instance — EXCEPT the vault markdown
-copy, which targets the owner's real vault and is skipped under VIRA_PASSIVE
-(the plans.py precedent).
+Migrate/sweep write this checkout's static/docs/ and local data/. The
+Markdown companion is copied to the configured connected vault.
 """
 from __future__ import annotations
 
 import hashlib
 import html as _html
 import json
-import os
 import re
 import shutil
 import sys
@@ -290,9 +287,9 @@ def migrate(site: Path | None = None, docs_dir: Path | None = None,
 
     # Markdown sources (the hook wrote lab/plans/src/<stem>.md for newer
     # plans) go to the vault so those plans are searchable. Owner-only:
-    # a passive clone must never write the real vault.
+    # The Markdown edition belongs in the configured connected vault.
     src_md = plans_src / "src"
-    if src_md.is_dir() and not os.environ.get("VIRA_PASSIVE"):
+    if src_md.is_dir():
         vp = vault_plans
         if vp is None:
             vroot = str(settings.get("vault_root") or "").strip()

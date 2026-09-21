@@ -93,6 +93,7 @@ class AdmissionTests(unittest.TestCase):
         lease.acquire(0)
         runtime = {"execution_lease": {"id": lease.id, "path": str(self.path), "pid": admission.os.getpid()}}
         lock = threading.Lock()
+        ready = threading.Barrier(4)
         counters = {"active": 0, "peak": 0}
         def model(*_args):
             with lock:
@@ -103,12 +104,20 @@ class AdmissionTests(unittest.TestCase):
                 counters["active"] -= 1
             return "ok", "cli"
         def run(_index):
+            ready.wait(timeout=10)
             with answer_runtime.scope(runtime):
                 return suggest._run("input", {"timeout": 2})
-        with mock.patch.object(suggest, "_run_admitted", side_effect=model):
+        # Receipt persistence is covered above. Its Windows byte-range lock
+        # retries in one-second steps, unrelated to parent-slot serialization.
+        with mock.patch.object(suggest, "_run_admitted", side_effect=model), \
+                mock.patch.object(answer_runtime, "completion_event"), \
+                mock.patch.object(admission, "STORE", self.path):
             with ThreadPoolExecutor(max_workers=4) as pool:
-                self.assertEqual(len(list(pool.map(run, range(4)))), 4)
+                self.assertEqual(list(pool.map(run, range(4))), [("ok", "cli")] * 4)
         self.assertEqual(counters["peak"], 1)
+        with admission._connect(self.path) as db:
+            tickets = db.execute("SELECT id,status FROM tickets").fetchall()
+        self.assertEqual([tuple(row) for row in tickets], [(lease.id, "running")])
 
 
 class RuntimeBudgetTests(unittest.TestCase):

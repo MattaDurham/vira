@@ -37,7 +37,7 @@ STATE = Path(__file__).resolve().parent.parent / "data" / "mail-state.json"
 # which account is failing. Regenerable; the watcher rewrites it each cycle.
 HEALTH = Path(__file__).resolve().parent.parent / "data" / "mail-health.json"
 # A health entry older than this many poll intervals reads as "stale" —
-# the honest word for a snapshot nothing has refreshed (a passive clone,
+# the honest word for a snapshot nothing has refreshed (an idle instance,
 # a watcher that is down).
 STALE_POLLS = 3
 PROBE_TIMEOUT_S = 20
@@ -89,7 +89,6 @@ def add_imap_account(account_email, host, password):
     accts.append({"email": account_email, "host": host})
     _save_accounts(accts)
     return {"email": account_email, "host": host, "added": True}
-
 
 
 # ---------- account kinds, hosts, and what a failure means ----------
@@ -671,5 +670,6 @@ class MailWatcher:
         }
         if not channels.push_feed_item(self.watcher, item):
             return                    # refetch echo — already in the feed
-        from . import notify
-        notify.maybe_notify(item)  # high-value senders ping the owner's phone
+        from . import notify, instance
+        if instance.owns_automation():
+            notify.maybe_notify(item)  # high-value senders ping the owner's phone

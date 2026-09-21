@@ -38,14 +38,11 @@ only when the fetch produced real material. A transcript-less video gets
 NO raw file — writing a stub would burn the one write the protocol
 allows on content that says nothing.
 
-Passive instances refuse every vault write and every room-store write
-outright — vault_root lives outside the cloned data/ (the plans.py
-precedent), and a clone reconciling its cloned store against the real
-vault would still MOVE real pointer notes.
+Room state belongs to this instance; captures and reconciled notes use the
+selected connected vault and its destination policies.
 """
 import html as _html
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -69,10 +66,6 @@ _YT_ID = re.compile(
 
 class StageError(RuntimeError):
     pass
-
-
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
 
 
 def classify(url):
@@ -423,8 +416,6 @@ def stage_items(items, room_slug, root=None, binary=None, destination=None):
     Vira's configured vault.  ``binary=None`` probes for yt-dlp while an
     explicit empty string preserves the existing "not installed" result.
     """
-    if _passive():
-        raise StageError("passive instance: staging writes the live vault. Refusing.")
     if not readingroom.SLUG_RE.match((room_slug or "").strip()):
         raise StageError(f"invalid room slug: {room_slug!r}")
     try:
@@ -475,8 +466,6 @@ def stage(slug, limit=None, destination=None):
     """Stage every un-staged, un-consumed item in a room. Deterministic,
     resumable, forward-only — an item with a raw on disk or a vault note
     on file is never touched."""
-    if _passive():
-        raise StageError("passive instance: staging writes the live vault. Refusing.")
     room = readingroom.load_room(slug)
     if room is None:
         raise StageError(f"no such room: {slug}")
@@ -555,9 +544,6 @@ def reconcile(slug, destination=None):
     """Link every synthesized item back into the room store and retire its
     pointer note. Idempotent; the store write happens under the room's own
     build lock so a concurrent refresh cannot interleave."""
-    if _passive():
-        raise StageError("passive instance: reconcile moves real vault notes "
-                         "and writes the room store. Refusing.")
     room = readingroom.load_room(slug)
     if room is None:
         raise StageError(f"no such room: {slug}")
@@ -635,8 +621,6 @@ def sync(slug, destination=None):
     """Best-effort stage+reconcile for entry points (a room refresh, the
     merge tool). Never raises, never blocks the caller — the work runs on a
     daemon thread; a room is never worth losing over its ingest."""
-    if _passive():
-        return None
     if destination:
         set_destination(slug, destination)
 

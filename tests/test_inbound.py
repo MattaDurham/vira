@@ -286,10 +286,7 @@ class Dormancy(Base):
     REAL = staticmethod(inbound.enabled)
 
     def test_it_is_live_when_a_handle_is_configured(self):
-        with mock.patch.dict("os.environ", {}, clear=False) as _:
-            import os
-            os.environ.pop("VIRA_PASSIVE", None)
-            self.assertTrue(self.REAL())
+        self.assertTrue(self.REAL())
 
     def test_it_is_dormant_without_a_configured_handle(self):
         notify.CONFIG.write_text(json.dumps(
@@ -301,14 +298,14 @@ class Dormancy(Base):
                                lambda key, default: False):
             self.assertFalse(self.REAL())
 
-    def test_a_passive_instance_never_reads_the_thread(self):
-        with mock.patch.dict("os.environ", {"VIRA_PASSIVE": "1"}):
-            self.assertFalse(self.REAL())
+    def test_branch_instance_has_the_configured_reply_channel(self):
+        with mock.patch.dict("os.environ", {"VIRA_INSTANCE_ID": "branch:test",
+                "VIRA_INSTANCE_URL": "http://localhost:8391"}):
+            self.assertTrue(self.REAL())
 
     def test_a_dormant_channel_routes_nothing(self):
         routed = []
-        with mock.patch.dict("os.environ", {"VIRA_PASSIVE": "1"}), \
-             mock.patch.object(inbound, "enabled", self.REAL), \
+        with mock.patch.object(inbound, "enabled", return_value=False), \
              mock.patch.object(inbound, "route",
                                lambda t, i=None: routed.append(t)):
             inbound.consume([{"channel": "imessage", "handle": HANDLE,

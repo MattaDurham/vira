@@ -15,14 +15,12 @@ scans it from WhatsApp > Settings > Linked Devices. The session lives in
 data/whatsapp/session/ (git-ignored, owner-only). Deleting that directory
 unlinks the device — the same "never clean this up" class as the venv.
 
-Passive instances (scripts/branch.sh serve) must never act on the world:
-they never spawn the sidecar and never auto-poll. If the owner starts a
-sidecar by hand (scripts/whatsapp-sidecar.sh) a passive instance may READ
-it — status, QR, and the explicit poll route only touch local files and
-the localhost seam.
+Parallel instances share one primary-owned linked-device connector. Each
+instance polls it into its own feed and keeps its own durable cursor. Pairing
+can start the shared connector from either instance; only its owner may stop
+it. A cross-process lock prevents simultaneous starts against one session.
 """
 import json
-import os
 import subprocess
 import threading
 import time
@@ -30,36 +28,49 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import channels
 from . import data as crm
-from . import settings
+from . import instance, settings
+from .filelock import locked
 
 ROOT = Path(__file__).resolve().parent.parent
-BRIDGE_DIR = ROOT / "bridge" / "whatsapp"
-DATA_DIR = ROOT / "data" / "whatsapp"
-SESSION_DIR = DATA_DIR / "session"
-INBOX = DATA_DIR / "inbox.ndjson"
-PIDFILE = DATA_DIR / "sidecar.pid"
-SIDECAR_LOG = DATA_DIR / "sidecar.log"
+BRIDGE_DIR = instance.primary_root() / "bridge" / "whatsapp"
+DATA_DIR = instance.primary_root() / "data" / "whatsapp"
 STATE = ROOT / "data" / "whatsapp-state.json"
 
 _ingest_lock = threading.Lock()   # watcher tick and the poll route serialize
-_mem_cursor = {"cursor": None}    # passive instances keep the cursor in memory
 _last_spawn = {"t": 0.0}
 
 
-def _passive():
-    return bool(os.environ.get("VIRA_PASSIVE"))
+def connector_dir():
+    # A fixture has an independent connector until explicitly paired. Resolve
+    # at use time so changing setup from fixture to real data needs no restart.
+    return ROOT / "data" / "whatsapp" if settings.fixture_mode() else DATA_DIR
+
+
+def connector_owner():
+    return instance.id() if settings.fixture_mode() else instance.primary_id()
 
 
 def bridge_port():
+    if settings.fixture_mode() and instance.is_branch():
+        return int(urlsplit(instance.api_url()).port) + 10000
+    # A copied branch config must not silently change the shared endpoint.
+    if instance.is_branch():
+        try:
+            cfg = json.loads((instance.primary_root() / "data" / "config.json")
+                             .read_text(encoding="utf-8"))
+            return int(cfg.get("whatsapp_bridge_port") or 18377)
+        except (OSError, ValueError, TypeError):
+            pass
     return int(settings.get("whatsapp_bridge_port"))
 
 
 def linked():
     """A prior pairing exists; the connector may run."""
-    return (SESSION_DIR / "creds.json").exists()
+    return (connector_dir() / "session" / "creds.json").exists()
 
 
 def installed():
@@ -85,9 +96,17 @@ def qr():
 
 
 def stop_sidecar():
+    st = sidecar_status()
+    if st is None:
+        return False
+    owner = st.get("owner_id") or instance.primary_id()
+    if owner != instance.id():
+        raise RuntimeError(f"WhatsApp connector belongs to instance {owner}; "
+                           "stop it from that instance")
     try:
         req = urllib.request.Request(
-            f"http://127.0.0.1:{bridge_port()}/stop", method="POST")
+            f"http://127.0.0.1:{bridge_port()}/stop", method="POST",
+            headers={"X-Vira-Instance": instance.id()})
         with urllib.request.urlopen(req, timeout=4):
             pass
         return True
@@ -96,20 +115,19 @@ def stop_sidecar():
 
 
 def ensure_sidecar(wait_seconds=8):
-    """Sidecar running, spawning it if needed. Returns its /status dict.
-
-    Never under VIRA_PASSIVE: a passive instance must not start the
-    sidecar (it links a device to the owner's account and holds a live
-    connection). On passive, an already-running sidecar is used read-only;
-    a missing one raises with the manual command.
-    """
+    """Use or start the shared primary-owned connector, including for pairing."""
     st = sidecar_status()
     if st is not None:
         return st
-    if _passive():
-        raise RuntimeError(
-            "passive instance: not starting the sidecar. Run it by hand: "
-            "scripts/whatsapp-sidecar.sh")
+    with locked(connector_dir() / "sidecar-start"):
+        # Another instance may have started it while this one waited.
+        st = sidecar_status()
+        if st is not None:
+            return st
+        return _spawn_sidecar(wait_seconds)
+
+
+def _spawn_sidecar(wait_seconds):
     if not installed():
         raise RuntimeError(
             "sidecar not installed — run: cd bridge/whatsapp && npm install")
@@ -120,13 +138,16 @@ def ensure_sidecar(wait_seconds=8):
         raise RuntimeError("sidecar not responding (respawn throttled)")
     _last_spawn["t"] = now
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    data_dir = connector_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_log = data_dir / "sidecar.log"
     cmd = [settings.get("whatsapp_node_bin"), str(BRIDGE_DIR / "sidecar.js"),
            "--port", str(bridge_port()),
-           "--session-dir", str(SESSION_DIR),
-           "--inbox", str(INBOX),
-           "--pidfile", str(PIDFILE),
-           "--log", str(SIDECAR_LOG)]
+           "--owner-id", connector_owner(),
+           "--session-dir", str(data_dir / "session"),
+           "--inbox", str(data_dir / "inbox.ndjson"),
+           "--pidfile", str(data_dir / "sidecar.pid"),
+           "--log", str(sidecar_log)]
     # Detached like the job runner: the linked-device connection should
     # ride through Vira restarts instead of re-handshaking every merge.
     if settings.IS_WIN:
@@ -134,7 +155,7 @@ def ensure_sidecar(wait_seconds=8):
                                     | subprocess.CREATE_NEW_PROCESS_GROUP)}
     else:
         detach = {"start_new_session": True}
-    log = open(SIDECAR_LOG, "ab")
+    log = open(sidecar_log, "ab")
     try:
         subprocess.Popen(cmd, cwd=str(BRIDGE_DIR), stdout=log,
                          stderr=subprocess.STDOUT, **detach)
@@ -146,28 +167,21 @@ def ensure_sidecar(wait_seconds=8):
         if st is not None:
             return st
         time.sleep(0.5)
-    raise RuntimeError(f"sidecar did not come up — see {SIDECAR_LOG}")
+    raise RuntimeError(f"sidecar did not come up — see {sidecar_log}")
 
 
 # ---------- cursor ----------
 
 def _load_cursor():
-    if _passive():
-        return _mem_cursor["cursor"]
     try:
-        return json.loads(STATE.read_text()).get("cursor")
+        return json.loads(STATE.read_text(encoding="utf-8")).get("cursor")
     except (OSError, json.JSONDecodeError):
         return None
 
 
 def _save_cursor(cursor):
-    if _passive():
-        # The cursor is this instance's read position into its own local
-        # inbox; in memory is enough for a disposable test copy.
-        _mem_cursor["cursor"] = cursor
-        return
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps({"cursor": cursor}))
+    STATE.write_text(json.dumps({"cursor": cursor}), encoding="utf-8")
 
 
 # ---------- message -> feed item ----------
@@ -250,8 +264,7 @@ def ingest(shared):
 class WhatsAppWatcher:
     """Polls the sidecar for new inbound messages and merges them into the
     shared live feed. Dormant until a pairing exists; supervises the
-    sidecar (respawn with throttle) while linked. Never started under
-    VIRA_PASSIVE — main.py gates it, and start() double-checks."""
+    shared sidecar (respawn with throttle) while linked."""
 
     def __init__(self, imessage_watcher, poll_seconds=None):
         self.watcher = imessage_watcher   # shared feed + listeners
@@ -260,10 +273,6 @@ class WhatsAppWatcher:
         self._stop = threading.Event()
 
     def start(self):
-        if _passive():
-            self.status = {"state": "passive",
-                           "detail": "test instance — watcher off"}
-            return
         threading.Thread(target=self._run, daemon=True,
                          name="vira-whatsapp").start()
 

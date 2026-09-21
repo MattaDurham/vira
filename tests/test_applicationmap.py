@@ -585,14 +585,6 @@ Posting URL: https://job-boards.greenhouse.io/examplelabs/jobs/321
                                            self.COVER_MD)
         self.assertIn("write the application first", str(caught.exception))
 
-    def test_a_passive_instance_never_writes_the_owners_package(self):
-        before = sorted(p.name for p in (self.package / "V2").iterdir())
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            with self.assertRaises(PermissionError):
-                applicationmap.attach_material(
-                    self.role, "cover", "cover-letter.md", self.COVER_MD)
-        self.assertEqual(sorted(p.name for p in (self.package / "V2").iterdir()),
-                         before)
 
     def test_the_material_route_refuses_and_reports_in_the_clients_terms(self):
         from fastapi import HTTPException
@@ -606,7 +598,7 @@ Posting URL: https://job-boards.greenhouse.io/examplelabs/jobs/321
         with (mock.patch.object(applications, "find_role",
                                 return_value=self.role),
               mock.patch.object(applicationmap, "attach_material",
-                                side_effect=PermissionError("passive"))):
+                                side_effect=PermissionError("destination denied"))):
             with self.assertRaises(HTTPException) as caught:
                 main.api_applications_evidence_map_material(
                     self.role["uid"], req)

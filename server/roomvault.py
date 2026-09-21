@@ -42,11 +42,8 @@ SO THE OUTPUT IS ONE SHAPE now, plus a legacy one it still reads:
                                 Reader resolves them until reconcile
                                 retires each one behind its summary.
 
-Passive instances refuse outright: vault_root lives outside the cloned
-data/, so a test clone writing here would land in the live Obsidian vault
-(the plans.py precedent).
+Writes use the selected connected vault and its destination policies.
 """
-import os
 import re
 from datetime import date
 from pathlib import Path
@@ -124,8 +121,6 @@ def _facts_line(it):
     bits = [it["mode"].capitalize(), it.get("type") or "", it.get("venue") or "",
             it.get("date") or it.get("year") or ""]
     return " · ".join(b for b in bits if b)
-
-
 
 
 MIN_RECURRING = 3      # appearances before an un-paged name is worth naming
@@ -281,10 +276,6 @@ def ingest(slug, dry_run=False, destination=None):
     best note that exists: the owner/reconciled summary, else the item's
     synthesized summary awaiting reconcile, else its legacy pointer note.
     Idempotent: safe to re-run after every room refresh."""
-    if os.environ.get("VIRA_PASSIVE"):
-        raise IngestError(
-            "passive instance: vault_root is outside the cloned data/, so "
-            "this would write the live Obsidian vault. Refusing.")
     room = readingroom.load_room(slug)
     if room is None:
         raise IngestError(f"no such room: {slug}")
@@ -342,7 +333,7 @@ def ingest(slug, dry_run=False, destination=None):
 def sync(slug, destination=None):
     """Best-effort projection for a real entry point (the create_reading_room
     tool, the update route). Returns the summary dict, or None when the
-    vault is unset, passive-blocked or unwritable — a room is never worth
+    vault is unset or unwritable — a room is never worth
     losing over its projection.
 
     This is deliberately NOT called from readingroom.build(). build() is a

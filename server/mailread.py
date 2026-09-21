@@ -24,15 +24,12 @@ Every socket here carries a timeout: imaplib/smtplib default to NONE,
 and one stalled read otherwise wedges the calling thread forever (the
 textindex Indexer lost a week to exactly that).
 
-VIRA_PASSIVE blocks the send outright — the send.py precedent; a test
-clone must never act on the world.
 """
 import email
 import email.message
 import email.utils
 import html as htmllib
 import imaplib
-import os
 import re
 import smtplib
 import urllib.error
@@ -346,9 +343,6 @@ def _reply_smtp(acct, text, to, subject, message_id, references):
 
 def send_reply(account, text, *, to=None, subject=None, message_id=None,
                references=None, graph_id=None):
-    if os.environ.get("VIRA_PASSIVE"):
-        raise RuntimeError("passive test instance — outbound email is "
-                           "blocked here")
     if not (text or "").strip():
         raise RuntimeError("empty reply")
     acct = _account(account)

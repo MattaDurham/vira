@@ -70,7 +70,7 @@ class Base(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        os.environ.pop("VIRA_PASSIVE", None)
+
 
     def handle(self, jid, state, spec=None):
         jdir = self.dir / jid
@@ -322,13 +322,6 @@ class Health(Base):
                                          "fetched": iso(0.01), "errors": {}}
         self.assertEqual(self.compose()["rows"], [])
 
-    def test_health_rows_skip_on_passive(self):
-        # a clone runs no watchers, so its health rows could only be false
-        # alarms about the live machine's stores
-        from server import aihealth
-        aihealth.summary.return_value = {"state": "red", "action": "x"}
-        with mock.patch.dict(os.environ, {"VIRA_PASSIVE": "1"}):
-            self.assertEqual(self.compose()["rows"], [])
 
 
 class ReviewBoundary(Base):
