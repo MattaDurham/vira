@@ -139,7 +139,9 @@ def materialize(output, model, effort):
     for name, body in fixture_documents().items():
         path = corpus / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
+        # The frozen inventory hashes canonical UTF-8 bytes, including LF.
+        # Native Windows newline conversion would invalidate a fresh corpus.
+        path.write_text(body, encoding="utf-8", newline="\n")
     corpus_hash, files = tree_hash(corpus)
     manifest = {"version": 1, "fixture_only": True, "sandbox_home": str(home),
                 "corpus_root": str(corpus), "corpus_hash": corpus_hash, "files": files,

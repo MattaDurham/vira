@@ -94,6 +94,23 @@ class ReceiptsAndIsolation(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "corpus changed"):
             evaluation.checked_manifest(self.manifest_path)
 
+    def test_corpus_bytes_stay_canonical_with_windows_text_defaults(self):
+        original_open = Path.open
+
+        def windows_open(path, mode="r", *args, **kwargs):
+            if "w" in mode and "b" not in mode and kwargs.get("newline") is None:
+                kwargs["newline"] = "\r\n"
+            return original_open(path, mode, *args, **kwargs)
+
+        output = self.root / "windows-defaults"
+        with mock.patch.object(Path, "open", windows_open):
+            manifest = evaluation.materialize(output, "test-model", "high")
+        corpus = Path(manifest["corpus_root"])
+        for name, body in answer_eval_guard.fixture_documents().items():
+            self.assertEqual((corpus / name).read_bytes(), body.encode("utf-8"))
+        self.assertEqual(evaluation.checked_manifest(output / "manifest.json")["files"],
+                         answer_eval_guard.expected_inventory())
+
     def test_rehashed_arbitrary_corpus_is_not_trusted_as_synthetic(self):
         root = Path(self.manifest["corpus_root"])
         (root / "extra.md").write_text("not part of the synthetic fixture", encoding="utf-8")
