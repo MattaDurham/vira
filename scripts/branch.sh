@@ -429,8 +429,13 @@ promote_snapshot() {
 # clone_data <src-data-dir> <dst-data-dir>
 #
 # An instant APFS clone of live data. Previous versions are retained.
-# The source is a RUNNING server, so it churns while the copy walks it — three rules keep
-# that from killing the clone:
+# The source is a RUNNING server, so it churns while the copy walks it.
+# These rules keep the clone consistent and independent:
+#
+#   - model-admission.sqlite3 and its SQLite sidecars are process-local
+#     capacity leases, not owner history. A copied ticket can hold a branch's
+#     slot forever while its primary PID stays alive. Each instance starts
+#     a fresh admission store; the source and previous snapshots stay intact.
 #
 #   - sqlite sidecars (-shm/-wal) are never copied. They appear and vanish as
 #     the server checkpoints (a vanished media-index.sqlite-wal used to abort
@@ -455,11 +460,15 @@ clone_data() {
   stage=$(mktemp -d "${dst:h}/.test-instance.snapshot.XXXXXXXX")
   entries=("$src"/*(DN:t))
   for name in $entries; do
-    [[ "$name" == *-shm || "$name" == *-wal ]] && continue
+    case "$name" in
+      model-admission.sqlite3|model-admission.sqlite3-*|*-shm|*-wal) continue ;;
+    esac
     cp -Rc "$src/$name" "$stage/$name" 2>/dev/null || churn=1
   done
   for name in $entries; do
-    [[ "$name" == *-shm || "$name" == *-wal ]] && continue
+    case "$name" in
+      model-admission.sqlite3|model-admission.sqlite3-*|*-shm|*-wal) continue ;;
+    esac
     [[ -e "$stage/$name" ]] && continue
     [[ -e "$src/$name" ]] || continue           # vanished mid-clone; not ours
     echo "error: data clone incomplete — could not copy $name from $src" >&2

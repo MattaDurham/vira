@@ -76,6 +76,41 @@ class CloneDataTests(unittest.TestCase):
         self.assertTrue((self.dst / ".test-snapshot").read_text().strip())
         self.assertFalse(self.stage.exists())
 
+    def test_model_admission_starts_empty_without_losing_previous_history(self):
+        from server import modeladmission
+
+        name = "model-admission.sqlite3"
+        source_db = self.src / name
+        running = modeladmission.Lease("primary running", "foreground",
+                                       capacity=1, path=source_db)
+        queued = modeladmission.Lease("primary queued", "foreground",
+                                      capacity=1, path=source_db)
+        self.assertEqual(running.poll()["status"], "running")
+        self.assertEqual(queued.poll()["status"], "queued")
+        original = source_db.read_bytes()
+        for suffix in ("-wal", "-shm", "-journal"):
+            (self.src / (name + suffix)).write_bytes(b"primary sidecar")
+
+        self.dst.mkdir()
+        previous = self.dst / name
+        previous.write_bytes(b"previous branch admission history")
+        result = run_clone(f'clone_data "{self.src}" "{self.dst}"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(list(self.dst.glob(name + "*")))
+        self.assertEqual(source_db.read_bytes(), original)
+        for suffix in ("-wal", "-shm", "-journal"):
+            self.assertEqual((self.src / (name + suffix)).read_bytes(), b"primary sidecar")
+        saved = list((self.wt / ".test-instance.history").glob("*/data/" + name))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_bytes(), b"previous branch admission history")
+
+        # A real branch lease gets its slot immediately despite both source
+        # tickets still naming this live process. No model is invoked.
+        branch = modeladmission.Lease("branch foreground", "foreground",
+                                      capacity=1, path=self.dst / name)
+        self.assertEqual(branch.poll()["status"], "running")
+        branch.release()
+
     def test_entry_that_vanishes_mid_clone_is_skipped_not_fatal(self):
         # the real failure: a file listed by the walk is gone by the time cp
         # reaches it, and `set -eu` turned that into a hard abort
