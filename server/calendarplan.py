@@ -12,12 +12,15 @@ reported for review, never automatically replayed.
 LANES (2026-09-22). Every draft carries a lane - personal, kids or family -
 and the lane picks the destination: kids and family each have their own
 configured calendar, and either falls back to the personal calendar when it
-is unset or cannot be found, saying so in the result. The model names the
-lane in its proposal; a proposal naming a configured child's name files
-under kids when the model stays silent; everything else is personal, on
-purpose - a wrong "family" entry would claim the owner's time. A kids or
-family entry is filed FOR the owner on the owner's own calendars: the people
-it names ride the description as text and nobody is ever invited.
+is unset or cannot be found, saying so in the result. Family is anything
+that would need the owner (their presence or their time), RSVP'd or not;
+kids is what concerns the children and would not need the owner, kept for
+information. The model names the lane in its proposal; a proposal naming a
+configured child's name files under kids when the model stays silent;
+everything else is personal, on purpose - a wrong "family" entry would
+claim the owner's time. A kids or family entry is filed FOR the owner on
+the owner's own calendars: the people it names ride the description as
+text and nobody is ever invited.
 """
 import copy
 import datetime as dt
