@@ -12,12 +12,15 @@ reported for review, never automatically replayed.
 LANES (2026-09-22). Every draft carries a lane - personal, kids or family -
 and the lane picks the destination: kids and family each have their own
 configured calendar, and either falls back to the personal calendar when it
-is unset or cannot be found, saying so in the result. The model names the
-lane in its proposal; a proposal naming a configured child's name files
-under kids when the model stays silent; everything else is personal, on
-purpose - a wrong "family" entry would claim the owner's time. A kids or
-family entry is filed FOR the owner on the owner's own calendars: the people
-it names ride the description as text and nobody is ever invited.
+is unset or cannot be found, saying so in the result. Family is anything
+that would need the owner (their presence or their time), RSVP'd or not;
+kids is what concerns the children and would not need the owner, kept for
+information. The model names the lane in its proposal; a proposal naming a
+configured child's name files under kids when the model stays silent;
+everything else is personal, on purpose - a wrong "family" entry would
+claim the owner's time. A kids or family entry is filed FOR the owner on
+the owner's own calendars: the people it names ride the description as
+text and nobody is ever invited.
 """
 import copy
 import datetime as dt
@@ -294,6 +297,24 @@ def _text(value, field, required=False):
     return value
 
 
+def _links(value, source_text):
+    """Links the event should carry: tickets, sign-ups, the posting itself.
+
+    Fidelity is the owner's rule (2026-09-22): an entry must carry the
+    ticket and information links its source carried. Grounded like every
+    quote - a URL the model did not copy verbatim from the source is
+    dropped, never repaired, so an invented link can never ride an event.
+    """
+    if not isinstance(value, list) or any(not isinstance(u, str) for u in value):
+        raise ValueError("links must be a list of URLs copied from the source.")
+    kept = []
+    for url in value:
+        url = url.strip()
+        if url.lower().startswith(("http://", "https://")) and url in source_text and url not in kept:
+            kept.append(url)
+    return kept[:12]
+
+
 def _date(value):
     if not isinstance(value, str) or "T" not in value:
         raise ValueError("Calendar times need full ISO dates, times and UTC offsets.")
@@ -461,6 +482,7 @@ def _validate(proposal, source):
         raise ValueError("owner_only must be a boolean.")
     draft["owner_only"] = proposal.get("owner_only", False)
     draft["lane"] = infer_lane(proposal, draft)
+    draft["links"] = _links(proposal.get("links", []), source_text)
     for field in ("start", "end"):
         draft[field] = _text(proposal.get(field, ""), field)
         if draft[field]:
@@ -951,6 +973,8 @@ def _description(draft):
     # artifact may carry (PortableDrafts pins this).
     if draft.get("lane") in LANE_KEYS:
         parts.append("Calendar lane: " + draft["lane"])
+    if draft.get("links"):
+        parts.append("Links:\n" + "\n".join(draft["links"]))
     if draft.get("schedule_kind") == "commitment":
         parts.append("Task deadline: " + draft.get("due", "") + (
             " (corrected by the owner)" if draft.get("deadline_authority") == "owner" else " (from source evidence)"))

@@ -105,9 +105,9 @@ window.ViraAssistant = (() => {
   // back to personal when unset or missing, which the status line says.
   const LANE_PICKERS = {
     "": { label: "Calendar for my own events", idKey: "assistant_calendar_id", nameKey: "assistant_calendar_name" },
-    kids: { label: "Calendar for the kids (school, classes, playdates, childcare - for my information)",
+    kids: { label: "Calendar for the kids (school, classes, playdates, childcare that never need me - for my information)",
       idKey: "assistant_calendar_kids_id", nameKey: "assistant_calendar_kids_name" },
-    family: { label: "Calendar for family plans I attend",
+    family: { label: "Calendar for anything that needs me (family plans, parent evenings, RSVP'd or not)",
       idKey: "assistant_calendar_family_id", nameKey: "assistant_calendar_family_name" },
   };
   function calendarDestination(form, data, lane = "") {
