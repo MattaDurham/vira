@@ -297,6 +297,24 @@ def _text(value, field, required=False):
     return value
 
 
+def _links(value, source_text):
+    """Links the event should carry: tickets, sign-ups, the posting itself.
+
+    Fidelity is the owner's rule (2026-09-22): an entry must carry the
+    ticket and information links its source carried. Grounded like every
+    quote - a URL the model did not copy verbatim from the source is
+    dropped, never repaired, so an invented link can never ride an event.
+    """
+    if not isinstance(value, list) or any(not isinstance(u, str) for u in value):
+        raise ValueError("links must be a list of URLs copied from the source.")
+    kept = []
+    for url in value:
+        url = url.strip()
+        if url.lower().startswith(("http://", "https://")) and url in source_text and url not in kept:
+            kept.append(url)
+    return kept[:12]
+
+
 def _date(value):
     if not isinstance(value, str) or "T" not in value:
         raise ValueError("Calendar times need full ISO dates, times and UTC offsets.")
@@ -464,6 +482,7 @@ def _validate(proposal, source):
         raise ValueError("owner_only must be a boolean.")
     draft["owner_only"] = proposal.get("owner_only", False)
     draft["lane"] = infer_lane(proposal, draft)
+    draft["links"] = _links(proposal.get("links", []), source_text)
     for field in ("start", "end"):
         draft[field] = _text(proposal.get(field, ""), field)
         if draft[field]:
@@ -954,6 +973,8 @@ def _description(draft):
     # artifact may carry (PortableDrafts pins this).
     if draft.get("lane") in LANE_KEYS:
         parts.append("Calendar lane: " + draft["lane"])
+    if draft.get("links"):
+        parts.append("Links:\n" + "\n".join(draft["links"]))
     if draft.get("schedule_kind") == "commitment":
         parts.append("Task deadline: " + draft.get("due", "") + (
             " (corrected by the owner)" if draft.get("deadline_authority") == "owner" else " (from source evidence)"))

@@ -1027,6 +1027,23 @@ class Lanes(CalendarFixture):
         self.assertFalse(found["lanes"]["kids"]["configured"])
         self.assertIn("personal calendar", found["lanes"]["kids"]["reason"])
 
+    def test_links_ride_the_description_only_when_copied_from_the_source(self):
+        text = ("Tickets for the fall party are at https://tickets.example.com/fall on "
+                "2030-09-13 from 15:00 to 15:45; map: https://maps.example.com/school")
+        source = dict(KIDS_SOURCE, id="message-links", text=text)
+        proposal = dict(KIDS_PROPOSAL, quote=text, time_quote="2030-09-13 from 15:00 to 15:45",
+                        links=["https://tickets.example.com/fall", "https://maps.example.com/school",
+                               "https://tickets.example.com/fall", "https://invented.example.com/x",
+                               "javascript:alert(1)"])
+        draft = self.stage(proposal, source)
+        self.assertEqual(draft["links"], ["https://tickets.example.com/fall", "https://maps.example.com/school"])
+        plans.create_owner_event(draft["id"])
+        description = plans._description(self.create.call_args.args[0])
+        self.assertIn("Links:\nhttps://tickets.example.com/fall\nhttps://maps.example.com/school", description)
+        self.assertNotIn("invented", description)
+        with self.assertRaises(ValueError):
+            self.stage(dict(proposal, links="https://tickets.example.com/fall"), source)
+
     def test_work_blocks_stay_personal(self):
         view = plans.plan_commitment(copy.deepcopy(LOOP), "p_test", "Alex")
         self.assertEqual(view["lane"], "personal")

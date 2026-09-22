@@ -290,6 +290,7 @@ def _prompt(detail, sources):
         '"calendar_proposals":[{"source_id":"source id","title":"event title",'
         '"start":"ISO with offset or empty","end":"ISO with offset or empty",'
         '"attendees":[],"owner_only":false,"lane":"kids, family, or personal",'
+        '"links":["every ticket, sign-up, map or information URL copied exactly from the source"],'
         '"quote":"exact source quote",'
         '"time_quote":"exact date/time quote or empty",'
         '"owner_only_quote":"exact request for a solo block/reminder or empty"}]}\n'
@@ -304,7 +305,9 @@ def _prompt(detail, sources):
         "childcare, their appointments) and would NOT need the owner, kept for "
         "information so they can coordinate; personal = the owner's own event, or "
         "whenever the lane is unclear. Prefix a family title with 'FYI: ' when "
-        "attendance is optional or the timing is still to be announced.\n"
+        "attendance is optional or the timing is still to be announced. "
+        "links: copy every ticket, sign-up, map, document and posting URL exactly "
+        "as it appears in the source; a URL not in the source is dropped.\n"
         + ("Owner's children: " + str(_cfg("assistant_kids_names", "")) + ".\n"
            if _cfg("assistant_kids_names", "") else "")
         + "Calendar timezone: " + str(_cfg("assistant_timezone", "") or

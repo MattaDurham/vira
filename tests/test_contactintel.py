@@ -629,6 +629,8 @@ class CalendarLanes(AssistantFixture):
         self.assertIn("family = anything that would need the owner", prompt)
         self.assertIn("whether or not they have RSVP'd", prompt)
         self.assertIn("Prefix a family title with 'FYI: '", prompt)
+        self.assertIn('"links":[', prompt)
+        self.assertIn("a URL not in the source is dropped", prompt)
         self.assertNotIn("Owner's children", prompt)
 
     def test_configured_children_are_named_to_the_model(self):
