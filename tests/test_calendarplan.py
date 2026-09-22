@@ -920,3 +920,113 @@ try {
 
 if __name__ == "__main__":
     unittest.main()
+
+
+KIDS_SOURCE = {
+    "id": "message-kids", "channel": "imessage", "when": NOW.isoformat(), "is_from_me": False,
+    "text": "Reminder: Avery has swim class on 2030-09-13 from 15:00 to 15:45 at the Y.",
+}
+KIDS_PROPOSAL = {
+    "title": "Avery swim class", "quote": KIDS_SOURCE["text"],
+    "time_quote": "2030-09-13 from 15:00 to 15:45", "owner_only": False, "attendees": ["Avery"],
+    "start": "2030-09-13T15:00:00+00:00", "end": "2030-09-13T15:45:00+00:00",
+    "lane": "kids", "description": "Swim class.", "location": "The Y",
+}
+
+
+class Lanes(CalendarFixture):
+    """kids and family are destinations, personal is the fallback, nobody is invited."""
+
+    def setUp(self):
+        super().setUp()
+        plans._metadata_native.return_value["calendars"] += [
+            {"id": "calendar-kids", "native_id": "calendar-kids", "name": "Kids test", "writable": True, "is_default": False},
+            {"id": "calendar-family", "native_id": "calendar-family", "name": "Family test", "writable": True, "is_default": False},
+            {"id": "calendar-ro", "native_id": "calendar-ro", "name": "Read only", "writable": False, "is_default": False},
+        ]
+        self.cfg["assistant_calendar_kids_name"] = "Kids test"
+        self.cfg["assistant_calendar_family_id"] = "calendar-family"
+
+    def test_kids_lane_files_on_the_kids_calendar_without_inviting_anyone(self):
+        draft = self.stage(KIDS_PROPOSAL, KIDS_SOURCE)
+        self.assertEqual(draft["lane"], "kids")
+        self.assertTrue(draft["can_create"], draft["reason"])
+        out = plans.create_owner_event(draft["id"])
+        self.assertEqual(out["status"], "created")
+        self.assertEqual(out["event_calendar"], "Kids test")
+        self.assertEqual(out["event_lane"], "kids")
+        self.assertEqual(self.create.call_args.args[1], "Kids test")
+        self.assertEqual(self.create.call_args.kwargs["calendar_id"], "calendar-kids")
+        # The adapter payload is the draft; the only fields the JXA script
+        # reads are title/start/end/description/location - no attendee key
+        # is ever composed, and the description names no person.
+        description = plans._description(self.create.call_args.args[0])
+        self.assertIn("Calendar lane: kids", description)
+        self.assertNotIn("Avery", description.split("Source quote:")[0])
+        self.assertNotIn("ATTENDEE", plans._SCRIPT)
+
+    def test_family_lane_resolves_by_id(self):
+        draft = self.stage(dict(KIDS_PROPOSAL, lane="family", title="Family swim"), KIDS_SOURCE)
+        out = plans.create_owner_event(draft["id"])
+        self.assertEqual((out["status"], out["event_calendar"], out["event_lane"]), ("created", "Family test", "family"))
+
+    def test_unconfigured_lane_falls_back_to_personal_and_says_so(self):
+        self.cfg.pop("assistant_calendar_family_id")
+        draft = self.stage(dict(KIDS_PROPOSAL, lane="family"), KIDS_SOURCE)
+        out = plans.create_owner_event(draft["id"])
+        self.assertEqual(out["status"], "created")
+        self.assertEqual(out["event_calendar"], "Personal test")
+        self.assertEqual(out["event_lane"], "personal")
+        self.assertIn("No family calendar is configured", out["reason"])
+        self.assertEqual(draft["lane"], "family", "the draft keeps the lane it was meant for")
+
+    def test_missing_or_readonly_lane_calendar_falls_back_rather_than_guessing(self):
+        for value in ("Vanished", "Read only"):
+            self.cfg["assistant_calendar_kids_name"] = value
+            plans.destinations(refresh=True)
+            with self.subTest(value=value):
+                draft = self.stage(dict(KIDS_PROPOSAL, title="Swim " + value), KIDS_SOURCE)
+                out = plans.create_owner_event(draft["id"])
+                self.assertEqual((out["status"], out["event_calendar"]), ("created", "Personal test"))
+                self.assertIn("personal calendar", out["reason"])
+        self.assertEqual(plans.destinations()["lanes"]["kids"]["selected"], None)
+
+    def test_lane_events_still_need_quoted_dates_and_times(self):
+        self.assert_refused(dict(KIDS_PROPOSAL, end=""), KIDS_SOURCE, reason="full ISO dates")
+        self.assert_refused(dict(KIDS_PROPOSAL, time_quote="Avery has swim class"), KIDS_SOURCE,
+                            reason="source must state")
+        self.assert_refused(dict(KIDS_PROPOSAL, start="2030-09-13T14:00:00+00:00"), KIDS_SOURCE,
+                            reason="do not match")
+
+    def test_personal_lane_rules_are_unchanged(self):
+        # An incoming message with other people and no lane is still a suggestion.
+        self.assert_refused(dict(KIDS_PROPOSAL, lane=""), KIDS_SOURCE, reason="other people")
+        self.assert_refused(dict(KIDS_PROPOSAL, lane="personal", attendees=[]), KIDS_SOURCE, reason="other people")
+        self.assert_refused(dict(KIDS_PROPOSAL, lane="party time"), KIDS_SOURCE, reason="other people")
+
+    def test_a_childs_name_infers_the_kids_lane_only_when_the_model_is_silent(self):
+        self.cfg["assistant_kids_names"] = "Avery, Rowan"
+        self.assertEqual(self.stage(dict(KIDS_PROPOSAL, lane=""), KIDS_SOURCE)["lane"], "kids")
+        self.assertEqual(self.stage(dict(KIDS_PROPOSAL, lane="family"), KIDS_SOURCE)["lane"], "family")
+        # "Averyt" is not Avery; an unrelated title from the same source stays personal.
+        text = "Reminder: the Averyt exhibit runs 2030-09-13 from 15:00 to 15:45."
+        source = dict(KIDS_SOURCE, id="message-exhibit", text=text)
+        proposal = dict(KIDS_PROPOSAL, lane="", title="Exhibit", quote=text, attendees=[],
+                        time_quote="2030-09-13 from 15:00 to 15:45", description="")
+        self.assertEqual(self.stage(proposal, source)["lane"], "personal")
+        self.cfg["assistant_kids_names"] = ""
+        self.assertEqual(self.stage(dict(KIDS_PROPOSAL, lane="", title="Avery again"), KIDS_SOURCE)["lane"], "personal")
+
+    def test_destinations_report_every_lane(self):
+        found = plans.destinations(refresh=True)
+        self.assertEqual(found["lanes"]["kids"]["selected"]["id"], "calendar-kids")
+        self.assertEqual(found["lanes"]["family"]["selected"]["id"], "calendar-family")
+        self.assertEqual(found["selected"]["id"], "calendar-test")
+        self.cfg.pop("assistant_calendar_kids_name")
+        found = plans.destinations(refresh=True)
+        self.assertFalse(found["lanes"]["kids"]["configured"])
+        self.assertIn("personal calendar", found["lanes"]["kids"]["reason"])
+
+    def test_work_blocks_stay_personal(self):
+        view = plans.plan_commitment(copy.deepcopy(LOOP), "p_test", "Alex")
+        self.assertEqual(view["lane"], "personal")

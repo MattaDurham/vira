@@ -289,13 +289,21 @@ def _prompt(detail, sources):
         '"closed_loops":[{"what":"EXACT existing loop what","evidence":[]}],'
         '"calendar_proposals":[{"source_id":"source id","title":"event title",'
         '"start":"ISO with offset or empty","end":"ISO with offset or empty",'
-        '"attendees":[],"owner_only":false,"quote":"exact source quote",'
+        '"attendees":[],"owner_only":false,"lane":"kids, family, or personal",'
+        '"quote":"exact source quote",'
         '"time_quote":"exact date/time quote or empty",'
         '"owner_only_quote":"exact request for a solo block/reminder or empty"}]}\n'
         "A calendar suggestion involving another person must have owner_only false. "
         "Do not invent start/end times; ambiguity is a draft with empty times. "
         "Only an outgoing owner message explicitly asking for a solo block/reminder "
         "can have owner_only true. No invitations are sent.\n"
+        "lane files the event on the owner's calendars: kids = about the owner's "
+        "children (school, classes, playdates, childcare, their appointments), kept "
+        "for the owner's information so they can coordinate; family = the whole "
+        "family does it and the owner is expected to attend; personal = the owner's "
+        "own event, or whenever the lane is unclear.\n"
+        + ("Owner's children: " + str(_cfg("assistant_kids_names", "")) + ".\n"
+           if _cfg("assistant_kids_names", "") else "")
         + "Calendar timezone: " + str(_cfg("assistant_timezone", "") or
                                         datetime.now().astimezone().tzinfo) + ".\n"
         + "Owner name for group attribution: " + str(_cfg("owner_name", "") or "not configured") + ". "

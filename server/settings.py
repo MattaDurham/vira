@@ -69,6 +69,17 @@ DEFAULTS = {
     "assistant_calendar_auto_create": False,
     "assistant_calendar_name": "",
     "assistant_calendar_id": "",
+    # Calendar lanes (2026-09-22). kids = school, classes, playdates and
+    # childcare, filed for the owner's information; family = whole-family
+    # plans the owner is expected to attend. Either lane falls back to the
+    # personal calendar above when unset or not found in Calendar.app.
+    "assistant_calendar_kids_name": "",
+    "assistant_calendar_kids_id": "",
+    "assistant_calendar_family_name": "",
+    "assistant_calendar_family_id": "",
+    "assistant_kids_names": "",          # comma-separated first names; a proposal
+                                         # naming one files under kids when the
+                                         # model states no lane
     "assistant_calendar_work_start": 9,
     "assistant_calendar_work_end": 17,
     "assistant_calendar_block_minutes": 30,

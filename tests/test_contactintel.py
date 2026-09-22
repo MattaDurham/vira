@@ -616,3 +616,21 @@ class DeadlineWritesTests(AssistantFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CalendarLanes(AssistantFixture):
+    def test_lane_rides_from_the_proposal_to_the_calendar_draft(self):
+        source = message("Avery has swim class Saturday 2026-09-12 from 15:00 to 15:45.")
+        self.run_source(source, {"calendar_proposals": [{"source_id": source["id"], "title": "Avery swim",
+                                                        "quote": source["text"], "lane": "kids"}]})
+        self.assertEqual(self.calendar_stage.call_args.args[0]["lane"], "kids")
+        prompt = self.model.call_args.args[0]
+        self.assertIn('"lane":"kids, family, or personal"', prompt)
+        self.assertIn("family = the whole family does it and the owner is expected to attend", prompt)
+        self.assertNotIn("Owner's children", prompt)
+
+    def test_configured_children_are_named_to_the_model(self):
+        self.cfg["assistant_kids_names"] = "Avery, Rowan"
+        source = message("Swim class Saturday.")
+        self.run_source(source, {})
+        self.assertIn("Owner's children: Avery, Rowan.", self.model.call_args.args[0])

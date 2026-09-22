@@ -8,6 +8,16 @@ need their complete time range in the source. No path sends invitations,
 accepts invitations, or edits an existing event.
 A durable claim precedes the OS call: an interrupted or ambiguous write is
 reported for review, never automatically replayed.
+
+LANES (2026-09-22). Every draft carries a lane - personal, kids or family -
+and the lane picks the destination: kids and family each have their own
+configured calendar, and either falls back to the personal calendar when it
+is unset or cannot be found, saying so in the result. The model names the
+lane in its proposal; a proposal naming a configured child's name files
+under kids when the model stays silent; everything else is personal, on
+purpose - a wrong "family" entry would claim the owner's time. A kids or
+family entry is filed FOR the owner on the owner's own calendars: the people
+it names ride the description as text and nobody is ever invited.
 """
 import copy
 import datetime as dt
@@ -30,6 +40,11 @@ STORE = settings.ROOT / "data" / "calendar-plans.json"
 UTC = dt.timezone.utc
 CLOSED = {"created", "dismissed"}
 STATUSES = CLOSED | {"suggested", "blocked", "creating", "uncertain"}
+LANES = ("personal", "kids", "family")
+# Each configured lane names a calendar; personal is the default destination
+# below and the fallback for both.
+LANE_KEYS = {"kids": ("assistant_calendar_kids_id", "assistant_calendar_kids_name"),
+             "family": ("assistant_calendar_family_id", "assistant_calendar_family_name")}
 _destination_cache = {"at": 0, "value": None}
 _destination_lock = threading.Lock()
 
@@ -124,6 +139,7 @@ def destinations(refresh=False):
         out = dict(empty, **copy.deepcopy(_destination_cache["value"]))
     calendars = out["calendars"]
     cfg = settings.raw()
+    out["lanes"] = {lane: _lane_destination(lane, calendars, cfg) for lane in LANE_KEYS}
     explicit_id = str(cfg.get("assistant_calendar_id") or "").strip()
     explicit_name = str(cfg.get("assistant_calendar_name") or "").strip()
     if explicit_id:
@@ -153,6 +169,77 @@ def destinations(refresh=False):
     else:
         out["reason"] = "Choose a writable calendar from the list; the current system default could not be verified."
     return out
+
+
+def _lane_destination(lane, calendars, cfg):
+    """One lane's configured calendar, or the reason it falls back to personal.
+
+    The same exact-unique-name rule as the personal destination: a name that
+    matches two calendars cannot be selected at the native boundary.
+    """
+    id_key, name_key = LANE_KEYS[lane]
+    explicit_id = str(cfg.get(id_key) or "").strip()
+    explicit_name = str(cfg.get(name_key) or "").strip()
+    row = {"lane": lane, "configured": bool(explicit_id or explicit_name), "selected": None, "reason": ""}
+    if not row["configured"]:
+        row["reason"] = f"No {lane} calendar is configured; {lane} events use the personal calendar."
+        return row
+    if explicit_id:
+        matches = [c for c in calendars if c["id"] == explicit_id]
+    else:
+        matches = [c for c in calendars if c["name"] == explicit_name]
+    if len(matches) == 1 and matches[0]["writable"] and (
+            matches[0]["native_id"] or sum(c["name"] == matches[0]["name"] for c in calendars) == 1):
+        row["selected"] = matches[0]
+    elif len(matches) == 1 and not matches[0]["writable"]:
+        row["reason"] = f"The configured {lane} calendar is read-only; {lane} events use the personal calendar."
+    else:
+        row["reason"] = f"The configured {lane} calendar is missing or ambiguous; {lane} events use the personal calendar."
+    return row
+
+
+def destination_for(lane, refresh=False):
+    """The calendar a lane writes to, and the lane actually used.
+
+    A configured, writable lane calendar wins; otherwise the personal
+    destination is returned with the fallback reason as `note`, so the
+    result can say where the event landed and why. Returns
+    (selected, lane_used, note, destinations_payload).
+    """
+    found = destinations(refresh=refresh)
+    if lane in LANE_KEYS:
+        row = found["lanes"][lane]
+        if row["selected"]:
+            return row["selected"], lane, "", found
+        return found.get("selected"), "personal", row["reason"], found
+    return found.get("selected"), "personal", "", found
+
+
+def kids_names():
+    raw = settings.raw().get("assistant_kids_names", "")
+    return [name.strip() for name in str(raw or "").split(",") if name.strip()]
+
+
+def _lane_value(value):
+    value = str(value or "").strip().lower() if isinstance(value, str) else ""
+    return value if value in LANES else ""
+
+
+def infer_lane(proposal, draft):
+    """The model's lane when it states one; else a configured child's name in
+    the title or quote files under kids; else personal. Personal is the
+    fallback by design (owner's call, 2026-09-22): a wrong kids entry costs
+    one FYI line, a wrong family entry claims the owner's time."""
+    lane = _lane_value(proposal.get("lane"))
+    if lane:
+        return lane
+    text = " ".join(str(draft.get(key, "")) for key in ("title", "quote", "description"))
+    for name in kids_names():
+        if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text, re.I):
+            return "kids"
+    return "personal"
+
+
 _SOLO = re.compile(
     r"\b(?:remind me|block (?:out )?(?:time|my calendar)|"
     r"(?:add|put) (?:this |it )?(?:on|to|in) my calendar|"
@@ -373,6 +460,7 @@ def _validate(proposal, source):
     if not isinstance(proposal.get("owner_only", False), bool):
         raise ValueError("owner_only must be a boolean.")
     draft["owner_only"] = proposal.get("owner_only", False)
+    draft["lane"] = infer_lane(proposal, draft)
     for field in ("start", "end"):
         draft[field] = _text(proposal.get(field, ""), field)
         if draft[field]:
@@ -724,6 +812,8 @@ def _eligibility(draft, automatic=True):
     target = destinations()
     if not target.get("selected"):
         return target["reason"] or "Choose a writable calendar from the discovered list."
+    if (draft.get("lane") or "personal") != "personal":
+        return _lane_eligibility(draft)
     if draft.get("attendees") or draft.get("owner_only") is not True:
         return "Events involving other people remain suggestions; Vira does not send invitations."
     if draft.get("schedule_kind") == "commitment":
@@ -745,6 +835,25 @@ def _eligibility(draft, automatic=True):
         # Check the whole owner request, not a cherry-picked time fragment
         # from another appointment in that source message.
         reason = _grounded(dict(draft, time_quote=contexts[0]))
+    except ValueError as exc:
+        return str(exc)
+    if reason:
+        return reason
+    if start <= _now():
+        return "The suggested start is in the past; review its date before creating an event."
+    return ""
+
+
+def _lane_eligibility(draft):
+    """A kids or family entry needs its dates and both times quoted from the
+    source, exactly as a personal one does - nothing is invented - but not
+    an owner request: a school notice or a partner's text is the source.
+    Nobody is invited; the people it names are description text."""
+    if draft.get("schedule_kind") == "commitment":
+        return _commitment_eligibility(draft)
+    try:
+        start, _ = _dates(draft)
+        reason = _grounded(draft)
     except ValueError as exc:
         return str(exc)
     if reason:
@@ -836,6 +945,12 @@ def _description(draft):
     source = draft.get("source", {})
     provenance = f'Source: {source.get("channel", "")} {source.get("id", "")} ({source.get("when", "")})'
     parts = [draft.get("description", ""), provenance, "Source quote: " + draft.get("quote", "")]
+    # The lane rides the description so a later sweep can tell where an
+    # entry was meant to live. Suggested people deliberately do NOT: an
+    # address in an exported .ics reads like an invitee, which no Vira
+    # artifact may carry (PortableDrafts pins this).
+    if draft.get("lane") in LANE_KEYS:
+        parts.append("Calendar lane: " + draft["lane"])
     if draft.get("schedule_kind") == "commitment":
         parts.append("Task deadline: " + draft.get("due", "") + (
             " (corrected by the owner)" if draft.get("deadline_authority") == "owner" else " (from source evidence)"))
@@ -898,8 +1013,7 @@ def create_owner_event(draft_id, automatic=True):
                 return _view(draft)
         # Resolve fresh immediately before the claim. A cached name or a
         # changed system default must not silently redirect this event.
-        destination = destinations(refresh=True)
-        selected = destination.get("selected")
+        selected, lane_used, note, destination = destination_for(draft.get("lane"), refresh=True)
         if not selected:
             draft.update(status="blocked", reason=destination["reason"], updated_at=_stamp())
             jsonstore.write_atomic(STORE, state, indent=2, ensure_ascii=False)
@@ -917,8 +1031,9 @@ def create_owner_event(draft_id, automatic=True):
             draft.update(status="uncertain", reason=f"Calendar result needs review: {exc}", updated_at=_stamp())
         else:
             draft.update(status="created", event_uid=result["uid"], event_calendar=calendar_name,
-                         event_calendar_id=selected["id"],
-                         reason="Personal event created without invitees.", updated_at=_stamp())
+                         event_calendar_id=selected["id"], event_lane=lane_used,
+                         reason=(f"Event created on the {lane_used} calendar without invitees."
+                                 + (" " + note if note else "")), updated_at=_stamp())
         jsonstore.write_atomic(STORE, state, indent=2, ensure_ascii=False)
         return _view(draft)
 
