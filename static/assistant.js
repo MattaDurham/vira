@@ -100,19 +100,30 @@ window.ViraAssistant = (() => {
     form.appendChild(wrap);
     return input;
   }
-  function calendarDestination(form, data) {
+  // One picker per lane. "" is the personal calendar (the default and the
+  // fallback); "kids" and "family" each name their own calendar and fall
+  // back to personal when unset or missing, which the status line says.
+  const LANE_PICKERS = {
+    "": { label: "Calendar for my own events", idKey: "assistant_calendar_id", nameKey: "assistant_calendar_name" },
+    kids: { label: "Calendar for the kids (school, classes, playdates, childcare - for my information)",
+      idKey: "assistant_calendar_kids_id", nameKey: "assistant_calendar_kids_name" },
+    family: { label: "Calendar for family plans I attend",
+      idKey: "assistant_calendar_family_id", nameKey: "assistant_calendar_family_name" },
+  };
+  function calendarDestination(form, data, lane = "") {
     const saved = data.settings || {};
+    const picker = LANE_PICKERS[lane];
     const box = node("div", "assistant-calendar-choice");
-    const wrap = node("label", "field", "Calendar for my own events");
+    const wrap = node("label", "field", picker.label);
     const select = node("select");
-    select.name = "assistant_calendar_id";
+    select.name = picker.idKey;
     wrap.appendChild(select);
     box.appendChild(wrap);
     const status = node("div", "assistant-calendar-status");
     box.appendChild(status);
     let choices = new Map();
-    let initial = { id: saved.assistant_calendar_id || "",
-      name: saved.assistant_calendar_id ? "" : saved.assistant_calendar_name || "" };
+    let initial = { id: saved[picker.idKey] || "",
+      name: saved[picker.idKey] ? "" : saved[picker.nameKey] || "" };
     const value = () => choices.get(select.value) || initial;
     function populate(destinations) {
       const keep = value();
@@ -129,9 +140,10 @@ window.ViraAssistant = (() => {
       };
       const systemDefault = calendars.find((c) => c.id === d.default_id && c.writable);
       const sole = calendars.filter((c) => c.writable);
-      const auto = systemDefault ? systemDefault.name + " (system default)"
+      const auto = lane ? "personal calendar (fallback)"
+        : systemDefault ? systemDefault.name + " (system default)"
         : d.available && sole.length === 1 ? sole[0].name + " (only writable calendar)" : "system default";
-      option("", "Auto - " + auto, { id: "", name: "" });
+      option("", (lane ? "Not set - " : "Auto - ") + auto, { id: "", name: "" });
       if (keep.name) option("saved-name", "Keep " + keep.name + " (saved destination)", keep);
       calendars.forEach((c) => option("id:" + c.id,
         c.name + (c.is_default ? " (system default)" : "") + (c.writable ? "" : " (read only)"),
@@ -141,6 +153,13 @@ window.ViraAssistant = (() => {
       select.value = keep.id ? "id:" + keep.id : keep.name ? "saved-name" : "";
       initial = keep;
       status.replaceChildren();
+      if (lane) {
+        const row = (d.lanes || {})[lane] || {};
+        if (row.selected?.name) notice(status, "Current " + lane + " calendar: " + row.selected.name + ".");
+        else if (keep.name || keep.id) notice(status, row.reason || ("The saved " + lane + " calendar is unavailable; " + lane + " events use the personal calendar."), true);
+        else notice(status, lane + " events use the personal calendar until a calendar is chosen here.");
+        return;
+      }
       if (d.selected?.name) notice(status, "Current destination: " + d.selected.name + ".");
       if (keep.name && !d.selected) notice(status, "Saved destination: " + keep.name + ".");
       const problem = d.error || d.reason;
@@ -173,8 +192,8 @@ window.ViraAssistant = (() => {
     form.appendChild(box);
     return (updates) => {
       const chosen = value();
-      updates.assistant_calendar_id = chosen.id;
-      updates.assistant_calendar_name = chosen.name;
+      updates[picker.idKey] = chosen.id;
+      updates[picker.nameKey] = chosen.name;
     };
   }
   function settingsPanel(data) {
@@ -208,14 +227,21 @@ window.ViraAssistant = (() => {
     add("assistant_due_soon_hours", "Remind me this many hours before a deadline", "number", { min: 1, max: 168, required: "" });
     add("assistant_catchup_days", "Check this many recent days when first enabled", "number", { min: 1, max: 90, required: "" });
     const saveDestination = calendarDestination(form, data);
+    const saveKidsDestination = calendarDestination(form, data, "kids");
+    const saveFamilyDestination = calendarDestination(form, data, "family");
+    add("assistant_kids_names", "Children's first names (comma-separated)", "text",
+      { placeholder: "An event naming one of them files on the kids calendar" });
+    notice(form, "Kid and family events Vira reads out of messages and mail land on those calendars "
+      + "as entries for you only; nobody is invited. Either lane falls back to the personal calendar.");
     add("assistant_calendar_work_start", "Weekday work hours start (0–23)", "number", { min: 0, max: 23, required: "" });
     add("assistant_calendar_work_end", "Weekday work hours end (1–24)", "number", { min: 1, max: 24, required: "" });
     add("assistant_calendar_block_minutes", "Personal task block length (minutes)", "number", { min: 15, max: 240, required: "" });
     notice(form, "Personal task blocks use these working hours and the assistant time zone above.");
     add("assistant_calendar_auto_create", "Create events automatically when I am the only attendee", "checkbox");
-    notice(form, "Vira can reserve free personal work time before a task's deadline "
-      + "or create an event from your explicit solo scheduling request. "
-      + "Meetings with others stay as suggestions for you to invite. "
+    notice(form, "Vira can reserve free personal work time before a task's deadline, "
+      + "create an event from your explicit solo scheduling request, or file a kids or "
+      + "family entry whose date and times are quoted in the source. "
+      + "Meetings with others on your own calendar stay as suggestions for you to invite. "
       + "Equal quiet-hour values turn quiet hours off.");
     form.addEventListener("input", () => { dirty = true; });
     const actions = node("div", "assistant-actions");
@@ -238,6 +264,8 @@ window.ViraAssistant = (() => {
           : input.type === "number" ? Number(input.value) : input.value.trim();
       });
       saveDestination(updates);
+      saveKidsDestination(updates);
+      saveFamilyDestination(updates);
       save.disabled = true;
       form.querySelector(".assistant-action-error")?.remove();
       try {
@@ -539,7 +567,8 @@ window.ViraAssistant = (() => {
       const label = { suggested: "Suggested", blocked: "Needs review", creating: "Creating",
         uncertain: "Check calendar", created: "Created" }[d.status];
       meta.appendChild(node("span", "assistant-tag", label || "Suggested"));
-      meta.appendChild(node("span", "", d.owner_only ? "Only you" : "Meeting suggestion"));
+      meta.appendChild(node("span", "", d.lane === "kids" ? "Kids calendar" : d.lane === "family" ? "Family calendar"
+        : d.owner_only ? "Only you" : "Meeting suggestion"));
       card.appendChild(meta);
       card.appendChild(node("h5", "", d.title || "Calendar event"));
       if (d.start) notice(card, date(d.start, true) + (d.end ? " – " + date(d.end, true) : ""));
@@ -555,7 +584,8 @@ window.ViraAssistant = (() => {
       if (d.description) notice(card, d.description);
       notice(card, d.reason, ["blocked", "uncertain"].includes(d.status));
       if (d.status === "uncertain") notice(card, "Check your calendar before trying again; creation could not be confirmed.", true);
-      if (d.status === "created") notice(card, "Created in " + (d.event_calendar || "your calendar"));
+      if (d.status === "created") notice(card, "Created in " + (d.event_calendar || "your calendar")
+        + (d.event_lane && d.event_lane !== "personal" ? " (" + d.event_lane + " calendar)" : ""));
       evidence(card, d.schedule_kind === "commitment" ? d.evidence || d.quote : d.quote || d.evidence);
       const actions = node("div", "assistant-actions");
       const path = "/api/assistant/calendar/" + encodeURIComponent(d.id);
@@ -576,7 +606,7 @@ window.ViraAssistant = (() => {
         actions.appendChild(dismiss);
       }
       if (actions.childElementCount) card.appendChild(actions);
-      if (d.can_export && !d.owner_only) notice(card, "The calendar file is a draft. Add invitees in your calendar when you are ready to invite them.");
+      if (d.can_export && !d.owner_only && !["kids", "family"].includes(d.lane)) notice(card, "The calendar file is a draft. Add invitees in your calendar when you are ready to invite them.");
       section.appendChild(card);
     });
     body.appendChild(section);
