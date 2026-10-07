@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import modelbudget, models, modulemodels, suggest
+from tests.model_ledgers import pin_model_ledgers
 
 
 class ModuleModelsTest(unittest.TestCase):
@@ -24,6 +25,7 @@ class ModuleModelsTest(unittest.TestCase):
         patch = mock.patch.object(models, "is_disabled", return_value=False)
         patch.start()
         self.addCleanup(patch.stop)
+        pin_model_ledgers(self)
 
     def test_scope_routes_completion_and_budget_to_same_model(self):
         with modulemodels.scope("find"), \

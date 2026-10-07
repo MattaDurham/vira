@@ -22,6 +22,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from server import applicationmap, applications, draftcheck as dc, resumeview
+from tests.model_ledgers import pin_model_ledgers
 
 
 def docx_bytes(paragraphs):
@@ -82,6 +83,16 @@ class Base(unittest.TestCase):
             patch = mock.patch.object(target, attr, value)
             patch.start()
             self.addCleanup(patch.stop)
+        # review() runs the model pass, and an unpinned suggest.complete is a
+        # real CLI call on this machine that also writes the admission queue,
+        # the completions ledger and the learned limits into data/. No
+        # backend is what CI has, so it is what every case here starts from;
+        # ModelPass feeds its own answers on top.
+        patch = mock.patch("server.suggest.complete",
+                           side_effect=RuntimeError("no model in the suite"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        pin_model_ledgers(self)
         resumeview._corpus_cache.update({"key": None})
         self.addCleanup(resumeview._corpus_cache.update, {"key": None})
 

@@ -405,6 +405,9 @@ class TidyIsWired(unittest.TestCase):
         mock.patch.object(
             session.worktree, "tidy",
             lambda *a: (self.calls.append(a), (True, "removed"))[1]).start()
+        # declaring a runner orphaned also marks its row in the job ledger
+        mock.patch.object(joblog, "STORE",
+                          Path(self.tmp.name) / "jobs-log.json").start()
         self.addCleanup(mock.patch.stopall)
         self.reg = session.Sessions()
 

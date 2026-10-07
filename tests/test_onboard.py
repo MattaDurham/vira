@@ -16,7 +16,21 @@ from pathlib import Path
 from unittest import mock
 
 from server import data as crm
-from server import onboard, settings, triage
+from server import companion, onboard, settings, triage
+
+
+def setUpModule():
+    """status() runs every source probe, and the companion probe sweeps
+    stale pairings out of companion.STORE and rewrites it on every read.
+    Any case here that reaches status() reaches that write, so the store is
+    pinned once for the whole module."""
+    tmp = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(tmp.cleanup)
+    patch = mock.patch.object(companion, "STORE",
+                              Path(tmp.name) / "companion.json")
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
+
 
 GOOGLE_CSV_NEW = """\
 First Name,Middle Name,Last Name,Organization Name,Organization Title,E-mail 1 - Value,E-mail 2 - Value,Phone 1 - Value

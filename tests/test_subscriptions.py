@@ -55,7 +55,8 @@ def _frozen_date_cls(day):
 class FrozenClockCase(unittest.TestCase):
     """Base for every case: pins the clock seams the suite reaches —
     subscriptions' `date`, notify's `datetime`, brief's `dt` — so results
-    are identical on every run date."""
+    are identical on every run date, and both stores, so no case reads or
+    seeds the checkout's own."""
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -66,6 +67,21 @@ class FrozenClockCase(unittest.TestCase):
                   mock.patch.object(brief, "dt", frozen_dt)):
             p.start()
             cls.addClassCleanup(p.stop)
+
+    def setUp(self):
+        # Both stores, for every case: in fixture mode the first touch of
+        # either one seeds BOTH from fixtures/, so a case that pins only the
+        # one it reads still writes the other into the checkout's data/.
+        # Cases that need a particular registry or ledger patch over this.
+        super().setUp()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for p in (mock.patch.object(subscriptions, "REGISTRY",
+                                    Path(tmp.name) / "subscriptions.json"),
+                  mock.patch.object(subscriptions, "LEDGER",
+                                    Path(tmp.name) / "subs-ledger.sqlite")):
+            p.start()
+            self.addCleanup(p.stop)
 
 # Minimal registry mirroring catalog-seeded entries for the six merchants.
 REG = {"merchants": [

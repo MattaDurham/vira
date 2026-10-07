@@ -3,8 +3,9 @@ the probe contract — present / configured / count derived from the world,
 independently, never raising.
 
 Hermetic by construction: every probe target (AddressBook glob, chat.db,
-Calendar store, mail-accounts.json, the CRM root) is patched to a tmp
-fixture, so these pass identically on a loaded Mac and a bare CI runner.
+Calendar store, mail-accounts.json, the CRM root, the companion store) is
+patched to a tmp fixture, so these pass identically on a loaded Mac and a
+bare CI runner.
 """
 import json
 import sqlite3
@@ -13,7 +14,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import mail, settings, sources
+from server import companion, mail, settings, sources
+
+
+def setUpModule():
+    """The companion probe sweeps stale pairings out of companion.STORE and
+    rewrites it on every read, and discover() and the platform cases run
+    every probe - so the store is pinned once for the whole module."""
+    tmp = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(tmp.cleanup)
+    patch = mock.patch.object(companion, "STORE",
+                              Path(tmp.name) / "companion.json")
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
+
 
 KINDS = {sources.CONTACTS, sources.MESSAGES, sources.CALENDAR, sources.MAIL}
 

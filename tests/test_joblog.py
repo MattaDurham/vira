@@ -2,10 +2,12 @@
 
 Run: .venv/bin/python -m unittest tests.test_joblog
 """
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from server import joblog
+from server import joblog, routines
 
 
 def _rec(**kw):
@@ -16,6 +18,16 @@ def _rec(**kw):
 
 
 class JobNamingTests(unittest.TestCase):
+    def setUp(self):
+        # a routine's job is named from the routine store, and reading that
+        # store seeds the starter routines into it on first touch
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patch = mock.patch.object(routines, "STORE",
+                                  Path(tmp.name) / "routines.json")
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_idea_implement_and_plan(self):
         r = _rec(idea_id="i1")
         self.assertEqual(joblog.command(r, "Build the atlas graph"),
