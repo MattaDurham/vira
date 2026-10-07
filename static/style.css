@@ -8809,6 +8809,11 @@ mark.doc-term {
 .vault-config-add > .btn { justify-self: start; }
 .vault-folder-choice { width: 100%; min-height: 40px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; text-align: left; background: var(--bg); color: var(--text-head); cursor: pointer; overflow-wrap: anywhere; font: inherit; font-size: 13px; }
 .vault-folder-choice:hover { border-color: var(--accent); }
+.data-connection-section { border-top: 1px solid var(--line); padding: 14px 0; min-width: 0; }
+.data-connection-section > summary { cursor: pointer; }
+.data-connection-path { overflow-wrap: anywhere; }
+.data-connection-form, .data-connection-preview { min-width: 0; }
+.data-connection-form .search { width: 100%; min-width: 0; box-sizing: border-box; font-size: 16px; }
 .vault-folder-choice:focus-visible, .vault-folder-remove:focus-visible, .vault-config-advanced > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .vault-folder-list { display: flex; gap: 6px; flex-wrap: wrap; }
 .vault-folder-chip { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; min-width: 0; font-size: 13px; }

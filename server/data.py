@@ -41,10 +41,11 @@ def norm_digits(h):
 
 def _load():
     now = time.time()
-    if _cache.get("people") and now - _cache["loaded_at"] < _TTL:
+    root = _crm()
+    if (_cache.get("root") == str(root.resolve()) and _cache.get("people")
+            and now - _cache["loaded_at"] < _TTL):
         return _cache
 
-    root = _crm()
     try:
         people = json.loads((root / "people.json").read_text())["people"]
     except (OSError, json.JSONDecodeError, KeyError):
@@ -59,6 +60,13 @@ def _load():
     by_id, by_handle = {}, {}
     for p in people:
         by_id[p["id"]] = p
+        imported = (p.get("refs") or {}).get("contact_import")
+        if isinstance(imported, dict):
+            # Contact-import facts are registry provenance, never a write to
+            # the external pipeline's master.json. Its evidence wins when set.
+            row = dict(imported)
+            row.update(master.get(p["id"], {}))
+            master[p["id"]] = row
         h = p.get("handles", {})
         for e in h.get("emails", []) + h.get("imessage", []):
             if "@" in e:
@@ -103,7 +111,7 @@ def _load():
     except (OSError, json.JSONDecodeError):
         pass
 
-    _cache.update(people=people, master=master, by_id=by_id, by_handle=by_handle,
+    _cache.update(root=str(root.resolve()), people=people, master=master, by_id=by_id, by_handle=by_handle,
                   profiles=profiles, chats_by_person=chats_by_person, loaded_at=now)
     return _cache
 
@@ -318,7 +326,7 @@ def _save_field_locked(pid, p, field, value):
     return prof
 
 
-def save_profile_refresh(pid, summary, how_met=None, reason="refresh"):
+def save_profile_refresh(pid, summary, how_met=None, reason="refresh", expected_root=None):
     """A refreshed dossier description, written back to the profile file.
 
     The summary is model-SYNTHESIZED content landing in a model-synthesized
@@ -334,6 +342,8 @@ def save_profile_refresh(pid, summary, how_met=None, reason="refresh"):
     if not p:
         raise KeyError(pid)
     with _write_lock, locked(_profile_path(pid)):
+        if expected_root is not None and _crm().resolve() != expected_root:
+            raise ValueError("The CRM changed during refresh; retry against the connected CRM.")
         path = _profile_path(pid)
         prof = _load_profile_for_write(pid, p)
         prev = prof.get("relationship_summary")

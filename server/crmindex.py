@@ -74,7 +74,7 @@ def _stamp():
     """Source fingerprint: cheap to compute, changes whenever any CRM
     file a person's text is built from changes."""
     root = settings.crm_root()
-    parts = []
+    parts = [str(root.resolve())]
     for name in ("people.json", "master.json"):
         f = root / name
         parts.append(f"{name}:{f.stat().st_mtime if f.exists() else 0}")

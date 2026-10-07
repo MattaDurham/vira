@@ -257,14 +257,14 @@ def candidates():
     return out
 
 
-def _read_people_backed_up():
+def _read_people_backed_up(root=None):
     """Read people.json after taking a timestamped backup. Every write path
     into the registry goes through this — the backup is the guarantee, and a
     guarantee with more than one implementation is not one."""
-    people_path = _people()
+    people_path = root / "people.json" if root is not None else _people()
     try:
-        doc = json.loads(people_path.read_text())
-        backups = _backups()
+        doc = json.loads(people_path.read_text(encoding="utf-8"))
+        backups = root / "backups" if root is not None else _backups()
         backups.mkdir(exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         shutil.copy2(people_path, backups / f"people-{stamp}.json")
@@ -276,8 +276,9 @@ def _read_people_backed_up():
     return doc
 
 
-def _write_people(doc):
-    jsonstore.write_atomic(_people(), doc, indent=1, ensure_ascii=False)
+def _write_people(doc, root=None):
+    path = root / "people.json" if root is not None else _people()
+    jsonstore.write_atomic(path, doc, indent=1, ensure_ascii=False)
     crm.invalidate()
 
 
