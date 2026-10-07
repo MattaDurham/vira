@@ -241,15 +241,30 @@ PC the wizard skips what does not exist there - see **Windows** above):
    pulled; without it the Brain still supports full-text search. Captures,
    plans, definitions, and ingested notes keep their selected destination.
 5. **Mail** - open Config > Connect mail and add a Gmail/IMAP or Microsoft
-   365 mailbox. Microsoft setup guides you through a one-time Entra app
-   registration, saves Application (client) ID and Directory (tenant) ID in
-   Vira, then starts device login. Enable public client flows and add
-   delegated `Mail.ReadWrite` (read mail/save drafts) and `Calendars.Read`;
-   your organization may require administrator consent. No client secret
-   or redirect URI is needed. Refresh tokens use the local secrets store;
-   registration IDs use private local configuration. An existing configured
-   registration is detected automatically. Changing it requires removing
-   Microsoft mailboxes first and finishing any pending login.
+   365 mailbox. **Connect Microsoft** opens browser sign-in and returns
+   directly to Vira, identifying the mailbox automatically. **Let Vira set
+   this up** starts a task that looks for registration IDs in Vira backups
+   and model-readable connected vaults, restores a unique registration
+   through validated tools, or asks for the missing Microsoft step.
+   **Manual setup** holds the ID fields, Entra guide and device-code login
+   for phones, remote browsers and older registrations.
+   Browser login needs a public-client registration with delegated
+   `User.Read`, `Mail.ReadWrite` (read mail/save drafts) and `Calendars.Read`,
+   and a **Mobile and desktop applications** redirect of
+   `http://localhost/api/mail/graph/browser/callback`. Enable public client
+   flows for the device fallback. No client secret is needed. Your
+   organization may require administrator consent. Refresh tokens stay in
+   the instance's secrets store; IDs stay in private local configuration.
+   Registration changes require removing Microsoft mailboxes and finishing
+   pending logins first. Full Disk Access supplies no Microsoft permissions.
+   A shared publisher-owned registration is **not provisioned in this
+   release**. A Vira publisher can register a multitenant public client once,
+   configure these permissions and callback, complete Microsoft's publisher
+   verification/consent requirements, and deliberately set
+   `server.msgraph.PUBLISHER_CLIENT_ID` to that public application ID. Existing
+   local registrations take precedence. Never use an owner's private tenant
+   registration as the public default. Until then, first-time users need
+   their own registration or help from their Microsoft administrator.
 6. **Config extras** - copy `config.example.json` to `data/config.json`
    for identity details: your name, the iMessage handle Vira texts
    notifications to, family calendar names. Every key is optional; an

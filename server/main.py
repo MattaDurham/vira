@@ -2750,6 +2750,67 @@ def api_graph_status(email: str):
     return msgraph.flow_status(email.strip().lower())
 
 
+class GraphSetupReq(BaseModel):
+    model: str | None = None
+
+
+@app.post("/api/mail/graph/setup")
+def api_graph_setup(req: GraphSetupReq):
+    from . import msgraphsetup
+    try:
+        jid = jobs.launch(msgraphsetup.prompt(), cwd=str(ROOT), model=req.model,
+                          subject="Set up Microsoft mail and calendar", kind_label="Microsoft setup",
+                          about="Recover or configure a Microsoft registration through validated native tools; browser sign-in and consent remain with the owner.")
+    except ValueError as exc:
+        raise HTTPException(429, str(exc))
+    return {"job_id": jid}
+
+
+@app.post("/api/mail/graph/browser/start")
+def api_graph_browser_start(request: Request):
+    from . import msgraphbrowser
+    try:
+        cookie, body = msgraphbrowser.start(request)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    response = JSONResponse(body, headers={"Cache-Control": "no-store"})
+    response.set_cookie(msgraphbrowser.cookie_name(request), cookie,
+                        max_age=msgraphbrowser.TTL, httponly=True, samesite="lax",
+                        secure=request.url.scheme == "https", path="/api/mail/graph/browser")
+    return response
+
+
+@app.get("/api/mail/graph/browser/status")
+def api_graph_browser_status(request: Request):
+    from . import msgraphbrowser
+    return JSONResponse(msgraphbrowser.status(request.cookies.get(msgraphbrowser.cookie_name(request))),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/mail/graph/browser/callback")
+def api_graph_browser_callback():
+    return FileResponse(ROOT / "static" / "microsoft-callback.html", media_type="text/html",
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                                 "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"})
+
+
+class GraphBrowserCompleteReq(BaseModel):
+    state: str
+    code: str = ""
+    error: str = ""
+    error_description: str = ""
+
+
+@app.post("/api/mail/graph/browser/complete")
+def api_graph_browser_complete(request: Request, req: GraphBrowserCompleteReq):
+    from . import msgraphbrowser
+    try:
+        result = msgraphbrowser.complete(request, req.state, req.code, req.error, req.error_description)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 class ImapAddReq(BaseModel):
     email: str
     host: str

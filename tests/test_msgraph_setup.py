@@ -1,12 +1,16 @@
 """Native Microsoft setup joins; no real stores, tokens, or network."""
+import asyncio
+import base64
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
-from server import jsonstore, main, msgraph, settings
+from server import jsonstore, main, msgraph, msgraphbrowser, msgraphsetup, settings, viratools
 
 
 CLIENT = "00000000-0000-4000-8000-000000000001"
@@ -35,6 +39,7 @@ class MicrosoftSetupTests(unittest.TestCase):
 
         patches = [
             mock.patch.object(msgraph, "CONFIG", self.config),
+            mock.patch.object(msgraph, "PUBLISHER_CLIENT_ID", ""),
             mock.patch.object(settings, "CONFIG_PATH", self.config),
             mock.patch.object(msgraph, "ACCOUNTS", self.accounts),
             mock.patch.object(msgraph, "_flows", {}),
@@ -52,7 +57,168 @@ class MicrosoftSetupTests(unittest.TestCase):
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
-        self.api = TestClient(main.app)  # no lifespan/background workers
+        self.api = TestClient(main.app, base_url="http://localhost:8378")  # no lifespan/background workers
+
+    def browser_start(self):
+        return self.api.post("/api/mail/graph/browser/start", headers={"origin": "http://localhost:8378"})
+
+    def browser_complete(self, params, **values):
+        return self.api.post("/api/mail/graph/browser/complete", json={"state": params["state"][0], "code": "example-code", **values}, headers={"origin": "http://localhost:8378"})
+
+    def test_browser_login_joins_pkce_profile_secret_and_account(self):
+        self.save()
+        started = self.browser_start()
+        self.assertEqual(started.status_code, 200, started.text)
+        params = parse_qs(urlparse(started.json()["authorize_url"]).query)
+        self.assertEqual(params["response_mode"], ["fragment"])
+        self.assertEqual(params["redirect_uri"], ["http://localhost:8378" + msgraphbrowser.CALLBACK])
+        self.assertIn("HttpOnly", started.headers["set-cookie"])
+        self.assertIn("SameSite=lax", started.headers["set-cookie"])
+        self.assertEqual(self.save(OTHER).status_code, 409)
+        msgraph._post_form.return_value = {"access_token": "test-access", "refresh_token": "test-refresh"}
+        with mock.patch.object(msgraphbrowser, "_profile", return_value=EMAIL):
+            done = self.browser_complete(params)
+        self.assertTrue(done.json()["connected"], done.text)
+        self.assertEqual(done.json()["email"], EMAIL)
+        form = msgraph._post_form.call_args.args[1]
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(form["code_verifier"].encode("ascii")).digest()).decode("ascii").rstrip("=")
+        self.assertEqual(params["code_challenge"], [challenge])
+        self.assertEqual(form["client_id"], CLIENT)
+        self.assertEqual(form["redirect_uri"], params["redirect_uri"][0])
+        self.assertEqual(jsonstore.read(self.accounts, []), [{"email": EMAIL, "type": "graph"}])
+        self.assertEqual(self.tokens[("test-" + msgraph.KEYCHAIN_SERVICE, EMAIL)], "test-refresh")
+        self.assertTrue(self.api.get("/api/mail/graph/browser/status").json()["connected"])
+        msgraph._post_form.reset_mock()
+        self.assertEqual(self.browser_complete(params).status_code, 400)
+        msgraph._post_form.assert_not_called()
+        self.assertEqual(self.save(OTHER).status_code, 409)
+
+    def test_browser_state_cookie_origin_expiry_and_retry_guards(self):
+        self.save()
+        started = self.browser_start()
+        params = parse_qs(urlparse(started.json()["authorize_url"]).query)
+        missing_cookie = TestClient(main.app, base_url="http://localhost:8378")
+        response = missing_cookie.post("/api/mail/graph/browser/complete", json={"state": params["state"][0], "code": "code"}, headers={"origin": "http://localhost:8378"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.browser_complete(params, state="z" * 43).status_code, 400)
+        self.assertEqual(self.browser_complete(params, state="invalid non-ASCII state \u00e9").status_code, 400)
+        self.assertEqual(self.api.post("/api/mail/graph/browser/complete", json={"state": params["state"][0], "code": "code"}, headers={"origin": "https://example.com"}).status_code, 400)
+        self.assertEqual(self.api.post("/api/mail/graph/browser/start", headers={"origin": "http://localhost:8378", "host": "example.com"}).status_code, 400)
+        self.assertEqual(self.api.post("/api/mail/graph/browser/start").status_code, 400)
+        newer = parse_qs(urlparse(self.browser_start().json()["authorize_url"]).query)
+        self.assertEqual(self.browser_complete(params).status_code, 400)
+        self.now += msgraphbrowser.TTL + 1
+        self.assertEqual(self.browser_complete(newer).status_code, 400)
+        self.assertIn("Connect Microsoft again", self.api.get("/api/mail/graph/browser/status").json()["error"])
+        self.assertFalse(self.accounts.exists())
+        self.assertFalse(self.tokens)
+        msgraph._post_form.assert_not_called()
+        self.assertEqual(self.save(OTHER).status_code, 200)
+
+    def test_browser_denial_and_failed_secret_never_show_connected(self):
+        self.save()
+        params = parse_qs(urlparse(self.browser_start().json()["authorize_url"]).query)
+        denied = self.browser_complete(params, code="", error="access_denied")
+        self.assertFalse(denied.json()["connected"])
+        self.assertIn("access_denied", denied.json()["error"])
+        msgraph._post_form.assert_not_called()
+        params = parse_qs(urlparse(self.browser_start().json()["authorize_url"]).query)
+        msgraph._post_form.return_value = {"access_token": "test-access", "refresh_token": "test-refresh"}
+        with mock.patch.object(msgraphbrowser, "_profile", return_value=EMAIL), mock.patch.object(msgraph.secrets, "set", side_effect=RuntimeError("Secret store unavailable")):
+            failed = self.browser_complete(params)
+        self.assertFalse(failed.json()["connected"])
+        self.assertIn("Secret store unavailable", failed.json()["error"])
+        self.assertFalse(self.accounts.exists())
+        self.assertFalse(msgraph._tokens)
+
+    def test_browser_callback_has_no_store_or_third_party_resources(self):
+        callback = self.api.get(msgraphbrowser.CALLBACK)
+        self.assertEqual(callback.status_code, 200)
+        self.assertEqual(callback.headers["cache-control"], "no-store")
+        self.assertEqual(callback.headers["referrer-policy"], "no-referrer")
+        self.assertIn("connect-src 'self'", callback.headers["content-security-policy"])
+        self.assertIn("frame-ancestors 'none'", callback.headers["content-security-policy"])
+
+    def test_browser_identity_comes_from_authenticated_graph_and_profile_failure_is_not_connected(self):
+        self.save()
+        params = parse_qs(urlparse(self.browser_start().json()["authorize_url"]).query)
+        msgraph._post_form.return_value = {"access_token": "test-access", "refresh_token": "test-refresh"}
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({"mail": EMAIL, "userPrincipalName": "different@example.com"}).encode("utf-8")
+        with mock.patch.object(msgraphbrowser.urllib.request, "urlopen", return_value=response) as request:
+            done = self.browser_complete(params)
+        self.assertEqual(done.json()["email"], EMAIL)
+        self.assertEqual(request.call_args.args[0].get_header("Authorization"), "Bearer test-access")
+        params = parse_qs(urlparse(self.browser_start().json()["authorize_url"]).query)
+        with mock.patch.object(msgraphbrowser.urllib.request, "urlopen", side_effect=OSError("network")):
+            failed = self.browser_complete(params)
+        self.assertFalse(failed.json()["connected"])
+        self.assertIn("try again", failed.json()["error"])
+
+    def test_browser_expired_cookie_cannot_redeem_and_failure_to_register_mailbox_is_visible(self):
+        self.save()
+        started = self.browser_start()
+        params = parse_qs(urlparse(started.json()["authorize_url"]).query)
+        cookie = started.headers["set-cookie"].split(";", 1)[0]
+        self.now += msgraphbrowser.TTL + 1
+        expired = self.api.post("/api/mail/graph/browser/complete", json={"state": params["state"][0], "code": "code"}, headers={"origin": "http://localhost:8378", "cookie": cookie})
+        self.assertEqual(expired.status_code, 400)
+        msgraph._post_form.assert_not_called()
+        params = parse_qs(urlparse(self.browser_start().json()["authorize_url"]).query)
+        msgraph._post_form.return_value = {"access_token": "test-access", "refresh_token": "test-refresh"}
+        with mock.patch.object(msgraphbrowser, "_profile", return_value=EMAIL), mock.patch.object(msgraph, "_ensure_account_entry", side_effect=RuntimeError("Account store unavailable")):
+            failed = self.browser_complete(params)
+        self.assertFalse(failed.json()["connected"])
+        self.assertIn("Account store unavailable", failed.json()["error"])
+        self.assertFalse(self.accounts.exists())
+
+    def test_publisher_registration_is_used_only_when_provisioned_and_local_wins(self):
+        self.seed()
+        self.assertFalse(msgraph.registration_status()["configured"])
+        with mock.patch.object(msgraph, "PUBLISHER_CLIENT_ID", OTHER):
+            self.assertEqual(msgraph.registration_status()["source"], "publisher")
+            self.assertEqual(msgraph._auth(), (OTHER, "https://login.microsoftonline.com/common"))
+            self.save()
+            self.assertEqual(msgraph.registration_status()["source"], "local")
+            self.assertEqual(msgraph.registration_status()["client_id"], CLIENT)
+
+    def test_native_setup_discovers_only_authorized_identifiers_and_configures_this_instance(self):
+        source = self.root / "vault"
+        source.mkdir()
+        archived = source / "archive"
+        archived.mkdir()
+        jsonstore.write_atomic(archived / "config.json", {"msgraph_client_id": CLIENT, "msgraph_tenant": TENANT, "unrelated_secret": "must-not-be-returned"})
+        hidden = source / "hidden"
+        hidden.mkdir()
+        jsonstore.write_atomic(hidden / "config.json", {"msgraph_client_id": OTHER})
+        specs = [{"root": source, "id": "primary", "name": "Example vault", "primary": True, "read_enabled": True, "model_exposure": True, "model_exclude_dirs": ["hidden"]}]
+        with mock.patch.object(msgraphsetup.backup, "DEST", self.root / "backups"), mock.patch.object(msgraphsetup.vault, "source_specs", return_value=specs):
+            found = asyncio.run(viratools.invoke("microsoft_setup"))
+        text = found["content"][0]["text"]
+        self.assertNotIn("must-not-be-returned", text)
+        payload = json.loads(text)
+        self.assertEqual(len(payload["candidates"]), 1)
+        self.assertEqual(payload["candidates"][0]["client_id"], CLIENT)
+        proposal = {"client_id": CLIENT, "tenant": TENANT}
+        denied = asyncio.run(viratools.invoke("configure_microsoft", proposal, read_only=True))
+        self.assertIn("read-only", denied["content"][0]["text"])
+        self.assertFalse(self.config.exists())
+        accepted = asyncio.run(viratools.invoke("configure_microsoft", proposal))
+        self.assertTrue(json.loads(accepted["content"][0]["text"])["configured"])
+        self.assertEqual(jsonstore.read(self.config, {})["msgraph_client_id"], CLIENT)
+        bad = asyncio.run(viratools.invoke("configure_microsoft", {"client_id": "wrong"}))
+        self.assertIn("error", bad["content"][0]["text"])
+        self.assertEqual(jsonstore.read(self.config, {})["msgraph_client_id"], CLIENT)
+
+    def test_setup_button_launches_a_native_task_without_config_or_microsoft_writes(self):
+        with mock.patch.object(main.jobs, "launch", return_value="synthetic-setup") as launch:
+            response = self.api.post("/api/mail/graph/setup", json={})
+        self.assertEqual(response.json(), {"job_id": "synthetic-setup"})
+        self.assertIn("configure_microsoft", launch.call_args.args[0])
+        self.assertIn("ask_owner", launch.call_args.args[0])
+        self.assertFalse(self.config.exists())
+        self.assertFalse(self.accounts.exists())
+        msgraph._post_form.assert_not_called()
 
     def seed(self, **values):
         jsonstore.write_atomic(self.config, {"owner_name": "Example", **values})

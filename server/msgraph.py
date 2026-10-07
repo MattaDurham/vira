@@ -37,6 +37,10 @@ KEYCHAIN_SERVICE = "vira-mail-graph"   # namespaced per instance by settings.key
 _DATA = Path(__file__).resolve().parent.parent / "data"
 ACCOUNTS = _DATA / "mail-accounts.json"
 CONFIG = _DATA / "config.json"
+# Provision the publisher-owned, multitenant public client before setting this.
+# Never fill this with an installation's private app registration.
+PUBLISHER_CLIENT_ID = ""
+PUBLISHER_TENANT = "common"
 
 
 def _registration(cfg):
@@ -73,15 +77,22 @@ def _read_registration_config():
 
 def registration_status():
     cfg = {}
+    source = "none"
     try:
         cfg = _read_registration_config()
+        if cfg.get("msgraph_client_id"):
+            source = "local"
+        elif PUBLISHER_CLIENT_ID:
+            cfg = {**cfg, "msgraph_client_id": PUBLISHER_CLIENT_ID,
+                   "msgraph_tenant": PUBLISHER_TENANT}
+            source = "publisher"
         client_id, tenant = _registration(cfg)
         error = None
     except (ValueError, RuntimeError) as e:
         client_id = str(cfg.get("msgraph_client_id") or "")
         tenant = str(cfg.get("msgraph_tenant") or "")
         error = str(e)
-    return {"configured": error is None, "client_id": client_id,
+    return {"configured": error is None, "source": source, "client_id": client_id,
             "tenant": tenant, "error": error}
 
 
@@ -253,6 +264,8 @@ def _login_error(payload):
         return "Enable Allow public client flows in the registration's Authentication settings, save, and try again."
     if "AADSTS700016" in detail:
         return "Microsoft could not find this app in the selected tenant. Check Application (client) ID and Directory (tenant) ID in Config."
+    if "AADSTS50011" in detail:
+        return "Add http://localhost/api/mail/graph/browser/callback under Authentication > Mobile and desktop applications in the Microsoft registration, or use device login in Manual setup."
     if "AADSTS65001" in detail or payload.get("error") == "consent_required":
         return "Microsoft requires consent for this app. Ask your tenant administrator to approve delegated Mail.ReadWrite and Calendars.Read, then try again."
     return detail[:300]  # Keep provider diagnostics bounded in the setup card.

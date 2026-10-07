@@ -11345,23 +11345,7 @@ function imapReconnectForm(a) {
 }
 
 function graphReconnectForm(a) {
-  const f = el("div", "acct-form");
-  f.dataset.kind = "graph";
-  f.appendChild(el("div", "acct-form-title", "Sign in to Microsoft 365 again"));
-  const acts = el("div", "acct-form-acts");
-  const btn = el("button", "btn small primary", "Start device login");
-  acts.appendChild(btn);
-  f.appendChild(acts);
-  const out = el("p", "acct-form-out"); out.hidden = true;
-  f.appendChild(out);
-  btn.disabled = true;
-  f.insertBefore(graphRegistrationForm(ready => { btn.disabled = !ready; }), acts);
-  btn.onclick = () => graphConnect(a.email, out, btn, () => refreshMail());
-  f.appendChild(el("p", "hint",
-    "A one-time device login: a code appears here, you approve it at "
-    + "microsoft.com/devicelogin, and the mailbox and the work calendar "
-    + "reconnect. No password is stored."));
-  return f;
+  return graphAddForm(a.email);
 }
 
 async function acctCheck(btn, a) {
@@ -11495,9 +11479,9 @@ function imapAddForm(st) {
 // Vira, with the one-time Microsoft registration explained before sign-in.
 function graphRegistrationForm(onReady) {
   const box = el("details", "graph-registration");
-  const summary = el("summary", null, "Checking Microsoft app registration...");
+  const summary = el("summary", null, "Manual setup");
   box.appendChild(summary);
-  box.appendChild(el("p", "hint", "Microsoft requires an app registration before Vira can connect mail and calendar. Create it once in your Microsoft tenant, then save its two IDs here."));
+  box.appendChild(el("p", "hint", "Use these fields if you already have a Microsoft app registration or prefer to set one up yourself. Vira can also look for an existing registration with the setup task."));
   const guide = el("details", "graph-registration-guide");
   guide.appendChild(el("summary", null, "Create a Microsoft app registration"));
   const steps = el("ol");
@@ -11505,8 +11489,8 @@ function graphRegistrationForm(onReady) {
   const portal = el("a", null, "Open Microsoft Entra");
   portal.href = "https://entra.microsoft.com/"; portal.target = "_blank"; portal.rel = "noopener";
   first.appendChild(portal); steps.appendChild(first);
-  steps.appendChild(el("li", null, "Under Authentication, enable Allow public client flows and save. Device login does not need a client secret or redirect URI."));
-  steps.appendChild(el("li", null, "Under API permissions > Add a permission > Microsoft Graph > Delegated permissions, add Mail.ReadWrite and Calendars.Read. Vira uses these to read mail, save drafts, and read your calendar; they do not grant permission to send mail."));
+  steps.appendChild(el("li", null, "Under Authentication > Add a platform > Mobile and desktop applications, add http://localhost/api/mail/graph/browser/callback for browser sign-in. Also enable Allow public client flows for device login. No client secret is needed."));
+  steps.appendChild(el("li", null, "Under API permissions > Add a permission > Microsoft Graph > Delegated permissions, add User.Read, Mail.ReadWrite and Calendars.Read. Vira uses these to identify your account, read mail, save drafts, and read your calendar; they do not grant permission to send mail."));
   steps.appendChild(el("li", null, "If your organization requires administrator consent or blocks app registration/device login, ask its Microsoft administrator to approve this setup."));
   steps.appendChild(el("li", null, "Copy Application (client) ID and Directory (tenant) ID from Overview into the fields below. Save, then sign in with Microsoft."));
   guide.appendChild(steps);
@@ -11536,10 +11520,10 @@ function graphRegistrationForm(onReady) {
   function apply(st) {
     saved = st.configured ? st : null;
     client.value = st.client_id || ""; tenant.value = st.tenant || "";
-    summary.textContent = st.configured ? "Microsoft app registration saved" : "Set up Microsoft app registration";
-    box.open = !st.configured; guide.open = !st.configured;
+    summary.textContent = "Manual setup";
+    guide.open = false;
     out.textContent = st.configured ? "Registration saved. Sign in below to connect your mailbox." : st.error;
-    onReady(!!st.configured);
+    onReady(!!st.configured, st);
   }
   save.onclick = async () => {
     save.disabled = true; onReady(false);
@@ -11551,41 +11535,120 @@ function graphRegistrationForm(onReady) {
       out.classList.add("warn"); out.textContent = errText(e); onReady(ready());
     } finally { save.disabled = false; }
   };
-  api("/api/mail/graph/registration").then(apply).catch(e => {
+  box.refresh = () => api("/api/mail/graph/registration").then(apply);
+  box.refresh().catch(e => {
     box.open = true; guide.open = true;
     out.textContent = "Could not check registration: " + errText(e);
   }).finally(() => { client.disabled = false; tenant.disabled = false; save.disabled = false; });
   return box;
 }
 
-function graphAddForm() {
-  const f = el("div", "acct-form");
+function graphAddForm(reconnectEmail = "") {
+  const f = el("div", "acct-form graph-connect-form");
   f.dataset.kind = "graph";
-  f.appendChild(el("div", "acct-form-title", "Connect Microsoft 365 / Outlook"));
-  const r1 = el("div", "acct-form-row");
-  const email = mkInput("email", "you@yourtenant.com");
-  email.setAttribute("aria-label", "Microsoft mailbox email");
-  r1.appendChild(email);
-  f.appendChild(r1);
+  f.appendChild(el("div", "acct-form-title", reconnectEmail ? "Reconnect Microsoft 365 / Outlook" : "Connect Microsoft 365 / Outlook"));
+  f.appendChild(el("p", "hint", "Sign in with Microsoft to connect mail, drafts and your work calendar. Microsoft asks you to approve access; Vira keeps the refresh token in this instance's secrets store."));
   const acts = el("div", "acct-form-acts");
-  const btn = el("button", "btn small primary", "Sign in with Microsoft");
-  btn.disabled = true;
-  f.insertBefore(graphRegistrationForm(ready => { btn.disabled = !ready; }), r1);
-  acts.appendChild(btn);
-  f.appendChild(acts);
-  const out = el("p", "acct-form-out"); out.hidden = true;
+  const connect = el("button", "btn small primary", "Connect Microsoft");
+  const setup = el("button", "btn small", "Let Vira set this up");
+  connect.disabled = true;
+  acts.append(connect, setup); f.appendChild(acts);
+  const out = el("p", "acct-form-out"); out.setAttribute("role", "status");
   f.appendChild(out);
-  btn.onclick = () => {
-    const v = email.value.trim().toLowerCase();
-    if (!v.includes("@")) { email.focus(); return; }
-    graphConnect(v, out, btn, () => refreshMail());
+  let ready = false, setupId = null, setupPoll = null;
+  const manual = graphRegistrationForm((isReady, st) => {
+    ready = isReady; connect.disabled = false; device.disabled = !ready;
+    if (st) out.textContent = ready ? "Ready to sign in with Microsoft."
+      : "An app registration is needed first. Let Vira look for an existing setup, or use Manual setup. This release does not yet include a shared Vira Microsoft registration.";
+  });
+  f.appendChild(manual);
+  const row = el("div", "acct-form-row");
+  const email = mkInput("email", "Mailbox email for device login");
+  email.setAttribute("aria-label", "Microsoft mailbox email"); email.value = reconnectEmail;
+  row.appendChild(email); manual.appendChild(row);
+  const fallback = el("div", "acct-form-acts");
+  const device = el("button", "btn small", "Use device login"); device.disabled = true;
+  fallback.appendChild(device); manual.appendChild(fallback);
+  manual.appendChild(el("p", "hint", "Device login works on a phone or another computer, and with registrations that do not have a browser callback. Enter your mailbox email, then approve the displayed code with Microsoft."));
+  device.onclick = () => {
+    if (!email.value.includes("@")) { email.focus(); return; }
+    graphConnect(email.value.trim().toLowerCase(), out, device, () => refreshMail());
   };
-  email.addEventListener("keydown", (e) => { if (e.key === "Enter") btn.click(); });
-  f.appendChild(el("p", "hint",
-    "A one-time device login — you approve a code in the browser; Vira keeps "
-    + "only the refresh token, in your secrets store. Mail and the work "
-    + "calendar both come through."));
+  connect.onclick = () => {
+    if (!ready) {
+      out.textContent = "Use Let Vira set this up to recover or configure a Microsoft registration. If you edited the manual fields, save them first.";
+      setup.focus(); return;
+    }
+    if (location.hostname !== "localhost") {
+      manual.open = true;
+      out.textContent = "Browser sign-in returns to this computer. Use device login here, or open Vira at localhost on the computer running it.";
+      email.focus(); return;
+    }
+    graphBrowserConnect(out, connect, () => refreshMail());
+  };
+  setup.onclick = async () => {
+    if (setupId) { openSession(setupId); return; }
+    setup.disabled = true; out.textContent = "Starting Microsoft's setup task...";
+    try {
+      const res = await post("/api/mail/graph/setup", {});
+      setupId = res.job_id; setup.textContent = "View setup task";
+      out.textContent = "Vira is checking existing registrations. The task will ask you for anything it cannot determine. Sign-in and Microsoft consent happen afterward.";
+      openSession(setupId);
+      refreshJobs?.().catch(() => {});
+      setupPoll?.stop();
+      setupPoll = startPoll(async h => {
+        if (!f.isConnected) { h.stop(); return; }
+        try {
+          const st = await api("/api/mail/graph/registration");
+          if (st.configured) {
+            h.stop(); await manual.refresh();
+            out.textContent = "Registration ready. Click Connect Microsoft to sign in.";
+          } else {
+            const job = await api("/api/jobs/" + encodeURIComponent(setupId));
+            if (["done", "error", "cancelled", "stopped"].includes(job.status)) {
+              h.stop();
+              out.textContent = "The setup task finished. Open View setup task for its result and any Microsoft step still needed.";
+            }
+          }
+        } catch { /* retry transient server errors */ }
+      }, 3000);
+    } catch (e) { out.textContent = "Could not start setup: " + errText(e); }
+    finally { setup.disabled = false; }
+  };
   return f;
+}
+
+async function graphBrowserConnect(out, btn, onDone) {
+  // Open synchronously to retain the click's popup allowance. Sever the opener
+  // before navigating to Microsoft; the cookie, not postMessage, binds login.
+  const win = window.open("about:blank", "_blank");
+  if (!win) { out.textContent = "Allow this sign-in window, then click Connect Microsoft again, or use device login in Manual setup."; return; }
+  win.opener = null;
+  btn.disabled = true; out.hidden = false; out.classList.remove("ok", "warn");
+  out.textContent = "Opening Microsoft sign-in...";
+  try {
+    const res = await post("/api/mail/graph/browser/start", {});
+    win.location = res.authorize_url;
+    btn.disabled = false; // A closed or isolated Microsoft window can be retried.
+    out.textContent = "Finish sign-in in the Microsoft window. Vira will confirm the connection here. If Microsoft says the redirect is missing, add the callback in Manual setup or use device login.";
+    graphPoll?.stop();
+    graphPoll = startPoll(async h => {
+      if (!out.isConnected) { h.stop(); return; }
+      try {
+        const st = await api("/api/mail/graph/browser/status");
+        if (st.connected) {
+          h.stop(); btn.disabled = false; out.classList.add("ok");
+          out.textContent = st.email + " connected. Mail and calendar are ready.";
+          if (onDone) onDone();
+        } else if (st.error) {
+          h.stop(); btn.disabled = false; out.classList.add("warn");
+          out.textContent = st.error;
+        }
+      } catch { /* retry transient server errors */ }
+    }, 2000);
+  } catch (e) {
+    win.close(); btn.disabled = false; out.textContent = errText(e);
+  }
 }
 
 // Microsoft 365 device-code login, rendered into `hint` (an element) with
