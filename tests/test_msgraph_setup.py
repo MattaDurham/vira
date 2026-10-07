@@ -10,7 +10,7 @@ from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
-from server import jsonstore, main, msgraph, msgraphbrowser, msgraphsetup, settings, viratools
+from server import jsonstore, main, msgraph, msgraphbrowser, msgraphsetup, settings, systembrowser, viratools
 
 
 CLIENT = "00000000-0000-4000-8000-000000000001"
@@ -44,6 +44,9 @@ class MicrosoftSetupTests(unittest.TestCase):
             mock.patch.object(msgraph, "ACCOUNTS", self.accounts),
             mock.patch.object(msgraph, "_flows", {}),
             mock.patch.object(msgraph, "_tokens", {}),
+            mock.patch.object(msgraphbrowser, "_launches", {}),
+            mock.patch.object(msgraphbrowser, "_bindings", {}),
+            mock.patch.object(systembrowser, "open_url"),
             mock.patch.object(msgraph, "_spawn_device_poll", side_effect=lambda *args: self.poll_args.append(args)),
             mock.patch.object(msgraph, "_post_form"),
             mock.patch.object(msgraph.time, "time", side_effect=lambda: self.now),
@@ -57,7 +60,98 @@ class MicrosoftSetupTests(unittest.TestCase):
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
-        self.api = TestClient(main.app, base_url="http://localhost:8378")  # no lifespan/background workers
+        self.api = TestClient(main.app, base_url="http://localhost:8378", client=("localhost", 50000))  # no lifespan/background workers
+
+    def test_system_browser_callback_connects_the_original_app_without_shared_cookies(self):
+        self.save()
+        opened = self.api.post("/api/mail/graph/browser/system", headers={"origin": "http://localhost:8378"})
+        self.assertEqual(opened.json(), {"opened": True})
+        url = systembrowser.open_url.call_args.args[0]
+        parsed = urlparse(url)
+        self.assertEqual(parsed.hostname, "localhost")
+        self.assertFalse(parsed.query)
+        ticket = parse_qs(parsed.fragment)["ticket"][0]
+        self.assertFalse(self.api.get("/api/mail/graph/browser/status").json()["browser_ready"])
+        external = TestClient(main.app, base_url="http://localhost:8378", client=("localhost", 50001))
+        claimed = external.post("/api/mail/graph/browser/launch", json={"ticket": ticket}, headers={"origin": "http://localhost:8378"})
+        self.assertEqual(claimed.status_code, 200, claimed.text)
+        self.assertIn("HttpOnly", claimed.headers["set-cookie"])
+        params = parse_qs(urlparse(claimed.json()["authorize_url"]).query)
+        self.assertTrue(self.api.get("/api/mail/graph/browser/status").json()["browser_ready"])
+        self.assertEqual(external.post("/api/mail/graph/browser/launch", json={"ticket": ticket}, headers={"origin": "http://localhost:8378"}).status_code, 400)
+        msgraph._post_form.return_value = {"access_token": "test-access", "refresh_token": "test-refresh"}
+        with mock.patch.object(msgraphbrowser, "_profile", return_value=EMAIL):
+            complete = external.post("/api/mail/graph/browser/complete", json={"state": params["state"][0], "code": "test-code"}, headers={"origin": "http://localhost:8378"})
+        self.assertTrue(complete.json()["connected"])
+        self.assertTrue(self.api.get("/api/mail/graph/browser/status").json()["connected"])
+        self.assertEqual(jsonstore.read(self.accounts, []), [{"email": EMAIL, "type": "graph"}])
+
+    def test_system_launch_rejects_remote_cross_origin_cross_port_and_expired_tickets(self):
+        self.save()
+        remote = TestClient(main.app, base_url="http://localhost:8378", client=("192.0.2.10", 50000))
+        self.assertEqual(remote.post("/api/mail/graph/browser/system", headers={"origin": "http://localhost:8378"}).status_code, 400)
+        self.assertEqual(self.api.post("/api/mail/graph/browser/system", headers={"origin": "https://example.com"}).status_code, 400)
+        systembrowser.open_url.assert_not_called()
+        self.api.post("/api/mail/graph/browser/system", headers={"origin": "http://localhost:8378"})
+        ticket = parse_qs(urlparse(systembrowser.open_url.call_args.args[0]).fragment)["ticket"][0]
+        wrong_port = TestClient(main.app, base_url="http://localhost:8379", client=("localhost", 50000))
+        self.assertEqual(wrong_port.post("/api/mail/graph/browser/launch", json={"ticket": ticket}, headers={"origin": "http://localhost:8379"}).status_code, 400)
+        self.assertEqual(self.api.post("/api/mail/graph/browser/launch", json={"ticket": ticket}, headers={"origin": "https://example.com"}).status_code, 400)
+        self.assertEqual(self.api.post("/api/mail/graph/browser/launch", json={"ticket": "bad"}).status_code, 400)
+        self.now += msgraphbrowser.LAUNCH_TTL + 1
+        self.assertEqual(self.api.post("/api/mail/graph/browser/launch", json={"ticket": ticket}, headers={"origin": "http://localhost:8378"}).status_code, 400)
+        self.assertIn("system browser did not start", self.api.get("/api/mail/graph/browser/status").json()["error"])
+        msgraph._post_form.assert_not_called()
+
+    def test_failed_system_browser_launch_does_not_leave_a_pending_registration_lock(self):
+        self.save()
+        systembrowser.open_url.side_effect = RuntimeError("No default browser")
+        opened = self.api.post("/api/mail/graph/browser/system", headers={"origin": "http://localhost:8378"})
+        self.assertEqual(opened.status_code, 502)
+        self.assertFalse(msgraph._flows)
+        self.assertFalse(msgraphbrowser._launches)
+        self.assertEqual(self.save(OTHER).status_code, 200)
+
+    def test_guided_prepare_restores_only_a_complete_unambiguous_discovery(self):
+        candidate = {"path": "example/config.json", "client_id": CLIENT, "tenant": TENANT}
+        base = {"registration": {"configured": False}, "candidates": [candidate], "issues": [], "truncated": False}
+        with mock.patch.object(msgraphsetup, "discover", return_value=base):
+            restored = self.api.post("/api/mail/graph/setup/prepare", headers={"origin": "http://localhost:8378"})
+        self.assertEqual(restored.json()["stage"], "ready")
+        self.assertTrue(restored.json()["restored"])
+        self.assertEqual(jsonstore.read(self.config, {})["msgraph_client_id"], CLIENT)
+        before = self.config.read_bytes()
+        ambiguous = {**base, "candidates": [candidate, {**candidate, "client_id": OTHER}]}
+        for found in [ambiguous, {**base, "truncated": True}, {**base, "issues": ["Folder unreadable"]}]:
+            with mock.patch.object(msgraphsetup, "discover", return_value=found):
+                result = self.api.post("/api/mail/graph/setup/prepare", headers={"origin": "http://localhost:8378"})
+            self.assertEqual(result.json()["stage"], "choose")
+            self.assertEqual(self.config.read_bytes(), before)
+        msgraph._post_form.assert_not_called()
+
+    def test_guided_missing_registration_returns_create_step_and_opens_only_fixed_portal_pages(self):
+        base = {"registration": {"configured": False}, "candidates": [], "issues": [], "truncated": False}
+        with mock.patch.object(msgraphsetup, "discover", return_value=base):
+            result = self.api.post("/api/mail/graph/setup/prepare", headers={"origin": "http://localhost:8378"})
+        self.assertEqual(result.json()["stage"], "register")
+        for step in ["register", "permissions", "authentication"]:
+            opened = self.api.post("/api/mail/graph/setup/open", json={"step": step, "client_id": CLIENT}, headers={"origin": "http://localhost:8378"})
+            self.assertEqual(opened.status_code, 200, opened.text)
+            self.assertEqual(urlparse(systembrowser.open_url.call_args.args[0]).hostname, "entra.microsoft.com")
+        systembrowser.open_url.reset_mock()
+        for data, origin in [({"step": "permissions", "client_id": "https://example.com"}, "http://localhost:8378"), ({"step": "arbitrary-url"}, "http://localhost:8378"), ({"step": "register"}, "https://example.com")]:
+            self.assertEqual(self.api.post("/api/mail/graph/setup/open", json=data, headers={"origin": origin}).status_code, 400)
+        systembrowser.open_url.assert_not_called()
+        self.assertFalse(self.config.exists())
+
+    def test_question_markup_is_rejected_before_owner_card_and_correct_retry_works(self):
+        channel = mock.AsyncMock(return_value="Create it")
+        with mock.patch.object(viratools, "_ASK", channel):
+            invalid = asyncio.run(viratools.invoke("ask_owner", {"question": 'Create the app?</question>\n<parameter name="options">[{"label":"Create it"}]', "options": ""}))
+            self.assertIn("Retry with separate", invalid["content"][0]["text"])
+            channel.assert_not_called()
+            asyncio.run(viratools.invoke("ask_owner", {"question": "Create the app?", "options": '[{"label":"Create it","description":"Register a new app."}]'}))
+        channel.assert_awaited_once_with("Create the app?", [{"label": "Create it", "description": "Register a new app."}], True)
 
     def browser_start(self):
         return self.api.post("/api/mail/graph/browser/start", headers={"origin": "http://localhost:8378"})
