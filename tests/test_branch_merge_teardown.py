@@ -36,8 +36,10 @@ class MergeTeardownBase(unittest.TestCase):
         self.wt = self.root / "wt"
         for d in (self.live, self.wt):
             d.mkdir()
-        (self.live / "CLAUDE.md").write_text("shared line\n", encoding="utf-8")
-        (self.wt / "CLAUDE.md").write_text("shared line\n", encoding="utf-8")
+        # provision's shape: the owner's rules live in live, linked into the
+        # worktree
+        (self.live / "AGENTS.local.md").write_text("rules\n", encoding="utf-8")
+        (self.wt / "AGENTS.local.md").symlink_to(self.live / "AGENTS.local.md")
         # cmd_merge announces a MISSING preflight and merges anyway, so the
         # file has to exist for the stubbed `bash` to be the thing deciding.
         (self.live / "scripts").mkdir()
@@ -114,32 +116,23 @@ class HoldsAreNamed(MergeTeardownBase):
         self.assertNotIn("DISCARD", self.recorded())
         self.assertIn("--keep", r.stdout)
 
-    def test_unported_spec_lines_hold_it(self):
-        """The port step diffs against the worktree, so removing it first
-        would delete the only copy of the session's spec edits."""
-        (self.wt / "CLAUDE.md").write_text(
-            "shared line\na line only the worktree has\n", encoding="utf-8")
+    def test_the_owners_rules_never_hold_it(self):
+        """AGENTS.local.md is a LINK to live's copy, so an edit made in the
+        worktree is already in the owner's real file: there is nothing to
+        port back, and no reason to hold the teardown for it."""
+        (self.live / "AGENTS.local.md").write_text(
+            "rules\na line this session added\n", encoding="utf-8")
         r = self.run_merge()
-        self.assertNotIn("DISCARD", self.recorded())
-        self.assertIn("CLAUDE.md", r.stdout)
+        self.assertIn("DISCARD demo", self.recorded(), r.stdout)
+        self.assertNotIn("HELD", r.stdout)
 
-    def test_live_being_merely_AHEAD_does_not_hold_it(self):
-        """The predicate is one-way on purpose. CLAUDE.md is gitignored and
-        sessions write their spec section straight into LIVE, so live is
-        routinely ahead of a worktree snapshot — a plain `diff -q` would fire
-        on nearly every merge and turn a real signal into noise."""
-        (self.live / "CLAUDE.md").write_text(
-            "shared line\nanother session's new section\n", encoding="utf-8")
+    def test_a_worktree_without_the_rules_is_named_but_not_held(self):
+        """No AGENTS.local.md means the session never read the owner's rules
+        - worth saying, but there is nothing in the worktree to keep."""
+        (self.wt / "AGENTS.local.md").unlink()
         r = self.run_merge()
-        self.assertIn("DISCARD demo", self.recorded(),
-                      f"held on a live-is-ahead diff\n{r.stdout}")
-
-    def test_a_worktree_with_no_spec_at_all_does_not_hold_it(self):
-        """No CLAUDE.md means the session never read the spec — worth saying,
-        but there is nothing in the worktree to port FROM."""
-        (self.wt / "CLAUDE.md").unlink()
-        self.run_merge()
         self.assertIn("DISCARD demo", self.recorded())
+        self.assertIn("NO AGENTS.local.md", r.stdout)
 
     def test_every_hold_names_its_reason_and_the_manual_command(self):
         r = self.run_merge(args="demo --keep")
@@ -210,8 +203,8 @@ class TheJoinAgainstRealGit(unittest.TestCase):
         self.sh("git", "config", "user.name", "T")
         # data/ is gitignored in the real repo — it must be here too, or the
         # clone reads as uncommitted work and cmd_merge correctly refuses.
-        (self.repo / ".gitignore").write_text("data\n", encoding="utf-8")
-        (self.repo / "CLAUDE.md").write_text("spec\n", encoding="utf-8")
+        (self.repo / ".gitignore").write_text("data\nAGENTS.local.md\n",
+                                              encoding="utf-8")
         (self.repo / "f.txt").write_text("one\n", encoding="utf-8")
         self.sh("git", "add", "-A")
         self.sh("git", "commit", "-qm", "init")
@@ -225,6 +218,10 @@ class TheJoinAgainstRealGit(unittest.TestCase):
         # a gitignored data/ clone, the thing that actually holds the GBs
         (self.wt / "data").mkdir()
         (self.wt / "data" / "big.sqlite").write_text("x", encoding="utf-8")
+        # the owner's rules, linked in the way provision does it
+        self.rules = self.repo / "AGENTS.local.md"
+        self.rules.write_text("the owner's rules\n", encoding="utf-8")
+        (self.wt / "AGENTS.local.md").symlink_to(self.rules)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -259,6 +256,15 @@ cmd_merge demo
         wl = subprocess.run(["git", "worktree", "list"], cwd=self.repo,
                             capture_output=True, text=True)
         self.assertNotIn("wt", wl.stdout.replace(str(self.repo), ""))
+
+    def test_the_owners_rules_survive_the_teardown(self):
+        """Removing the worktree removes the LINK, never the file it points
+        at: the owner's only copy lives in the live checkout."""
+        r = self.run_merge()
+        self.assertEqual(r.returncode, 0, f"{r.stdout}\n{r.stderr}")
+        self.assertFalse(self.wt.exists())
+        self.assertEqual(self.rules.read_text(encoding="utf-8"),
+                         "the owner's rules\n")
 
     def test_the_branch_ref_goes_too(self):
         """43 stale claude/* refs had accumulated alongside the worktrees."""

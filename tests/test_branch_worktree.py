@@ -59,7 +59,7 @@ class WorktreeResolution(unittest.TestCase):
         git("-c", "user.email=t@t", "-c", "user.name=t",
             "commit", "-q", "--allow-empty", "-m", "base", cwd=self.live)
         # what the live checkout provisions from
-        (self.live / "CLAUDE.md").write_text("the operational spec")
+        (self.live / "AGENTS.local.md").write_text("the owner's rules")
         (self.live / ".venv").mkdir()
         (self.live / ".claude").mkdir()
         (self.live / ".claude" / "launch.json").write_text("{}")
@@ -141,7 +141,7 @@ class NestedWorktreesDoNotDirtyTheLiveTree(unittest.TestCase):
         git("add", ".gitignore", cwd=self.live)
         git("-c", "user.email=t@t", "-c", "user.name=t",
             "commit", "-q", "-m", "base", cwd=self.live)
-        (self.live / "CLAUDE.md").write_text("spec", encoding="utf-8")
+        (self.live / "AGENTS.local.md").write_text("rules", encoding="utf-8")
         (self.live / ".venv").mkdir()
         (self.live / ".claude").mkdir()
         (self.live / ".claude" / "launch.json").write_text("{}",
@@ -170,6 +170,20 @@ class NestedWorktreesDoNotDirtyTheLiveTree(unittest.TestCase):
         self.assertEqual(
             git("status", "--porcelain", cwd=self.live).stdout.strip(), "")
 
+    def test_the_owners_rules_dirty_neither_tree(self):
+        """AGENTS.local.md sits in live and is LINKED into every worktree.
+        The merge preflights the worktree's status strictly, untracked files
+        included, so without the .gitignore entry this link would refuse
+        every merge - and in live it would be one `git add -A` from public."""
+        r = run_in(self.live, 'cmd_start feat')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        wt = self.live / ".worktrees" / "feat"
+        self.assertTrue((wt / "AGENTS.local.md").is_symlink())
+        self.assertEqual(
+            git("status", "--porcelain", cwd=wt).stdout.strip(), "")
+        self.assertEqual(
+            git("status", "--porcelain", cwd=self.live).stdout.strip(), "")
+
 
 @posix_only
 class Provisioning(unittest.TestCase):
@@ -184,7 +198,8 @@ class Provisioning(unittest.TestCase):
         git("init", "-q", "-b", "main", ".", cwd=self.live)
         git("-c", "user.email=t@t", "-c", "user.name=t",
             "commit", "-q", "--allow-empty", "-m", "base", cwd=self.live)
-        (self.live / "CLAUDE.md").write_text("the operational spec")
+        (self.live / "AGENTS.local.md").write_text("the owner's rules",
+                                                    encoding="utf-8")
         (self.live / ".venv").mkdir()
         (self.live / ".claude").mkdir()
         (self.live / ".claude" / "launch.json").write_text("{}")
@@ -194,24 +209,46 @@ class Provisioning(unittest.TestCase):
             cwd=self.live)
 
     def test_adopt_installs_the_gitignored_pieces(self):
-        # the state a harness-made worktree starts in: no spec, no venv
-        self.assertFalse((self.wt / "CLAUDE.md").exists())
+        # the state a harness-made worktree starts in: no rules, no venv
+        self.assertFalse((self.wt / "AGENTS.local.md").exists())
         self.assertFalse((self.wt / ".venv").exists())
         r = run_in(self.live, 'cmd_adopt feat')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual((self.wt / "CLAUDE.md").read_text(),
-                         "the operational spec")
+        rules = self.wt / "AGENTS.local.md"
+        self.assertTrue(rules.is_symlink(), "a copy, not a link")
+        self.assertEqual(rules.resolve(),
+                         (self.live / "AGENTS.local.md").resolve())
         self.assertTrue((self.wt / ".venv").is_symlink())
         self.assertEqual((self.wt / ".venv").resolve(),
                          (self.live / ".venv").resolve())
         self.assertTrue((self.wt / ".claude" / "launch.json").exists())
 
-    def test_provision_never_clobbers_worktree_edits(self):
-        (self.wt / "CLAUDE.md").write_text("edited in this worktree")
+    def test_an_edit_in_the_worktree_is_the_owners_real_file(self):
+        """The reason it is a link: one file, so nothing waits to be ported
+        back by hand at merge time."""
+        run_in(self.live, 'cmd_adopt feat')
+        (self.wt / "AGENTS.local.md").write_text("a rule a session added",
+                                                  encoding="utf-8")
+        self.assertEqual(
+            (self.live / "AGENTS.local.md").read_text(encoding="utf-8"),
+            "a rule a session added")
+
+    def test_provision_never_clobbers_a_worktree_copy(self):
+        (self.wt / "AGENTS.local.md").write_text("this worktree's own",
+                                                  encoding="utf-8")
         r = run_in(self.live, f'provision "{self.wt}"')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual((self.wt / "CLAUDE.md").read_text(),
-                         "edited in this worktree")
+        self.assertFalse((self.wt / "AGENTS.local.md").is_symlink())
+        self.assertEqual(
+            (self.wt / "AGENTS.local.md").read_text(encoding="utf-8"),
+            "this worktree's own")
+
+    def test_no_live_rules_means_a_note_not_a_dangling_link(self):
+        (self.live / "AGENTS.local.md").unlink()
+        r = run_in(self.live, f'provision "{self.wt}"')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.wt / "AGENTS.local.md").is_symlink())
+        self.assertIn("no AGENTS.local.md", r.stderr)
 
     def test_provision_is_idempotent(self):
         for _ in range(2):
@@ -226,10 +263,10 @@ class Provisioning(unittest.TestCase):
 
 
 @posix_only
-class MergeChecklistSpecWarning(unittest.TestCase):
-    """CLAUDE.md is gitignored, so a spec line never rides a merge. The merge
-    checklist has to say so — including in the silent case where the worktree
-    has no copy at all, which means the session worked without the spec."""
+class MergeChecklistRulesNote(unittest.TestCase):
+    """A worktree that never received AGENTS.local.md means the session
+    worked without the owner's rules. The merge says so, but never holds the
+    teardown for it: the file is a link, so there is nothing to port back."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -240,11 +277,13 @@ class MergeChecklistSpecWarning(unittest.TestCase):
         git("init", "-q", "-b", "main", ".", cwd=self.live)
         # merge preflights both trees clean, so the fixture needs the real
         # repo's ignores for the provisioned pieces
-        (self.live / ".gitignore").write_text("CLAUDE.md\n.venv\n.claude/\n")
+        (self.live / ".gitignore").write_text(
+            "AGENTS.local.md\n.venv\n.claude/\n", encoding="utf-8")
         git("add", ".gitignore", cwd=self.live)
         git("-c", "user.email=t@t", "-c", "user.name=t",
             "commit", "-q", "-m", "base", cwd=self.live)
-        (self.live / "CLAUDE.md").write_text("the operational spec")
+        (self.live / "AGENTS.local.md").write_text("the owner's rules",
+                                                    encoding="utf-8")
         (self.live / ".venv").mkdir()
         (self.live / ".claude").mkdir()
         (self.live / ".claude" / "launch.json").write_text("{}")
@@ -258,41 +297,22 @@ class MergeChecklistSpecWarning(unittest.TestCase):
         git("-c", "user.email=t@t", "-c", "user.name=t",
             "commit", "-q", "-m", "work", cwd=self.wt)
 
-    def test_warns_when_worktree_never_had_the_spec(self):
+    def test_names_a_worktree_that_never_had_the_rules(self):
         r = run_in(self.live, 'cmd_merge feat')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("NO CLAUDE.md", r.stdout)
+        self.assertIn("NO AGENTS.local.md", r.stdout)
         self.assertIn("adopt", r.stdout)
 
-    def test_warns_when_the_spec_was_edited_in_the_worktree(self):
-        (self.wt / "CLAUDE.md").write_text("the operational spec\nplus a line")
+    def test_quiet_when_the_rules_were_linked(self):
+        (self.wt / "AGENTS.local.md").symlink_to(
+            self.live / "AGENTS.local.md")
         r = run_in(self.live, 'cmd_merge feat')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("CLAUDE.md", r.stdout)
-        # ...and it HOLDS the automatic teardown, because the port step diffs
-        # against this worktree: removing it first would delete the only copy
-        # of the session's spec edits.
-        self.assertIn("HELD", r.stdout)
-        self.assertTrue(self.wt.exists(), "worktree removed with unported spec")
-
-    def test_live_being_merely_ahead_is_not_an_unported_edit(self):
-        """One-way on purpose. Sessions write their spec section straight into
-        LIVE, so live is routinely ahead of a worktree snapshot; a plain
-        `diff -q` would warn on nearly every merge."""
-        (self.wt / "CLAUDE.md").write_text("the operational spec",
-                                           encoding="utf-8")
-        (self.live / "CLAUDE.md").write_text(
-            "the operational spec\nanother session's section",
-            encoding="utf-8")
-        r = run_in(self.live, 'cmd_merge feat')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn("CLAUDE.md", r.stdout)
-
-    def test_quiet_when_the_spec_matches(self):
-        (self.wt / "CLAUDE.md").write_text("the operational spec")
-        r = run_in(self.live, 'cmd_merge feat')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn("CLAUDE.md", r.stdout)
+        self.assertNotIn("AGENTS.local.md", r.stdout)
+        self.assertNotIn("HELD", r.stdout)
+        self.assertEqual(
+            (self.live / "AGENTS.local.md").read_text(encoding="utf-8"),
+            "the owner's rules")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ attention - with drafted replies in your own voice, semantic search over
 everything ever shared with you, and a cockpit that dispatches coding
 agents at your own backlog.
 
-> **An AI agent installing this?** [AGENTS.md](AGENTS.md) is your whole
+> **An AI agent installing this?** [AGENTS.install.md](AGENTS.install.md) is your whole
 > job: `bash scripts/agent-install.sh`, connect an AI (yourself, if you
 > can).
 
@@ -131,7 +131,7 @@ sh scripts/install-hooks.sh   # pre-commit guard (if you'll be committing)
 
 **Would rather not use a terminal?** Hand this repo to an AI agent you
 already have - Claude Code, Claude Desktop, ChatGPT desktop - and point it
-at [AGENTS.md](AGENTS.md). That file is the contract written for it:
+at [AGENTS.install.md](AGENTS.install.md). That file is the contract written for it:
 install, connect an AI, stop. It is the shortest path if the commands
 above are not your thing.
 

@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Vira parallel-branch workflow. One feature = one branch = one worktree.
 # The live instance (launchd, port 8377) only ever changes at a merge.
-# See CLAUDE.md, section "Parallel feature branches".
+# The rules it serves are in AGENTS.local.md (seeded from the public
+# template AGENTS.local.example.md), sections 2 and 3.
 #
 #   branch.sh start <slug>     new branch claude/<slug> + worktree .worktrees/<slug>
 #   branch.sh adopt [slug]     provision a worktree this script didn't create
@@ -70,14 +71,25 @@ wt_dir() {
 
 # Provision the gitignored pieces a session needs, whoever made the worktree:
 # - the FDA-granted venv (never rebuild; symlink the live one)
-# - CLAUDE.md + .claude/launch.json (COPIES — edits are ported back by hand at
-#   merge time because these files never ride git)
-# CLAUDE.md is the load-bearing one: it carries this workflow, so a session
-# that never receives it does not know the branch discipline exists. Idempotent.
+# - AGENTS.local.md, the owner's operating rules, as a LINK to live's copy.
+#   AGENTS.md routes every coding session there, so a session without it does
+#   not know the branch discipline exists. A link rather than a copy: there
+#   is one file, an edit made in any session is the owner's real file, and
+#   nothing waits to be ported back by hand at merge time, which the old
+#   CLAUDE.md copies needed.
+# - .claude/launch.json (a copy; harness-local, never rides git)
+# Idempotent.
 provision() {
   local dir=$1
   [[ -e "$dir/.venv" ]] || ln -s "$LIVE/.venv" "$dir/.venv"
-  [[ -e "$dir/CLAUDE.md" ]] || cp "$LIVE/CLAUDE.md" "$dir/CLAUDE.md" 2>/dev/null || true
+  if [[ -e "$dir/AGENTS.local.md" || -L "$dir/AGENTS.local.md" ]]; then
+    :
+  elif [[ -e "$LIVE/AGENTS.local.md" ]]; then
+    ln -s "$LIVE/AGENTS.local.md" "$dir/AGENTS.local.md"
+  else
+    echo "note: the live checkout has no AGENTS.local.md yet - Vira seeds it on" \
+         "startup, or run: python -m server.agentslocal seed (in $LIVE)" >&2
+  fi
   mkdir -p "$dir/.claude"
   [[ -e "$dir/.claude/launch.json" ]] ||
     cp "$LIVE/.claude/launch.json" "$dir/.claude/launch.json" 2>/dev/null || true
@@ -386,7 +398,7 @@ cmd_start() {
 }
 
 # Bring a worktree this script didn't create under the same discipline: give it
-# the venv symlink and the CLAUDE.md/launch.json copies `start` would have.
+# the venv and AGENTS.local.md links and the launch.json copy `start` would have.
 # With no slug, adopts the worktree the caller is standing in.
 cmd_adopt() {
   local dir slug=""
@@ -1096,18 +1108,12 @@ cmd_merge() {
 
   echo ""
   echo "merged. Post-merge checklist:"
-  # CLAUDE.md is gitignored (the repo is public), so a spec line NEVER rides a
-  # merge. Two ways that goes wrong, and the silent one used to be invisible:
-  # an unprovisioned worktree has no copy at all, which means the session
-  # worked without the spec and any line it proposed lives only in its report.
-  if [[ -d "$dir" && ! -f "$dir/CLAUDE.md" ]]; then
-    echo "  [ ] this worktree had NO CLAUDE.md — the session never read the"
-    echo "      spec. Check its report for proposed spec lines and apply them"
-    echo "      to $LIVE/CLAUDE.md by hand; run 'branch.sh adopt' next time."
-  elif wt_spec_unported "$dir"; then
-    echo "  [ ] the worktree's CLAUDE.md carries lines live does not (gitignored —"
-    echo "      git did NOT carry them). Port by hand, then discard:"
-    echo "      diff $LIVE/CLAUDE.md $dir/CLAUDE.md"
+  # A worktree that never received AGENTS.local.md means the session worked
+  # without the owner's rules. Nothing is lost (the file is a link, so there
+  # are no unported edits), but it is worth saying.
+  if [[ -d "$dir" && ! -e "$dir/AGENTS.local.md" ]]; then
+    echo "  [ ] this worktree had NO AGENTS.local.md - the session never read"
+    echo "      the owner's rules. Run 'branch.sh adopt' next time."
   fi
   if git -C "$LIVE" diff --name-only ORIG_HEAD..HEAD | grep -q "^server/"; then
     echo "  [ ] server code changed — restart live:"
@@ -1136,10 +1142,6 @@ cmd_merge() {
   local hold=""
   if [[ "$keep" == 1 ]]; then
     hold="--keep was passed"
-  elif wt_spec_unported "$dir"; then
-    # The port step above diffs against this worktree. Removing it first
-    # would delete the only copy of the session's spec edits.
-    hold="its CLAUDE.md has unported lines — port them first"
   elif [[ -d "$dir" && -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]]; then
     hold="the worktree is no longer clean — inspect it first"
   fi
@@ -1152,23 +1154,6 @@ cmd_merge() {
   echo "tearing down (merged and clean — the worktree is spent):"
   cmd_discard "$1" ||
     echo "NOTE: teardown did not finish — run: scripts/branch.sh discard $1"
-}
-
-# Does the worktree's CLAUDE.md carry anything live's does not?
-#
-# NOT a plain `diff -q`. CLAUDE.md is gitignored and every session writes its
-# spec section straight into the LIVE copy, so live is routinely AHEAD of a
-# worktree snapshot taken at branch time — and treating "differs" as "unported
-# work" fires on almost every merge, which is how a real signal becomes noise
-# nobody reads. Only lines present in the WORKTREE and missing from live are
-# evidence the session edited its own copy and the edit still needs porting.
-wt_spec_unported() {
-  local dir=$1
-  [[ -f "$dir/CLAUDE.md" ]] || return 1
-  # Line-set containment, not a positional diff. `diff | grep "^>"` reports a
-  # CHANGED line as a worktree-only one, so two files differing solely in the
-  # trailing newline read as unported work — caught by its own test.
-  grep -qvxF -f "$LIVE/CLAUDE.md" "$dir/CLAUDE.md" 2>/dev/null
 }
 
 cmd_discard() {

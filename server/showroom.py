@@ -726,7 +726,7 @@ def _primary():
 def _ensure_worktree(branch):
     """A bare local ref gets a worktree so it can serve: `git worktree add`
     at the canonical .worktrees/<slug> path, then `branch.sh adopt` for
-    the venv symlink and the CLAUDE.md copy. Raises ValueError with git's
+    the venv and AGENTS.local.md links. Raises ValueError with git's
     own words when it cannot."""
     wt = _worktree_of(branch)
     if wt:

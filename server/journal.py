@@ -738,7 +738,8 @@ def _task_rules(cwd):
         f"Work in the owner's Vira repository at {cwd} — cd there first if "
         "you are not already inside it. The CRM stores this instruction may "
         "concern are reachable from there by path; read the repo's agent "
-        "contract (AGENTS.md, and CLAUDE.md where present) and follow it.",
+        "contract (AGENTS.md, and the AGENTS.local.md it routes you to) "
+        "and follow it.",
         # true whether REPO is the live checkout or (on a branch instance)
         # the worktree this Vira serves from — never call it "the checkout
         # the owner runs from", which is false in the second case

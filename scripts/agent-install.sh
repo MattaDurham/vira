@@ -2,7 +2,7 @@
 # One-shot install + launch for Vira, written for whoever is doing a first
 # install — an AI agent handed this repo, or a human who wants one command.
 # Idempotent: re-running reuses whatever already exists and never starts a
-# second server. The full installer contract lives in AGENTS.md.
+# second server. The full installer contract lives in AGENTS.install.md.
 #
 # What it does: pick a python -> venv --copies -> pip install -> serve
 # http://localhost:8377 -> open it. Nothing else. Persistence (launchd /
@@ -85,4 +85,4 @@ say ""
 say "Vira is up: $URL"
 say "A fresh install boots into fixture mode — the demo contact's thread is the tour."
 say "Next step: connect an AI. The app's first screen walks it; if you are"
-say "an AI agent, AGENTS.md says how to connect yourself."
+say "an AI agent, AGENTS.install.md says how to connect yourself."

@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    actions, admission, agentbackend, aihealth, applecontacts, instance,
+    actions, admission, agentbackend, agentslocal, aihealth, applecontacts, instance,
                applicationmap, applications,
                atlas, attention, circles,
                backup, brainchat, brief, virachat,
@@ -178,6 +178,14 @@ media_archiver = mediaarchive.Archiver()          # Vira's own copy of every
 
 @app.on_event("startup")
 async def _startup():
+    # AGENTS.md routes every coding or content session to AGENTS.local.md,
+    # the owner's private operating file. Seed it once from the public
+    # template when this install has none; an existing copy is never
+    # touched, and a failure here must never keep the app from booting.
+    try:
+        agentslocal.seed()
+    except OSError:
+        pass
     # Every instance runs the complete application lifecycle.
     loopwatch.watcher.start()
     instance.start_automation()

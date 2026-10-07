@@ -6821,9 +6821,9 @@ function ideaImplementPrompt(it, extra, cwd, perm, fold, plan) {
     "",
     ...ideaTaskLines(it, extra, fold, plan),
     "Carry it out end to end:",
-    "- First read the repo's agent contract (AGENTS.md, and CLAUDE.md where",
-    "  present) and the relevant modules, so your changes fit the existing",
-    "  code and conventions.",
+    "- First read the repo's agent contract (AGENTS.md, and the",
+    "  AGENTS.local.md it routes you to) and the relevant modules, so your",
+    "  changes fit the existing code and conventions.",
     "- Make the real code changes needed to accomplish the task.",
     "- Verify your work by actually exercising it (run the app, tests, or build",
     "  as appropriate) and fix what you find.",
@@ -6865,8 +6865,9 @@ function ideaPlanPrompt(it, extra, cwd, fold) {
     "You are read-only: plan the work, change nothing.",
     "",
     ...ideaTaskLines(it, extra, fold),
-    "Read the repo's agent contract (AGENTS.md, and CLAUDE.md where present)",
-    "and the modules the task touches, so the plan is grounded in real code.",
+    "Read the repo's agent contract (AGENTS.md, and the AGENTS.local.md it",
+    "routes you to) and the modules the task touches, so the plan is grounded",
+    "in real code.",
     "",
     "Output ONLY the plan as markdown — no preamble, no closing remarks, no",
     "code fence around the whole thing. Vira saves it to the vault as an",
@@ -6953,9 +6954,10 @@ function ideaExportPrompt(it, cwd, extra, fold) {
     "",
     ...ideaTaskLines(it, extra, fold),
     "Carry it out end to end:",
-    "- Read the repo's agent contract first — AGENTS.md, and CLAUDE.md if",
-    "  present — and follow it. It carries the branching rule, the test",
-    "  command, and the conventions this repo enforces.",
+    "- Read the repo's agent contract first — AGENTS.md, and the",
+    "  AGENTS.local.md it routes you to — and follow it. It carries the",
+    "  branching rule, the test command, and the conventions this repo",
+    "  enforces.",
     "- Branch first. That path is the checkout the owner runs from, so do not",
     '  build in it: run "scripts/branch.sh start <slug>" if the repo ships it,',
     "  otherwise make your own branch. If you are already in a worktree of",
@@ -21412,8 +21414,8 @@ $("#app-run-copy").addEventListener("click", async () => {
     await copyText(
       `cd ${cwd}\n\n` +
       "(If this was pasted into an already-running session: cd to the path " +
-      "above and read its agent contract — AGENTS.md, and CLAUDE.md where " +
-      "present — before building.)\n\n" + prompt);
+      "above and read its agent contract — AGENTS.md, and the AGENTS.local.md " +
+      "it routes you to — before building.)\n\n" + prompt);
     appRunSheet.close();
     toast("Prompt copied — paste into a terminal or Claude Code session");
   } catch (e) {
