@@ -200,11 +200,12 @@ def refresh_current(pid):
     """The one-pass mode. Returns the updated profile fields."""
     if settings.fixture_mode():
         return {"status": "empty", "note": "fixture mode"}
+    root = crm._crm().resolve()
     ctx = _context(pid)
     text = suggest.complete(_prompt(ctx))
     summary, how = _clean(suggest._extract_json(text), ctx["prof"])
     prof = crm.save_profile_refresh(pid, summary, how_met=how,
-                                    reason="vira-refresh-current")
+                                    reason="vira-refresh-current", expected_root=root)
     return {"status": "ok",
             "relationship_summary": prof["relationship_summary"],
             "how_we_met": prof.get("how_we_met"),

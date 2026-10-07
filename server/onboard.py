@@ -5,7 +5,7 @@ Deterministic movers, one model seam:
 
 - import_apple() / import_google_csv(text) — read what the user already has
   (the local AddressBook stores; a Google Contacts export) and write
-  schema-compatible people.json / master.json into the CONFIGURED crm_root,
+  schema-compatible people.json into the CONFIGURED crm_root,
   created on demand. Importing IS the fixture->real transition: the moment
   people.json lands, settings.fixture_mode() flips off on its own.
 - DossierBuilder — background thread that walks the most-active imported
@@ -49,11 +49,13 @@ def crm_target() -> Path:
     return Path(str(settings.get("crm_root"))).expanduser()
 
 
-def config_set(**updates):
+def config_set(*, _validate=None, **updates):
     """Merge keys into data/config.json (atomic). settings has no setter and
     suggest.save_config filters to the AI keys only — this one is for
     identity/data keys (vault_root, crm_root)."""
     def update(cfg):
+        if _validate is not None:
+            _validate(cfg)
         cfg.update(updates)
     return jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
 
@@ -149,22 +151,18 @@ def read_google_csv(text):
 
 def import_contacts(contacts, source):
     """Write contacts into the configured crm_root: new people appended to
-    people.json (schema-compatible with triage adds), company/title rows to
-    master.json. People whose handles already resolve to a CRM person are
+    people.json (backup-first through triage), imported company/title facts
+    retained in registry refs. Never writes the external master.json.
+    People whose handles already resolve to a CRM person are
     left untouched (counted as known). Returns counts."""
-    root = crm_target()
-    with _lock:
+    from . import dataconnections, triage
+    with _lock, triage._lock:
+        root = crm_target()
         root.mkdir(parents=True, exist_ok=True)
         people_path = root / "people.json"
-        master_path = root / "master.json"
-        try:
-            doc = json.loads(people_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            doc = {"people": []}
-        try:
-            master = json.loads(master_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            master = []
+        if people_path.exists():
+            dataconnections._registry(root)  # corrupt registries fail closed
+        doc = triage._read_people_backed_up(root=root)
         known = {}
         for p in doc["people"]:
             hs = p.get("handles", {})
@@ -186,7 +184,9 @@ def import_contacts(contacts, source):
                 "id": "p_" + uuid.uuid4().hex[:12],
                 "name": c["name"],
                 "class_hint": None,
-                "refs": {"vira_imported": today, "import_source": source},
+                "refs": {"vira_imported": today, "import_source": source,
+                         "contact_import": {"company": c.get("company", ""),
+                                            "title": c.get("title", "")}},
                 "handles": {
                     "imessage": [*c.get("emails", []),
                                  *("+1" + p for p in c.get("phones10", []))],
@@ -199,17 +199,8 @@ def import_contacts(contacts, source):
             doc["people"].append(person)
             for h in handles:
                 known[h] = person["id"]
-            if c.get("company") or c.get("title"):
-                master.append({"id": person["id"], "full_name": c["name"],
-                               "company": c.get("company", ""),
-                               "title": c.get("title", ""),
-                               "emails": c.get("emails", []),
-                               "phones": c.get("phones10", [])})
             added += 1
-        for path, payload in ((people_path, doc), (master_path, master)):
-            jsonstore.write_atomic(path, payload, indent=1,
-                                   ensure_ascii=False)
-        crm.invalidate()
+        triage._write_people(doc, root=root)
     return {"added": added, "already_known": existing, "skipped": skipped,
             "total_people": len(doc["people"]), "source": source}
 

@@ -217,9 +217,15 @@ PC the wizard skips what does not exist there - see **Windows** above):
    CSV export. Vira writes them into its own CRM store (`crm_root`,
    default `~/.vira/crm`) and flips out of demo mode on its own. Already
    keep CRM data in Vira's shape (`people.json` / `master.json` /
-   `profiles/`)? Point `crm_root` at it in `data/config.json` instead -
-   both paths work, and unknown senders keep flowing in through Triage
-   either way.
+   `profiles/`)? Open **Config > Storage & connections > CRM storage**,
+   choose **Use an existing Vira CRM**, select its folder, and inspect it
+   before connecting. IDs and dossiers stay in place. A switch from an
+   established CRM must retain its person IDs so saved contact references
+   keep working. Choose whether to keep the current self-record location or
+   use the selected CRM's `self` folder. To start fresh elsewhere, select an
+   empty folder there before importing. Imports back up `people.json` and
+   retain company/title facts in registry provenance; external `master.json`
+   evidence is never rewritten.
 3. **Build first dossiers** - Vira reads your most active iMessage threads
    and writes a first dossier per person: relationship summary,
    conversation hooks you can tap to draft an opener, open loops. One call
@@ -250,6 +256,23 @@ PC the wizard skips what does not exist there - see **Windows** above):
 8. **Run at login** - a launchd agent keeps it alive; set `launchd_label`
    in the config so the in-app updater can restart the service cleanly.
    (Windows: `scripts\run.ps1 -Register` does both - see **Windows**.)
+
+**Config > Storage & connections** also connects an existing self record
+independently and displays the resulting career-evidence, analysis and package
+locations. Existing output-path overrides are preserved. A folder without
+`canon/MASTER_HISTORY.md` can be connected but is not ready for career evidence.
+This does not grant Brain or model access: connect the folder separately in
+**Config > Brain**, with the capture and exposure settings you want. Brain's
+protected folders govern Brain writes, not every Applications or separately
+authorized coding-agent write.
+
+The same section connects external **Reader folders** with a filename pattern
+and document kind. Reader reads matching files and `index.html` bundles without
+copying or editing them; run **Scan** in Reader after connecting. Disconnecting
+revokes Reader access and leaves the source documents intact. Data connections
+are inspected before saving, and a changed folder or configuration requires a
+new inspection. Finish running Vira sessions and dossier builds before switching
+CRM or self-record locations.
 
 ## Working across vaults
 

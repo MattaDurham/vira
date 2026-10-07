@@ -121,8 +121,8 @@ class ImportMergeTests(unittest.TestCase):
         self.assertIn("casey@example.com", casey["handles"]["emails"])
         self.assertIn("5555550155", casey["handles"]["phones10"])
         self.assertIn("+15555550155", casey["handles"]["imessage"])
-        master = json.loads((self.root / "master.json").read_text())
-        self.assertEqual(master[0]["company"], "Acme Rockets")
+        self.assertEqual(casey["refs"]["contact_import"]["company"], "Acme Rockets")
+        self.assertFalse((self.root / "master.json").exists())
         # re-import: nothing duplicated
         r2 = onboard.import_contacts(contacts, "google-csv")
         self.assertEqual(r2["added"], 0)

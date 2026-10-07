@@ -32,7 +32,7 @@ from . import (
                contactcard,
                correspondence, reminderstickies, workresults,
                crmindex,
-               data as crm,
+               data as crm, dataconnections,
                define,
                designstudio,
                draftcheck,
@@ -2979,6 +2979,40 @@ def api_crm_add(req: AddPersonReq):
 
 
 # ---------- onboarding (Setup window: importers, dossiers, the Brain) ----
+
+
+class DataPreviewReq(BaseModel):
+    request: dict
+
+
+class DataConnectReq(DataPreviewReq):
+    revision: str
+
+
+@app.get("/api/data/connections")
+def api_data_connections():
+    try:
+        return dataconnections.status()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/data/connections/preview")
+def api_data_connection_preview(req: DataPreviewReq):
+    try:
+        with admission.cpu("data.connections.preview"):
+            return dataconnections.preview(req.request)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/data/connections")
+def api_data_connection_set(req: DataConnectReq):
+    try:
+        with admission.cpu("data.connections.connect"):
+            return dataconnections.connect(req.request, req.revision)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
 
 
 class OnboardCsvReq(BaseModel):

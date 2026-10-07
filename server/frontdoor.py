@@ -87,20 +87,18 @@ def _reader_state():
 
 
 def _applications_state():
+    from . import applications
     cfg = settings.raw()
     wired = bool(cfg.get("applications_sources") or cfg.get("lab_root"))
-    self_rec = cfg.get("self_record")
     # The canonical record is <self_record>/canon/MASTER_HISTORY.md — body is
     # the career account, endnotes are the claim gate. The root-level fallback
     # covers a record the front door has just onboarded but not yet organised
     # into canon/. (Before 2026-08-11 this probed FACTS.md at the ROOT only,
     # which an organised record never has: it reported "no self-record" for a
     # complete one, and the failure mode was a silent skip.)
-    has_facts = False
-    if self_rec:
-        record = Path(str(self_rec)).expanduser()
-        has_facts = any((record / name).exists() for name in (
-            "canon/MASTER_HISTORY.md", "MASTER_HISTORY.md"))
+    record = applications.self_record()
+    has_facts = any((record / name).exists() for name in (
+        "canon/MASTER_HISTORY.md", "MASTER_HISTORY.md"))
     if wired and has_facts:
         detail = "Role sources wired, self-record ready."
     elif wired:

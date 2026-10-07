@@ -1230,11 +1230,39 @@ async def _t_record_role_scores(args):
         _record_role_scores_text, args.get("scores_json")))
 
 
+async def _t_data_connections(args):
+    from . import dataconnections
+    request = args.get("request")
+    try:
+        result = await asyncio.to_thread(dataconnections.preview, request) if request else await asyncio.to_thread(dataconnections.status)
+        return _json_tool(result)
+    except (OSError, ValueError) as exc:
+        return _txt(f"error: {exc}")
+
+
+async def _t_connect_data(args):
+    from . import dataconnections
+    try:
+        result = await asyncio.to_thread(dataconnections.connect, args.get("request"), args.get("revision"))
+        return _json_tool(result)
+    except (OSError, ValueError) as exc:
+        return _txt(f"error: {exc}")
+
+
 # ---------- the SDK server ----------
 
 # (name, description, input schema, handler). Schemas use the SDK's simple
 # name->type form; handlers tolerate missing optional keys.
 TOOL_SPECS = [
+    ("data_connections", "Read configured storage locations, or inspect a proposed connection without writing. "
+     "request is {kind: crm|self|reader, path: absolute folder, mode: existing|fresh|disconnect, "
+     "self_choice: keep|follow, label, glob, document_kind}. fresh applies only to CRM and disconnect only to Reader. "
+     "Returns validation, resulting locations and a revision for connect_data. Brain permissions remain separate.",
+     {"request": dict}, _t_data_connections),
+    ("connect_data", "Apply an owner-authorized data connection inspected by data_connections; pass its request and revision. "
+     "Revalidates before saving. Refuses CRM/self changes while Vira sessions, dossier builds or contact maintenance run. "
+     "Never copies or migrates data; established CRM IDs must be preserved. Never hand-edit config.json.",
+     {"request": dict, "revision": str}, _t_connect_data),
     ("answer_sources", "List this conversation's approved sources, current exposure policies and freshness basis.", {}, _t_answer_sources),
     ("source_read", "Read an exact source page with an immutable evidence handle, original date, provenance, full length and continuation. Pass version on every continued read.",
      {"source": str, "start": int, "length": int, "version": str}, _t_source_read),
@@ -1425,6 +1453,7 @@ TOOL_NAMES = [f"mcp__vira__{name}" for name, *_ in TOOL_SPECS]
 # propose_idea is deliberately absent: it STAGES to a queue the owner must
 # approve, which is why it was safe to ship as a read-adjacent tool.
 WRITE_TOOLS = {
+    "mcp__vira__connect_data",
     "mcp__vira__vault_capture",
     "mcp__vira__vault_update",
     "mcp__vira__update_module_map",

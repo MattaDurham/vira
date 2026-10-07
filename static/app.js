@@ -13542,13 +13542,14 @@ async function loadSetup() {
 // sublines and the cards' first paint. Update is the un-fetched (local sha)
 // call; the slow network fetch only runs when the owner opens the card.
 async function loadSetupExtra() {
-  const [notify, companion, update, config] = await Promise.all([
+  const [notify, companion, update, config, connections] = await Promise.all([
     api("/api/notify").then((r) => r.config).catch(() => null),
     api("/api/companion/status").catch(() => null),
     api("/api/update").catch(() => null),
     api("/api/config").catch(() => null),
+    api("/api/data/connections").catch((e) => ({ error: errText(e) })),
   ]);
-  return { notify, companion, update, config };
+  return { notify, companion, update, config, connections };
 }
 
 function pollSetup() {
@@ -13776,8 +13777,9 @@ function renderSetup(flow, st) {
   const groups = [
     { title: "AI", rows: aiRows },
     { title: "Your data",
-      rows: ["disk", "contacts", "dossiers", "brain", "mail"]
-        .map(stepRow).filter(Boolean) },
+      rows: [{ id: "connections", title: "Storage & connections", state: "manage",
+        sub: "CRM, self record and Reader folders", render: cardDataConnections },
+        ...["disk", "contacts", "dossiers", "brain", "mail"].map(stepRow).filter(Boolean)] },
     { title: "Channels", rows: [manageRow("channels")] },
     { title: "Notifications", rows: [manageRow("notifications")] },
     { title: "System", rows: [
@@ -14491,11 +14493,159 @@ function cardContacts(card, step, st) {
     `${st.crm.people} ${st.crm.people === 1 ? "person" : "people"} in your ` +
     `CRM (${st.crm.root}). Importing reads what this machine already has — ` +
     `it never sends anything anywhere.`));
+  const connection = el("button", "btn", "Choose CRM storage or connect an existing CRM");
+  connection.onclick = () => dashJump("connections");
+  card.appendChild(connection);
   (step.sources || []).forEach((row) => {
     const tile = srcTile(row, { on: "imported" });
     (SRC_ACTIONS[row.card] || (() => {}))(tile, row);
     card.appendChild(tile);
   });
+}
+
+function connectionSummary(container, summary) {
+  const rows = [["Folder", summary.root]];
+  if (summary.effective_root && summary.effective_root !== summary.root)
+    rows.push(["Active demo location until contacts are imported", summary.effective_root]);
+  if (summary.people != null) rows.push(["Contacts", String(summary.people)], ["Dossiers", String(summary.profiles)]);
+  if (summary.canon) rows.push(["Career evidence", summary.career_ready ? "Ready" : "Not ready"],
+    ["Canon", summary.canon], ["Analysis output", summary.analysis], ["Application packages", summary.packages]);
+  if (summary.self_record_after) {
+    rows.push(["Self record now", summary.self_record_before], ["Self record after saving", summary.self_record_after.root],
+      ["Analysis output", summary.self_record_after.analysis], ["Application packages", summary.self_record_after.packages]);
+    if (summary.self_record_after.effective_root !== summary.self_record_after.root)
+      rows.push(["Active demo self record until contacts are imported", summary.self_record_after.effective_root]);
+  }
+  rows.forEach(([label, value]) => {
+    const row = el("p", "hint data-connection-path");
+    row.appendChild(el("strong", "", label + ": "));
+    row.appendChild(document.createTextNode(value));
+    container.appendChild(row);
+  });
+}
+
+// A preview belongs to the exact visible choices. Discard late reads when
+// the owner selects another folder or changes a policy while it is loading.
+function dataConnectionForm(container, kind, initial, { mode = "existing", removal = null } = {}) {
+  const form = el("div", "vault-config-add data-connection-form");
+  let revision = 0, inspected = null;
+  const preview = el("div", "data-connection-preview");
+  const message = el("p", "vault-config-error"); message.setAttribute("role", "alert");
+  const save = el("button", "btn primary", removal ? "Disconnect folder" : "Connect folder");
+  save.type = "button"; save.disabled = true;
+  const invalidate = () => { revision++; inspected = null; save.disabled = true; preview.replaceChildren(); message.textContent = ""; };
+  let modeControl = null, selfChoice = null, label = null, pattern = null, docKind = null;
+  if (kind === "crm") {
+    const modes = el("label", "vault-config-field");
+    modes.appendChild(el("span", "vault-config-label", "How are you starting?"));
+    modeControl = el("select", "search");
+    [["existing", "Use an existing Vira CRM"], ["fresh", "Start fresh with Apple Contacts or Google CSV"]].forEach(([value, text]) => {
+      const option = el("option", "", text); option.value = value; modeControl.appendChild(option);
+    });
+    modeControl.value = mode; modeControl.onchange = invalidate;
+    modes.appendChild(modeControl); form.appendChild(modes);
+  }
+  const folder = brainFolderControl(removal ? "Connected folder" : "Choose folder", initial, { onChange: invalidate });
+  if (removal) folder.button.disabled = true;
+  form.appendChild(folder.wrap);
+  if (kind === "crm") {
+    const field = el("label", "vault-config-field");
+    field.appendChild(el("span", "vault-config-label", "Self-record location"));
+    selfChoice = el("select", "search");
+    [["keep", "Keep the current self-record location"], ["follow", "Use the self folder inside the selected CRM"]].forEach(([value, text]) => {
+      const option = el("option", "", text); option.value = value; selfChoice.appendChild(option);
+    });
+    selfChoice.onchange = invalidate; field.appendChild(selfChoice); form.appendChild(field);
+    form.appendChild(el("p", "hint", "An existing CRM is connected in place. IDs and dossiers are preserved. A different CRM must retain your current person IDs; migrations are separate."));
+  }
+  if (kind === "reader" && !removal) {
+    const textField = (title, value) => {
+      const field = el("label", "vault-config-field"); field.appendChild(el("span", "vault-config-label", title));
+      const input = el("input", "search"); input.value = value; input.oninput = invalidate;
+      field.appendChild(input); form.appendChild(field); return input;
+    };
+    label = textField("Folder label", ""); pattern = textField("Filename pattern", "*.html");
+    const field = el("label", "vault-config-field"); field.appendChild(el("span", "vault-config-label", "Document kind"));
+    docKind = el("select", "search");
+    ["dossier", "plan", "retro", "brief", "walkthrough"].forEach((value) => {
+      const option = el("option", "", value); option.value = value; docKind.appendChild(option);
+    });
+    docKind.onchange = invalidate; field.appendChild(docKind); form.appendChild(field);
+  }
+  const inspect = el("button", "btn", removal ? "Review disconnection" : "Inspect folder"); inspect.type = "button";
+  inspect.onclick = async () => {
+    invalidate(); const started = revision;
+    const request = { kind, path: folder.value, mode: removal ? "disconnect" : modeControl?.value || mode };
+    if (selfChoice) request.self_choice = selfChoice.value;
+    if (label) Object.assign(request, { label: label.value, glob: pattern.value, document_kind: docKind.value });
+    inspect.disabled = true;
+    try {
+      const result = await post("/api/data/connections/preview", { request });
+      if (started !== revision || !form.isConnected) return;
+      if (!result.valid) { message.textContent = result.errors.join(" "); return; }
+      inspected = result;
+      connectionSummary(preview, result.summary);
+      result.warnings.forEach((warning) => preview.appendChild(el("p", "hint", warning)));
+      preview.appendChild(el("p", "hint", removal ? "This removes Reader access to this folder. Its files stay in place." : "Inspection changed no files. Saving applies the locations shown above."));
+      save.disabled = false;
+    } catch (e) { if (started === revision) message.textContent = errText(e); }
+    finally { inspect.disabled = false; }
+  };
+  save.onclick = async () => {
+    if (!inspected || save.disabled) return;
+    save.disabled = true; inspect.disabled = true;
+    try {
+      await post("/api/data/connections", { request: inspected.request, revision: inspected.revision });
+      // Existing windows hold person/application data. Reload them together;
+      // their normal saved arrangement is restored by the workspace loader.
+      location.reload();
+    } catch (e) {
+      invalidate(); message.textContent = errText(e) + " Inspect again before saving.";
+      inspect.disabled = false;
+    }
+  };
+  form.appendChild(inspect); form.appendChild(preview); form.appendChild(message); form.appendChild(save);
+  container.appendChild(form);
+}
+
+function cardDataConnections(card) {
+  const state = setupExtra?.connections;
+  if (!state || state.version !== 1) {
+    card.appendChild(el("p", "vault-config-error", state?.error || "Storage settings are unavailable from this server. Restart Vira after active sessions finish, then reopen Config."));
+    return;
+  }
+  card.appendChild(el("p", "hint", "Connect stores independently. CRM imports and edits update your registry and profiles; imported company/title facts stay in registry provenance. External master evidence is read, never rewritten by imports. Brain controls its own capture and model access; Applications and authorized agent work have separate write paths."));
+  const section = (title, render) => {
+    const details = el("details", "data-connection-section");
+    details.appendChild(el("summary", "setup-sub", title)); render(details); card.appendChild(details); return details;
+  };
+  const crm = section("CRM storage", (body) => {
+    connectionSummary(body, state.crm);
+    if (!state.crm.available) body.appendChild(el("p", "hint", "Folder unavailable or not created yet."));
+    dataConnectionForm(body, "crm", state.crm.root, { mode: state.crm.registry_present ? "existing" : "fresh" });
+  });
+  crm.open = true;
+  section("Self record", (body) => {
+    connectionSummary(body, state.self_record);
+    body.appendChild(el("p", "hint", state.self_record.explicit ? "This location is configured independently of the CRM." : "This location follows the configured CRM. Keeping it during a CRM change makes it independent."));
+    if (!state.self_record.available) body.appendChild(el("p", "hint", "Self-record folder unavailable."));
+    body.appendChild(el("p", "hint", "Applications may write analysis and packages. Connecting here does not connect Brain or grant AI access to your notes."));
+    dataConnectionForm(body, "self", state.self_record.root);
+  });
+  section("Reader folders", (body) => {
+    body.appendChild(el("p", "hint", "Reader reads connected folders without copying or editing their documents. Scan in Reader after adding a folder."));
+    (state.reader_sources || []).forEach((source) => {
+      const item = el("details", "data-connection-section");
+      item.appendChild(el("summary", "hint", `${source.label || "Reader folder"}${source.available ? "" : " - unavailable"}`));
+      connectionSummary(item, { root: source.path });
+      item.appendChild(el("p", "hint", `${source.kind || "dossier"} files matching ${source.glob || "*.html"}, plus index.html bundles`));
+      dataConnectionForm(item, "reader", source.path, { removal: source }); body.appendChild(item);
+    });
+    dataConnectionForm(body, "reader", "");
+  });
+  const brain = el("button", "btn", "Review Brain vault permissions and capture destinations");
+  brain.onclick = () => dashJump("brain"); card.appendChild(brain);
+  card.appendChild(el("p", "hint", "Brain's protected folders apply to Brain writes. Review Applications and agent destinations separately before authorizing work on your self record."));
 }
 
 function cardDossiers(card, step, st) {
