@@ -28,7 +28,7 @@ class Element {
 }
 function all(root) { return [root, ...root.children.flatMap(all)]; }
 function button(root, text) {
-  const result = all(root).find(e => e.tag === "button" && e.textContent === text);
+  const result = all(root).find(e => e.tag === "button" && (e.textContent === text || e.attributes["aria-label"] === text));
   assert.ok(result, "Missing button: " + text); return result;
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));

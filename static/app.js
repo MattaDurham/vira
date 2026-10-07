@@ -11534,7 +11534,8 @@ function graphCopyItem(list, label, value) {
   const text = el("span");
   if (label !== value) text.appendChild(el("span", null, label + ": "));
   text.appendChild(el("code", null, value));
-  const copy = el("button", "btn small ghost", "Copy " + label);
+  const copy = el("button", "btn small ghost", "Copy");
+  copy.setAttribute("aria-label", "Copy " + label);
   copy.onclick = async () => {
     try { await copyText(value); copy.textContent = "Copied"; }
     catch (e) { copy.textContent = "Copy failed"; }
