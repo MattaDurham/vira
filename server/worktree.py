@@ -8,7 +8,7 @@ desktop came up with no dock, no layout button and a scrambled arrangement,
 because `buildWindow()` hit `appendChild(null)` for a section that no longer
 existed and took the rest of `initDesktop()` down with it.
 
-The repo's own CLAUDE.md already carried the branch-first rule in prose. The
+The repo's own spec file already carried the branch-first rule in prose. The
 session either never received that file (a worktree the app made itself is
 not provisioned with it) or ignored it. So the lesson is NOT "say it louder":
 
@@ -34,8 +34,8 @@ import re
 import subprocess
 from pathlib import Path
 
-# `git worktree add` plus branch.sh's provisioning (venv symlink, CLAUDE.md
-# and launch.json copies) is a few hundred ms; a slow disk can make it more.
+# `git worktree add` plus branch.sh's provisioning (venv and AGENTS.local.md
+# links, the launch.json copy) is a few hundred ms; a slow disk can make it more.
 TIMEOUT = 120
 
 # Writes are what we care about. A session reading the live tree is fine and

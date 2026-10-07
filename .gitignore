@@ -6,8 +6,11 @@ data
 # Real screenshots, private design docs, the private data map.
 docs/
 
-# The private operational spec for this instance (a scrubbed README ships
-# in its place).
+# The owner's private operating file (AGENTS.md routes coding and content
+# sessions to it; seeded from the tracked AGENTS.local.example.md).
+AGENTS.local.md
+# Retired 2026-10-07 in favour of AGENTS.local.md, which every model reads.
+# Still ignored so an old private copy can never be committed.
 CLAUDE.md
 
 # System-atlas explainer: diagram exports carry instance-specific detail.

@@ -124,6 +124,14 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             f"but {enforcement}. Do not merge, do "
             "not push, and do not run `scripts/branch.sh merge` — the owner "
             "decides that after reviewing your work.\n\n"
+            # A pointer, not the file: this preamble already carries the
+            # branch and landing rules, and inlining the owner's whole file
+            # would say them twice (and can overrun a Windows command line
+            # on the CLI-exec path, where the prompt rides argv).
+            "THE OWNER'S OPERATING RULES are in AGENTS.local.md at the root "
+            "of your worktree (a link to the live checkout's copy): the "
+            "coding conventions, the tests, and how to hand work over. Read "
+            "it before changing anything.\n\n"
             "FINISH WHAT YOU START. A half-applied change is worse than no "
             "change: markup without its JavaScript, an engine without the "
             "route that reaches it. If you cannot complete every part, "

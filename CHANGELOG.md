@@ -8,6 +8,15 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Changed
 
+- Agent instructions are a density ladder. `AGENTS.md` is a short router that
+  every agent loads: it carries only the rules that cannot wait and sends each
+  task to its file. Installing goes to `AGENTS.install.md`; adding content and
+  changing code go to the owner's private `AGENTS.local.md`, seeded on startup
+  from the public template `AGENTS.local.example.md` and never overwritten.
+  `python -m server.agentslocal diff|adopt|promote` keeps the two in step
+  deliberately, in both directions. Branch worktrees link the owner's copy
+  instead of copying `CLAUDE.md`, which is retired: every model reads the
+  AGENTS files. "Merge it" from the owner authorizes the whole landing.
 - Branch instances run the full Vira application, including models, sessions,
   vault operations, and background workers. Explicit instance metadata keeps
   the UI, agent prompts, and lifecycle controls attached to the right server.
