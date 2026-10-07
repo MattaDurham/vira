@@ -198,7 +198,10 @@ class OwnershipTests(unittest.TestCase):
                   mock.patch.object(main.backup, "start"),
                   mock.patch.object(circuits.driver, "start"),
                   mock.patch.object(routines.scheduler, "start"),
-                  mock.patch.object(main.atlas, "GRAPH")]
+                  mock.patch.object(main.atlas, "GRAPH"),
+                  # in a plain clone with no AGENTS.local.md, startup seeds
+                  # one into the checkout root and its baseline into data/
+                  mock.patch.object(main.agentslocal, "seed")]
         mocks = [p.start() for p in patchers + others]
         try:
             asyncio.run(main._startup())
