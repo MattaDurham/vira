@@ -15,6 +15,18 @@ ROOT="$(git rev-parse --show-toplevel)"
 # instance's pattern file; ROOT still resolves to the CALLING repo, so the
 # scan covers that repo's staged diff).
 PATTERNS_FILE="${PII_PATTERNS_FILE:-$ROOT/data/pii-patterns.txt}"
+# A branch worktree has no data/ of its own until it is served, and the
+# patterns file is gitignored, so it exists only in the main checkout. Without
+# this fallback every commit made in a worktree ran the generic patterns only,
+# and `branch.sh pr` publishes the branch before the merge gate's full scan
+# ever sees it. The common git dir's parent is the main checkout, wherever the
+# worktree lives.
+if [ -z "${PII_PATTERNS_FILE:-}" ] && [ ! -f "$PATTERNS_FILE" ]; then
+    COMMON="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -n "$COMMON" ] && [ -f "$(dirname "$COMMON")/data/pii-patterns.txt" ]; then
+        PATTERNS_FILE="$(dirname "$COMMON")/data/pii-patterns.txt"
+    fi
+fi
 
 # Two modes: default scans STAGED additions (the pre-commit hook);
 # `--tree` scans every line of every tracked text file (publication
