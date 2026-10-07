@@ -185,6 +185,16 @@ class KeepingInStep(unittest.TestCase):
         self.assertIn("whole difference", note)
         self.assertIsNone(agentslocal.status(self.root)["template_changed"])
 
+    def test_status_names_a_missing_template_as_missing(self):
+        """Not as a missing baseline: a checkout that predates the template
+        has nothing to compare against, and saying 'adopt' there is wrong."""
+        self.example.unlink()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            agentslocal.main(["status", "--root", str(self.root)])
+        self.assertIn("no AGENTS.local.example.md", out.getvalue())
+        self.assertNotIn("adopt", out.getvalue())
+
     def test_the_cli_runs_every_command(self):
         for cmd in ("seed", "status", "diff", "adopt", "promote"):
             out = io.StringIO()

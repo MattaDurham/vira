@@ -148,7 +148,9 @@ def main(argv=None):
         if not s["local"]:
             print(f"no {LOCAL} yet - run: python -m server.agentslocal seed")
             return 0
-        if s["template_changed"]:
+        if not s["template"]:
+            print(f"no {EXAMPLE} in this checkout to compare against")
+        elif s["template_changed"]:
             print("the public template changed since your copy was made - "
                   "review: python -m server.agentslocal diff")
         elif s["template_changed"] is None:
