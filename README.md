@@ -241,13 +241,22 @@ PC the wizard skips what does not exist there - see **Windows** above):
    pulled; without it the Brain still supports full-text search. Captures,
    plans, definitions, and ingested notes keep their selected destination.
 5. **Mail** - open Config > Connect mail and add a Gmail/IMAP or Microsoft
-   365 mailbox. **Connect Microsoft** opens browser sign-in and returns
-   directly to Vira, identifying the mailbox automatically. **Let Vira set
-   this up** starts a task that looks for registration IDs in Vira backups
-   and model-readable connected vaults, restores a unique registration
-   through validated tools, or asks for the missing Microsoft step.
+   365 mailbox. **Connect Microsoft** checks for an existing registration,
+   restores a complete, unambiguous result, and opens sign-in in the
+   computer's **system browser**, identifying the mailbox automatically.
+   Embedded browsers can be rejected by an organization's sign-in provider.
+   A single-use local launch connects the system browser back to the original
+   Vira window without sharing browser cookies or exposing tokens in URLs.
+   **Let Vira set this up** offers the same recovery and a native three-step
+   guide when registration is still needed. Each step opens the relevant
+   Microsoft page in the system browser; Vira saves the supplied IDs and
+   resumes sign-in. You perform Microsoft sign-in, registration, permissions
+   and any administrator approval. Connection is confirmed only after
+   Microsoft completes sign-in and Vira saves the token and mailbox.
    **Manual setup** holds the ID fields, Entra guide and device-code login
-   for phones, remote browsers and older registrations.
+   for phones, remote browsers and older registrations, plus an optional
+   **Ask Vira for setup help** task. System-browser launch requires using
+   Vira at `localhost` on the computer running its server.
    Browser login needs a public-client registration with delegated
    `User.Read`, `Mail.ReadWrite` (read mail/save drafts) and `Calendars.Read`,
    and a **Mobile and desktop applications** redirect of

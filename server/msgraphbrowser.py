@@ -6,6 +6,7 @@ is not browser authentication. Phone/LAN clients use the device flow.
 """
 import base64
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
@@ -13,12 +14,16 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import msgraph
+from . import msgraph, systembrowser
 
 CALLBACK = "/api/mail/graph/browser/callback"
 # Ten minutes covers interactive sign-in without retaining unused verifiers.
 TTL = 600
 SCOPE = msgraph.SCOPE_LOGIN + " https://graph.microsoft.com/User.Read"
+# A launch ticket only bridges browsers; it never carries a Microsoft token.
+LAUNCH_TTL = 120
+_launches = {}
+_bindings = {}
 
 
 def origin(request):
@@ -41,8 +46,28 @@ def check_origin(request):
         raise ValueError("Start Microsoft sign-in from this Vira window.")
 
 
+def check_local(request):
+    check_origin(request)
+    host = request.client.host if request.client else ""
+    try:
+        local = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = False
+    if not local:
+        raise ValueError("Open Vira at localhost on the computer running it to launch the system browser. Remote clients can use device login in Manual setup.")
+
+
 def _key(cookie):
-    return "browser:" + str(cookie or "")
+    return _bindings.get(cookie, "browser:" + str(cookie or ""))
+
+
+def _prune():
+    for ticket, launch in list(_launches.items()):
+        if launch["expires_at"] <= time.time() or launch["key"] not in msgraph._flows:
+            del _launches[ticket]
+    for cookie, key in list(_bindings.items()):
+        if key not in msgraph._flows:
+            del _bindings[cookie]
 
 
 def start(request):
@@ -58,6 +83,7 @@ def start(request):
         for key, flow in list(msgraph._flows.items()):
             if key.startswith("browser:") and flow["expires_at"] <= time.time() and not flow.get("redeeming"):
                 del msgraph._flows[key]
+        _prune()
         cookie, state, verifier = (secrets.token_urlsafe(32) for _ in range(3))
         redirect = origin(request) + CALLBACK
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
@@ -71,6 +97,45 @@ def start(request):
               "scope": SCOPE, "state": state, "code_challenge": challenge,
               "code_challenge_method": "S256"}
     return cookie, {"authorize_url": authority + "/oauth2/v2.0/authorize?" + urllib.parse.urlencode(params)}
+
+
+def open_system(request):
+    check_local(request)
+    cookie, body = start(request)
+    ticket = secrets.token_urlsafe(32)
+    with msgraph._registration_lock:
+        key = _key(cookie)
+        msgraph._flows[key].update(system_launch=True, browser_ready=False,
+                                  expires_at=time.time() + LAUNCH_TTL)
+        _launches[ticket] = {"key": key, "origin": origin(request),
+                             "expires_at": time.time() + LAUNCH_TTL,
+                             "authorize_url": body["authorize_url"]}
+    try:
+        systembrowser.open_url(origin(request) + "/api/mail/graph/browser/launch#ticket=" + ticket)
+    except Exception:
+        with msgraph._registration_lock:
+            _launches.pop(ticket, None)
+            msgraph._flows.pop(key, None)
+        raise
+    return cookie, {"opened": True}
+
+
+def claim_launch(request, ticket):
+    check_local(request)
+    with msgraph._registration_lock:
+        _prune()
+        launch = _launches.get(ticket)
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket)
+                or not launch or launch["origin"] != origin(request)):
+            raise ValueError("This browser launch is invalid or expired. Return to Vira and click Connect Microsoft again.")
+        flow = msgraph._flows.get(launch["key"])
+        if not flow or flow.get("consumed") or time.time() >= flow["expires_at"]:
+            raise ValueError("Microsoft sign-in expired. Return to Vira and connect again.")
+        del _launches[ticket]
+        cookie = secrets.token_urlsafe(32)
+        _bindings[cookie] = launch["key"]
+        flow.update(browser_ready=True, expires_at=time.time() + TTL)
+        return cookie, {"authorize_url": launch["authorize_url"]}
 
 
 def _profile(access_token):
@@ -92,7 +157,10 @@ def status(cookie):
         expired = time.time() >= flow["expires_at"]
         return {"pending": not flow.get("connected") and not flow.get("error") and not expired,
                 "connected": bool(flow.get("connected")), "email": flow.get("email"),
-                "error": flow.get("error") or ("Microsoft sign-in expired. Connect Microsoft again." if expired and not flow.get("connected") else None)}
+                "browser_ready": flow.get("browser_ready", True),
+                "error": flow.get("error") or (("The system browser did not start sign-in. Check your default browser and click Connect Microsoft again."
+                    if flow.get("system_launch") and not flow.get("browser_ready")
+                    else "Microsoft sign-in expired. Connect Microsoft again.") if expired and not flow.get("connected") else None)}
 
 
 def complete(request, state, code="", error="", error_description=""):

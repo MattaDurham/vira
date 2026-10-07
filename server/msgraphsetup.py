@@ -4,7 +4,37 @@ import os
 import time
 from pathlib import Path
 
-from . import backup, msgraph, vault
+from . import backup, msgraph, msgraphbrowser, systembrowser, vault
+
+PORTAL = "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+
+
+def prepare():
+    """Recover an unambiguous setup, otherwise return a native guided decision."""
+    found = discover()
+    if found["registration"]["configured"]:
+        return {**found, "stage": "ready"}
+    groups = {(item["client_id"], item["tenant"]) for item in found["candidates"]}
+    if len(groups) == 1 and not found["truncated"] and not found["issues"]:
+        client, tenant = groups.pop()
+        registration = msgraph.save_registration(client, tenant)
+        return {**found, "registration": registration, "stage": "ready", "restored": True}
+    return {**found, "stage": "choose" if groups else "register"}
+
+
+def open_step(request, step, client_id=""):
+    msgraphbrowser.check_local(request)
+    if step not in {"register", "permissions", "authentication", "overview"}:
+        raise ValueError("Unknown Microsoft setup step.")
+    url = PORTAL
+    if step != "register":
+        # The portal identifies the application by its public GUID, never a secret.
+        client, _ = msgraph._registration({"msgraph_client_id": client_id})
+        page = {"permissions": "CallAnAPI", "authentication": "Authentication", "overview": "Overview"}[step]
+        url = ("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/"
+               f"ApplicationMenuBlade/~/{page}/appId/{client}/isMSAApp~/false")
+    systembrowser.open_url(url)
+    return {"opened": True}
 
 
 def discover():

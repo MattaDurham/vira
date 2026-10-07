@@ -33,6 +33,7 @@ import datetime as dt
 import email as email_lib
 import imaplib
 import json
+import re
 import time
 from contextvars import ContextVar
 import urllib.parse
@@ -1065,7 +1066,12 @@ async def _t_ask_owner(args):
     if channel is None:
         return _txt("No owner channel is available in this session. Do not "
                     "guess: stop and put the question in your final report.")
-    return _txt(await channel(args.get("question"),
+    question = str(args.get("question") or "")
+    if re.search(r'</(?:question|parameter)>\s*<(?:parameter|invoke)\b', question):
+        return _txt("Error: ask_owner received tool-call markup inside question. "
+                    "Retry with separate question and options arguments; question must be plain text "
+                    "and options must be a JSON array of label/description objects.")
+    return _txt(await channel(question,
                              parse_options(args.get("options")),
                              str(args.get("allow_text", "true")).lower()
                              != "false"))

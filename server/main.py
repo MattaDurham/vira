@@ -2754,6 +2754,34 @@ class GraphSetupReq(BaseModel):
     model: str | None = None
 
 
+@app.post("/api/mail/graph/setup/prepare")
+def api_graph_setup_prepare(request: Request):
+    from . import msgraphbrowser, msgraphsetup
+    try:
+        msgraphbrowser.check_local(request)
+        return msgraphsetup.prepare()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+class GraphSetupOpenReq(BaseModel):
+    step: str
+    client_id: str = ""
+
+
+@app.post("/api/mail/graph/setup/open")
+def api_graph_setup_open(request: Request, req: GraphSetupOpenReq):
+    from . import msgraphsetup
+    try:
+        return msgraphsetup.open_step(request, req.step, req.client_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
+
+
 @app.post("/api/mail/graph/setup")
 def api_graph_setup(req: GraphSetupReq):
     from . import msgraphsetup
@@ -2771,6 +2799,47 @@ def api_graph_browser_start(request: Request):
     from . import msgraphbrowser
     try:
         cookie, body = msgraphbrowser.start(request)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    response = JSONResponse(body, headers={"Cache-Control": "no-store"})
+    response.set_cookie(msgraphbrowser.cookie_name(request), cookie,
+                        max_age=msgraphbrowser.TTL, httponly=True, samesite="lax",
+                        secure=request.url.scheme == "https", path="/api/mail/graph/browser")
+    return response
+
+
+@app.post("/api/mail/graph/browser/system")
+def api_graph_browser_system(request: Request):
+    from . import msgraphbrowser
+    try:
+        cookie, body = msgraphbrowser.open_system(request)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
+    response = JSONResponse(body, headers={"Cache-Control": "no-store"})
+    response.set_cookie(msgraphbrowser.cookie_name(request), cookie,
+                        max_age=msgraphbrowser.TTL, httponly=True, samesite="lax",
+                        secure=request.url.scheme == "https", path="/api/mail/graph/browser")
+    return response
+
+
+@app.get("/api/mail/graph/browser/launch")
+def api_graph_browser_launch():
+    return FileResponse(ROOT / "static" / "microsoft-launch.html", media_type="text/html",
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                                 "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"})
+
+
+class GraphLaunchReq(BaseModel):
+    ticket: str
+
+
+@app.post("/api/mail/graph/browser/launch")
+def api_graph_browser_claim(request: Request, req: GraphLaunchReq):
+    from . import msgraphbrowser
+    try:
+        cookie, body = msgraphbrowser.claim_launch(request, req.ticket)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     response = JSONResponse(body, headers={"Cache-Control": "no-store"})

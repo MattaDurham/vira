@@ -11543,25 +11543,123 @@ function graphRegistrationForm(onReady) {
   return box;
 }
 
+function graphSetupGuide(found, onReady, onConnect) {
+  const box = el("section", "graph-setup-guide");
+  box.setAttribute("aria-label", "Guided Microsoft setup");
+  let step = 0;
+  const client = mkInput("text", "Application (client) ID");
+  const tenant = mkInput("text", "Directory (tenant) ID");
+  client.setAttribute("aria-label", "Setup application (client) ID");
+  tenant.setAttribute("aria-label", "Setup directory (tenant) ID");
+  client.value = found.registration?.client_id || "";
+  tenant.value = found.registration?.tenant || "";
+  const out = el("p", "acct-form-out"); out.setAttribute("role", "status");
+  async function saveAndConnect(button) {
+    button.disabled = true;
+    out.textContent = "Saving your registration...";
+    try {
+      await post("/api/mail/graph/registration", {client_id: client.value.trim(), tenant: tenant.value.trim()});
+      await onReady(); box.remove(); await onConnect();
+    } catch (e) { out.textContent = errText(e); button.disabled = false; }
+  }
+  function render() {
+    box.replaceChildren();
+    box.appendChild(el("h4", null, "Set up Microsoft"));
+    if (found.stage === "choose") {
+      box.appendChild(el("p", "hint", "Choose the registration to restore. Vira will save it and open Microsoft sign-in in your system browser."));
+      if (found.truncated || found.issues?.length) box.appendChild(el("p", "hint warn", "Some folders could not be checked. Review the source before choosing a registration."));
+      const seen = new Set();
+      for (const candidate of found.candidates || []) {
+        const key = candidate.client_id + ":" + candidate.tenant;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const row = el("div", "graph-registration-choice");
+        row.appendChild(el("p", "hint", candidate.path));
+        row.appendChild(el("p", "hint", "Application: " + candidate.client_id + " · Tenant: " + candidate.tenant));
+        const use = el("button", "btn small", "Use this registration");
+        use.onclick = () => { client.value = candidate.client_id; tenant.value = candidate.tenant; saveAndConnect(use); };
+        row.appendChild(use); box.appendChild(row);
+      }
+      const fresh = el("button", "btn small", "Create a new registration");
+      fresh.onclick = () => { found.stage = "register"; render(); };
+      box.append(fresh, out); return;
+    }
+    const titles = ["Create the app registration", "Choose mail and calendar access", "Enable browser sign-in"];
+    box.appendChild(el("p", "hint", "Step " + (step + 1) + " of 3 · " + titles[step]));
+    const text = [
+      found.registration?.configured ? "Your registration is already saved. Review it in your system browser and confirm the two IDs below; you do not need to create another app." : "Microsoft needs an app registration before sign-in can work. Open App registrations in your system browser, sign in, and select New registration. Name it Vira, choose your organization's accounts, and click Register. Copy the two IDs from Overview below.",
+      "In API permissions, select Add a permission > Microsoft Graph > Delegated permissions. Add User.Read, Mail.ReadWrite, Calendars.Read and offline_access. These identify your mailbox, read mail, save drafts, and read your calendar. Vira does not request permission to send mail.",
+      "In Authentication, select Add a platform > Mobile and desktop applications. Add the callback below. Enable Allow public client flows if you also want device login. No client secret is needed."
+    ];
+    box.appendChild(el("p", "hint", text[step]));
+    if (step === 0 && (found.truncated || found.issues?.length)) box.appendChild(el("p", "hint warn", "The existing-setup scan was incomplete. You can use Manual setup for IDs you already have, or continue to create a new registration."));
+    if (step === 0) {
+      const fields = el("div", "graph-registration-fields");
+      for (const [name, input] of [["Application (client) ID", client], ["Directory (tenant) ID", tenant]]) {
+        const label = el("label", "graph-registration-field", name); label.appendChild(input); fields.appendChild(label);
+      }
+      box.appendChild(fields);
+    }
+    if (step === 2) {
+      const callback = "http://localhost/api/mail/graph/browser/callback";
+      box.appendChild(el("code", "graph-callback", callback));
+      const copy = el("button", "btn small", "Copy callback");
+      copy.onclick = () => { copyText(callback); out.textContent = "Callback copied. Paste it into Microsoft's desktop redirect field."; };
+      box.appendChild(copy);
+    }
+    const actions = el("div", "acct-form-acts");
+    const open = el("button", "btn small", step === 0 ? "Open Microsoft setup" : "Open " + (step === 1 ? "API permissions" : "Authentication"));
+    open.onclick = async () => {
+      open.disabled = true; out.textContent = "Opening your system browser...";
+      try {
+        await post("/api/mail/graph/setup/open", {step: ["register", "permissions", "authentication"][step], client_id: client.value.trim()});
+        out.textContent = "Continue in your system browser, then return to this step. Your password and MFA stay with Microsoft or your organization's sign-in provider.";
+      } catch (e) { out.textContent = errText(e); }
+      finally { open.disabled = false; }
+    };
+    actions.appendChild(open);
+    if (step > 0) {
+      const back = el("button", "btn small", "Back"); back.onclick = () => { step--; out.textContent = ""; render(); };
+      actions.appendChild(back);
+    }
+    const next = el("button", "btn small primary", ["Registration created — continue", "Permissions added — continue", "Save and sign in"][step]);
+    next.onclick = () => {
+      if (step === 0 && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(client.value.trim()) || !tenant.value.trim())) {
+        out.textContent = "Copy both IDs from the registration's Overview before continuing."; return;
+      }
+      if (step < 2) { step++; out.textContent = ""; render(); }
+      else saveAndConnect(next);
+    };
+    actions.appendChild(next); box.appendChild(actions);
+    const admin = el("details", "graph-registration-guide");
+    admin.appendChild(el("summary", null, "Microsoft says I need an administrator"));
+    admin.appendChild(el("p", "hint", "Your organization may restrict app registration or consent. Ask its Microsoft administrator to create or approve this Vira registration with the delegated access above. Keep this guide open; return when they provide the client and tenant IDs. Vira cannot grant organization approval itself."));
+    box.append(admin, out);
+  }
+  render(); return box;
+}
+
 function graphAddForm(reconnectEmail = "") {
   const f = el("div", "acct-form graph-connect-form");
   f.dataset.kind = "graph";
   f.appendChild(el("div", "acct-form-title", reconnectEmail ? "Reconnect Microsoft 365 / Outlook" : "Connect Microsoft 365 / Outlook"));
-  f.appendChild(el("p", "hint", "Sign in with Microsoft to connect mail, drafts and your work calendar. Microsoft asks you to approve access; Vira keeps the refresh token in this instance's secrets store."));
+  f.appendChild(el("p", "hint", "Sign in through your system browser to connect mail, drafts and your work calendar. Microsoft asks you to approve access; Vira confirms the connection here and saves the refresh token in this instance's secrets store."));
   const acts = el("div", "acct-form-acts");
   const connect = el("button", "btn small primary", "Connect Microsoft");
   const setup = el("button", "btn small", "Let Vira set this up");
+  const help = el("button", "btn small", "Ask Vira for setup help");
   connect.disabled = true;
   acts.append(connect, setup); f.appendChild(acts);
   const out = el("p", "acct-form-out"); out.setAttribute("role", "status");
   f.appendChild(out);
-  let ready = false, setupId = null, setupPoll = null;
+  let ready = false, setupId = null, setupPoll = null, guide = null;
   const manual = graphRegistrationForm((isReady, st) => {
     ready = isReady; connect.disabled = false; device.disabled = !ready;
     if (st) out.textContent = ready ? "Ready to sign in with Microsoft."
-      : "An app registration is needed first. Let Vira look for an existing setup, or use Manual setup. This release does not yet include a shared Vira Microsoft registration.";
+      : "Click Connect Microsoft. Vira will check for a saved setup and guide the remaining steps in your system browser.";
   });
   f.appendChild(manual);
+  manual.appendChild(help);
   const row = el("div", "acct-form-row");
   const email = mkInput("email", "Mailbox email for device login");
   email.setAttribute("aria-label", "Microsoft mailbox email"); email.value = reconnectEmail;
@@ -11574,10 +11672,31 @@ function graphAddForm(reconnectEmail = "") {
     if (!email.value.includes("@")) { email.focus(); return; }
     graphConnect(email.value.trim().toLowerCase(), out, device, () => refreshMail());
   };
+  async function guidedSetup(signIn) {
+    if (location.hostname !== "localhost") {
+      manual.open = true; out.textContent = "Open Vira at localhost on the computer running it for guided setup. On this device, use Manual setup and device login."; return;
+    }
+    connect.disabled = setup.disabled = true;
+    out.textContent = "Checking Vira's backups and connected vaults for Microsoft setup...";
+    try {
+      const found = await post("/api/mail/graph/setup/prepare", {});
+      await manual.refresh();
+      if (found.registration.configured && signIn) {
+        guide?.remove(); guide = null;
+        await graphBrowserConnect(out, connect, () => refreshMail());
+      } else {
+        guide?.remove();
+        guide = graphSetupGuide(found, () => manual.refresh(), () => graphBrowserConnect(out, connect, () => refreshMail()));
+        f.insertBefore(guide, manual);
+        out.textContent = found.registration.configured ? "Review your Microsoft registration below." : "Continue with the guided setup below. Microsoft sign-in opens in your system browser.";
+      }
+    } catch (e) { out.textContent = errText(e); }
+    finally { connect.disabled = setup.disabled = false; }
+  }
+  setup.onclick = () => guidedSetup(false);
   connect.onclick = () => {
     if (!ready) {
-      out.textContent = "Use Let Vira set this up to recover or configure a Microsoft registration. If you edited the manual fields, save them first.";
-      setup.focus(); return;
+      return guidedSetup(true);
     }
     if (location.hostname !== "localhost") {
       manual.open = true;
@@ -11586,12 +11705,12 @@ function graphAddForm(reconnectEmail = "") {
     }
     graphBrowserConnect(out, connect, () => refreshMail());
   };
-  setup.onclick = async () => {
+  help.onclick = async () => {
     if (setupId) { openSession(setupId); return; }
-    setup.disabled = true; out.textContent = "Starting Microsoft's setup task...";
+    help.disabled = true; out.textContent = "Starting Microsoft's setup task...";
     try {
       const res = await post("/api/mail/graph/setup", {});
-      setupId = res.job_id; setup.textContent = "View setup task";
+      setupId = res.job_id; help.textContent = "View setup task";
       out.textContent = "Vira is checking existing registrations. The task will ask you for anything it cannot determine. Sign-in and Microsoft consent happen afterward.";
       openSession(setupId);
       refreshJobs?.().catch(() => {});
@@ -11613,24 +11732,18 @@ function graphAddForm(reconnectEmail = "") {
         } catch { /* retry transient server errors */ }
       }, 3000);
     } catch (e) { out.textContent = "Could not start setup: " + errText(e); }
-    finally { setup.disabled = false; }
+    finally { help.disabled = false; }
   };
   return f;
 }
 
 async function graphBrowserConnect(out, btn, onDone) {
-  // Open synchronously to retain the click's popup allowance. Sever the opener
-  // before navigating to Microsoft; the cookie, not postMessage, binds login.
-  const win = window.open("about:blank", "_blank");
-  if (!win) { out.textContent = "Allow this sign-in window, then click Connect Microsoft again, or use device login in Manual setup."; return; }
-  win.opener = null;
   btn.disabled = true; out.hidden = false; out.classList.remove("ok", "warn");
   out.textContent = "Opening Microsoft sign-in...";
   try {
-    const res = await post("/api/mail/graph/browser/start", {});
-    win.location = res.authorize_url;
+    await post("/api/mail/graph/browser/system", {});
     btn.disabled = false; // A closed or isolated Microsoft window can be retried.
-    out.textContent = "Finish sign-in in the Microsoft window. Vira will confirm the connection here. If Microsoft says the redirect is missing, add the callback in Manual setup or use device login.";
+    out.textContent = "Finish sign-in in your system browser. Vira will confirm the connection here. If your organization's sign-in provider rejects a browser, use its supported regular browser. Let Vira set this up can guide registration changes.";
     graphPoll?.stop();
     graphPoll = startPoll(async h => {
       if (!out.isConnected) { h.stop(); return; }
@@ -11647,7 +11760,7 @@ async function graphBrowserConnect(out, btn, onDone) {
       } catch { /* retry transient server errors */ }
     }, 2000);
   } catch (e) {
-    win.close(); btn.disabled = false; out.textContent = errText(e);
+    btn.disabled = false; out.textContent = errText(e);
   }
 }
 

@@ -8841,3 +8841,7 @@ mark.doc-term {
 .vault-config-advanced > summary { font-size: 13px; color: var(--text-head); cursor: pointer; }
 .vault-config-advanced[open] > summary { margin-bottom: 16px; }
 .vault-scope-note:empty { display: none; }
+.graph-setup-guide { margin: 1rem 0; padding: 1rem; border: 1px solid var(--line, #444); border-radius: 8px; min-width: 0; }
+.graph-setup-guide .hint, .graph-registration-choice, .graph-callback { overflow-wrap: anywhere; }
+.graph-callback { display: block; margin: .75rem 0; white-space: normal; }
+.graph-setup-guide input { font-size: 16px; min-width: 0; width: 100%; box-sizing: border-box; }
