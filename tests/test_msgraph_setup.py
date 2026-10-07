@@ -77,6 +77,7 @@ class MicrosoftSetupTests(unittest.TestCase):
         self.assertEqual(claimed.status_code, 200, claimed.text)
         self.assertIn("HttpOnly", claimed.headers["set-cookie"])
         params = parse_qs(urlparse(claimed.json()["authorize_url"]).query)
+        self.assertIn("https://graph.microsoft.com/Mail.Send", params["scope"][0].split())
         self.assertTrue(self.api.get("/api/mail/graph/browser/status").json()["browser_ready"])
         self.assertEqual(external.post("/api/mail/graph/browser/launch", json={"ticket": ticket}, headers={"origin": "http://localhost:8378"}).status_code, 400)
         msgraph._post_form.return_value = {"access_token": "test-access", "refresh_token": "test-refresh"}
@@ -85,6 +86,18 @@ class MicrosoftSetupTests(unittest.TestCase):
         self.assertTrue(complete.json()["connected"])
         self.assertTrue(self.api.get("/api/mail/graph/browser/status").json()["connected"])
         self.assertEqual(jsonstore.read(self.accounts, []), [{"email": EMAIL, "type": "graph"}])
+        # Use the saved connection through the real reply/token-refresh join.
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b""
+        with mock.patch.object(main.mailread, "_accounts", side_effect=lambda: jsonstore.read(self.accounts, [])), \
+                mock.patch.object(msgraph.urllib.request, "urlopen", return_value=response) as network:
+            sent = self.api.post("/api/mail/reply", json={"account": EMAIL, "text": "Thanks", "graph_id": "synthetic-message"})
+        self.assertEqual(sent.status_code, 200, sent.text)
+        self.assertTrue(sent.json()["sent"])
+        self.assertEqual(msgraph._post_form.call_args.args[1]["scope"], "https://graph.microsoft.com/Mail.Send offline_access")
+        request = network.call_args.args[0]
+        self.assertEqual(request.full_url, msgraph.GRAPH + "/me/messages/synthetic-message/reply")
+        self.assertEqual(request.get_method(), "POST")
 
     def test_system_launch_rejects_remote_cross_origin_cross_port_and_expired_tickets(self):
         self.save()
@@ -345,6 +358,7 @@ class MicrosoftSetupTests(unittest.TestCase):
         self.assertIn(TENANT, url)
         self.assertEqual(form["client_id"], CLIENT)
         self.assertEqual(form["scope"], msgraph.SCOPE_LOGIN)
+        self.assertIn("https://graph.microsoft.com/Mail.Send", form["scope"].split())
         self.assertEqual(response.json()["user_code"], "USER-CODE")
         self.assertNotIn("device_code", response.json())
         self.assertTrue(msgraph.flow_status(EMAIL)["pending"])

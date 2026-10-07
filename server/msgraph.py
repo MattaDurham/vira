@@ -25,12 +25,13 @@ from pathlib import Path
 from . import channels, jsonstore, secrets, settings
 
 SCOPE ="https://graph.microsoft.com/Mail.ReadWrite offline_access"
-# device login asks for calendar too (brief v2); token refreshes keep
+# Interactive login asks for sending and calendar too; token refreshes keep
 # requesting only the scope they need, so a pre-calendar refresh token
 # keeps working for mail and simply can't mint a calendar token until
 # the user reconnects once.
 SCOPE_CAL = "https://graph.microsoft.com/Calendars.Read offline_access"
 SCOPE_LOGIN = ("https://graph.microsoft.com/Mail.ReadWrite "
+               "https://graph.microsoft.com/Mail.Send "
                "https://graph.microsoft.com/Calendars.Read offline_access")
 GRAPH = "https://graph.microsoft.com/v1.0"
 KEYCHAIN_SERVICE = "vira-mail-graph"   # namespaced per instance by settings.keychain_service
@@ -265,9 +266,9 @@ def _login_error(payload):
     if "AADSTS700016" in detail:
         return "Microsoft could not find this app in the selected tenant. Check Application (client) ID and Directory (tenant) ID in Config."
     if "AADSTS50011" in detail:
-        return "Add http://localhost/api/mail/graph/browser/callback under Authentication > Mobile and desktop applications in the Microsoft registration, or use device login in Manual setup."
+        return "Add http://localhost/api/mail/graph/browser/callback under Authentication > Mobile and desktop applications in the Microsoft registration, or use device login in Advanced setup."
     if "AADSTS65001" in detail or payload.get("error") == "consent_required":
-        return "Microsoft requires consent for this app. Ask your tenant administrator to approve delegated Mail.ReadWrite and Calendars.Read, then try again."
+        return "Microsoft requires consent for this app. Ask your tenant administrator to approve delegated User.Read, Mail.ReadWrite, Mail.Send and Calendars.Read, then try again."
     return detail[:300]  # Keep provider diagnostics bounded in the setup card.
 
 

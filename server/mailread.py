@@ -10,8 +10,8 @@ Two backends, matching the watcher's split:
 
 - Graph (M365): message looked up by internetMessageId, full body from
   /me/messages. REPLYING needs the Mail.Send delegated scope, which this
-  tenant's "Vira" registration may not have consented yet (consent is an
-  admin act in Entra — see CLAUDE.md's M365 consent model). When the
+  mailbox's registration may not have consented yet. Config requests it
+  during sign-in; an organization's policy may require admin approval. When the
   scope is refused, the reply falls back to a ready-to-send reply DRAFT
   in the mailbox (Mail.ReadWrite covers createReply) and the response
   says so honestly — never a silent degrade dressed as a send.
@@ -302,7 +302,7 @@ def _reply_graph(acct, text, graph_id, message_id):
             raise
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Graph reply failed: HTTP {e.code}") from e
-    # Mail.Send isn't admin-consented in the tenant — the honest degrade:
+    # Mail.Send isn't consented in the tenant — the honest degrade:
     # a ready-to-send reply draft (Mail.ReadWrite covers createReply),
     # with the one-time fix named so the owner can enable real sends.
     msgraph._graph_request(addr, f"/me/messages/{graph_id}/createReply",
@@ -314,7 +314,9 @@ def _reply_graph(acct, text, graph_id, message_id):
                      "was saved as a draft in Outlook instead. One-time "
                      "fix: Entra admin center > App registrations > Vira "
                      "> API permissions > add Microsoft Graph delegated "
-                     "Mail.Send > Grant admin consent.")}
+                     "Mail.Send, then Config > Mail > Microsoft 365 > "
+                     "Sign in again and approve sending. Your organization "
+                     "may require administrator consent.")}
 
 
 def _reply_smtp(acct, text, to, subject, message_id, references):

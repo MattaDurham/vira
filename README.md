@@ -241,29 +241,36 @@ PC the wizard skips what does not exist there - see **Windows** above):
    pulled; without it the Brain still supports full-text search. Captures,
    plans, definitions, and ingested notes keep their selected destination.
 5. **Mail** - open Config > Connect mail and add a Gmail/IMAP or Microsoft
-   365 mailbox. **Connect Microsoft** checks for an existing registration,
+   365 mailbox. Choosing **Microsoft 365** starts setup automatically. Vira checks for an existing registration,
    restores a complete, unambiguous result, and opens sign-in in the
    computer's **system browser**, identifying the mailbox automatically.
    Embedded browsers can be rejected by an organization's sign-in provider.
    A single-use local launch connects the system browser back to the original
    Vira window without sharing browser cookies or exposing tokens in URLs.
-   **Let Vira set this up** offers the same recovery and a native three-step
-   guide when registration is still needed. Each step opens the relevant
-   Microsoft page in the system browser; Vira saves the supplied IDs and
+   If registration is still needed, one three-step guide opens the first
+   Microsoft page automatically. **Continue** opens the next page. Short
+   bullets explain the Microsoft actions, copy buttons supply names,
+   permissions and the callback, and pasting both labeled registration IDs
+   fills both fields. Vira saves the supplied IDs and
    resumes sign-in. You perform Microsoft sign-in, registration, permissions
    and any administrator approval. Connection is confirmed only after
    Microsoft completes sign-in and Vira saves the token and mailbox.
-   **Manual setup** holds the ID fields, Entra guide and device-code login
-   for phones, remote browsers and older registrations, plus an optional
+   **Advanced setup** holds existing ID fields, permission review and
+   device-code login for phones, remote browsers and older registrations, plus an optional
    **Ask Vira for setup help** task. System-browser launch requires using
    Vira at `localhost` on the computer running its server.
    Browser login needs a public-client registration with delegated
-   `User.Read`, `Mail.ReadWrite` (read mail/save drafts) and `Calendars.Read`,
+   `User.Read`, `Mail.ReadWrite` (read mail/save drafts), `Mail.Send` (send
+   mail) and `Calendars.Read`,
    and a **Mobile and desktop applications** redirect of
    `http://localhost/api/mail/graph/browser/callback`. Enable public client
    flows for the device fallback. No client secret is needed. Your
    organization may require administrator consent. Refresh tokens stay in
    the instance's secrets store; IDs stay in private local configuration.
+   Existing mailboxes need **Sign in again** to approve sending if their
+   earlier connection did not include `Mail.Send`. Microsoft email replies
+   use this permission when you click Send; missing consent saves an Outlook
+   draft and explains how to reconnect instead of claiming delivery.
    Registration changes require removing Microsoft mailboxes and finishing
    pending logins first. Full Disk Access supplies no Microsoft permissions.
    A shared publisher-owned registration is **not provisioned in this
