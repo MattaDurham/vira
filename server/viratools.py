@@ -1181,6 +1181,20 @@ async def _t_configure_applications(args):
         _configure_applications_text, args.get("config_json")))
 
 
+async def _t_microsoft_setup(args):
+    from . import msgraphsetup
+    return _txt(json.dumps(await asyncio.to_thread(msgraphsetup.discover), ensure_ascii=False))
+
+
+async def _t_configure_microsoft(args):
+    try:
+        result = await asyncio.to_thread(msgraph.save_registration,
+                                        args.get("client_id", ""), args.get("tenant", ""))
+        return _txt(json.dumps(result))
+    except (ValueError, RuntimeError) as exc:
+        return _txt(f"error: {exc}")
+
+
 def _record_role_scores_text(scores_json):
     """The write path for job-role scores.
 
@@ -1400,6 +1414,12 @@ TOOL_SPECS = [
      "lists accepted employer-written remote territories; never infer it "
      "from a city.",
      {"config_json": str}, _t_configure_applications),
+    ("microsoft_setup",
+     "Check Microsoft registration and discover existing IDs in Vira backups and connected, model-readable vaults. Returns only IDs and source paths, never tokens or other configuration. Read only; coverage and incomplete scans are explicit.",
+     {}, _t_microsoft_setup),
+    ("configure_microsoft",
+     "Save an owner's Microsoft public-client registration through validated native setup. Preserve unrelated config. Refuse registration changes during sign-in or while Microsoft mailboxes exist. Does not sign in or grant consent; the owner uses Connect Microsoft in Config afterward.",
+     {"client_id": str, "tenant": str}, _t_configure_microsoft),
     ("record_role_scores",
      "File job-role scores into the candidate universe. Pass scores_json "
      "as a JSON ARRAY of objects: uid (the role's board uid, required), "
@@ -1453,6 +1473,7 @@ TOOL_NAMES = [f"mcp__vira__{name}" for name, *_ in TOOL_SPECS]
 # propose_idea is deliberately absent: it STAGES to a queue the owner must
 # approve, which is why it was safe to ship as a read-adjacent tool.
 WRITE_TOOLS = {
+    "mcp__vira__configure_microsoft",
     "mcp__vira__connect_data",
     "mcp__vira__vault_capture",
     "mcp__vira__vault_update",

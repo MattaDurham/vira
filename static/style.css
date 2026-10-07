@@ -6877,6 +6877,10 @@ a.rm-name:hover { color: var(--accent); }
 .graph-registration-field { display: flex; flex-direction: column; gap: 6px; flex: 1 1 250px; min-width: 0; }
 .graph-registration-field .search { width: 100%; min-width: 0; box-sizing: border-box; font-size: 16px; }
 .graph-registration .acct-form-out { overflow-wrap: anywhere; }
+.graph-connect-form { min-width: 0; overflow-wrap: anywhere; }
+.graph-connect-form .acct-form-out { overflow-wrap: anywhere; }
+.graph-connect-form .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.graph-connect-form .acct-form-row .search { min-width: 0; font-size: 16px; }
 
 
 @media (max-width: 1099px) {
