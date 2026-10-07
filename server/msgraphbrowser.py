@@ -28,7 +28,7 @@ _bindings = {}
 
 def origin(request):
     if request.url.hostname != "localhost" or request.url.scheme not in {"http", "https"}:
-        raise ValueError("For browser sign-in, open Vira on this computer at localhost. On a phone or another computer, use device login in Manual setup.")
+        raise ValueError("For browser sign-in, open Vira on this computer at localhost. On a phone or another computer, use device login in Advanced setup.")
     port = request.url.port or (443 if request.url.scheme == "https" else 80)
     if not 1 <= port <= 65535:
         raise ValueError("Invalid local Vira port.")
@@ -54,7 +54,7 @@ def check_local(request):
     except ValueError:
         local = False
     if not local:
-        raise ValueError("Open Vira at localhost on the computer running it to launch the system browser. Remote clients can use device login in Manual setup.")
+        raise ValueError("Open Vira at localhost on the computer running it to launch the system browser. Remote clients can use device login in Advanced setup.")
 
 
 def _key(cookie):
@@ -145,7 +145,7 @@ def _profile(access_token):
         profile = json.loads(response.read())
     email = str(profile.get("mail") or profile.get("userPrincipalName") or "").strip().lower()
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        raise RuntimeError("Microsoft did not return a mailbox address. Use device login with your mailbox email in Manual setup.")
+        raise RuntimeError("Microsoft did not return a mailbox address. Use device login with your mailbox email in Advanced setup.")
     return email
 
 

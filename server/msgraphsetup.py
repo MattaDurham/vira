@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import backup, msgraph, msgraphbrowser, systembrowser, vault
 
-PORTAL = "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+PORTAL = "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/CreateApplicationBlade/quickStartType~/null/isMSAApp~/false"
 
 
 def prepare():
@@ -124,7 +124,7 @@ never guess which tenant or app should get access. If the scan is incomplete,
 say so and ask the owner before choosing a candidate from an incomplete scan.
 If none exists, explain the remaining Microsoft step: an authorized person must
 create a public-client app in Microsoft Entra. Guide them through App registrations,
-delegated User.Read, Mail.ReadWrite and Calendars.Read, offline access, Authentication
+delegated User.Read, Mail.ReadWrite, Mail.Send and Calendars.Read, offline access, Authentication
 > Mobile and desktop applications > http://localhost/api/mail/graph/browser/callback,
 and Allow public client flows for the device fallback. No client secret is needed.
 Full Disk Access does not authorize Microsoft or create an Entra application.

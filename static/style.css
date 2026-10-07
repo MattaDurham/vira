@@ -6878,6 +6878,7 @@ a.rm-name:hover { color: var(--accent); }
 .graph-registration-field .search { width: 100%; min-width: 0; box-sizing: border-box; font-size: 16px; }
 .graph-registration .acct-form-out { overflow-wrap: anywhere; }
 .graph-connect-form { min-width: 0; overflow-wrap: anywhere; }
+.graph-connect-form [hidden] { display: none; }
 .graph-connect-form .acct-form-out { overflow-wrap: anywhere; }
 .graph-connect-form .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .graph-connect-form .acct-form-row .search { min-width: 0; font-size: 16px; }
@@ -8845,3 +8846,8 @@ mark.doc-term {
 .graph-setup-guide .hint, .graph-registration-choice, .graph-callback { overflow-wrap: anywhere; }
 .graph-callback { display: block; margin: .75rem 0; white-space: normal; }
 .graph-setup-guide input { font-size: 16px; min-width: 0; width: 100%; box-sizing: border-box; }
+.graph-setup-bullets { padding-left: 1.2rem; }
+.graph-setup-bullets li { margin: .6rem 0; overflow-wrap: anywhere; }
+.graph-copy-item { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.graph-copy-item > span { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.graph-copy-item .btn { flex: 0 1 auto; max-width: 100%; white-space: normal; }
