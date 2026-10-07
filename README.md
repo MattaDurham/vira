@@ -240,13 +240,16 @@ PC the wizard skips what does not exist there - see **Windows** above):
    Semantic indexing wants [Ollama](https://ollama.com) with `nomic-embed-text`
    pulled; without it the Brain still supports full-text search. Captures,
    plans, definitions, and ingested notes keep their selected destination.
-5. **Mail** - Gmail/IMAP: app password in the Keychain (service
-   `vira-mail`, account = the address), then add the account to
-   `data/mail-accounts.json`. Microsoft 365: IMAP basic auth is dead, so
-   use a Graph app registration in your own tenant (public client flows
-   enabled, delegated Mail + Calendars.Read with admin consent), set
-   `msgraph_client_id` / `msgraph_tenant`, and run the device login from
-   Settings > Connect M365.
+5. **Mail** - open Config > Connect mail and add a Gmail/IMAP or Microsoft
+   365 mailbox. Microsoft setup guides you through a one-time Entra app
+   registration, saves Application (client) ID and Directory (tenant) ID in
+   Vira, then starts device login. Enable public client flows and add
+   delegated `Mail.ReadWrite` (read mail/save drafts) and `Calendars.Read`;
+   your organization may require administrator consent. No client secret
+   or redirect URI is needed. Refresh tokens use the local secrets store;
+   registration IDs use private local configuration. An existing configured
+   registration is detected automatically. Changing it requires removing
+   Microsoft mailboxes first and finishing any pending login.
 6. **Config extras** - copy `config.example.json` to `data/config.json`
    for identity details: your name, the iMessage handle Vira texts
    notifications to, family calendar names. Every key is optional; an

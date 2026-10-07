@@ -8,7 +8,7 @@
   "_graph_email": "Default account for the Connect M365 button and the cockpit banner.",
   "msgraph_client_id": "",
   "msgraph_tenant": "",
-  "_msgraph": "Your own tenant's app registration for Microsoft Graph mail/calendar (public client flows enabled, device-code login). See README > Mail.",
+  "_msgraph": "Set these through Config > Connect mail > Microsoft 365. Vira guides app registration (public client flows, delegated Mail.ReadWrite and Calendars.Read) and saves both IDs here before device login.",
   "notify_handle": "",
   "_notify_handle": "iMessage handle Vira pings for high-value inbound email (your own self-thread number, e.g. +12125551234). Empty = notifications off.",
   "notify_enabled": true,
