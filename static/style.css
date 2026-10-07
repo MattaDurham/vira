@@ -6867,6 +6867,17 @@ a.rm-name:hover { color: var(--accent); }
 .acct-form-out a { color: var(--accent-bright); }
 .acct-code { font-family: var(--mono); letter-spacing: .12em; color: var(--text-bright); padding: 1px 6px; border: 1px solid var(--accent-line); border-radius: 4px; }
 .acct-form .hint { margin: 10px 0 0; }
+.graph-registration { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.graph-registration summary { cursor: pointer; color: var(--text-head); font-weight: 600; }
+.graph-registration-guide { margin: 12px 0; }
+.graph-registration-guide ol { padding-left: 22px; line-height: 1.6; }
+.graph-registration-guide li { margin: 8px 0; }
+.graph-registration a { color: var(--accent-bright); }
+.graph-registration-fields { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.graph-registration-field { display: flex; flex-direction: column; gap: 6px; flex: 1 1 250px; min-width: 0; }
+.graph-registration-field .search { width: 100%; min-width: 0; box-sizing: border-box; font-size: 16px; }
+.graph-registration .acct-form-out { overflow-wrap: anywhere; }
+
 
 @media (max-width: 1099px) {
   .dash-hero { padding: 14px 14px 12px; }

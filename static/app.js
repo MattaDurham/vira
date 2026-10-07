@@ -11354,6 +11354,8 @@ function graphReconnectForm(a) {
   f.appendChild(acts);
   const out = el("p", "acct-form-out"); out.hidden = true;
   f.appendChild(out);
+  btn.disabled = true;
+  f.insertBefore(graphRegistrationForm(ready => { btn.disabled = !ready; }), acts);
   btn.onclick = () => graphConnect(a.email, out, btn, () => refreshMail());
   f.appendChild(el("p", "hint",
     "A one-time device login: a code appears here, you approve it at "
@@ -11489,16 +11491,86 @@ function imapAddForm(st) {
   return f;
 }
 
+// Shared setup for first connection and reconnect: configuration stays in
+// Vira, with the one-time Microsoft registration explained before sign-in.
+function graphRegistrationForm(onReady) {
+  const box = el("details", "graph-registration");
+  const summary = el("summary", null, "Checking Microsoft app registration...");
+  box.appendChild(summary);
+  box.appendChild(el("p", "hint", "Microsoft requires an app registration before Vira can connect mail and calendar. Create it once in your Microsoft tenant, then save its two IDs here."));
+  const guide = el("details", "graph-registration-guide");
+  guide.appendChild(el("summary", null, "Create a Microsoft app registration"));
+  const steps = el("ol");
+  const first = el("li", null, "In Microsoft Entra, open App registrations > New registration. Name it Vira and select Accounts in this organizational directory only for your work mailbox. ");
+  const portal = el("a", null, "Open Microsoft Entra");
+  portal.href = "https://entra.microsoft.com/"; portal.target = "_blank"; portal.rel = "noopener";
+  first.appendChild(portal); steps.appendChild(first);
+  steps.appendChild(el("li", null, "Under Authentication, enable Allow public client flows and save. Device login does not need a client secret or redirect URI."));
+  steps.appendChild(el("li", null, "Under API permissions > Add a permission > Microsoft Graph > Delegated permissions, add Mail.ReadWrite and Calendars.Read. Vira uses these to read mail, save drafts, and read your calendar; they do not grant permission to send mail."));
+  steps.appendChild(el("li", null, "If your organization requires administrator consent or blocks app registration/device login, ask its Microsoft administrator to approve this setup."));
+  steps.appendChild(el("li", null, "Copy Application (client) ID and Directory (tenant) ID from Overview into the fields below. Save, then sign in with Microsoft."));
+  guide.appendChild(steps);
+  const docs = el("a", "hint", "Microsoft's registration guide");
+  docs.href = "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app";
+  docs.target = "_blank"; docs.rel = "noopener";
+  guide.appendChild(docs); box.appendChild(guide);
+  const fields = el("div", "graph-registration-fields");
+  const client = mkInput("text", "Application (client) ID");
+  const tenant = mkInput("text", "Directory (tenant) ID");
+  for (const [name, input] of [["Application (client) ID", client], ["Directory (tenant) ID", tenant]]) {
+    const label = el("label", "graph-registration-field", name);
+    input.disabled = true; label.appendChild(input); fields.appendChild(label);
+  }
+  box.appendChild(fields);
+  const acts = el("div", "acct-form-acts");
+  const save = el("button", "btn small", "Save Microsoft registration"); save.disabled = true;
+  acts.appendChild(save); box.appendChild(acts);
+  const out = el("p", "acct-form-out"); out.setAttribute("role", "status"); box.appendChild(out);
+  let saved = null;
+  const ready = () => !!saved && client.value.trim() === saved.client_id && tenant.value.trim() === saved.tenant;
+  const changed = () => {
+    onReady(ready());
+    if (!ready()) out.textContent = "Save these IDs before signing in.";
+  };
+  client.addEventListener("input", changed); tenant.addEventListener("input", changed);
+  function apply(st) {
+    saved = st.configured ? st : null;
+    client.value = st.client_id || ""; tenant.value = st.tenant || "";
+    summary.textContent = st.configured ? "Microsoft app registration saved" : "Set up Microsoft app registration";
+    box.open = !st.configured; guide.open = !st.configured;
+    out.textContent = st.configured ? "Registration saved. Sign in below to connect your mailbox." : st.error;
+    onReady(!!st.configured);
+  }
+  save.onclick = async () => {
+    save.disabled = true; onReady(false);
+    out.classList.remove("warn", "ok"); out.textContent = "Saving registration...";
+    try {
+      const st = await post("/api/mail/graph/registration", {client_id: client.value.trim(), tenant: tenant.value.trim()});
+      apply(st); box.open = true; guide.open = false; out.classList.add("ok");
+    } catch (e) {
+      out.classList.add("warn"); out.textContent = errText(e); onReady(ready());
+    } finally { save.disabled = false; }
+  };
+  api("/api/mail/graph/registration").then(apply).catch(e => {
+    box.open = true; guide.open = true;
+    out.textContent = "Could not check registration: " + errText(e);
+  }).finally(() => { client.disabled = false; tenant.disabled = false; save.disabled = false; });
+  return box;
+}
+
 function graphAddForm() {
   const f = el("div", "acct-form");
   f.dataset.kind = "graph";
   f.appendChild(el("div", "acct-form-title", "Connect Microsoft 365 / Outlook"));
   const r1 = el("div", "acct-form-row");
   const email = mkInput("email", "you@yourtenant.com");
+  email.setAttribute("aria-label", "Microsoft mailbox email");
   r1.appendChild(email);
   f.appendChild(r1);
   const acts = el("div", "acct-form-acts");
   const btn = el("button", "btn small primary", "Sign in with Microsoft");
+  btn.disabled = true;
+  f.insertBefore(graphRegistrationForm(ready => { btn.disabled = !ready; }), r1);
   acts.appendChild(btn);
   f.appendChild(acts);
   const out = el("p", "acct-form-out"); out.hidden = true;

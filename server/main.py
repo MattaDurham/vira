@@ -2711,6 +2711,26 @@ def api_set_send_channel(pid: str, req: SendChannelReq):
 
 # ---------- mail: M365 connect + drafts ----------
 
+class GraphRegistrationReq(BaseModel):
+    client_id: str
+    tenant: str
+
+
+@app.get("/api/mail/graph/registration")
+def api_graph_registration():
+    return msgraph.registration_status()
+
+
+@app.post("/api/mail/graph/registration")
+def api_graph_registration_save(req: GraphRegistrationReq):
+    try:
+        return msgraph.save_registration(req.client_id, req.tenant)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
 class GraphStartReq(BaseModel):
     email: str
 
@@ -2719,6 +2739,8 @@ class GraphStartReq(BaseModel):
 def api_graph_start(req: GraphStartReq):
     try:
         return msgraph.start_device_flow(req.email.strip().lower())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001 — surface the failure to the UI
         raise HTTPException(502, str(e)[:400])
 
