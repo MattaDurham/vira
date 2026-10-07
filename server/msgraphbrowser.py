@@ -27,7 +27,8 @@ def origin(request):
     port = request.url.port or (443 if request.url.scheme == "https" else 80)
     if not 1 <= port <= 65535:
         raise ValueError("Invalid local Vira port.")
-    return f"{request.url.scheme}://localhost:{port}"
+    suffix = "" if port == (443 if request.url.scheme == "https" else 80) else f":{port}"
+    return f"{request.url.scheme}://localhost{suffix}"
 
 
 def cookie_name(request):
@@ -99,7 +100,8 @@ def complete(request, state, code="", error="", error_description=""):
     key = _key(request.cookies.get(cookie_name(request)))
     with msgraph._registration_lock:
         flow = msgraph._flows.get(key)
-        if (not flow or not state or not secrets.compare_digest(flow.get("state", ""), state)
+        if (not flow or not re.fullmatch(r"[A-Za-z0-9_-]{43}", state)
+                or not secrets.compare_digest(flow.get("state", ""), state)
                 or flow.get("redeeming") or flow.get("consumed") or time.time() >= flow["expires_at"]):
             raise ValueError("Microsoft sign-in session is invalid or expired. Connect Microsoft again from the original Vira window.")
         flow["consumed"] = True
