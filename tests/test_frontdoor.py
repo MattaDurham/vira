@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import frontdoor, jobboards, readingroom
+from server import applications, frontdoor, jobboards, readingroom
 
 
 def item(title="A talk", url="https://example.com/a", **kw):
@@ -193,7 +193,12 @@ class FrontDoorStateTest(unittest.TestCase):
                     self.assertTrue(q.get("options"))
 
     def test_state_never_leaks_the_probe_callable(self):
-        st = frontdoor.state()
+        # the applications probe resolves the self record, and in fixture
+        # mode that seeds a CRM copy into the checkout's data/
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(applications, "self_record",
+                                  return_value=Path(tmp) / "self"):
+            st = frontdoor.state()
         for m in st["modules"]:
             self.assertNotIn("probe", m)
             self.assertIn("ready", m)
