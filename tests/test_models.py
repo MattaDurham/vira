@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import models
+from tests.model_ledgers import pin_model_ledgers
 
 
 def _fake_bin(dirpath, name):
@@ -608,6 +609,9 @@ class ApiOnlyProviderTest(unittest.TestCase):
 class ApiOnlyDraftRoutingTest(unittest.TestCase):
     """suggest._run: an API-only provider always takes the API path, and a
     missing key fails honestly instead of silently switching providers."""
+
+    def setUp(self):
+        pin_model_ledgers(self)
 
     def _cfg(self, pid):
         from server import suggest

@@ -290,8 +290,14 @@ class Destinations(unittest.TestCase):
         response = client.post("/api/reading/rooms/garden/destination", json={"destination": "household"})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["source_id"], "household")
-        ingested = client.post("/api/reading/rooms/garden/ingest", json={"destination": "household"})
+        # The endpoint kicks staging on a daemon thread that outlives this
+        # case: unheld, it fetched the item's URL and, once the patches
+        # above were undone, locked the real data/reading/. The kick is the
+        # endpoint's contract; staging itself is pinned in test_fullingest.
+        with mock.patch.object(fullingest, "sync") as kick:
+            ingested = client.post("/api/reading/rooms/garden/ingest", json={"destination": "household"})
         self.assertEqual(ingested.status_code, 200, ingested.text)
+        kick.assert_called_once_with("garden", destination="household")
         self.assertTrue(list(self.extra.rglob("*.md")))
 
 

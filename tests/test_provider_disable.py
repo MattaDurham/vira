@@ -31,6 +31,7 @@ from unittest import mock
 
 from server import agentbackend, aihealth, models, session, settings
 from server import suggest, virachat
+from tests.model_ledgers import pin_model_ledgers
 
 
 def _all_signed_in():
@@ -156,6 +157,10 @@ class SessionsRefuseByName(_Pinned):
 
 
 class DraftsRefuseBeforeAnyCall(_Pinned):
+    def setUp(self):
+        super().setUp()
+        pin_model_ledgers(self)
+
     def test_effective_backend_refuses_a_disabled_go_to(self):
         cfg = {"ai_backend": "cli", "ai_provider": "google"}
         self.disable("google")

@@ -13,8 +13,10 @@ web or spawn a subagent purely because of what happened to its output.
 Run: .venv/bin/python -m unittest discover tests
 """
 import re
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from server import circuits, plans
 
@@ -176,6 +178,17 @@ class PlanShapeIsStatedOnce(unittest.TestCase):
 
 
 class PublishingIsNotAPermission(unittest.TestCase):
+    def setUp(self):
+        # The starters as shipped, not as this install has edited them:
+        # get_circuit seeds and reconciles the Flow store it reads, and
+        # unpinned that store is the checkout's data/circuits.json.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patch = mock.patch.object(circuits, "DEFS",
+                                  Path(tmp.name) / "circuits.json")
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_the_starters_plan_step_stays_read_only_by_its_own_choice(self):
         """Decoupling did not loosen the starters: their plan step still
         declares read_only, which is now a separate, visible decision."""

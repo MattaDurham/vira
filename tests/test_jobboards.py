@@ -196,6 +196,11 @@ class PollDiffAndNotify(unittest.TestCase):
                               return_value=self.dir),
             mock.patch.object(applications, "load_universe",
                               return_value=[]),
+            # ...and the score prompt names the owner's canon, so the self
+            # record is pinned too: unpinned it is the real CRM, or in
+            # fixture mode a copy seeded into the checkout's data/.
+            mock.patch.object(applications, "self_record",
+                              return_value=self.dir / "self"),
         ]
         for p in patches:
             p.start()
