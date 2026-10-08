@@ -113,7 +113,9 @@ Local-first by design, with every egress path named and opt-in:
   universe with live board polling, scoring dispatches, and one-click
   application-package agent sessions (draft-only; you submit by hand).
 - Plus a **System Map** (a live module atlas the app keeps current about
-  itself) and a **Design Studio** (edit the app's design tokens against
+  itself), **Maps** (ask for a map of anything and a session researches
+  it and draws it in the System Map's layered style, refreshable on
+  demand) and a **Design Studio** (edit the app's design tokens against
   the running app, save straight to the stylesheet).
 
 ## Quickstart (macOS)
