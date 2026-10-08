@@ -27,7 +27,7 @@ const context=vm.createContext({el:(...args)=>new Element(...args),$:id=>nodes[i
   backendBlock:()=>{},provCard:()=>{},cardNotifications:()=>{},cardUpdates:()=>{},openFirstrun:()=>{},
   connectionSection:(host,title,text,render)=>{const d=new Element('details','',title);d.appendChild(new Element('p','',text));render(d);host.appendChild(d);},
   loadCompanion:()=>Promise.resolve(),companionPairStart:()=>{},copyText:()=>{},toast:()=>{},
-  window:{open(){}},fmtTime:()=>'',confirm:()=>false,del:()=>Promise.resolve(),
+  window:{open(){}},URL,fmtTime:()=>'',confirm:()=>false,del:()=>Promise.resolve(),
 });
 function section(first,last){const a=app.indexOf(first),b=app.indexOf(last,a);assert(a>=0&&b>a);return app.slice(a,b);}
 vm.runInContext(section('const DASH_NOUNS =','// ---- step cards'),context);
@@ -58,6 +58,10 @@ assert.match(phoneCard.textContent,/No phone pairing is needed/);
 assert.match(phoneCard.textContent,/Android phone \(optional\)/);
 assert.match(phoneCard.textContent,/Tailscale/);
 assert(!phoneCard.textContent.includes('WhatsApp'),'independent source is not duplicated inside the phone card');
+context.setupExtra.companion.hub_url='http://192.168.1.20:8377';
+const localPhoneCard=new Element('div');context.cardChannels(localPhoneCard);
+assert.match(localPhoneCard.textContent,/Same Wi-Fi address/);
+assert.match(localPhoneCard.textContent,/reopen this card to get your Tailscale address/);
 context.renderCompanion({devices:[]});
 assert(!nodes['#companion-body'].textContent.includes('No phone'));
 assert.match(nodes['#companion-body'].textContent,/For Android SMS/);

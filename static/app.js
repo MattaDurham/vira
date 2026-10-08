@@ -15640,15 +15640,22 @@ function cardChannels(card) {
     "Open Vira in Safari or Chrome on either iPhone or Android. Tailscale lets your phone reach this computer away from home; it is not needed to read iPhone messages on this Mac.", (body) => {
       const url = setupExtra?.companion?.hub_url;
       const usableUrl = url && !/^https?:\/\/localhost[:/]/.test(url);
+      let localAddress = false;
+      try {
+        const host = new URL(url).hostname;
+        localAddress = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[f[cd]|\[fe80:)/.test(host)
+          || host.endsWith(".local");
+      } catch { /* No address has been detected yet. */ }
       if (usableUrl) {
-        body.appendChild(el("p", "hint data-connection-path", "Phone address: " + url));
+        body.appendChild(el("p", "hint data-connection-path", (localAddress ? "Same Wi-Fi address: " : "Phone address: ") + url));
         const copy = el("button", "btn", "Copy phone address");
         copy.onclick = () => { copyText(url); toast("Phone address copied"); };
         body.appendChild(copy);
       }
       const list = el("ol", "setup-steps");
       ["For remote access, install Tailscale on this computer and your phone, then sign both into the same Tailscale account.",
-       usableUrl ? "With Tailscale connected on both devices, open the phone address above in the phone browser. A local network address works only on the same Wi-Fi."
+       localAddress ? "The address above works on the same Wi-Fi. For access away from home, connect Tailscale and reopen this card to get your Tailscale address."
+         : usableUrl ? "Open the phone address above in the phone browser. Keep Tailscale connected on both devices when away from home."
          : "After connecting Tailscale, reopen this card to see your phone address. Open that address in the phone browser.",
        "You can add Vira to the phone's Home Screen. Android SMS pairing is a separate, optional connection."].forEach((text) => list.appendChild(el("li", "", text)));
       body.appendChild(list);
