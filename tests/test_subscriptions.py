@@ -448,51 +448,37 @@ class RenewalPings(FrozenClockCase):
         self.assertEqual(first, 0)
 
 
-class FixtureMode(FrozenClockCase):
-    def _seed_and_reconcile(self, date_cls):
-        """Seed the demo stores into a temp dir with the clock pinned to
-        date_cls.today() and return the reconcile keyed by merchant id."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(settings, "fixture_mode",
-                                   return_value=True), \
-                 mock.patch.object(subscriptions, "REGISTRY",
-                                   Path(tmp) / "subscriptions.json"), \
-                 mock.patch.object(subscriptions, "LEDGER",
-                                   Path(tmp) / "subs-ledger.sqlite"), \
-                 mock.patch.object(subscriptions, "date", date_cls):
-                r = subscriptions.reconcile()
-        return {m["id"]: m for m in r["merchants"]}
+class EmptyInstall(FrozenClockCase):
+    def test_old_demo_rows_are_hidden_without_deleting_real_history(self):
+        conn = subscriptions.ledger_connect(":memory:")
+        self.addCleanup(conn.close)
+        reg = {"merchants": [
+            {"id": "demo", "display_name": "Demo"},
+            {"id": "real", "display_name": "Real"}]}
+        subscriptions.upsert_charge(conn, "demo", 12, "2026-07-01", "fx-1", source="fixture")
+        subscriptions.upsert_charge(conn, "real", 20, "2026-07-01", "fx-2", source="fixture")
+        subscriptions.upsert_charge(conn, "real", 30, "2026-07-01", "real-1")
+        conn.execute("INSERT INTO evidence (merchant_id,kind,date,account,message_ref) "
+                     "VALUES (?,?,?,?,?)", ("demo", "receipt", "2026-07-01", "demo@fixture", "fixture"))
+        conn.execute("INSERT INTO evidence (merchant_id,kind,date,account,message_ref) "
+                     "VALUES (?,?,?,?,?)", ("real", "receipt", "2026-07-01", "demo@fixture", "fixture"))
+        result = subscriptions.reconcile(conn, registry=reg)
+        self.assertEqual([m["id"] for m in result["merchants"]], ["real"])
+        self.assertEqual(result["merchants"][0]["last_charge"]["amount"], 30)
+        history = subscriptions.merchant_evidence("real", conn)
+        self.assertEqual([c["amount"] for c in history["charges"]], [30])
+        self.assertEqual(history["evidence"], [])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM charges").fetchone()[0], 3)
 
-    def _assert_demo_shapes(self, by_id, today):
-        self.assertEqual(len(by_id), 5)
-        quill = by_id["quill-notes"]                # receipt-driven renewal
-        self.assertEqual(quill["renewal_source"], "receipt")
-        self.assertLessEqual(
-            (date.fromisoformat(quill["next_renewal"]) - today).days, 7)
-        hexa = by_id["hexagon-ai"]                  # streams + both chip states
-        self.assertEqual(hexa["monthly"], 41.0)
-        kinds = [e["kind"] for e in hexa["evidence_needed"]]
-        self.assertIn("anomaly_explained", kinds)
-        self.assertIn("anomalous_charge", kinds)
-        self.assertIn("possibly_canceled", by_id["photon-vpn"]["flags"])
-        self.assertIn("cadence_conflict", by_id["datastream"]["flags"])
-
-    def test_fresh_clone_seeds_demo_stores(self):
-        self._assert_demo_shapes(self._seed_and_reconcile(_FrozenDate), TODAY)
-
-    def test_seed_shapes_hold_on_any_calendar_day(self):
-        """The fixture's days_ago offsets slide against the calendar-month
-        grid the engine buckets by, so the demo shapes must survive EVERY
-        seed date, not just mid-month ones (the original offsets read
-        hexagon-ai as "unclear" on days 1-5 and 21-31 of any month). Sweep
-        fourteen consecutive months — every day-of-month across all four
-        month lengths, including a leap February."""
-        day, end = date(2027, 1, 1), date(2028, 3, 1)
-        while day <= end:
-            with self.subTest(seed_date=day.isoformat()):
-                self._assert_demo_shapes(
-                    self._seed_and_reconcile(_frozen_date_cls(day)), day)
-            day += timedelta(days=1)
+    def test_fresh_install_has_no_placeholder_subscriptions(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(settings, "fixture_mode", return_value=True), \
+             mock.patch.object(subscriptions, "REGISTRY", Path(tmp) / "subscriptions.json"), \
+             mock.patch.object(subscriptions, "LEDGER", Path(tmp) / "subs-ledger.sqlite"):
+            result = subscriptions.reconcile()
+            self.assertEqual(result["merchants"], [])
+            self.assertIsNone(result["data_through"])
+            self.assertFalse(subscriptions.REGISTRY.exists())
 
 
 class GroupingAndIngest(FrozenClockCase):

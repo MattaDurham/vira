@@ -12,8 +12,9 @@ time:
   1. In Mercury (app.mercury.com) -> Settings -> API Tokens, create a token
      with READ ONLY permission. Read-only tokens cannot send money, create
      transfers, or manage recipients, and need no IP allowlist.
-  2. Store it in the macOS Keychain (never in a file):
-       security add-generic-password -U -a mercury -s vira-mercury -w
+  2. Open Config > Banking in Vira, paste the token in the secure form,
+     and confirm Read Only permissions. Vira validates read access before
+     saving it through the platform credential store.
 
 The poller self-heals within a minute of the token landing — no restart.
 Poll cadence: config "mercury_poll_hours" (default 6) — subscriptions move
@@ -27,7 +28,7 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timezone
 
-from . import secrets, settings, subscriptions
+from . import instance, secrets, settings, subscriptions
 
 API = "https://api.mercury.com/api/v1"
 PAGE = 500
@@ -41,7 +42,11 @@ SKIP_COUNTERPARTIES = {"mercury credit"}
 
 
 def keychain_service():
-    return settings.keychain_service("vira-mercury")
+    # Branch previews must never replace the primary bank token through Config.
+    service = "vira-mercury"
+    if instance.is_branch():
+        service += "-" + instance.id().replace(":", "-")
+    return settings.keychain_service(service)
 
 
 def keychain_token():

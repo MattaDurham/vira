@@ -13347,9 +13347,19 @@ const subDate = (iso) => new Date(iso + "T12:00:00").toLocaleDateString(
   "en-US", { month: "short", day: "numeric" });
 
 async function loadSubs() {
-  subsData = await api("/api/subs");
+  const [ledger, banking] = await Promise.all([api("/api/subs"), api("/api/banking")]);
+  subsData = { ...ledger, banking };
   renderSubs();
 }
+
+async function openBankingConfig() {
+  setupActive = "banking";
+  openApp("setup");
+  await loadSetup();
+  dashJump("banking");
+}
+
+$("#subs-config")?.addEventListener("click", () => openBankingConfig().catch((e) => toast(errText(e))));
 
 function subDaysUntil(iso) {
   return Math.round((new Date(iso + "T12:00:00") - Date.now()) / 86400000);
@@ -13630,6 +13640,24 @@ function renderSubs() {
   root.innerHTML = "";
   const { merchants, kpis } = subsData;
 
+  const refresh = $("#subs-refresh");
+  if (refresh) refresh.hidden = !subsData.banking?.mercury?.configured;
+  if (!merchants.length) {
+    const intro = el("div", "setup-card");
+    intro.appendChild(el("p", null,
+      "Track recurring charges, estimate monthly spending, spot price changes and upcoming renewals, and match charges to email receipts."));
+    intro.appendChild(el("p", "hint", subsData.banking?.mercury?.configured
+      ? "Mercury is configured. Charges will appear after the first successful sync."
+      : "Connect a bank in Config to start building your subscription ledger."));
+    if (subsData.banking?.mercury?.configured && subsData.poller)
+      intro.appendChild(el("p", "hint", "Mercury: " + subsData.poller));
+    const config = el("button", "btn primary", "Open banking config");
+    config.onclick = () => openBankingConfig().catch((e) => toast(errText(e)));
+    intro.appendChild(config);
+    root.appendChild(intro);
+    return;
+  }
+
   const kpi = el("div", "sub-kpis");
   const k1 = el("div", "sub-kpi");
   k1.appendChild(el("div", "sub-kpi-num", subMoney(kpis.monthly_run_rate)));
@@ -13744,7 +13772,7 @@ document.getElementById("subs-refresh")?.addEventListener("click", async (e) => 
   btn.disabled = true;
   btn.textContent = "Polling…";
   try {
-    subsData = await post("/api/subs/refresh", {});
+    subsData = { ...await post("/api/subs/refresh", {}), banking: subsData?.banking };
     renderSubs();
     toast(`Mercury polled — ${subsData.ingested} charge${subsData.ingested === 1 ? "" : "s"} ingested`);
   } catch (err) {
@@ -13818,14 +13846,15 @@ async function loadSetup() {
 // sublines and the cards' first paint. Update is the un-fetched (local sha)
 // call; the slow network fetch only runs when the owner opens the card.
 async function loadSetupExtra() {
-  const [notify, companion, update, config, connections] = await Promise.all([
+  const [notify, companion, update, config, connections, banking] = await Promise.all([
     api("/api/notify").then((r) => r.config).catch(() => null),
     api("/api/companion/status").catch(() => null),
     api("/api/update").catch(() => null),
     api("/api/config").catch(() => null),
     api("/api/data/connections").catch((e) => ({ error: errText(e) })),
+    api("/api/banking").catch((e) => ({ error: errText(e) })),
   ]);
-  return { notify, companion, update, config, connections };
+  return { notify, companion, update, config, connections, banking };
 }
 
 function pollSetup() {
@@ -14055,7 +14084,12 @@ function renderSetup(flow, st) {
     { title: "Your data",
       rows: [{ id: "connections", title: "Storage & connections", state: "manage",
         sub: "CRM, self record and Reader folders", render: cardDataConnections },
-        ...["disk", "contacts", "dossiers", "brain", "mail"].map(stepRow).filter(Boolean)] },
+        ...["disk", "contacts", "dossiers", "brain", "mail"].map(stepRow).filter(Boolean),
+        { id: "banking", title: "Banking", state: x.banking?.mercury?.configured ? "done" : "todo",
+          sub: x.banking?.error ? "Status unavailable: " + x.banking.error
+            : x.banking?.mercury?.configured ? "Mercury token configured"
+            : "Connect a read-only transaction feed for Subscriptions",
+          render: cardBanking }] },
     { title: "Channels", rows: [manageRow("channels")] },
     { title: "Notifications", rows: [manageRow("notifications")] },
     { title: "System", rows: [
@@ -14194,6 +14228,77 @@ function dashRow(r, flow, st) {
 }
 
 // ---- step cards --------------------------------------------------------
+
+function cardBanking(card) {
+  const state = setupExtra?.banking;
+  card.appendChild(el("p", "hint",
+    "Connect bank transactions to discover recurring charges and track subscription renewals. Mercury is supported directly. Vira can guide setup for another bank."));
+  if (state?.error) card.appendChild(el("p", "hint", "Banking status unavailable: " + state.error));
+  if (state?.mercury?.configured) {
+    card.appendChild(el("p", "setup-ok", "Mercury token configured"));
+    card.appendChild(el("p", "hint", "Feed: " + (state.poller || "waiting for sync")));
+    const disconnect = el("button", "btn", "Disconnect Mercury");
+    disconnect.onclick = () => setupAct(disconnect,
+      () => api("/api/banking/mercury", { method: "DELETE" }),
+      () => "Mercury disconnected. Existing subscription history is retained.");
+    card.appendChild(disconnect);
+  }
+  const details = el("details", "");
+  details.open = !state?.mercury?.configured;
+  details.appendChild(el("summary", "", state?.mercury?.configured ? "Replace Mercury token" : "Connect Mercury"));
+  const instructions = el("p", "hint",
+    "In Mercury, open your organization > All Settings > Tokens and create a Read Only API token. You may need an admin to grant access. ");
+  const docs = el("a", "", "Mercury setup instructions");
+  docs.href = "https://docs.mercury.com/docs/getting-started";
+  docs.target = "_blank"; docs.rel = "noopener noreferrer";
+  instructions.appendChild(docs);
+  details.appendChild(instructions);
+  const form = el("form", "fd-form banking-form");
+  const label = el("label", "banking-label", "Mercury API token");
+  const token = el("input", "fd-input banking-input");
+  token.type = "password"; token.autocomplete = "new-password"; token.required = true;
+  token.setAttribute("aria-label", "Mercury API token");
+  label.appendChild(token); form.appendChild(label);
+  const permission = el("label", "");
+  const readOnly = el("input", ""); readOnly.type = "checkbox"; readOnly.required = true;
+  permission.append(readOnly, document.createTextNode(" I created this token with Read Only permissions."));
+  form.appendChild(permission);
+  form.appendChild(el("p", "hint",
+    "Vira checks account and transaction access, then saves the token in the system credential store (or its protected local fallback). The token is never sent to the setup session. Permission scope is confirmed by you in Mercury."));
+  const result = el("p", "hint"); result.setAttribute("role", "status");
+  const connect = el("button", "btn primary", "Verify and connect Mercury"); connect.type = "submit";
+  form.append(connect, result);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (connect.disabled) return;
+    connect.disabled = true; result.textContent = "Verifying read access...";
+    try {
+      const saved = await post("/api/banking/mercury", { token: token.value.trim(), read_only: readOnly.checked });
+      token.value = "";
+      toast("Mercury connected. Token stored in " + saved.storage + ". The feed will sync shortly.");
+      await loadSetup();
+      if (subsData) await loadSubs();
+    } catch (e2) { token.value = ""; result.textContent = errText(e2); }
+    finally { connect.disabled = false; }
+  };
+  details.appendChild(form); card.appendChild(details);
+
+  card.appendChild(el("h3", "", "Bank setup session"));
+  card.appendChild(el("p", "hint",
+    "Vira asks which service and accounts you use, checks the official API options, and walks you through getting access. Mercury guidance is built in. Chase can connect through Plaid OAuth, but Vira needs a new connector and Plaid production approval before it can sync Chase transactions."));
+  const service = el("input", "fd-input banking-input"); service.type = "text";
+  service.placeholder = "Bank or service (optional)";
+  service.setAttribute("aria-label", "Bank or service for the setup session");
+  card.appendChild(service);
+  const interview = el("button", "btn", "Start bank setup session");
+  interview.onclick = () => setupAct(interview, async () => {
+    const started = await post("/api/banking/setup", { service: service.value.trim() });
+    openSession(started.job_id);
+    refreshJobs?.().catch(() => {});
+    return started;
+  }, () => "Bank setup session started", { refresh: false });
+  card.appendChild(interview);
+}
 
 // Where a pasted key actually lands (server/secrets.py ladder), said in the
 // platform's own words so the promise is checkable. st.platform uses the

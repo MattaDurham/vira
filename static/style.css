@@ -7289,6 +7289,9 @@ a.rm-name:hover { color: var(--accent); }
 
 /* the interview */
 .fd-form { margin-top: 4px; max-width: 62ch; }
+.banking-label { display: block; margin: 10px 0; }
+.banking-input { font-size: 16px; min-width: 0; box-sizing: border-box; margin: 6px 0 10px; }
+.banking-form input[type="checkbox"] { width: auto; margin-right: 6px; }
 .fd-q { margin-bottom: 15px; }
 .fd-q-label {
   display: block; font-size: 13.5px; font-weight: 600;
