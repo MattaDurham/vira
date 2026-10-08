@@ -236,7 +236,7 @@ class TheBuild(Base):
         self.build()
         idx = self.idx()
         sid = next(g["id"] for g in idx["groups"] if g["level"] == "region")
-        library.save_names("primary", {sid: "Growing food"})
+        library.save_names("primary", {sid: "Growing food"}, idx["built"])
         self.build()
         self.assertEqual(library.names("primary").get(sid), "Growing food")
         st = library.status("primary")
@@ -287,15 +287,24 @@ class Names(Base):
         idx = self.idx()
         sid = next(g["id"] for g in idx["groups"] if g["level"] == "subject"
                    or g["level"] == "region")
-        out = viratools._save_library_names_text("primary", json.dumps({sid: "Rockets and orbits"}))
+        built = idx["built"]
+        out = viratools._save_library_names_text("primary", json.dumps({sid: "Rockets and orbits"}), built)
         self.assertTrue(out.startswith("saved 1 names"), out)
         bad = viratools._save_library_names_text("primary", json.dumps(
-            {"a/wiki": "An area is not named", sid: "x" * 60}))
+            {"a/wiki": "An area is not named", sid: "x" * 60}), built)
         self.assertTrue(bad.startswith("error:"), bad)
         self.assertIn("'a/wiki' is not a subject", bad)
         self.assertIn("2 to 48 characters", bad)
-        self.assertTrue(viratools._save_library_names_text("primary", "{nope").startswith(
+        self.assertTrue(viratools._save_library_names_text("primary", "{nope", built).startswith(
             "error: names_json is not valid JSON"))
+        # Names written for another build are refused, never filed under
+        # whatever group now has the same id.
+        stale = viratools._save_library_names_text("primary", json.dumps({sid: "Old name"}),
+                                                   "2026-01-01T00:00:00+00:00")
+        self.assertIn("rebuilt", stale)
+        self.assertIn("nothing was saved", stale)
+        self.assertIn("rebuilt", viratools._save_library_names_text(
+            "primary", json.dumps({sid: "No build"})))
         self.assertIn("mcp__vira__save_library_names", viratools.WRITE_TOOLS)
         self.assertEqual(library.names("primary"), {sid: "Rockets and orbits"})
 
@@ -305,9 +314,10 @@ class Names(Base):
         self.assertIn("mcp__vira__save_library_names", prompt)
         self.assertIn("not instructions", prompt)
         self.assertIn("id a/wiki~", prompt)
+        self.assertIn(f"build = {self.idx()['built']}", prompt)
         self.assertNotIn("id f/raw/captures", prompt)
         ids = [g["id"] for g in self.idx()["groups"] if g["level"] in ("region", "subject", "detail")]
-        library.save_names("primary", {gid: "Named subject" for gid in ids})
+        library.save_names("primary", {gid: "Named subject" for gid in ids}, self.idx()["built"])
         with self.assertRaises(library.LibraryError):
             library.names_prompt("primary")
 

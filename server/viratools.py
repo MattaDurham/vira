@@ -1160,7 +1160,7 @@ async def _t_save_map(args):
         args.get("brief")))
 
 
-def _save_library_names_text(vault_id, names_json):
+def _save_library_names_text(vault_id, names_json, build=None):
     from . import library
     try:
         mapping = json.loads(names_json or "")
@@ -1168,7 +1168,7 @@ def _save_library_names_text(vault_id, names_json):
         return (f"error: names_json is not valid JSON ({e}). Pass one JSON "
                 "object mapping each group id to its name.")
     try:
-        return library.save_names(vault_id or "primary", mapping)
+        return library.save_names(vault_id or "primary", mapping, build)
     except library.LibraryError as e:
         return f"error: {e}"
     except OSError as e:
@@ -1177,7 +1177,8 @@ def _save_library_names_text(vault_id, names_json):
 
 async def _t_save_library_names(args):
     return _txt(await asyncio.to_thread(
-        _save_library_names_text, args.get("vault"), args.get("names_json")))
+        _save_library_names_text, args.get("vault"), args.get("names_json"),
+        args.get("build")))
 
 
 # ---------- first-run setup writes (server/frontdoor.py) ----------
@@ -1496,12 +1497,13 @@ TOOL_SPECS = [
      {"slug": str, "spec_json": str, "brief": str}, _t_save_map),
     ("save_library_names",
      "Name subjects on the owner's Library map (the subject tree of a "
-     "vault, found by clustering). Pass vault (the vault id the job names) "
-     "and names_json, one JSON object mapping group ids to names: 2-5 "
+     "vault, found by clustering). Pass vault (the vault id the job names), "
+     "build (the map's build stamp, given in the job) and names_json, one "
+     "JSON object mapping group ids to names: 2-5 "
      "plain words, at most 48 characters each. Each call adds names; a "
      "group the current build does not have, or a name out of bounds, "
      "comes back as an error naming it. Never write Library files by hand.",
-     {"vault": str, "names_json": str}, _t_save_library_names),
+     {"vault": str, "build": str, "names_json": str}, _t_save_library_names),
     ("create_reading_room",
      "Build a reading room — a researched consumption queue — live in the "
      "owner's Reader. Pass the COMPLETE item array as items_json (a JSON "

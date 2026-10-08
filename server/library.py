@@ -1445,11 +1445,14 @@ def names_prompt(vault_id, machine=False):
         "found. Siblings under the same parent must be told apart. A group "
         "that is honestly a mix gets a name that says so (for example "
         "'Mixed: energy and aerials').\n\n"
-        f"Call mcp__vira__save_library_names with vault = {vault_id} and "
+        f"Call mcp__vira__save_library_names with vault = {vault_id}, "
+        f"build = {idx['built']} (the subject map these ids belong to), and "
         "names_json = one JSON object mapping each group id to its name. "
         "You may call it more than once; each call adds names. It "
         "validates every name; if it returns an error, fix the names it "
-        "lists and call again. Do not write any file and change nothing "
+        "lists and call again - except when it says the map was rebuilt: "
+        "then stop, because these ids no longer name these groups. Do not "
+        "write any file and change nothing "
         "else. When it reports success, say in one sentence how many you "
         "named.\n\n"
         + (f"{left} smaller groups did not fit in this job; they keep their "
@@ -1457,11 +1460,22 @@ def names_prompt(vault_id, machine=False):
         + "GROUPS\n\n" + "\n\n".join(blocks))
 
 
-def save_names(vault_id, mapping):
-    """Validate and store subject names. Returns a sentence for the tool."""
+def save_names(vault_id, mapping, build):
+    """Validate and store subject names. Returns a sentence for the tool.
+
+    `build` is the build stamp the naming job was given. A group id is a
+    position in one build's tree ("a/wiki~0.3"); after a rebuild the same
+    id can name a different group, so names for any other build are
+    refused, never filed under the wrong box."""
     if not isinstance(mapping, dict) or not mapping:
         raise LibraryError("names_json must be a JSON object of group id -> name")
     idx = _need(vault_id)
+    if str(build or "") != idx["built"]:
+        raise LibraryError(
+            "the subject map was rebuilt after this job was written (build "
+            f"{build or 'missing'}, now {idx['built']}), so these ids may name "
+            "other groups: nothing was saved. Stop here; naming can be run "
+            "again on the new map.")
     valid = {g["id"] for g in idx["groups"] if g["level"] in SEMANTIC}
     clean, problems = {}, []
     for gid, name in mapping.items():
