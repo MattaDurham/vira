@@ -243,3 +243,14 @@ class TheSunStaysOnTheStageAndCardsStayClickable(unittest.TestCase):
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         self.assertIn("orbits layout harness: ok", result.stdout)
+
+    def test_refresh_follows_the_real_load_and_poll_path(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed here; the harness needs it")
+        result = subprocess.run([node, "tests/orbits_refresh_harness.mjs"], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("orbits refresh harness: ok", result.stdout)
