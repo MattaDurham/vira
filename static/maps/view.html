@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vira map</title>
+<!-- The shared renderer for Vira maps (server/maps.py): one layered diagram
+     per spec, drawn live from GET /api/maps/<slug>. ?m=<slug> picks the map
+     (default: the built-in system map); #<box-id> opens on one box. Every
+     string from the spec goes in through textContent - map text is written
+     by a session and can quote the web. -->
+<style>
+  :root {
+    --bg: #0b0d10; --surface: #14171c; --surface-2: #1c2027;
+    --border: #262b33; --text: #e6e8eb; --dim: #9aa3ad; --gold: #d9b64a;
+    --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          sans-serif;
+    padding: 0 20px 56px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  header { padding: 22px 0 6px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 18px; margin: 38px 0 12px; }
+  h3 { font-size: 15px; margin: 22px 0 10px; color: var(--dim);
+       text-transform: uppercase; letter-spacing: 0.07em; font-weight: 500; }
+  p { max-width: 74ch; }
+  .lead { font-size: 16.5px; color: var(--dim); margin: 0 0 8px; }
+  .meta { color: var(--dim); font-size: 12.5px; margin: 0 0 4px; }
+  .meta q { color: var(--text); }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--surface-2);
+         border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 12px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px;
+    border-radius: 999px; font-size: 12.5px; background: var(--surface-2);
+    color: var(--dim); border: 1px solid var(--border); cursor: pointer;
+    font: inherit; font-size: 12.5px;
+  }
+  .badge:hover, .badge.on { color: var(--text); border-color: var(--gold); }
+  .badge i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  .mapframe {
+    background: #101216; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px; overflow-x: auto;
+  }
+  .mapframe svg { display: block; width: 100%; height: auto; margin: 0 auto; }
+  .mapnode { cursor: pointer; outline: none; }
+  .mapnode rect { fill: var(--surface); stroke-width: 1;
+                  transition: opacity 0.12s; }
+  .mapnode text { fill: var(--text); font-size: 12.5px; pointer-events: none; }
+  .mapnode text.kind { fill: var(--dim); font-size: 9.5px; }
+  .mapnode.dim { opacity: 0.22; }
+  .mapnode.sel rect, .mapnode:focus-visible rect { stroke-width: 2; }
+  .mapedge { fill: none; stroke: #8891a0; stroke-opacity: 0.13;
+             stroke-width: 1.2; transition: stroke-opacity 0.12s; }
+  .mapedge.lit { stroke-opacity: 0.85; stroke-width: 1.6; }
+  .mapedge.dim { stroke-opacity: 0.04; }
+  .colhead { fill: var(--dim); font-size: 10.5px; letter-spacing: 0.09em;
+             text-transform: uppercase; }
+  figcaption { color: var(--dim); font-size: 12.5px; margin-top: 10px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border);
+          border-radius: var(--radius); padding: 16px 18px; }
+  #detail { margin-top: 14px; }
+  #detail h4 { margin: 0 0 2px; font-size: 17px; }
+  .kindline { color: var(--dim); font-size: 11.5px; text-transform: uppercase;
+              letter-spacing: 0.06em; margin-bottom: 8px; }
+  #detail p { margin: 0 0 10px; color: var(--text); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    padding: 2px 10px; border: 1px solid var(--border); border-radius: 999px;
+    font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer;
+    background: var(--surface-2); text-align: left;
+  }
+  .chip:hover { color: var(--text); border-color: var(--gold); }
+  .chip b { color: var(--text); font-weight: 500; }
+
+  .grid { display: grid; gap: 12px;
+          grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
+  .dir-card { cursor: pointer; padding: 14px 16px; }
+  .dir-card:hover { border-color: var(--gold); }
+  .dir-card h4 { margin: 0 0 2px; font-size: 14.5px; }
+  .dir-card p { font-size: 13.5px; color: var(--dim); margin: 0; }
+
+  .state { color: var(--dim); padding: 40px 0; }
+  footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border);
+           color: var(--dim); font-size: 12.5px; display: flex;
+           justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  @media (max-width: 600px) {
+    body { padding: 0 14px 40px; }
+    h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Loading map...</h1>
+    <p class="lead" id="intro"></p>
+    <p class="meta" id="meta"></p>
+  </header>
+  <div id="body" hidden>
+    <div class="legend" id="legend"></div>
+    <figure style="margin:0">
+      <div class="mapframe"><svg id="svg" xmlns="http://www.w3.org/2000/svg"
+           role="img" aria-labelledby="title"></svg></div>
+      <figcaption>Hover a box to light up its connections; click it for the
+        full story.</figcaption>
+    </figure>
+    <div class="card" id="detail" hidden></div>
+    <h2>Every box</h2>
+    <div id="directory"></div>
+  </div>
+  <p class="state" id="state" hidden></p>
+  <footer>
+    <span id="foot"></span>
+    <span>drawn by Vira from its own data; nothing here leaves the machine</span>
+  </footer>
+</div>
+<script>
+"use strict";
+const SLUG = new URLSearchParams(location.search).get("m") || "system";
+const COL_W = 250, COL_GAP = 46, NODE_H = 42, NODE_GAP = 13, TOP = 34;
+const NS = "http://www.w3.org/2000/svg";
+const S = { spec: null, byId: {}, cols: {}, groups: {}, sel: null,
+            group: null, edges: [], nodes: [] };
+
+const $ = (q) => document.querySelector(q);
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function svgEl(tag, attrs) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+}
+// SVG text does not wrap: cut to the box with an ellipsis and keep the
+// whole string in the box's tooltip.
+function fit(s, px, charW) {
+  const max = Math.floor(px / charW);
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+const colorOf = (n) => (S.groups[n.group] || {}).color || "#4a515c";
+
+async function boot() {
+  let r;
+  try {
+    r = await fetch("/api/maps/" + encodeURIComponent(SLUG));
+  } catch {
+    return fail("Could not reach Vira - is it running?");
+  }
+  if (r.status === 404) {
+    return fail(`There is no map named "${SLUG}". Pick one in the Maps window.`);
+  }
+  if (!r.ok) return fail(`Vira answered ${r.status} for this map.`);
+  const data = await r.json();
+  S.spec = data.spec;
+  S.spec.nodes.forEach((n) => { S.byId[n.id] = n; });
+  S.spec.columns.forEach((c, i) => { S.cols[c.id] = { ...c, i }; });
+  S.spec.groups.forEach((g) => { S.groups[g.id] = g; });
+  document.title = S.spec.title + " - Vira map";
+  $("#title").textContent = S.spec.title;
+  $("#intro").textContent = S.spec.intro || "";
+  head(data);
+  legend();
+  draw();
+  directory();
+  $("#body").hidden = false;
+  const want = decodeURIComponent(location.hash.slice(1));
+  if (want && S.byId[want]) select(want);
+}
+
+function fail(msg) {
+  $("#title").textContent = "No map to show";
+  $("#state").textContent = msg;
+  $("#state").hidden = false;
+  $("#foot").textContent = "GET /api/maps/" + SLUG;
+}
+
+function head(data) {
+  const links = S.spec.nodes.reduce((k, n) => k + n.links.length, 0);
+  const upd = (data.meta.updated || "").slice(0, 10);
+  const meta = $("#meta");
+  meta.textContent = `${S.spec.nodes.length} boxes · ${links} links`
+    + (upd ? ` · updated ${upd}` : "");
+  if (data.meta.brief) {
+    meta.appendChild(document.createTextNode(" · asked: "));
+    meta.appendChild(el("q", null, data.meta.brief));
+  }
+  $("#foot").textContent = "Drawn live from GET /api/maps/" + SLUG
+    + (data.builtin ? " (the module registry)" : "");
+}
+
+function legend() {
+  const box = $("#legend");
+  S.spec.groups.forEach((g) => {
+    const b = el("button", "badge");
+    b.type = "button";
+    const dot = el("i");
+    dot.style.background = g.color;
+    b.appendChild(dot);
+    b.appendChild(document.createTextNode(g.name));
+    b.addEventListener("mouseenter", () => { if (!S.sel) lightGroup(g.id); });
+    b.addEventListener("mouseleave", () => restore());
+    b.addEventListener("click", () => {
+      S.group = S.group === g.id ? null : g.id;
+      box.querySelectorAll(".badge").forEach((x) =>
+        x.classList.toggle("on", x === b && S.group === g.id));
+      if (S.group) { S.sel = null; showDetail(null); }
+      restore();
+    });
+    box.appendChild(b);
+  });
+  box.hidden = !S.spec.groups.length;
+}
+
+function draw() {
+  const svg = $("#svg");
+  const cols = S.spec.columns.map((c) =>
+    S.spec.nodes.filter((n) => n.column === c.id));
+  const nCols = cols.length;
+  const width = nCols * COL_W + (nCols - 1) * COL_GAP;
+  const height = TOP + 10 + Math.max(...cols.map((c) => c.length))
+    * (NODE_H + NODE_GAP);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  // Never upscale a narrow map, and never shrink a wide one past legibility
+  // - scroll it sideways instead.
+  svg.style.maxWidth = width + "px";
+  svg.style.minWidth = Math.min(width, Math.max(720, width * 0.66)) + "px";
+
+  const pos = {};
+  cols.forEach((col, ci) => col.forEach((n, ri) => {
+    pos[n.id] = { x: ci * (COL_W + COL_GAP),
+                  y: TOP + ri * (NODE_H + NODE_GAP), ci };
+  }));
+
+  S.spec.nodes.forEach((n) => n.links.forEach((l) => {
+    const a = pos[n.id], b = pos[l.to];
+    if (!a || !b) return;
+    let x1, x2;
+    if (a.ci === b.ci) { x1 = a.x + COL_W; x2 = b.x + COL_W; }
+    else if (a.ci > b.ci) { x1 = a.x; x2 = b.x + COL_W; }
+    else { x1 = a.x + COL_W; x2 = b.x; }
+    const y1 = a.y + NODE_H / 2, y2 = b.y + NODE_H / 2;
+    // Same column: both ends bow out to the right. Otherwise the curve
+    // leaves toward its target and arrives from the side it came from.
+    const same = a.ci === b.ci, back = a.ci > b.ci;
+    const dx = same ? 42 : Math.abs(x2 - x1) * 0.45;
+    const c1 = same || !back ? x1 + dx : x1 - dx;
+    const c2 = same || back ? x2 + dx : x2 - dx;
+    const p = svgEl("path", { class: "mapedge",
+      d: `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}` });
+    p.dataset.from = n.id; p.dataset.to = l.to;
+    svg.appendChild(p);
+    S.edges.push(p);
+  }));
+
+  S.spec.columns.forEach((c, ci) => {
+    const t = svgEl("text", { class: "colhead", x: ci * (COL_W + COL_GAP),
+                              y: 16 });
+    t.textContent = fit(c.title, COL_W, 7.4);
+    svg.appendChild(t);
+  });
+
+  S.spec.nodes.forEach((n) => {
+    const p = pos[n.id];
+    const g = svgEl("g", { class: "mapnode", tabindex: "0", role: "button",
+                           transform: `translate(${p.x},${p.y})` });
+    g.setAttribute("aria-label", n.name + (n.kind ? ", " + n.kind : ""));
+    g.dataset.id = n.id;
+    const tip = svgEl("title", {});
+    tip.textContent = n.name + (n.kind ? " — " + n.kind : "");
+    g.appendChild(tip);
+    const rect = svgEl("rect", { width: COL_W, height: NODE_H, rx: 8 });
+    rect.style.stroke = colorOf(n);
+    rect.style.strokeOpacity = 0.6;
+    g.appendChild(rect);
+    const name = svgEl("text", { x: 12, y: 18 });
+    name.textContent = fit(n.name, COL_W - 22, 7.2);
+    g.appendChild(name);
+    const kind = svgEl("text", { class: "kind", x: 12, y: 33 });
+    kind.textContent = fit(n.kind || S.cols[n.column].title, COL_W - 22, 5.6);
+    g.appendChild(kind);
+    g.addEventListener("mouseenter", () => light(n.id, false));
+    g.addEventListener("mouseleave", () => restore());
+    g.addEventListener("focus", () => light(n.id, false));
+    g.addEventListener("blur", () => restore());
+    g.addEventListener("click", () => select(n.id));
+    g.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n.id); }
+    });
+    svg.appendChild(g);
+    S.nodes.push(g);
+  });
+}
+
+function light(id, hard) {
+  if (!id) {
+    S.nodes.forEach((n) => n.classList.remove("dim", "sel"));
+    S.edges.forEach((e) => e.classList.remove("lit", "dim"));
+    return;
+  }
+  const near = new Set([id]);
+  S.edges.forEach((e) => {
+    const on = e.dataset.from === id || e.dataset.to === id;
+    e.classList.toggle("lit", on);
+    e.classList.toggle("dim", !on);
+    if (on) { near.add(e.dataset.from); near.add(e.dataset.to); }
+  });
+  S.nodes.forEach((n) => {
+    n.classList.toggle("dim", !near.has(n.dataset.id));
+    n.classList.toggle("sel", hard && n.dataset.id === id);
+  });
+}
+
+function lightGroup(gid) {
+  const inside = (id) => S.byId[id].group === gid;
+  S.nodes.forEach((n) => {
+    n.classList.toggle("dim", !inside(n.dataset.id));
+    n.classList.remove("sel");
+  });
+  S.edges.forEach((e) => {
+    const on = inside(e.dataset.from) || inside(e.dataset.to);
+    e.classList.toggle("lit", on);
+    e.classList.toggle("dim", !on);
+  });
+}
+
+// Back to whatever is pinned: a selected box, a pinned group, or nothing.
+function restore() {
+  if (S.sel) light(S.sel, true);
+  else if (S.group) lightGroup(S.group);
+  else light(null);
+}
+
+function select(id) {
+  S.sel = S.sel === id ? null : id;
+  if (S.sel && S.group) {
+    S.group = null;
+    document.querySelectorAll(".badge.on").forEach((b) => b.classList.remove("on"));
+  }
+  restore();
+  showDetail(S.sel);
+  history.replaceState(null, "", S.sel ? "#" + encodeURIComponent(S.sel)
+    : location.pathname + location.search);
+}
+
+function showDetail(id) {
+  const box = $("#detail");
+  box.textContent = "";
+  box.hidden = !id;
+  if (!id) return;
+  const n = S.byId[id];
+  box.style.borderTop = `2px solid ${colorOf(n)}`;
+  box.appendChild(el("h4", null, n.name));
+  const bits = [S.cols[n.column].title];
+  if (S.groups[n.group]) bits.push(S.groups[n.group].name);
+  if (n.kind) bits.push(n.kind);
+  box.appendChild(el("div", "kindline", bits.join(" · ")));
+  box.appendChild(el("p", null, n.what));
+  const chips = el("div", "chips");
+  const chip = (target, before, after) => {
+    const c = el("button", "chip");
+    c.type = "button";
+    if (before) c.appendChild(document.createTextNode(before + " "));
+    c.appendChild(el("b", null, S.byId[target].name));
+    if (after) c.appendChild(document.createTextNode(" " + after));
+    c.addEventListener("click", () => select(target));
+    chips.appendChild(c);
+  };
+  n.links.forEach((l) => chip(l.to, l.how, ""));
+  S.spec.nodes.forEach((o) => o.links.forEach((l) => {
+    if (l.to === id) chip(o.id, "", l.how + " this");
+  }));
+  if (chips.children.length) box.appendChild(chips);
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function directory() {
+  const box = $("#directory");
+  S.spec.columns.forEach((c) => {
+    const nodes = S.spec.nodes.filter((n) => n.column === c.id);
+    box.appendChild(el("h3", null, c.title));
+    const grid = el("div", "grid");
+    nodes.forEach((n) => {
+      const card = el("div", "card dir-card");
+      card.style.borderTop = `2px solid ${colorOf(n)}`;
+      card.appendChild(el("h4", null, n.name));
+      if (n.kind) card.appendChild(el("div", "kindline", n.kind));
+      card.appendChild(el("p", null, n.what));
+      card.addEventListener("click", () => {
+        if (S.sel !== n.id) select(n.id);
+        $(".mapframe").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      grid.appendChild(card);
+    });
+    box.appendChild(grid);
+  });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && (S.sel || S.group)) {
+    S.group = null;
+    document.querySelectorAll(".badge.on").forEach((b) => b.classList.remove("on"));
+    if (S.sel) select(S.sel); else restore();
+  }
+});
+
+boot().catch((e) => fail("The map could not be drawn: " + e.message));
+</script>
+</body>
+</html>

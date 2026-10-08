@@ -16748,9 +16748,25 @@ function viewLoad(id) {
   if (id === "people") peopleTabLoad(peopleTab);
   if (id === "atlas") worldViewLoad();
   if (id === "map") {
-    const f = $("#map-frame");             // load the atlas page on first open
-    if (f && !f.getAttribute("src")) f.src = "/explainer/modules.html";
+    // Load the atlas page on first open. That page is private
+    // (static/explainer/ is git-ignored), so a fresh clone has none: fall
+    // back to the shared map renderer drawing the same registry, rather
+    // than framing a 404.
+    const f = $("#map-frame");
+    if (f && !f.getAttribute("src") && !f.dataset.probing) {
+      f.dataset.probing = "1";
+      const shared = "/maps/view.html?m=system";
+      fetch("/explainer/modules.html", { method: "HEAD" })
+        .then((r) => (r.ok ? "/explainer/modules.html" : shared), () => shared)
+        .then((src) => {
+          f.src = src;
+          const full = $("#map-fulltab");
+          if (full) full.href = src;
+          delete f.dataset.probing;
+        });
+    }
   }
+  if (id === "maps") loadMaps().catch((e) => mapsNote("Could not load maps: " + errText(e)));
   if (id === "imageatlas") loadImageAtlas().catch(() => {});
   if (id === "design") {
     const f = $("#design-frame");          // load the studio on first open
@@ -16769,6 +16785,143 @@ function viewLoad(id) {
     }).catch(() => {});
   }
 }
+
+// ==================== Maps: the System Map's diagram type, for anything
+// server/maps.py validates and stores each map; static/maps/view.html draws
+// one in the frame. This window asks for a new map (a session researches it
+// and saves it through save_map), picks among them, and refreshes, undoes or
+// deletes one. The built-in system map is always listed first, so the
+// window is never empty - not even on a fresh clone.
+let mapsList = [];
+let mapsWatch = null;
+
+function mapsNote(text) {
+  const n = $("#maps-note");
+  if (!n) return;
+  n.textContent = text || "";
+  n.hidden = !text;
+}
+
+function mapsSelected() {
+  const want = lsGet("vira-maps-sel", "system");
+  return mapsList.some((m) => m.slug === want) ? want : "system";
+}
+
+function mapsShow(slug, reload) {
+  lsSet("vira-maps-sel", slug);
+  const src = "/maps/view.html?m=" + encodeURIComponent(slug);
+  const f = $("#maps-frame");
+  if (f && (reload || f.getAttribute("src") !== src)) {
+    f.src = reload && f.getAttribute("src") === src ? src + "&t=" + Date.now() : src;
+  }
+  const full = $("#maps-fulltab");
+  if (full) full.href = src;
+  const m = mapsList.find((x) => x.slug === slug);
+  $("#maps-delete").hidden = !m || m.builtin;
+  $("#maps-undo").hidden = !m || m.builtin || !m.has_previous;
+}
+
+async function loadMaps(want, reload) {
+  const d = await api("/api/maps");
+  mapsList = d.maps || [];
+  const pick = $("#maps-pick");
+  const cur = want && mapsList.some((m) => m.slug === want) ? want : mapsSelected();
+  pick.textContent = "";
+  mapsList.forEach((m) => {
+    const o = el("option", null, `${m.title} · ${m.boxes} boxes`
+      + (m.builtin ? " · built in" : ""));
+    o.value = m.slug;
+    pick.appendChild(o);
+  });
+  pick.value = cur;
+  mapsShow(cur, reload);
+  return mapsList;
+}
+
+// After a dispatch: watch the list until the map lands (a new slug, or the
+// refreshed one's stamp moves), or the session ends without saving - which
+// is said out loud, never left as a spinner.
+function mapsWatchFor(jid, slug) {
+  mapsWatch?.stop();
+  const before = Object.fromEntries(mapsList.map((m) => [m.slug, m.updated]));
+  mapsWatch = startPoll(async (h) => {
+    const d = await api("/api/maps");
+    const hit = (d.maps || []).find((m) => (slug ? m.slug === slug
+      : !m.builtin) && before[m.slug] !== m.updated);
+    if (hit) {
+      h.stop();
+      await loadMaps(hit.slug, true);
+      mapsNote("");
+      toast(`Map ready: ${hit.title}`);
+      return;
+    }
+    const job = await api("/api/jobs/" + encodeURIComponent(jid));
+    if (["done", "error", "cancelled", "stopped"].includes(job.status)) {
+      h.stop();
+      mapsNote(slug ? "The refresh finished without changing the map - the "
+        + "session found nothing new, or open it to see why."
+        : "The session finished without saving a map - open it to see why.");
+      toast("Mapping session finished", [["Open", () => openJob(jid)]]);
+    }
+  }, 8000, 45 * 60 * 1000);
+}
+
+$("#maps-pick")?.addEventListener("change", (e) => mapsShow(e.target.value));
+
+$("#maps-ask")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("#maps-ask-text");
+  const text = input.value.trim();
+  if (!text) { input.focus(); return; }
+  try {
+    const r = await post("/api/maps/ask", { request: text });
+    input.value = "";
+    mapsNote("Mapping it: a session is researching your request. The map "
+      + "opens here when it saves.");
+    toast("Map dispatched", [["Watch", () => openJob(r.job_id)]]);
+    mapsWatchFor(r.job_id, null);
+  } catch (err) { toast("Could not start the map: " + errText(err)); }
+});
+
+$("#maps-refresh")?.addEventListener("click", async () => {
+  const slug = mapsSelected();
+  try {
+    const r = slug === "system" ? await post("/api/map/refresh", {})
+      : await post(`/api/maps/${encodeURIComponent(slug)}/refresh`, {});
+    mapsNote("Refreshing: a session is re-running this map's request. The "
+      + "map redraws here when it saves.");
+    toast("Refresh dispatched", [["Watch", () => openJob(r.job_id)]]);
+    mapsWatchFor(r.job_id, slug);
+  } catch (err) { toast("Refresh failed: " + errText(err)); }
+});
+
+$("#maps-undo")?.addEventListener("click", async () => {
+  const slug = mapsSelected();
+  try {
+    await post(`/api/maps/${encodeURIComponent(slug)}/undo`, {});
+    await loadMaps(slug, true);
+    toast("Back to the previous version");
+  } catch (err) { toast("Undo failed: " + errText(err)); }
+});
+
+// Delete is two presses: the first arms the button for a few seconds.
+$("#maps-delete")?.addEventListener("click", async (e) => {
+  const b = e.currentTarget;
+  const slug = mapsSelected();
+  if (!b.dataset.armed) {
+    b.dataset.armed = "1";
+    b.textContent = "Press again to delete";
+    setTimeout(() => { delete b.dataset.armed; b.textContent = "Delete"; }, 4000);
+    return;
+  }
+  delete b.dataset.armed;
+  b.textContent = "Delete";
+  try {
+    await del(`/api/maps/${encodeURIComponent(slug)}`);
+    await loadMaps("system");
+    toast("Map deleted");
+  } catch (err) { toast("Delete failed: " + errText(err)); }
+});
 
 // Open an app on either width: floating window on desktop; on mobile the
 // view takes over the column. Every registered app is reachable this way,
@@ -22303,6 +22456,8 @@ const WINDOWS = [
     icon: "M12 12m-2.4 0a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0M5 5.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M19 6.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M5.5 18.5m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M18.5 18m-1.9 0a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0M10.3 10.3L6.3 6.9M13.7 10.6L17.5 7.6M10.5 13.7L6.8 17.2M13.6 13.5L17 16.7" },
   { id: "map", title: "System Map", w: 1000,
     icon: "M9 4L4 6v14l5-2 6 2 5-2V4l-5 2-6-2zM9 4v14M15 6v14" },
+  { id: "maps", title: "Maps", w: 1000,
+    icon: "M3 5h5v4H3zM3 15h5v4H3zM16 3h5v4h-5zM16 10h5v4h-5zM16 17h5v4h-5zM8 7c4 0 4-2 8-2M8 7c4 0 4 5 8 5M8 17c4 0 4-5 8-5M8 17c4 0 4 2 8 2" },
   { id: "imageatlas", title: "Image Atlas", w: 1100,
     icon: "M12 12m-1.6 0a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0M12 12m-5.2 0a5.2 5.2 0 1 0 10.4 0a5.2 5.2 0 1 0-10.4 0M12 12m-8.8 0a8.8 8.8 0 1 0 17.6 0a8.8 8.8 0 1 0-17.6 0M6.6 8.4l1.5 1.2M17.4 15.6l-1.5-1.2M15.9 6.9l-1.1 1.5M8.1 17.1l1.1-1.5" },
   { id: "subs", title: "Subscriptions", w: 660,
