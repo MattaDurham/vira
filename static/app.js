@@ -16868,40 +16868,55 @@ function mapsWatchFor(jid, slug) {
 
 $("#maps-pick")?.addEventListener("change", (e) => mapsShow(e.target.value));
 
-$("#maps-ask")?.addEventListener("submit", async (e) => {
+// A dispatch takes seconds (a session is spawned), so every control that
+// starts one is held until it answers: a second Enter or click during that
+// wait would launch a second, duplicate session.
+async function mapsHold(controls, fn) {
+  if (controls.some((c) => c.disabled)) return;
+  controls.forEach((c) => { c.disabled = true; });
+  try { await fn(); } finally { controls.forEach((c) => { c.disabled = false; }); }
+}
+
+$("#maps-ask")?.addEventListener("submit", (e) => {
   e.preventDefault();
   const input = $("#maps-ask-text");
   const text = input.value.trim();
   if (!text) { input.focus(); return; }
-  try {
-    const r = await post("/api/maps/ask", { request: text });
-    input.value = "";
-    mapsNote("Mapping it: a session is researching your request. The map "
-      + "opens here when it saves.");
-    toast("Map dispatched", [["Watch", () => openJob(r.job_id)]]);
-    mapsWatchFor(r.job_id, null);
-  } catch (err) { toast("Could not start the map: " + errText(err)); }
+  mapsHold([input, e.currentTarget.querySelector("button")], async () => {
+    try {
+      const r = await post("/api/maps/ask", { request: text });
+      input.value = "";
+      mapsNote("Mapping it: a session is researching your request. The map "
+        + "opens here when it saves.");
+      toast("Map dispatched", [["Watch", () => openJob(r.job_id)]]);
+      mapsWatchFor(r.job_id, null);
+    } catch (err) { toast("Could not start the map: " + errText(err)); }
+  });
 });
 
-$("#maps-refresh")?.addEventListener("click", async () => {
+$("#maps-refresh")?.addEventListener("click", (e) => {
   const slug = mapsSelected();
-  try {
-    const r = slug === "system" ? await post("/api/map/refresh", {})
-      : await post(`/api/maps/${encodeURIComponent(slug)}/refresh`, {});
-    mapsNote("Refreshing: a session is re-running this map's request. The "
-      + "map redraws here when it saves.");
-    toast("Refresh dispatched", [["Watch", () => openJob(r.job_id)]]);
-    mapsWatchFor(r.job_id, slug);
-  } catch (err) { toast("Refresh failed: " + errText(err)); }
+  mapsHold([e.currentTarget], async () => {
+    try {
+      const r = slug === "system" ? await post("/api/map/refresh", {})
+        : await post(`/api/maps/${encodeURIComponent(slug)}/refresh`, {});
+      mapsNote("Refreshing: a session is re-running this map's request. The "
+        + "map redraws here when it saves.");
+      toast("Refresh dispatched", [["Watch", () => openJob(r.job_id)]]);
+      mapsWatchFor(r.job_id, slug);
+    } catch (err) { toast("Refresh failed: " + errText(err)); }
+  });
 });
 
-$("#maps-undo")?.addEventListener("click", async () => {
+$("#maps-undo")?.addEventListener("click", (e) => {
   const slug = mapsSelected();
-  try {
-    await post(`/api/maps/${encodeURIComponent(slug)}/undo`, {});
-    await loadMaps(slug, true);
-    toast("Back to the previous version");
-  } catch (err) { toast("Undo failed: " + errText(err)); }
+  mapsHold([e.currentTarget], async () => {
+    try {
+      await post(`/api/maps/${encodeURIComponent(slug)}/undo`, {});
+      await loadMaps(slug, true);
+      toast("Back to the previous version");
+    } catch (err) { toast("Undo failed: " + errText(err)); }
+  });
 });
 
 // Delete is two presses: the first arms the button for a few seconds.
@@ -26632,6 +26647,11 @@ const HASH_ROUTES = {
   "world": "atlas",
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
+  // #maps, #maps/<slug> - the Maps window, opened on that map
+  "maps": (rest) => {
+    if (rest[0]) lsSet("vira-maps-sel", decodeURIComponent(rest[0]));
+    openApp("maps");
+  },
   "work": (rest) => {           // #work, #work/queue|dispatch|live|record
     // "record" stays accepted: setWorkTab's WORK_TAB_ALIAS lands it on
     // the merged Record pane (tab id `live`).
