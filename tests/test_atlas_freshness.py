@@ -112,13 +112,21 @@ class FreshnessTests(unittest.TestCase):
         self.assertEqual(len(atlas.compose()["nodes"]), 2)
 
     def test_demo_to_real_transition_is_detected(self):
+        from server import onboard
         demo = self.root / "demo"
         self.seed(demo)
-        with mock.patch.object(crm, "_crm", return_value=demo):
+        target = self.root / "fresh-install"
+        onboard.config_set(crm_root=str(target), fixture_mode=None)
+        with mock.patch.object(settings, "FIXTURE_CRM", demo):
+            self.assertTrue(settings.fixture_mode())
             atlas.build_graph()
-        self.assertTrue(atlas.compose()["building"])
-        self.finish()
-        self.assertFalse(atlas.compose()["stale"])
+            onboard.import_google_csv("Name,E-mail 1 - Value\nDrew Sample,drew@example.com\n")
+            self.assertFalse(settings.fixture_mode())
+            self.assertTrue(atlas.compose()["building"])
+            self.finish()
+            graph = atlas.compose()
+            self.assertFalse(graph["stale"])
+            self.assertEqual([n["name"] for n in graph["nodes"]], ["Drew Sample"])
 
     def test_profile_edit_and_parameter_changes_trigger_refresh(self):
         atlas.build_graph()
