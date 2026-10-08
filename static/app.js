@@ -26460,6 +26460,7 @@ const HASH_ROUTES = {
   },
   "design": "design",
   "reader": "reader",
+  "research": (rest) => openResearch(decodeURIComponent(rest.join("/"))),
   "journal": (rest) => {
     if (rest[0]) revealJournal(rest[0]); else openApp("journal");
   },

@@ -319,3 +319,12 @@
   .research-claim-row,
   .research-link-row { scroll-behavior: auto; }
 }
+
+.research-create { padding: 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.research-create label { display: flex; flex-direction: column; gap: 8px; }
+.research-topic-input { font: inherit; font-size: 16px; min-width: 0; width: 100%; box-sizing: border-box; padding: 10px; color: var(--text); background: var(--bg-window); border: 1px solid var(--line); border-radius: 6px; }
+.research-new-topic { margin-bottom: 16px; width: 100%; white-space: normal; }
+.research-topic-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.research-topic-controls select { width: auto; max-width: 100%; }
+.research-topic-status { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.research-topic-summary { padding: 0 20px; white-space: pre-line; overflow-wrap: anywhere; }

@@ -456,7 +456,7 @@ def _ping_additions(slug, title, new_titles):
         pass
 
 
-def build(slug, title, subtitle, items, legacy_key=""):
+def build(slug, title, subtitle, items, legacy_key="", notify_owner=True):
     """Validate a proposed room and write THE STORE. Returns a summary dict.
 
     Rebuilding an existing slug is deliberate and supported — a repass
@@ -496,7 +496,7 @@ def build(slug, title, subtitle, items, legacy_key=""):
                        encoding="utf-8")
         tmp.replace(path)
 
-    if prev and new_titles:
+    if prev and new_titles and notify_owner:
         _ping_additions(slug, title, new_titles)
 
     by_mode = {}
@@ -695,7 +695,7 @@ def enumerate_sources(room):
             "swept": len(sources), "dropped": dropped}
 
 
-def merge_items(slug, new_items):
+def merge_items(slug, new_items, notify_owner=True):
     """Append/merge into an existing room WITHOUT re-emitting it — the
     answer to the single-string ceiling that blocked the 2026-08-03 scout
     write (350 items is ~70k tokens; no single model message carries it).
@@ -723,7 +723,7 @@ def merge_items(slug, new_items):
         tmp.write_text(json.dumps(room, ensure_ascii=False, indent=1),
                        encoding="utf-8")
         tmp.replace(path)
-    if new_titles:
+    if new_titles and notify_owner:
         _ping_additions(slug, room["title"], new_titles)
     return {"slug": slug, "items": len(merged), "added": len(new_titles),
             "titles": new_titles}

@@ -1094,6 +1094,51 @@ async def _t_update_module_map(args):
         _update_module_map_text, args.get("modules_json")))
 
 
+# ---------- durable research topics ----------
+
+async def _t_research_topic(args):
+    from . import researchtopics
+    topic = await asyncio.to_thread(researchtopics.get, args.get("topic_id"))
+    if topic is None:
+        return _txt("error: unknown research topic")
+    paths = {stage: str(researchtopics.ROOT / "data" / "research-packets" /
+                       topic["id"] / topic["generation"] / (stage + ".json"))
+             for stage in topic.get("packets", {})}
+    text = json.dumps({"packet_paths": paths, "canonical_store": str(researchtopics.STORE),
+                       "topic": topic}, ensure_ascii=False)
+    if len(text) > _text_cap():
+        # The standard tool channel is modelbudget-bounded. Name the complete
+        # on-disk sources BEFORE omitting their payloads, so no packet vanishes.
+        compact = {k: v for k, v in topic.items() if k not in ("packets", "result", "history")}
+        text = json.dumps({"topic": compact, "packet_paths": paths,
+                           "canonical_store": str(researchtopics.STORE),
+                           "payload_omitted": True,
+                           "instruction": "Read complete packet files and this topic's result in the canonical store."}, ensure_ascii=False)
+    return _txt(text)
+
+
+async def _t_save_research_packet(args):
+    from . import researchtopics
+    try:
+        result = await asyncio.to_thread(researchtopics.save_packet,
+            args.get("topic_id"), args.get("generation"), args.get("stage"),
+            json.loads(args.get("packet_json") or ""))
+        return _txt(json.dumps(result))
+    except (ValueError, KeyError, OSError) as exc:
+        return _txt(f"error: {exc}")
+
+
+async def _t_publish_research_topic(args):
+    from . import researchtopics
+    try:
+        result = await asyncio.to_thread(researchtopics.publish,
+            args.get("topic_id"), args.get("generation"),
+            json.loads(args.get("result_json") or ""))
+        return _txt(json.dumps(result))
+    except (ValueError, KeyError, OSError) as exc:
+        return _txt(f"error: {exc}")
+
+
 # ---------- first-run setup writes (server/frontdoor.py) ----------
 # Both are dispatched only by a module's front door, and both exist so the
 # setup session never touches config or the served page tree by hand.
@@ -1385,6 +1430,15 @@ TOOL_SPECS = [
      "name+what required; a payload that drops too many existing modules "
      "is refused. Use only when refreshing the system map.",
      {"modules_json": str}, _t_update_module_map),
+    ("research_topic",
+     "Read a research topic, its current generation, complete stage packets and previous results. Continue any named local packet files; payload omissions are explicit.",
+     {"topic_id": str}, _t_research_topic),
+    ("save_research_packet",
+     "Save a stage's structured research packet through validation. Pass topic_id, current generation, stage scope|inventory|discovery|verify|analyze, and packet_json as a JSON object string. Never hand-write research stores.",
+     {"topic_id": str, "generation": str, "stage": str, "packet_json": str}, _t_save_research_packet),
+    ("publish_research_topic",
+     "Publish a complete sourced research result for the current generation. Validates independently verified sources and located claim evidence, then saves canonical results, the local library note, Reader links and its refresh routine. Pass result_json as a complete JSON object. No external publication or messaging.",
+     {"topic_id": str, "generation": str, "result_json": str}, _t_publish_research_topic),
     ("create_reading_room",
      "Build a reading room — a researched consumption queue — live in the "
      "owner's Reader. Pass the COMPLETE item array as items_json (a JSON "
@@ -1479,6 +1533,8 @@ TOOL_NAMES = [f"mcp__vira__{name}" for name, *_ in TOOL_SPECS]
 # propose_idea is deliberately absent: it STAGES to a queue the owner must
 # approve, which is why it was safe to ship as a read-adjacent tool.
 WRITE_TOOLS = {
+    "mcp__vira__save_research_packet",
+    "mcp__vira__publish_research_topic",
     "mcp__vira__configure_microsoft",
     "mcp__vira__connect_data",
     "mcp__vira__vault_capture",

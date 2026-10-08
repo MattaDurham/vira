@@ -237,6 +237,8 @@ def source_specs():
     for spec in specs:
         if spec["write_enabled"] and spec["dirs"] is not None:
             capture_dirs = [spec["capture_dir"]]
+            if spec.get("write_scope") == "all":
+                capture_dirs.append("Library/Research")
             if spec["primary"] and not spec["policy_explicit"]:
                 capture_dirs.append("plans")
             spec["dirs"] = list(dict.fromkeys(spec["dirs"] + capture_dirs))
