@@ -23,7 +23,7 @@ const context=vm.createContext({el:(...args)=>new Element(...args),$:id=>nodes[i
   api:async url=>url.endsWith('/qr')?{png:'data:image/png;base64,fixture'}:status,
   post:async(url,body)=>{posts.push({url,body});return {};},errText:e=>e.message,
   setTimeout:()=>{},startPoll:()=>({stop(){}}),stopWaPoll:()=>{},companionPollT:null,
-  cardDisk:()=>{},cardContacts:()=>{},cardDossiers:()=>{},cardBrain:()=>{},cardMail:()=>{},
+  cardDisk:()=>{},cardContacts:()=>{},cardDossiers:()=>{},cardBrain:()=>{},cardMail:()=>{},cardBanking:()=>{},
   backendBlock:()=>{},provCard:()=>{},cardNotifications:()=>{},cardUpdates:()=>{},openFirstrun:()=>{},
   connectionSection:(host,title,text,render)=>{const d=new Element('details','',title);d.appendChild(new Element('p','',text));render(d);host.appendChild(d);},
   loadCompanion:()=>Promise.resolve(),companionPairStart:()=>{},copyText:()=>{},toast:()=>{},
@@ -55,6 +55,13 @@ assert.match(optional.children[0].className,/s-optional/);
 assert.match(optional.textContent,/optional/i);
 let notifications=byClass(nodes['#setup-body'],'dash-item').find(n=>n.dataset.setupId==='notifications');
 assert.match(notifications.children[0].className,/s-optional/,'enabled flag alone cannot claim notifications are configured');
+let banking=byClass(nodes['#setup-body'],'dash-item').find(n=>n.dataset.setupId==='banking');
+assert.match(banking.children[0].className,/s-optional/);
+context.setupExtra.banking={mercury:{configured:true}};
+context.renderSetup(flow,state);
+banking=byClass(nodes['#setup-body'],'dash-item').find(n=>n.dataset.setupId==='banking');
+assert.match(banking.children[0].className,/s-done/);
+assert.match(banking.textContent,/Mercury token configured/);
 const phoneCard=new Element('div');context.cardChannels(phoneCard);
 assert.match(phoneCard.textContent,/No phone pairing is needed/);
 assert.match(phoneCard.textContent,/Android phone \(optional\)/);
