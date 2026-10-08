@@ -703,6 +703,12 @@ def _write(graph):
     jsonstore.write_atomic(GRAPH, graph, ensure_ascii=False)
 
 
+def _source_files(root):
+    files = [root / name for name in
+             ("people.json", "master.json", "imessage-archive/index.json")]
+    return files + sorted((root / "profiles").glob("p_*.json"))
+
+
 def _source_stamp():
     """Fingerprint effective CRM inputs, including the transition out of demo.
 
@@ -711,13 +717,10 @@ def _source_stamp():
     Stat failures other than absence propagate, never become a cached fact.
     """
     root = crm._crm().resolve()
-    files = [root / name for name in
-             ("people.json", "master.json", "imessage-archive/index.json")]
-    files.extend(sorted((root / "profiles").glob("p_*.json")))
     parts = [str(root), settings.get("owner_name"),
              settings.raw().get("notify_handle"), _max_nodes(),
              _min_weight(), _anchor_org()]
-    for path in files:
+    for path in _source_files(root):
         try:
             stat = path.stat()
             parts.append([str(path.relative_to(root)), stat.st_mtime_ns,
@@ -725,6 +728,24 @@ def _source_stamp():
         except FileNotFoundError:
             parts.append([str(path.relative_to(root)), None])
     return hashlib.sha256(json.dumps(parts).encode("utf-8")).hexdigest()
+
+
+def _validate_source():
+    """Do not certify tolerant CRM reads as a complete, fresh graph."""
+    root = crm._crm()
+    for path in _source_files(root):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            if path == root / "people.json":
+                raise
+            continue  # Masters, profiles and chat archives are optional.
+        doc = json.loads(text)
+        expected = list if path == root / "master.json" else dict
+        if not isinstance(doc, expected):
+            raise ValueError(f"Invalid CRM document: {path.name}")
+        if path == root / "people.json" and not isinstance(doc.get("people"), list):
+            raise ValueError("CRM registry has no people list")
 
 
 def build_graph(narrate=False):
@@ -737,9 +758,7 @@ def build_graph(narrate=False):
             source = _source_stamp()
             # A failed registry read must not replace a good graph with an
             # empty one. The general CRM reader tolerates missing/corrupt data.
-            registry = json.loads((crm._crm() / "people.json").read_text(encoding="utf-8"))
-            if not isinstance(registry.get("people"), list):
-                raise ValueError("CRM registry has no people list")
+            _validate_source()
             crm.invalidate()  # File changes can precede the CRM reader's TTL.
             c = crm._load()
             own = owner_pid(c)

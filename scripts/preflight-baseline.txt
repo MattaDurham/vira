@@ -7,5 +7,5 @@
 # it, and without anyone having to argue about it in review.
 #
 # id        count
-encoding    194
+encoding    192
 capdoc      1

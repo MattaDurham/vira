@@ -161,6 +161,16 @@ class FreshnessTests(unittest.TestCase):
                 atlas.build_graph()
         self.assertFalse(atlas.GRAPH.exists())
 
+    def test_corrupt_optional_evidence_cannot_publish_an_incomplete_graph(self):
+        atlas.build_graph()
+        before = atlas.GRAPH.read_bytes()
+        (self.crm / "master.json").write_text("{", encoding="utf-8")
+        atlas.compose()
+        with mock.patch.object(atlas._log, "exception"):
+            self.finish()
+        self.assertEqual(atlas.GRAPH.read_bytes(), before)
+        self.assertIn("error", atlas.compose())
+
 
 if __name__ == "__main__":
     unittest.main()
