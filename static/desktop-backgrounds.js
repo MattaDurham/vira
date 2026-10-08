@@ -155,8 +155,9 @@
       if(scene<.5) {
         // Fish are composited before surface light and share the water's
         // refraction. Their photographic reflections remain ABOVE the fish.
-        vec4 fish=texture2D(underwater,clamp(p+offset/scale,.001,.999));
-        vec3 submerged=fish.rgb*vec3(.70,.88,.79);
+        vec2 fishUV=clamp(p+offset/scale,.001,.999);
+        vec4 fish=texture2D(underwater,vec2(fishUV.x,1.-fishUV.y));
+        vec3 submerged=fish.rgb/max(fish.a,.001)*vec3(.70,.88,.79);
         float reflection=(.14+.16*(1.-uv.y))*(.6+.4*original.b);
         color=mix(color,mix(submerged,original,reflection),fish.a);
         float light=sin(uv.x*71.+uv.y*34.+time*.55)*sin(uv.y*62.-time*.43);
@@ -180,7 +181,25 @@
       gl_FragColor=vec4(color,1.);
     }`;
 
-  function renderer(node, image, scene, onLost, below) {
+  const SKIN_VERTEX = `attribute vec4 vertex; varying vec2 uv;
+    uniform vec2 offset;
+    void main(){uv=vertex.zw;gl_Position=vec4(vertex.xy+offset,0.,1.);}`;
+  const SKIN_FRAGMENT = `precision mediump float;
+    varying vec2 uv; uniform sampler2D sprite; uniform float depth, shadow;
+    void main(){
+      float softness=mix(depth*.0012,.008,shadow);
+      vec4 fish=texture2D(sprite,uv)*.4;
+      fish+=texture2D(sprite,uv+vec2(softness,0.))*.15;
+      fish+=texture2D(sprite,uv-vec2(softness,0.))*.15;
+      fish+=texture2D(sprite,uv+vec2(0.,softness*2.))*.15;
+      fish+=texture2D(sprite,uv-vec2(0.,softness*2.))*.15;
+      fish.rgb*=1.-depth*.13;
+      fish.a*=.94-depth*.24;
+      gl_FragColor=mix(fish,vec4(0.,.07,.05,fish.a*.12),shadow);
+    }`;
+
+  function renderer(node, loaded, scene, onLost, pond) {
+    const image = loaded[0];
     const canvas = document.createElement("canvas");
     const gl = canvas.getContext("webgl", { alpha: false, antialias: false,
       depth: false, powerPreference: "low-power" });
@@ -229,19 +248,112 @@
       gl.uniform1i(loc("underwater"),1);
       gl.uniform2f(loc("imageSize"), image.width, image.height);
       gl.uniform1f(loc("scene"), ["koi", "redwoods", "aurora"].indexOf(scene));
+      let skin = null, frameW = 0, frameH = 0;
+      if (pond) {
+        const skinProgram = gl.createProgram();
+        resources.push(() => gl.deleteProgram(skinProgram));
+        gl.attachShader(skinProgram,shader(gl.VERTEX_SHADER,SKIN_VERTEX));
+        gl.attachShader(skinProgram,shader(gl.FRAGMENT_SHADER,SKIN_FRAGMENT));
+        gl.linkProgram(skinProgram);
+        if (!gl.getProgramParameter(skinProgram,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(skinProgram));
+        const framebuffer = gl.createFramebuffer(), skinBuffer = gl.createBuffer();
+        resources.push(() => gl.deleteFramebuffer(framebuffer),() => gl.deleteBuffer(skinBuffer));
+        // Immutable sprite textures are uploaded once; only the small vertex
+        // buffer changes each frame. No CPU skin raster or canvas readback.
+        const sprites = loaded.slice(1).map(sprite => {
+          const texture = gl.createTexture();
+          resources.push(() => gl.deleteTexture(texture));
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,texture);
+          gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+          gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,sprite);
+          return texture;
+        });
+        gl.useProgram(skinProgram);
+        gl.uniform1i(gl.getUniformLocation(skinProgram,"sprite"),2);
+        skin = { program:skinProgram, framebuffer, buffer:skinBuffer, sprites,
+          attribute:gl.getAttribLocation(skinProgram,"vertex"),
+          depth:gl.getUniformLocation(skinProgram,"depth"),
+          shadow:gl.getUniformLocation(skinProgram,"shadow"),
+          offset:gl.getUniformLocation(skinProgram,"offset") };
+      }
+      function drawFish(w,h) {
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,fishTexture);
+        gl.bindFramebuffer(gl.FRAMEBUFFER,skin.framebuffer);
+        if (frameW!==w || frameH!==h) {
+          frameW=w;frameH=h;
+          gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,fishTexture,0);
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)
+            throw new Error("Fish render target unavailable");
+        }
+        gl.viewport(0,0,w,h); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(skin.program); gl.bindBuffer(gl.ARRAY_BUFFER,skin.buffer);
+        if (skin.attribute!==a) gl.disableVertexAttribArray(a);
+        gl.enableVertexAttribArray(skin.attribute);
+        gl.vertexAttribPointer(skin.attribute,4,gl.FLOAT,false,16,0);
+        gl.enable(gl.BLEND);
+        // Store premultiplied color in the fish target, including overlaps;
+        // the water shader converts back before applying surface reflections.
+        gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+        const cover=Math.max(w/image.width,h/image.height), pw=image.width*cover, ph=image.height*cover;
+        for (const f of [...pond.fish].sort((a,b)=>b.depth-a.depth)) {
+          const uv=window.ViraKoiPond.project(f.x,f.y);
+          const px=(w-pw)/2+uv.x*pw, py=(h-ph)/2+uv.y*ph+f.depth*3;
+          const c=window.ViraKoiPond.camera(f.x,f.y,image.width/image.height);
+          const length=pw*.108*f.size*(1-f.depth*.07);
+          const cosine=Math.cos(f.heading+Math.PI), sine=Math.sin(f.heading+Math.PI);
+          const mesh=window.ViraKoiPond.skinMesh(f,loaded[1+f.type].height/loaded[1+f.type].width);
+          const vertices=new Float32Array((mesh.length-1)*4*3*4);
+          let cursor=0;
+          const vertex=p=>{
+            const x=cosine*p.x-sine*p.y,y=sine*p.x+cosine*p.y;
+            vertices[cursor++]=2*(px+length*(c.xx*x+c.xy*y))/w-1;
+            vertices[cursor++]=1-2*(py+length*(c.yx*x+c.yy*y))/h;
+            vertices[cursor++]=p.u; vertices[cursor++]=p.v;
+          };
+          for(let j=0;j<mesh.length-1;j++)for(let k=0;k<2;k++){
+            const a=mesh[j][k],b=mesh[j+1][k],c=mesh[j+1][k+1],d=mesh[j][k+1];
+            [a,b,c,a,c,d].forEach(vertex);
+          }
+          gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.DYNAMIC_DRAW);
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,skin.sprites[f.type]);
+          gl.uniform1f(skin.depth,f.depth);
+          gl.uniform1f(skin.shadow,1);
+          gl.uniform2f(skin.offset,f.depth*14/w,-f.depth*36/h);
+          gl.drawArrays(gl.TRIANGLES,0,vertices.length/4);
+          gl.uniform1f(skin.shadow,0); gl.uniform2f(skin.offset,0,0);
+          gl.drawArrays(gl.TRIANGLES,0,vertices.length/4);
+        }
+        gl.disable(gl.BLEND); gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+        if (skin.attribute!==a) gl.disableVertexAttribArray(skin.attribute);
+        gl.useProgram(program); gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+        gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
+      }
       node.appendChild(canvas);
       // A lost context reveals the static photograph immediately.
-      const lost = () => { canvas.style.display = "none"; onLost(); };
+      let failed = false;
+      const lost = () => { failed = true; canvas.style.display = "none"; onLost(); };
       canvas.addEventListener("webglcontextlost", lost);
       return {
         draw(t, w, h, impacts) {
-          if (gl.isContextLost()) return;
+          if (failed || gl.isContextLost()) return;
           if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h);
+            canvas.width = w; canvas.height = h;
           }
+          if (skin) {
+            try {
+              drawFish(Math.round(w/Math.max(1,w/1280)),Math.round(h/Math.max(1,w/1280)));
+            } catch (error) {
+              failed = true; gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+              canvas.style.display = "none"; onLost(error.message); return;
+            }
+          }
+          gl.useProgram(program); gl.viewport(0,0,w,h);
           gl.uniform2f(size, w, h); gl.uniform1f(time, t);
-          if (below) {
-            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,below);
+          if (skin) {
             gl.uniform4fv(ripples,impacts);
           }
           gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -263,19 +375,36 @@
     }
   }
 
+  function skinStrip(ctx,image,a,b,side) {
+    // A light affine fallback for devices without WebGL. Each short column
+    // follows its bone tangent; fins still have independent cross sections.
+    const sw=b[1].sx-a[1].sx, edge=side ? 2 : 0, sign=side ? 1 : -1;
+    const xx=(b[1].x-a[1].x)/sw, yx=(b[1].y-a[1].y)/sw;
+    const xy=(a[edge].x-a[1].x+b[edge].x-b[1].x)/(sign*image.height);
+    const yy=(a[edge].y-a[1].y+b[edge].y-b[1].y)/(sign*image.height);
+    ctx.save();
+    ctx.transform(xx,yx,xy,yy,a[1].x-xx*a[1].sx-xy*image.height/2,
+      a[1].y-yx*a[1].sx-yy*image.height/2);
+    const left=Math.max(0,a[1].sx-.5), width=Math.min(image.width,b[1].sx+.5)-left;
+    const top=side ? image.height/2 : 0;
+    ctx.drawImage(image,left,top,width,image.height/2,left,top,width,image.height/2);
+    ctx.restore();
+  }
+
   function animate(node, scene, loaded) {
     const pond = scene === "koi" ? window.ViraKoiPond.create() : null;
     const below = pond ? document.createElement("canvas") : null;
     const fishCtx = below?.getContext("2d");
     const body = pond ? document.createElement("canvas") : null;
     const bodyCtx = body?.getContext("2d");
-    if (body) { body.width = 512; body.height = 320; }
+    if (body) { body.width = 640; body.height = 640; }
     let graphicsLost = false;
-    const plate = renderer(node, loaded[0], scene, () => {
+    const plate = renderer(node, loaded, scene, reason => {
       graphicsLost = true;
-      message = "Water and light effects stopped: graphics context lost. Choose the scene again to retry.";
+      message = reason ? "Water and light effects unavailable: " + reason + ". Choose the scene again to retry."
+        : "Water and light effects stopped: graphics context lost. Choose the scene again to retry.";
       status();
-    }, below);
+    }, pond);
     const canvas = document.createElement("canvas");
     node.appendChild(canvas);
     const ctx = canvas.getContext("2d");
@@ -300,37 +429,34 @@
       // Paint deeper fish first so a near-surface swimmer passes above them.
       for (const f of [...pond.fish].sort((a,b) => b.depth-a.depth)) {
         const p = position(f,v), image = loaded[1+f.type];
-        const perspective = .70+.30*f.y;
+        const projection = window.ViraKoiPond.camera(f.x,f.y,loaded[0].width/loaded[0].height);
         const length = v.pw*.108*f.size*(1-f.depth*.07);
-        const height = 384*image.height/image.width;
-        bodyCtx.clearRect(0,0,512,320);
-        // Reconstruct the body at full alpha, then submerge it as ONE image.
-        // This avoids bright seams where translucent, flexing strips overlap.
-        const strips = 48;
-        for (let j = 0; j < strips; j++) {
-          const a = j/strips, sw = image.width/strips;
-          const stroke = Math.sin(f.tail-a*7)*a*a*384*(.006+f.speed*.28);
-          const curve = f.turn*a*a*384*.028;
-          bodyCtx.drawImage(image,j*sw,0,Math.min(sw+1,image.width-j*sw),image.height,
-            64+a*384,160-height/2+stroke+curve,384/strips+.5,height);
+        bodyCtx.clearRect(0,0,640,640);
+        // The CPU fallback follows the same backbone using short rotated
+        // columns; the normal GPU path renders a connected triangle mesh.
+        const mesh = window.ViraKoiPond.skinMesh(f,image.height/image.width).map(column =>
+          column.map(p => ({ sx:p.u*image.width, sy:p.v*image.height,
+            x:320+p.x*384, y:320+p.y*384 })));
+        for (let j=0;j<mesh.length-1;j++) for (let k=0;k<2;k++) {
+          skinStrip(bodyCtx,image,mesh[j],mesh[j+1],k);
         }
         fishCtx.save();
         fishCtx.translate(p.x+f.depth*7,p.y+f.depth*18);
-        fishCtx.transform(perspective,0,.10*(f.x-.5),perspective*.76,0,0);
+        fishCtx.transform(projection.xx,projection.yx,projection.xy,projection.yy,0,0);
         fishCtx.rotate(f.heading+Math.PI);
         fishCtx.filter = `blur(${3+f.depth*5}px)`;
         fishCtx.fillStyle = `rgba(0,18,15,${.15-f.depth*.065})`;
         fishCtx.beginPath(); fishCtx.ellipse(0,0,length*.39,length*.085,0,0,Math.PI*2); fishCtx.fill();
         fishCtx.restore();
         fishCtx.save(); fishCtx.translate(p.x,p.y+f.depth*3);
-        fishCtx.transform(perspective,0,.10*(f.x-.5),perspective*.76,0,0);
+        fishCtx.transform(projection.xx,projection.yx,projection.xy,projection.yy,0,0);
         fishCtx.rotate(f.heading+Math.PI);
-        // Banking briefly reveals a narrower flank through a turn.
-        fishCtx.scale(1,.35+.65*Math.cos(f.bank*1.2));
+        // Roll varies along the spine in the mesh, rather than flattening
+        // the entire fish into a uniformly squashed photograph.
         fishCtx.globalAlpha = .94-f.depth*.24;
         fishCtx.filter = `blur(${f.depth*.55}px) brightness(${1-f.depth*.13})`;
-        fishCtx.drawImage(body,-length*(.5+64/384),-length*160/384,
-          length*512/384,length*320/384);
+        fishCtx.drawImage(body,-length*320/384,-length*320/384,
+          length*640/384,length*640/384);
         fishCtx.restore();
       }
     }
@@ -368,14 +494,16 @@
       const w = Math.round(innerWidth*layerRatio), h = Math.round(innerHeight*layerRatio);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       impacts.fill(0);
+      const fallback = !plate || graphicsLost;
       if (pond) {
-        fish(w,h);
+        if (fallback) fish(w,h);
         pond.drops.forEach((drop,i) => {
           const p = window.ViraKoiPond.project(drop.x,drop.y);
           impacts.set([p.x,p.y,drop.age,drop.strength],i*4);
         });
       }
       plate?.draw(elapsed,gpuW,gpuH,impacts);
+      if (pond && graphicsLost && !fallback) fish(w,h);
       ctx.clearRect(0,0,w,h);
       if (pond) {
         if (!plate || graphicsLost) ctx.drawImage(below,0,0,w,h);

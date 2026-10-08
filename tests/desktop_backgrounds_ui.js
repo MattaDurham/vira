@@ -9,9 +9,43 @@ class Target {
   emit(type, extra = {}) { for (const fn of this.listeners.get(type) || []) fn({ target: this, ...extra }); }
 }
 let draws = 0, poses = [];
+let gpuEnabled = false, gpuDraws = [], uploads = 0, disposed = 0;
+const gl = { program:null, buffer:null, enabled:new Set(), pointers:new Map() };
+["VERTEX_SHADER","FRAGMENT_SHADER","COMPILE_STATUS","LINK_STATUS","ARRAY_BUFFER","STATIC_DRAW",
+ "DYNAMIC_DRAW","FLOAT","TEXTURE_2D","TEXTURE_MIN_FILTER","TEXTURE_MAG_FILTER","LINEAR",
+ "TEXTURE_WRAP_S","TEXTURE_WRAP_T","CLAMP_TO_EDGE","RGB","RGBA","UNSIGNED_BYTE",
+ "TEXTURE1","TEXTURE2","FRAMEBUFFER","COLOR_ATTACHMENT0","FRAMEBUFFER_COMPLETE","COLOR_BUFFER_BIT",
+ "BLEND","SRC_ALPHA","ONE_MINUS_SRC_ALPHA","ONE","TRIANGLES"].forEach((name,i)=>{gl[name]=i+1;});
+Object.assign(gl,{
+  createShader:()=>({}),shaderSource:(s,source)=>{s.source=source;},compileShader(){},getShaderParameter:()=>true,
+  createProgram:()=>({shaders:[]}),attachShader:(p,s)=>p.shaders.push(s),linkProgram(){},getProgramParameter:()=>true,
+  useProgram:p=>{gl.program=p;},createBuffer:()=>({}),bindBuffer:(_,b)=>{gl.buffer=b;},
+  bufferData:(_,data)=>{gl.buffer.data=data;},getAttribLocation:(_,name)=>name==="a"?0:1,
+  enableVertexAttribArray:i=>gl.enabled.add(i),disableVertexAttribArray:i=>gl.enabled.delete(i),
+  vertexAttribPointer:(i,size)=>gl.pointers.set(i,{buffer:gl.buffer,size}),
+  createTexture:()=>({}),bindTexture(){},texParameteri(){},texImage2D(){uploads++;},activeTexture(){},
+  getUniformLocation:(program,name)=>({program,name}),
+  uniform1i(location){assert.equal(gl.program,location.program);},
+  uniform1f(location){assert.equal(gl.program,location.program);},
+  uniform2f(location){assert.equal(gl.program,location.program);},
+  uniform4fv(location){assert.equal(gl.program,location.program);},
+  createFramebuffer:()=>({}),bindFramebuffer(){},framebufferTexture2D(){},checkFramebufferStatus:()=>gl.FRAMEBUFFER_COMPLETE,
+  viewport(){},clearColor(){},clear(){},enable(){},disable(){},blendFuncSeparate(){},isContextLost:()=>gl.lost===true,
+  drawArrays(_,first,count){
+    const skin=gl.program.shaders.some(s=>s.source.includes("attribute vec4 vertex"));
+    const attribute=skin?1:0, pointer=gl.pointers.get(attribute);
+    assert.deepEqual([...gl.enabled],[attribute],"passes must restore their vertex attribute state");
+    assert.equal(pointer.size,skin?4:2);
+    assert.ok(pointer.buffer.data.length>=(first+count)*pointer.size,"the draw uses its own complete buffer");
+    assert.ok([...pointer.buffer.data].every(Number.isFinite),"mesh vertices must stay finite on the GPU path");
+    gpuDraws.push(skin?"skin":"water");
+  },
+  getExtension:()=>({loseContext(){}}),deleteProgram(){disposed++;},deleteBuffer(){},deleteTexture(){},deleteShader(){},deleteFramebuffer(){},
+});
 const context = { clearRect() {}, save() {}, restore() {}, rotate() {},
   transform() {}, scale() {},
   translate(x, y) { poses.push([x, y]); }, beginPath() {}, ellipse() {}, fill() {},
+  moveTo() {}, lineTo() {}, closePath() {}, clip() {},
   stroke() {}, arc() {}, drawImage() { draws++; } };
 class Element extends Target {
   constructor(tag) { super(); this.tagName = tag; this.children = []; this.dataset = {}; this.attrs = {}; this.style = { setProperty() {} }; }
@@ -39,7 +73,7 @@ class Element extends Target {
     }
     this.appendChild(new Element("input"));
   }
-  getContext(kind) { return kind === "2d" ? context : null; }
+  getContext(kind) { return kind === "2d" ? context : gpuEnabled ? gl : null; }
 }
 const document = new Target(); document.body = new Element("body"); document.hidden = false;
 document.createElement = tag => new Element(tag);
@@ -123,5 +157,21 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   assert.match(panel().querySelector(".background-status").textContent, /Could not load/);
   scene("aurora"); resolve("aurora.jpg"); await flush(); assert.equal(frames.size, 1);
   scene("none");
+  gpuEnabled=true;
+  const cpuDraws=draws;
+  scene("koi");await flush();
+  assert.equal(host().children.length,2,"the GPU plane and surface overlay are installed together");
+  assert.equal(gpuDraws.filter(kind=>kind==="skin").length,14,"seven connected skins and shadows draw into the water target");
+  assert.equal(gpuDraws.at(-1),"water","surface refraction composites after the submerged fish");
+  const loadedUploads=uploads;
+  frame();frame();
+  assert.equal(uploads,loadedUploads,"moving fish update vertices without reuploading sprite pixels");
+  assert.equal(draws,cpuDraws,"the GPU path must not rasterize the fish on the CPU");
+  gl.lost=true;host().children[0].emit("webglcontextlost");frame();
+  assert.match(panel().querySelector(".background-status").textContent,/context lost/);
+  assert.ok(draws>cpuDraws,"context loss retains animated fish above the photograph");
+  scene("none");
+  assert.equal(disposed,2,"both water and skin programs are released");
+  assert.equal(frames.size,0);
   console.log("Scene races, cleanup, pause/resume, hidden tabs, reduced motion and load failures pass.");
 })().catch(error => { console.error(error); process.exitCode = 1; });
