@@ -21,3 +21,6 @@ class DesktopBackgroundTests(unittest.TestCase):
 
     def test_pond_behavior(self):
         self.run_harness("koi_pond.js")
+
+    def test_pond_volume_and_propulsion(self):
+        self.run_harness("koi_pond_3d.mjs")

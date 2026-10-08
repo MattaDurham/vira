@@ -1,4 +1,4 @@
-/* Photographic plates + local animation. No remote assets or libraries. */
+/* Local living backgrounds: a 3D pond and animated photographic landscapes. */
 (() => {
   "use strict";
   const KEY = "vira-background";
@@ -33,6 +33,7 @@
     const p = value && typeof value === "object" ? value : {};
     return { scene: ids.has(p.scene) ? p.scene : "constellation",
       pond: PONDS.some(s => s.id === p.pond) ? p.pond : "garden",
+      look:p.look==="wireframe"?"wireframe":"natural",
       paused: p.paused === true,
       dim: typeof p.dim === "number" && Number.isFinite(p.dim)
         ? Math.max(0, Math.min(.65, p.dim)) : .2 };
@@ -60,12 +61,18 @@
     feed.hidden = prefs.scene !== "koi";
     feed.disabled = !moving() || !stop.feed;
     panel.querySelector(".background-pond-setting").hidden = prefs.scene !== "koi";
-    panel.querySelector("select").value = prefs.pond;
+    panel.querySelector(".background-pond-select").value = prefs.pond;
+    panel.querySelector(".background-look-setting").hidden=prefs.scene!=="koi";
+    panel.querySelector(".background-look-select").value=prefs.look;
+    panel.querySelector(".background-look-select").disabled=prefs.scene==="koi" && !stop.look;
+    const studioLook=document.getElementById("design-pond-look");if(studioLook){studioLook.value=prefs.look;studioLook.disabled=prefs.scene==="koi" && !stop.look;}
+    const explore=panel.querySelector(".background-explore");explore.hidden=prefs.scene!=="koi";
+    explore.disabled=!stop.explore;
     panel.querySelector('[data-scene="koi"]').querySelector("img").src = asset(pondSetting().image);
     panel.querySelector(".background-status").textContent = message ||
       (reduced.matches ? "Still scene: your system prefers reduced motion."
         : prefs.paused ? "Motion paused. Your choice is saved."
-        : prefs.scene === "koi" ? "Click open water to drop food. The koi will swim over."
+        : prefs.scene === "koi" ? "Click open water to feed. Look around to explore the pond."
         : "Your choice is saved. Motion rests when this tab is hidden.");
   }
   async function apply() {
@@ -99,7 +106,20 @@
         ? [scene.image, "kohaku.webp", "ogon.webp", "showa.webp", "shusui.webp"] : [scene.image];
       const loaded = await Promise.all(names.map(load));
       if (token !== generation) return;
-      stop = animate(node, scene.id, loaded);
+      if(scene.id==="koi"){
+        let engine=null;
+        try{
+          const factory=io.pond3D || (()=>import("./koi-pond-3d.js"));
+          const module=await factory();if(token!==generation)return;
+          engine=module?.create({node,loaded,style:prefs.pond,canFeed:io.canFeed,
+            onMessage:value=>{if(token===generation){message=value;status();}},onLook:setLook,look:prefs.look,
+            onPause:()=>{prefs.paused=!prefs.paused;save();motionChange();}});
+        }catch(error){console.warn("3D pond unavailable:",error.message);}
+        if(token!==generation){engine?.();return;}
+        stop=engine || animate(node,scene.id,loaded);
+        if(engine){stop.look(prefs.look);stop.motion(moving());}
+        else stop.message="3D pond unavailable: using the photographic approximation. "+(stop.message || "");
+      }else stop = animate(node, scene.id, loaded);
       message = stop.message || "";
       status();
     } catch (error) {
@@ -107,6 +127,13 @@
       message = error.message + ". Choose another background or try again.";
       status();
     }
+  }
+
+  function setLook(look){
+    if(!["natural","wireframe"].includes(look))return;
+    prefs.look=look;save();
+    if(prefs.scene!=="koi")select("koi");
+    else {stop.look?.(look);status();}
   }
 
   const VERTEX = `attribute vec2 a; void main() { gl_Position=vec4(a,0.,1.); }`;
@@ -615,10 +642,13 @@
       <div class="background-options"></div><div class="background-simple"></div>
       <div class="background-controls"><button class="background-motion">Pause motion</button>
       <button class="background-feed" hidden>Feed koi</button>
+      <button class="background-explore" hidden>Look around</button>
       <label>Dim <input aria-label="Background dimming" type="range" min="0" max="65" step="1"></label></div>
-      <label class="background-pond-setting" hidden>Pond setting <select aria-label="Pond setting"></select></label>
+      <label class="background-pond-setting" hidden>Pond setting <select class="background-pond-select" aria-label="Pond setting"></select></label>
+      <label class="background-look-setting" hidden>Pond look <select class="background-look-select" aria-label="Pond look">
+        <option value="natural">Natural 3D</option><option value="wireframe">Cyberpunk wireframe</option></select></label>
       <p class="background-status" role="status"></p>`;
-    const setting = panel.querySelector("select");
+    const setting = panel.querySelector(".background-pond-select");
     for (const p of PONDS) {
       const option = document.createElement("option"); option.value=p.id; option.textContent=p.name;
       setting.appendChild(option);
@@ -648,6 +678,9 @@
       prefs.paused = !prefs.paused; save(); motionChange();
     });
     panel.querySelector(".background-feed").addEventListener("click", () => stop.feed?.());
+    panel.querySelector(".background-explore").addEventListener("click",()=>{panel.hidden=true;trigger.setAttribute("aria-expanded","false");stop.explore?.();});
+    panel.querySelector(".background-look-select").addEventListener("change",e=>setLook(e.target.value));
+    document.getElementById("design-pond-look")?.addEventListener("change",e=>setLook(e.target.value));
     const range = panel.querySelector("input"); range.value = Math.round(prefs.dim * 100);
     range.addEventListener("input", () => {
       prefs.dim = Number(range.value) / 100;

@@ -17119,7 +17119,12 @@ function armSkinApply(foot, s) {
 async function doApplySkin(s) {
   try {
     toast("Applying " + s.name + "…");
-    await post("/api/skins/" + encodeURIComponent(s.id) + "/apply", {});
+    const result = await post("/api/skins/" + encodeURIComponent(s.id) + "/apply", {});
+    if (result.background) {
+      const raw = lsSet("vira-background", result.background);
+      // Save before reloading: the usual UI debounce outlives this reload.
+      await post("/api/ui-state", { keys: { "vira-background": raw } });
+    }
     // reload to pick up the rewritten style.css + skin-active.css
     setTimeout(() => location.reload(), 450);
   } catch (e) {
@@ -31089,7 +31094,7 @@ function initLayout() {
 
 function initDesktop() {
   document.body.classList.add("desktop");
-  window.ViraBackgrounds.init({ read: lsGet, write: lsSet,
+  window.ViraBackgrounds.init({ read: lsGet, write: (key, value) => uiPush(key, lsSet(key, value)),
     constellation: initConstellation,
     canFeed: target => !editing && isDesktopOpenSpace(target) });
   const stored = desktopStore();

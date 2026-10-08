@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { create, project, unproject, inWater, camera, skinMesh, projectedMesh, optics } = require("../static/koi-pond.js");
+const { create, project, unproject, inWater, camera, skinMesh, projectedMesh, optics, space, world, floorAt, bodyPoint, volumeMesh, anatomy, segments } = require("../static/koi-pond.js");
 let seed = 947;
 const random = () => { seed = (Math.imul(seed,1664525)+1013904223) >>> 0; return seed/4294967296; };
 const pond = create(random);
@@ -51,9 +51,9 @@ for (let i=0;i<2400;i++) {
     let length=0;
     for (let k=1;k<f.spine.length;k++) {
       const a=f.spine[k-1], b=f.spine[k], segment=Math.hypot(b.x-a.x,b.y-a.y);
-      assert.ok(Math.abs(segment-1/(f.spine.length-1)) < 1e-10,"bending must not stretch bones");
+      assert.ok(Math.abs(segment-segments[k-1].length) < 1e-10,"bending must not stretch bones");
       length+=segment;
-      if (k/(f.spine.length-1) < .20) assert.ok(Math.abs(b.y) < 1e-10,"the skull must stay rigid");
+      if (b.s <= .20) assert.ok(Math.abs(b.y) < 1e-10,"the skull must stay rigid");
     }
     assert.ok(Math.abs(length-1)<1e-10,"arc length stays constant through a turn");
     curl=Math.max(curl,Math.abs(f.spine.at(-1).angle));
@@ -78,7 +78,7 @@ const distance = () => pond.fish.reduce((sum,f) => sum+Math.hypot(f.x-center.x,f
 const initialDistance = distance();
 assert.equal(pond.feed(center.x,center.y),true); assert.equal(pond.food.length,8);
 let shallowest = Infinity;
-for (let i=0;i<240;i++) {
+for (let i=0;i<320;i++) {
   pond.step(.025);
   shallowest = Math.min(shallowest,pond.fish.reduce((sum,f) => sum+f.depth,0)/pond.fish.length);
 }
@@ -128,7 +128,7 @@ Object.assign(swimmer,{heading:0,vx:.04,vy:0,angularVelocity:0,bend:0,bendVeloci
 const crossings=[[],[]], previous=[0,0];
 for(let i=0;i<1200;i++){
   swimmer.x=.5;swimmer.y=.5;wave.step(1/120);
-  [10,17].forEach((joint,j)=>{
+  [10,24].forEach((joint,j)=>{
     const value=swimmer.joints[joint];
     if(i>600 && previous[j]<0 && value>=0)crossings[j].push(i/120);
     previous[j]=value;

@@ -68,12 +68,13 @@ class Element extends Target {
   querySelector(s) { return this.querySelectorAll(s)[0]; }
   set innerHTML(html) {
     // Only the fixed picker skeleton needs parsing in this harness.
-    for (const cls of ["background-options", "background-simple", "background-motion", "background-feed", "background-pond-setting", "background-status", "background-close"]) {
+    for (const cls of ["background-options", "background-simple", "background-motion", "background-feed", "background-explore", "background-pond-setting", "background-look-setting", "background-status", "background-close"]) {
       const c = new Element(cls.includes("motion") || cls.includes("close") ? "button" : "div");
       c.className = cls; this.appendChild(c);
     }
     this.appendChild(new Element("input"));
-    this.appendChild(new Element("select"));
+    const pond=new Element("select");pond.className="background-pond-select";this.appendChild(pond);
+    const look=new Element("select");look.className="background-look-select";this.appendChild(look);
   }
   getContext(kind) { return kind === "2d" ? context : gpuEnabled ? gl : null; }
 }
@@ -84,6 +85,7 @@ document.getElementById = id => id === trigger.id ? trigger : undefined;
 const reduced = new Target(); reduced.matches = false;
 const windowEvents = new Target(), frames = new Map(), pendingImages = new Map();
 let nextFrame = 0, clock = 0, stored, stops = 0, constellations = 0;
+let pondFactory=async()=>null;
 class Image {
   constructor() { this.width = 1600; this.height = 900; }
   set src(src) { pendingImages.set(src.split("/").pop(), this); }
@@ -103,6 +105,7 @@ const host = () => document.body.children.find(c => c.id === "desktop-background
 const frame = () => { clock += 40; const work = [...frames.values()]; frames.clear(); work.forEach(fn => fn(clock)); };
 (async () => {
   sandbox.window.ViraBackgrounds.init({ read: () => ({ scene: "unknown", dim: 100 }),
+    pond3D:()=>pondFactory(),
     canFeed: target => target === document.body,
     write: (key, value) => { assert.equal(key, "vira-background"); stored = { ...value }; },
     constellation: () => { constellations++; return () => { stops++; }; } });
@@ -182,5 +185,29 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   scene("none");
   assert.equal(disposed,2,"both water and skin programs are released");
   assert.equal(frames.size,0);
-  console.log("Scene races, cleanup, pause/resume, hidden tabs, reduced motion and load failures pass.");
+  let release, allocations=0, retired=0, callbacks, engine;
+  pondFactory=()=>new Promise(resolve=>{release=resolve;});
+  scene("koi");await flush();scene("none");
+  release({create:()=>{allocations++;}});await flush();
+  assert.equal(allocations,0,"a delayed module must not allocate into an abandoned scene");
+  pondFactory=async()=>({create:options=>{
+    callbacks=options;allocations++;
+    engine=()=>{retired++;};engine.styles=[];engine.moves=[];
+    engine.look=value=>engine.styles.push(value);engine.motion=value=>engine.moves.push(value);
+    engine.explore=()=>{engine.explored=true;};engine.feed=()=>{};return engine;
+  }});
+  scene("koi");await flush();
+  const look=panel().querySelector(".background-look-select");
+  look.value="wireframe";look.emit("change");
+  assert.equal(stored.look,"wireframe");assert.equal(engine.styles.at(-1),"wireframe");
+  assert.equal(allocations,1);assert.equal(retired,0,"changing look must retain the simulation");
+  callbacks.onLook("natural");assert.equal(look.value,"natural");assert.equal(stored.look,"natural");
+  motion.emit("click");assert.equal(engine.moves.at(-1),false);
+  motion.emit("click");assert.equal(engine.moves.at(-1),true);
+  reduced.matches=true;reduced.emit("change");assert.equal(engine.moves.at(-1),false);
+  reduced.matches=false;reduced.emit("change");
+  panel().querySelector(".background-explore").emit("click");assert.equal(engine.explored,true);
+  assert.equal(panel().hidden,true,"exploration closes the picker without moving desktop windows");
+  scene("none");assert.equal(retired,1,"leaving the scene disposes the 3D engine once");
+  console.log("Scene races, cleanup, pause/resume, hidden tabs, reduced motion and 3D style continuity pass.");
 })().catch(error => { console.error(error); process.exitCode = 1; });
