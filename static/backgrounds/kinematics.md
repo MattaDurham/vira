@@ -2,7 +2,8 @@
 
 The animated pond uses a reduced model informed by carp research, with coefficients
 tuned visually for a desktop background. It is not a calibrated animal simulation
-or a full fluid solver. Fish lengths and water-plane velocities are normalized.
+or a full fluid solver. Fish lengths and water-plane velocities are normalized;
+vertical depth uses metres in a nominal six-metre-wide pond.
 
 ## Sources and what they informed
 
@@ -45,9 +46,45 @@ keep the fish moving over the photograph.
 Muscle effort rises before forward speed. Caudal angular motion modulates thrust;
 velocity persists between strokes and decays under forward drag. Stronger lateral
 drag resists sliding sideways when heading changes. Steering has angular inertia.
+Larger fish have more gradual changes in velocity and heading, using a simplified
+area-to-volume scaling for effective inertia; their stroke cadence is also slower.
 Springs run with bounded 120 Hz substeps so a slow render frame cannot explode the
 rig. Pause and hidden tabs retain the pose and momentum without advancing time.
 
 The joint stiffness, drag ratios, stroke cadence, fin movement and burst timings
 are animation choices, not measured koi parameters. Pectoral movement and roll are
-visual approximations; buoyancy and three-dimensional fluid forces are not solved.
+visual approximations; buoyancy and full three-dimensional fluid forces are not solved.
+
+## Camera and underwater light
+
+The plate, fish, feeding points and ripple rings share one oblique pinhole camera
+with a visually chosen 50-degree elevation. Connected skin cross sections have a
+raised dorsal profile and rotate in three dimensions when banking or pitching.
+Depth changes projected position and scale. Vertical velocity responds gradually
+to a chosen depth, with damping and bounded ascent/descent speed; the fish pitch
+into the movement. Feeding requires reaching the surface layer first.
+
+[PBRT's dielectric reflection and transmission model](https://www.pbr-book.org/3ed-2018/Reflection_Models/Specular_Reflection_and_Transmission)
+informs Snell-law apparent depth using water's refractive index of 1.333 and a
+Fresnel surface reflection approximation. [PBRT's transmittance model](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance)
+informs exponential contrast and color attenuation with optical path length.
+Deeper fish progressively soften, lose warm colors and recede beneath the green
+medium and photographic reflections. Blur samples use premultiplied sprite color
+so transparent edges do not develop dark halos. Camera elevation, apparent-depth
+reference ray, pond extinction coefficients and reflected-radiance gain are tuned
+approximations: this does not reconstruct an environment map or ray-trace the
+photograph. Water distortion is masked to the open pond rather than shifting its
+stone banks. The fallback preserves the same projected skin and depth cues with
+simplified raster tinting.
+
+## Classic pond settings
+
+The garden and courtyard photographs are generated background plates, not images
+of specific gardens. Their design is informed by the broad pond, stone banks and
+garden planting shown in the official [Portland Strolling Pond Garden](https://japanesegarden.org/garden-spaces/strolling-pond-garden/)
+and [Seattle Japanese Garden's stroll-garden design](https://www.seattlejapanesegarden.org/blog/2019/7/22/the-seattle-japanese-garden-designed-in-the-stroll-garden-style).
+Portland's [koi article](https://japanesegarden.org/2024/05/23/koi/) identifies
+its lower pond as the koi habitat. The design interpretation here is quiet, deep
+open water with planted, intentional banks rather than a visible river-stone bed.
+The generated plates contain no fish; all fish are animated beneath the reflected
+surface. Exact generation prompts are recorded in `provenance.json`.

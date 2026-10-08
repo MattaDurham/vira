@@ -28,6 +28,7 @@ Object.assign(gl,{
   uniform1i(location){assert.equal(gl.program,location.program);},
   uniform1f(location){assert.equal(gl.program,location.program);},
   uniform2f(location){assert.equal(gl.program,location.program);},
+  uniform3fv(location){assert.equal(gl.program,location.program);},
   uniform4fv(location){assert.equal(gl.program,location.program);},
   createFramebuffer:()=>({}),bindFramebuffer(){},framebufferTexture2D(){},checkFramebufferStatus:()=>gl.FRAMEBUFFER_COMPLETE,
   viewport(){},clearColor(){},clear(){},enable(){},disable(){},blendFuncSeparate(){},isContextLost:()=>gl.lost===true,
@@ -46,7 +47,7 @@ const context = { clearRect() {}, save() {}, restore() {}, rotate() {},
   transform() {}, scale() {},
   translate(x, y) { poses.push([x, y]); }, beginPath() {}, ellipse() {}, fill() {},
   moveTo() {}, lineTo() {}, closePath() {}, clip() {},
-  stroke() {}, arc() {}, drawImage() { draws++; } };
+  stroke() {}, arc() {}, fillRect() {}, drawImage() { draws++; } };
 class Element extends Target {
   constructor(tag) { super(); this.tagName = tag; this.children = []; this.dataset = {}; this.attrs = {}; this.style = { setProperty() {} }; }
   appendChild(c) { c.parent = this; this.children.push(c); return c; }
@@ -67,11 +68,12 @@ class Element extends Target {
   querySelector(s) { return this.querySelectorAll(s)[0]; }
   set innerHTML(html) {
     // Only the fixed picker skeleton needs parsing in this harness.
-    for (const cls of ["background-options", "background-simple", "background-motion", "background-feed", "background-status", "background-close"]) {
+    for (const cls of ["background-options", "background-simple", "background-motion", "background-feed", "background-pond-setting", "background-status", "background-close"]) {
       const c = new Element(cls.includes("motion") || cls.includes("close") ? "button" : "div");
       c.className = cls; this.appendChild(c);
     }
     this.appendChild(new Element("input"));
+    this.appendChild(new Element("select"));
   }
   getContext(kind) { return kind === "2d" ? context : gpuEnabled ? gl : null; }
 }
@@ -107,7 +109,7 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   assert.equal(constellations, 1); assert.equal(pendingImages.size, 0);
   scene("koi"); scene("redwoods");
   assert.equal(stops, 1);
-  resolve("pond-perspective.jpg"); resolve("kohaku.webp"); resolve("ogon.webp");
+  resolve("pond-garden.jpg"); resolve("kohaku.webp"); resolve("ogon.webp");
   resolve("showa.webp"); resolve("shusui.webp"); await flush();
   assert.equal(host().children.length, 0, "a stale load must not install its animation");
   resolve("redwoods.jpg"); await flush();
@@ -125,6 +127,12 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   motion.emit("click"); frame();
   assert.deepEqual(poses.at(-1), before, "resume must retain the paused simulation time");
   assert.equal(frames.size, 1);
+  const setting=panel().querySelector("select");
+  setting.value="courtyard";setting.emit("change");
+  assert.equal(stored.pond,"courtyard");assert.equal(frames.size,0,"changing ponds retires the previous fish loop");
+  resolve("pond-courtyard.jpg");await flush();
+  assert.equal(frames.size,1);assert.equal(document.listeners.get("click").size,1,"the new pond has one feeding handler");
+  assert.equal(panel().querySelector(".background-pond-setting").hidden,false);
   let prevented = false;
   const click = { button: 0, clientX: 640, clientY: 360,
     preventDefault() { prevented = true; }, defaultPrevented: false };
@@ -149,6 +157,7 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   const range = panel().querySelector("input"); range.value = "35"; range.emit("input");
   assert.equal(stored.dim, .35);
   scene("none"); assert.equal(host(), undefined); assert.equal(frames.size, 0);
+  assert.equal(panel().querySelector(".background-pond-setting").hidden,true);
   assert.equal(document.listeners.get("visibilitychange").size, 0);
   assert.equal(windowEvents.listeners.get("resize").size, 0);
   assert.equal(document.listeners.get("click").size, 0);

@@ -6,21 +6,45 @@
   // Physical water-plane units use image width. The pond is wider than tall,
   // with modest oblique foreshortening; steering and rendering share this metric.
   const WATER_Y = (16/9)*.76;
+  // A fitted photographic camera, looking 50 degrees down into a six-metre
+  // pond. Depth is metres below the surface, rather than a cosmetic alpha.
+  const lens = { scale:.82, distance:2.6, sin:Math.sin(50*Math.PI/180),
+    cos:Math.cos(50*Math.PI/180), centerY:.51, waterY:WATER_Y, width:6 };
+  // Snell: apparent vertical depth at the centre of this air/water view.
+  const refractedSin=lens.cos/1.333;
+  const apparentDepth=(refractedSin/Math.sqrt(1-refractedSin*refractedSin))/(lens.cos/lens.sin);
   const clamp = (x, low, high) => Math.max(low, Math.min(high, x));
   const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
   const radius = (x, y) => Math.hypot((x - .5) / .46, (y - .5) / .44);
   const inWater = (x, y) => Number.isFinite(x) && Number.isFinite(y) && radius(x, y) < .94;
   // Far water compresses in both axes. The inverse is also used for feeding,
   // so a clicked ripple and a fish's destination remain aligned when cropped.
-  const project = (x, y) => ({ x: .5 + (x - .5) * (.70 + .30 * y),
-    y: .12 + .80 * y / (1.18 - .18 * y) });
-  const unproject = (u, v) => {
-    const y = (v - .12) * 1.18 / (.80 + .18 * (v - .12));
-    return { x: .5 + (u - .5) / (.70 + .30 * y), y };
+  const project = (x, y, depth=0) => {
+    const X=x-.5, Y=(y-.5)/WATER_Y, Z=-depth/lens.width*apparentDepth;
+    const q=lens.distance-Y*lens.cos-Z*lens.sin;
+    const scale=lens.scale*lens.distance/q;
+    return { x:.5+X*scale, y:lens.centerY+(Y*lens.sin-Z*lens.cos)*scale*(16/9) };
   };
-  const camera = (x,y,photoRatio=16/9) => ({ xx:.70+.30*y, yx:0,
-    xy:.30*(x-.5)*WATER_Y,
-    yy:.80*1.18/Math.pow(1.18-.18*y,2)*WATER_Y/photoRatio });
+  const unproject = (u, v) => {
+    const t=(v-lens.centerY)/((16/9)*lens.scale);
+    const Y=t*lens.distance/(lens.distance*lens.sin+t*lens.cos);
+    return { x:.5+(u-.5)*(lens.distance-Y*lens.cos)/(lens.scale*lens.distance),
+      y:.5+Y*WATER_Y };
+  };
+  const camera = (x,y,photoRatio=16/9,depth=0) => {
+    const X=x-.5,Y=(y-.5)/WATER_Y,Z=-depth/lens.width*apparentDepth;
+    const q=lens.distance-Y*lens.cos-Z*lens.sin,k=lens.scale*lens.distance;
+    return { xx:k/q, yx:0, xy:k*X*lens.cos/(q*q),
+      yy:k*(lens.sin*lens.distance-Z)/(q*q)*(16/9)/photoRatio };
+  };
+  function optics(depth) {
+    const path=Math.max(0,depth)/Math.sqrt(1-refractedSin*refractedSin);
+    // Pond turbidity and illumination are fitted, not measured. Exponential
+    // extinction reduces contrast; wavelength-dependent absorption changes hue.
+    return { path, clarity:.96*Math.exp(-.95*path),
+      transmission:[Math.exp(-.75*path),Math.exp(-.28*path),Math.exp(-.43*path)],
+      blur:.0003+.012*(1-Math.exp(-1.2*path)) };
+  }
   const separation = (x,y) => Math.hypot(x,y/WATER_Y);
   // A reduced articulated backbone, NOT a literal vertebral count. Regional
   // rigidity, muscle waves and water damping are based on the carp studies
@@ -45,7 +69,7 @@
   }
   function flex(f, dt) {
     const effort = Math.sqrt(clamp(f.drive/.19,0,1));
-    f.tail += dt*TAU*(.18+2.35*effort);
+    f.tail += dt*TAU*(.18+2.35*effort)/Math.sqrt(f.size);
     const amplitude = .04+.96*effort;
     for (let i = 0; i < BONES; i++) {
       const s = (i+.5)/BONES;
@@ -79,10 +103,24 @@
       return [0,.5,1].map(v => {
         const fin = v < .5 ? f.finLeft : f.finRight;
         const offset = (v-.5)*aspect*Math.cos(roll)*(1+fins*(fin-1));
+        const dorsal=.12*Math.sin(Math.PI*s)*Math.max(0,1-Math.pow((v-.5)*2,2));
         return { u:s, v, x:p.x-f.center.x-Math.sin(angle)*offset,
-          y:p.y-f.center.y+Math.cos(angle)*offset };
+          y:p.y-f.center.y+Math.cos(angle)*offset,
+          z:dorsal*Math.cos(roll)+(v-.5)*aspect*Math.sin(roll) };
       });
     });
+  }
+  function projectedMesh(f,aspect=.5) {
+    const length=.108*f.size, cosine=Math.cos(f.heading+Math.PI),sine=Math.sin(f.heading+Math.PI);
+    const pitch=f.pitch || 0;
+    return skinMesh(f,aspect).map(column=>column.map(p=>{
+      const along=p.x*Math.cos(pitch), up=p.z*Math.cos(pitch)-p.x*Math.sin(pitch);
+      const x=f.x+length*(cosine*along-sine*p.y);
+      const y=f.y+length*(sine*along+cosine*p.y)*WATER_Y;
+      const depth=Math.max(.025,f.depth-up*length*lens.width);
+      const screen=project(x,y,depth);
+      return { u:p.u,v:p.v,x:screen.x,y:screen.y,depth };
+    }));
   }
   function create(random = Math.random) {
     let time = 0, nextDrop = 1.2;
@@ -99,7 +137,7 @@
         : f.mode === "cruise" ? between(.025,.050) : between(.085,.13);
       f.timer = f.mode === "dart" ? between(.6,1.4) : between(2.2,5.5);
       if (f.mode !== "hover") f.target = point();
-      f.targetDepth = between(.25,1.1);
+      f.targetDepth = between(.22,1.65);
     };
     const types = [0, 1, 2, 3, 0, 2, 3];
     types.forEach((type, i) => {
@@ -111,7 +149,7 @@
         joints: Array(BONES).fill(0), jointVelocity: Array(BONES).fill(0),
         finPhase: i*2.1, finLeft: 1, finRight: 1, thrust: 0,
         startAge: 1, startSign: 0, startCooldown: 0,
-        size: between(.82,1.15), depth: between(.25,.85), target: point(),
+        size: between(.82,1.15), depth: between(.18,1.2), depthVelocity:0, pitch:0, target: point(),
         eating: 0, attention: 0, mode: "cruise", pace: .025, timer: 0, targetDepth: .5 };
       change(f); f.timer = between(.5,3.5); buildSpine(f); fish.push(f);
     });
@@ -127,7 +165,9 @@
       while (food.length > 16) food.shift();
       for (let i = 0; i < 8; i++) {
         const a = i * TAU / 8, r = between(.006,.021);
-        const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+        let px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+        const edge = radius(px,py);
+        if (edge > .92) { px=.5+(px-.5)*.92/edge; py=.5+(py-.5)*.92/edge; }
         food.push({ x: px, y: py, life: 15 });
       }
       ripple(x, y, 1);
@@ -169,7 +209,7 @@
           depth = .07;
           const nose = { x: f.x+Math.cos(f.heading)*.035*f.size,
             y: f.y+Math.sin(f.heading)*.035*f.size*WATER_Y };
-          if (separation(nose.x-pellet.x,nose.y-pellet.y) < .022 || distance < .016) {
+          if (f.depth < .22 && (separation(nose.x-pellet.x,nose.y-pellet.y) < .022 || distance < .016)) {
             food.splice(food.indexOf(pellet),1);
             f.eating = between(.45,.95); pace = .001;
             ripple(pellet.x,pellet.y,.22);
@@ -181,8 +221,9 @@
         }
         let dx = target.x-f.x, dy = (target.y-f.y)/WATER_Y;
         // A soft shoreline turns fish inward before their bodies meet the bank.
-        if (radius(f.x,f.y) > .83) {
-          dx += (.5-f.x)*2; dy += (.5-f.y)*2/WATER_Y;
+        if (radius(f.x,f.y) > (pellet ? .90 : .83)) {
+          const strength=pellet ? .4 : 2;
+          dx += (.5-f.x)*strength; dy += (.5-f.y)*strength/WATER_Y;
         }
         if (!f.eating) for (const other of fish) {
           if (other === f) continue;
@@ -208,7 +249,7 @@
         f.bendVelocity += ((bend-f.bend)*35-f.bendVelocity*10)*dt;
         f.bend = clamp(f.bend+f.bendVelocity*dt,-1.8,1.8);
         const torque = f.bend*(.6+f.speed*13);
-        f.angularVelocity += (torque-f.angularVelocity)*3.5*dt;
+        f.angularVelocity += (torque-f.angularVelocity)*3.5*dt/(f.size*f.size);
         f.heading += f.angularVelocity*dt;
         f.turn = f.angularVelocity;
         f.bank += (clamp(f.turn*.34,-.65,.65)-f.bank)*(1-Math.exp(-dt*3));
@@ -226,8 +267,11 @@
         // flank, while longitudinal momentum outlasts a stopped tail stroke.
         const drag = forward*(.55+8*Math.abs(forward));
         const sideDrag = lateral*(4.5+18*Math.abs(lateral));
-        f.vx += ((f.thrust-drag)*hx+sideDrag*hy)*dt;
-        f.vy += ((f.thrust-drag)*hy-sideDrag*hx)*dt;
+        // Force scales roughly with area and effective mass with volume;
+        // larger swimmers therefore accelerate more gradually (including
+        // entrained water in the tuned effective mass).
+        f.vx += ((f.thrust-drag)*hx+sideDrag*hy)*dt/f.size;
+        f.vy += ((f.thrust-drag)*hy-sideDrag*hx)*dt/f.size;
         f.speed = Math.hypot(f.vx,f.vy);
         f.x += f.vx*dt; f.y += f.vy*WATER_Y*dt;
         const r = radius(f.x,f.y);
@@ -239,18 +283,21 @@
           f.vx -= outward*nx; f.vy -= outward*ny;
           f.speed = Math.hypot(f.vx,f.vy);
         }
-        f.depth += (depth-f.depth)*(1-Math.exp(-dt*.8));
+        f.depthVelocity=clamp(f.depthVelocity+((depth-f.depth)*1.3-f.depthVelocity*2)*dt,-.42,.32);
+        f.depth=clamp(f.depth+f.depthVelocity*dt,.04,1.8);
+        const pitch=clamp(Math.atan2(-f.depthVelocity,Math.max(.12,f.speed*lens.width)),-.42,.42);
+        f.pitch+=(pitch-f.pitch)*(1-Math.exp(-dt*3));
       }
     }
     function step(delta) {
       // Bounded 120 Hz substeps keep springs stable at both 30 and 60 fps.
       // A resumed tab advances from its last state, never by hidden minutes.
-      const dt = clamp(delta,0,.1), count = Math.ceil(dt*120);
+      const dt = clamp(delta,0,.25), count = Math.ceil(dt*120);
       for (let i=0;i<count;i++) advance(dt/count);
     }
     return { fish, food, drops, feed, step, get time() { return time; } };
   }
-  const api = { create, project, unproject, inWater, skinMesh, camera };
+  const api = { create, project, unproject, inWater, skinMesh, projectedMesh, camera, optics, lens };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ViraKoiPond = api;
 })(typeof window !== "undefined" ? window : {});

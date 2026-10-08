@@ -2,8 +2,12 @@
 (() => {
   "use strict";
   const KEY = "vira-background";
+  const PONDS = [
+    { id:"garden", name:"Garden pond", image:"pond-garden.jpg" },
+    { id:"courtyard", name:"Courtyard pond", image:"pond-courtyard.jpg" },
+  ];
   const SCENES = [
-    { id: "koi", name: "Koi pond", image: "pond-perspective.jpg",
+    { id: "koi", name: "Koi pond", image: "pond-garden.jpg",
       detail: "Living koi below rippling water. Click to feed." },
     { id: "redwoods", name: "Redwood grove", image: "redwoods.jpg",
       detail: "A canopy breeze, sunbeams and drifting motes." },
@@ -28,11 +32,13 @@
   function normalize(value) {
     const p = value && typeof value === "object" ? value : {};
     return { scene: ids.has(p.scene) ? p.scene : "constellation",
+      pond: PONDS.some(s => s.id === p.pond) ? p.pond : "garden",
       paused: p.paused === true,
       dim: typeof p.dim === "number" && Number.isFinite(p.dim)
         ? Math.max(0, Math.min(.65, p.dim)) : .2 };
   }
   const moving = () => !prefs.paused && !reduced.matches;
+  const pondSetting = () => PONDS.find(p => p.id === prefs.pond);
   function save() { io.write(KEY, prefs); }
   function select(scene) {
     if (!ids.has(scene)) return;
@@ -53,6 +59,9 @@
     const feed = panel.querySelector(".background-feed");
     feed.hidden = prefs.scene !== "koi";
     feed.disabled = !moving() || !stop.feed;
+    panel.querySelector(".background-pond-setting").hidden = prefs.scene !== "koi";
+    panel.querySelector("select").value = prefs.pond;
+    panel.querySelector('[data-scene="koi"]').querySelector("img").src = asset(pondSetting().image);
     panel.querySelector(".background-status").textContent = message ||
       (reduced.matches ? "Still scene: your system prefers reduced motion."
         : prefs.paused ? "Motion paused. Your choice is saved."
@@ -73,7 +82,8 @@
       stop.motion?.(moving());
       return;
     }
-    const scene = SCENES.find(s => s.id === prefs.scene);
+    const base = SCENES.find(s => s.id === prefs.scene);
+    const scene = prefs.scene === "koi" ? { ...base, image:pondSetting().image } : base;
     const node = document.createElement("div");
     node.id = "desktop-background";
     node.setAttribute("aria-hidden", "true");
@@ -104,6 +114,8 @@
     uniform sampler2D photo, underwater;
     uniform vec2 resolution, imageSize;
     uniform float time, scene;
+    uniform vec4 pondCamera;
+    uniform float waterMetric;
     // Match the simulation's twelve live impacts; fixed loops support WebGL 1.
     uniform vec4 ripples[12];
     vec3 aurora(vec2 p) {
@@ -127,9 +139,12 @@
       vec2 offset=vec2(0.);
       float rippleLight=0.;
       if(scene<.5) {
-        float edge=smoothstep(.02,.18,uv.x)*(1.-smoothstep(.82,.98,uv.x));
+        float planeY=(uv.y-.51)/(photoRatio*pondCamera.x);
+        float worldY=planeY*pondCamera.y/(pondCamera.y*pondCamera.z+planeY*pondCamera.w);
+        float worldX=(uv.x-.5)*(pondCamera.y-worldY*pondCamera.w)/(pondCamera.x*pondCamera.y);
+        float edge=1.-smoothstep(.91,1.03,length(vec2(worldX/.46,worldY*waterMetric/.44)));
         offset=vec2(sin(uv.y*65.+time*.7)+sin(uv.x*37.-time*.4),
-          cos(uv.x*54.+time*.6)+sin(uv.y*42.-time*.5))*.0013*edge;
+          cos(uv.x*54.+time*.6)+sin(uv.y*42.-time*.5))*.00065*edge;
         for(int i=0;i<12;i++) {
           vec4 r=ripples[i];
           if(r.w>0.) {
@@ -138,8 +153,8 @@
             float front=r.z*.06;
             float wave=sin((distance-front)*190.)*exp(-abs(distance-front)*65.)
               *exp(-r.z*.9)*r.w;
-            offset+=d/max(distance,.001)*wave*.002;
-            rippleLight+=wave*.06;
+            offset+=d/max(distance,.001)*wave*.0015*edge;
+            rippleLight+=wave*.025*edge;
           }
         }
       } else if(scene<1.5) {
@@ -157,11 +172,19 @@
         // refraction. Their photographic reflections remain ABOVE the fish.
         vec2 fishUV=clamp(p+offset/scale,.001,.999);
         vec4 fish=texture2D(underwater,vec2(fishUV.x,1.-fishUV.y));
-        vec3 submerged=fish.rgb/max(fish.a,.001)*vec3(.70,.88,.79);
-        float reflection=(.14+.16*(1.-uv.y))*(.6+.4*original.b);
-        color=mix(color,mix(submerged,original,reflection),fish.a);
-        float light=sin(uv.x*71.+uv.y*34.+time*.55)*sin(uv.y*62.-time*.43);
-        color+=vec3(.04,.07,.055)*max(0.,light)*.45+vec3(.65,.85,.78)*rippleLight;
+        vec3 submerged=fish.rgb/max(fish.a,.001);
+        float planeY=(uv.y-.51)/(photoRatio*pondCamera.x);
+        float worldY=planeY*pondCamera.y/(pondCamera.y*pondCamera.z+planeY*pondCamera.w);
+        float worldX=(uv.x-.5)*(pondCamera.y-worldY*pondCamera.w)/(pondCamera.x*pondCamera.y);
+        float cosine=pondCamera.y*pondCamera.z/length(vec3(worldX,
+          pondCamera.y*pondCamera.w-worldY,pondCamera.y*pondCamera.z));
+        float fresnel=.0204+.9796*pow(1.-cosine,5.);
+        // The plate already contains reflected garden radiance. Estimate its
+        // prominence from brightness, keeping it above even a shallow fish.
+        float brightness=dot(original,vec3(.2126,.7152,.0722));
+        float reflection=clamp(fresnel*(4.+brightness*24.),.07,.52);
+        color=mix(color,mix(submerged,color,reflection),fish.a);
+        color+=vec3(.65,.85,.78)*rippleLight;
       } else if(scene<1.5) {
         float rays=pow(.5+.5*sin(uv.x*38.+uv.y*21.+sin(time*.25)*.3),8.);
         float sun=exp(-length((uv-vec2(.79,.15))*vec2(1.,.7))*2.);
@@ -185,17 +208,19 @@
     uniform vec2 offset;
     void main(){uv=vertex.zw;gl_Position=vec4(vertex.xy+offset,0.,1.);}`;
   const SKIN_FRAGMENT = `precision mediump float;
-    varying vec2 uv; uniform sampler2D sprite; uniform float depth, shadow;
+    varying vec2 uv; uniform sampler2D sprite; uniform float depth, shadow, clarity, softness;
+    uniform vec3 transmission;
+    vec4 sampleFish(vec2 p){vec4 f=texture2D(sprite,p);return vec4(f.rgb*f.a,f.a);}
     void main(){
-      float softness=mix(depth*.0012,.008,shadow);
-      vec4 fish=texture2D(sprite,uv)*.4;
-      fish+=texture2D(sprite,uv+vec2(softness,0.))*.15;
-      fish+=texture2D(sprite,uv-vec2(softness,0.))*.15;
-      fish+=texture2D(sprite,uv+vec2(0.,softness*2.))*.15;
-      fish+=texture2D(sprite,uv-vec2(0.,softness*2.))*.15;
-      fish.rgb*=1.-depth*.13;
-      fish.a*=.94-depth*.24;
-      gl_FragColor=mix(fish,vec4(0.,.07,.05,fish.a*.12),shadow);
+      float blur=mix(softness,.012,shadow);
+      vec4 fish=sampleFish(uv)*.4;
+      fish+=sampleFish(uv+vec2(blur,0.))*.15;
+      fish+=sampleFish(uv-vec2(blur,0.))*.15;
+      fish+=sampleFish(uv+vec2(0.,blur*2.))*.15;
+      fish+=sampleFish(uv-vec2(0.,blur*2.))*.15;
+      fish.rgb=fish.rgb/max(fish.a,.001)*transmission;
+      fish.a*=clarity;
+      gl_FragColor=mix(fish,vec4(0.,.07,.05,fish.a*.035*exp(-depth)),shadow);
     }`;
 
   function renderer(node, loaded, scene, onLost, pond) {
@@ -248,6 +273,9 @@
       gl.uniform1i(loc("underwater"),1);
       gl.uniform2f(loc("imageSize"), image.width, image.height);
       gl.uniform1f(loc("scene"), ["koi", "redwoods", "aurora"].indexOf(scene));
+      const lens=window.ViraKoiPond.lens;
+      gl.uniform4fv(loc("pondCamera"),new Float32Array([lens.scale,lens.distance,lens.sin,lens.cos]));
+      gl.uniform1f(loc("waterMetric"),lens.waterY);
       let skin = null, frameW = 0, frameH = 0;
       if (pond) {
         const skinProgram = gl.createProgram();
@@ -276,6 +304,9 @@
         skin = { program:skinProgram, framebuffer, buffer:skinBuffer, sprites,
           attribute:gl.getAttribLocation(skinProgram,"vertex"),
           depth:gl.getUniformLocation(skinProgram,"depth"),
+          clarity:gl.getUniformLocation(skinProgram,"clarity"),
+          softness:gl.getUniformLocation(skinProgram,"softness"),
+          transmission:gl.getUniformLocation(skinProgram,"transmission"),
           shadow:gl.getUniformLocation(skinProgram,"shadow"),
           offset:gl.getUniformLocation(skinProgram,"offset") };
       }
@@ -300,18 +331,12 @@
         gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
         const cover=Math.max(w/image.width,h/image.height), pw=image.width*cover, ph=image.height*cover;
         for (const f of [...pond.fish].sort((a,b)=>b.depth-a.depth)) {
-          const uv=window.ViraKoiPond.project(f.x,f.y);
-          const px=(w-pw)/2+uv.x*pw, py=(h-ph)/2+uv.y*ph+f.depth*3;
-          const c=window.ViraKoiPond.camera(f.x,f.y,image.width/image.height);
-          const length=pw*.108*f.size*(1-f.depth*.07);
-          const cosine=Math.cos(f.heading+Math.PI), sine=Math.sin(f.heading+Math.PI);
-          const mesh=window.ViraKoiPond.skinMesh(f,loaded[1+f.type].height/loaded[1+f.type].width);
+          const mesh=window.ViraKoiPond.projectedMesh(f,loaded[1+f.type].height/loaded[1+f.type].width);
           const vertices=new Float32Array((mesh.length-1)*4*3*4);
           let cursor=0;
           const vertex=p=>{
-            const x=cosine*p.x-sine*p.y,y=sine*p.x+cosine*p.y;
-            vertices[cursor++]=2*(px+length*(c.xx*x+c.xy*y))/w-1;
-            vertices[cursor++]=1-2*(py+length*(c.yx*x+c.yy*y))/h;
+            vertices[cursor++]=2*((w-pw)/2+p.x*pw)/w-1;
+            vertices[cursor++]=1-2*((h-ph)/2+p.y*ph)/h;
             vertices[cursor++]=p.u; vertices[cursor++]=p.v;
           };
           for(let j=0;j<mesh.length-1;j++)for(let k=0;k<2;k++){
@@ -320,7 +345,10 @@
           }
           gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.DYNAMIC_DRAW);
           gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,skin.sprites[f.type]);
+          const light=window.ViraKoiPond.optics(f.depth);
           gl.uniform1f(skin.depth,f.depth);
+          gl.uniform1f(skin.clarity,light.clarity); gl.uniform1f(skin.softness,light.blur);
+          gl.uniform3fv(skin.transmission,new Float32Array(light.transmission));
           gl.uniform1f(skin.shadow,1);
           gl.uniform2f(skin.offset,f.depth*14/w,-f.depth*36/h);
           gl.drawArrays(gl.TRIANGLES,0,vertices.length/4);
@@ -419,7 +447,7 @@
       return { pw, ph, left: (w-pw)/2, top: (h-ph)/2 };
     }
     function position(p, v) {
-      const uv = window.ViraKoiPond.project(p.x,p.y);
+      const uv = window.ViraKoiPond.project(p.x,p.y,p.depth || 0);
       return { x: v.left+uv.x*v.pw, y: v.top+uv.y*v.ph };
     }
     function fish(w, h) {
@@ -429,32 +457,33 @@
       // Paint deeper fish first so a near-surface swimmer passes above them.
       for (const f of [...pond.fish].sort((a,b) => b.depth-a.depth)) {
         const p = position(f,v), image = loaded[1+f.type];
-        const projection = window.ViraKoiPond.camera(f.x,f.y,loaded[0].width/loaded[0].height);
-        const length = v.pw*.108*f.size*(1-f.depth*.07);
+        const length = v.pw*.108*f.size;
+        const light=window.ViraKoiPond.optics(f.depth);
         bodyCtx.clearRect(0,0,640,640);
         // The CPU fallback follows the same backbone using short rotated
         // columns; the normal GPU path renders a connected triangle mesh.
-        const mesh = window.ViraKoiPond.skinMesh(f,image.height/image.width).map(column =>
-          column.map(p => ({ sx:p.u*image.width, sy:p.v*image.height,
-            x:320+p.x*384, y:320+p.y*384 })));
+        const mesh = window.ViraKoiPond.projectedMesh(f,image.height/image.width).map(column =>
+          column.map(vertex => ({ sx:vertex.u*image.width, sy:vertex.v*image.height,
+            x:320+(v.left+vertex.x*v.pw-p.x)*384/length,
+            y:320+(v.top+vertex.y*v.ph-p.y)*384/length })));
         for (let j=0;j<mesh.length-1;j++) for (let k=0;k<2;k++) {
           skinStrip(bodyCtx,image,mesh[j],mesh[j+1],k);
         }
         fishCtx.save();
         fishCtx.translate(p.x+f.depth*7,p.y+f.depth*18);
-        fishCtx.transform(projection.xx,projection.yx,projection.xy,projection.yy,0,0);
         fishCtx.rotate(f.heading+Math.PI);
         fishCtx.filter = `blur(${3+f.depth*5}px)`;
-        fishCtx.fillStyle = `rgba(0,18,15,${.15-f.depth*.065})`;
+        fishCtx.fillStyle = `rgba(0,18,15,${.025*Math.exp(-f.depth)})`;
         fishCtx.beginPath(); fishCtx.ellipse(0,0,length*.39,length*.085,0,0,Math.PI*2); fishCtx.fill();
         fishCtx.restore();
-        fishCtx.save(); fishCtx.translate(p.x,p.y+f.depth*3);
-        fishCtx.transform(projection.xx,projection.yx,projection.xy,projection.yy,0,0);
-        fishCtx.rotate(f.heading+Math.PI);
+        bodyCtx.save(); bodyCtx.globalCompositeOperation="source-atop";
+        bodyCtx.fillStyle=`rgba(20,62,44,${1-Math.exp(-light.path*.38)})`;
+        bodyCtx.fillRect(0,0,640,640); bodyCtx.restore();
+        fishCtx.save(); fishCtx.translate(p.x,p.y);
         // Roll varies along the spine in the mesh, rather than flattening
         // the entire fish into a uniformly squashed photograph.
-        fishCtx.globalAlpha = .94-f.depth*.24;
-        fishCtx.filter = `blur(${f.depth*.55}px) brightness(${1-f.depth*.13})`;
+        fishCtx.globalAlpha = light.clarity;
+        fishCtx.filter = `blur(${light.blur*length}px) brightness(${light.transmission[1]})`;
         fishCtx.drawImage(body,-length*320/384,-length*320/384,
           length*640/384,length*640/384);
         fishCtx.restore();
@@ -463,18 +492,21 @@
     function surface(w,h) {
       const v = view(w,h);
       for (const drop of pond.drops) {
-        const p = position(drop,v), r = Math.max(1,drop.age*.06*v.ph);
+        const p = position(drop,v), r = Math.max(1,drop.age*.06*v.pw);
+        const c=window.ViraKoiPond.camera(drop.x,drop.y,loaded[0].width/loaded[0].height);
         const a = Math.exp(-drop.age*.9)*drop.strength*.28;
+        ctx.save(); ctx.translate(p.x,p.y); ctx.transform(c.xx,c.yx,c.xy,c.yy,0,0);
         ctx.lineWidth = .8;
         for (let k = 0; k < 3; k++) {
           const ring = Math.max(1,r-k*7);
           ctx.strokeStyle = `rgba(194,229,219,${a*(1-k*.2)})`;
-          ctx.beginPath(); ctx.ellipse(p.x,p.y,ring,ring/1.35,0,0,Math.PI*2); ctx.stroke();
+          ctx.beginPath(); ctx.ellipse(0,0,ring,ring,0,0,Math.PI*2); ctx.stroke();
         }
         if (drop.age < .18) {
           ctx.fillStyle = "rgba(231,248,242,.45)";
-          ctx.beginPath(); ctx.ellipse(p.x,p.y,1.5,1,0,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.ellipse(0,0,1.5,1,0,0,Math.PI*2); ctx.fill();
         }
+        ctx.restore();
       }
       for (const pellet of pond.food) {
         const p = position(pellet,v);
@@ -522,7 +554,7 @@
     function tick(now) {
       raf = 0;
       if (closed || document.hidden || !moving()) return;
-      const dt = last ? Math.min((now-last)/1000,.1) : 0;
+      const dt = last ? Math.min((now-last)/1000,.25) : 0;
       elapsed += dt; pond?.step(dt); last = now;
       if (now-painted >= 1000/30) { paint(); painted = now; }
       raf = requestAnimationFrame(tick);
@@ -584,7 +616,18 @@
       <div class="background-controls"><button class="background-motion">Pause motion</button>
       <button class="background-feed" hidden>Feed koi</button>
       <label>Dim <input aria-label="Background dimming" type="range" min="0" max="65" step="1"></label></div>
+      <label class="background-pond-setting" hidden>Pond setting <select aria-label="Pond setting"></select></label>
       <p class="background-status" role="status"></p>`;
+    const setting = panel.querySelector("select");
+    for (const p of PONDS) {
+      const option = document.createElement("option"); option.value=p.id; option.textContent=p.name;
+      setting.appendChild(option);
+    }
+    setting.addEventListener("change", () => {
+      if (!PONDS.some(p => p.id === setting.value)) return;
+      prefs.pond=setting.value; save();
+      if (prefs.scene === "koi") apply();
+    });
     for (const s of SCENES) {
       const b = document.createElement("button");
       b.className = "background-choice"; b.dataset.scene = s.id;
