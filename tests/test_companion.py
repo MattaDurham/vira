@@ -416,11 +416,21 @@ class NotifyChannelTests(CompanionBase):
         self.pair()
         with tempfile.TemporaryDirectory() as d:
             cfg = {"enabled": True, "handle": "", "tier": "active"}
+            recorded = threading.Event()
+            record = notify._record
+
+            def record_and_finish(entry):
+                record(entry)
+                recorded.set()
+
             with mock.patch.object(notify, "LOG", Path(d) / "log.json"), \
                  mock.patch.object(notify, "config", return_value=cfg), \
-                 mock.patch.object(notify, "_throttled", return_value=None):
+                 mock.patch.object(notify, "_throttled", return_value=None), \
+                 mock.patch.object(notify, "_record", side_effect=record_and_finish):
                 self.assertTrue(notify.agent_ping("circuit finished"))
-                time.sleep(0.3)  # _send runs on a daemon thread
+                # Keep the real async sender inside its temporary store until
+                # recording finishes, even under a busy full-suite run.
+                self.assertTrue(recorded.wait(5), "notification recording did not finish")
         self.assertTrue(any(p["text"] == "circuit finished"
                             for p in companion.pings_since(0)))
 
