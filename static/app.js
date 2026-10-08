@@ -11852,7 +11852,29 @@ async function waTick() {
   let st;
   try {
     st = await api("/api/whatsapp/status");
-  } catch { return; }
+  } catch (error) {
+    stat.textContent = "Status unavailable";
+    hint.textContent = errText(error);
+    btn.disabled = false;
+    return;
+  }
+  if (setupExtra) { setupExtra.whatsapp = st; refreshManageRow("whatsapp"); }
+  const pairing = st.pairing || {};
+  btn.disabled = !!pairing.running;
+  btn.textContent = pairing.running ? "Preparing WhatsApp…" : "Connect WhatsApp";
+  if (pairing.running) {
+    stat.textContent = pairing.stage === "starting" ? "Starting connector…" : "Preparing connector…";
+    hint.textContent = "Vira is preparing WhatsApp on this computer. The pairing code will appear here; no terminal command is needed.";
+    qrBox.style.display = "none";
+    return;
+  }
+  if (pairing.error) {
+    stat.textContent = "Connection failed";
+    hint.textContent = pairing.error;
+    qrBox.style.display = "none";
+    btn.style.display = "";
+    return;
+  }
   const sc = st.sidecar;
   if (sc && sc.connected) {
     qrBox.style.display = "none";
@@ -11880,9 +11902,9 @@ async function waTick() {
   } else {
     qrBox.style.display = "none";
     btn.style.display = "";
-    stat.textContent = st.linked ? "Linked — sidecar not running" : "Not connected";
+    stat.textContent = st.linked ? "Previously linked" : "Optional";
     if (!st.installed)
-      hint.textContent = "Sidecar not installed — run: cd bridge/whatsapp && npm install";
+      hint.textContent = "Connect WhatsApp prepares the connector, then displays a code to scan from WhatsApp > Settings > Linked Devices.";
     else if (st.linked)
       hint.textContent = "The sidecar starts on its own within a few seconds.";
   }
@@ -11895,11 +11917,15 @@ function startWaPoll() {
 function stopWaPoll() { waPoll?.stop(); waPoll = null; }
 async function waConnect() {
   const hint = $("#wa-hint");
-  hint.textContent = "Starting the sidecar…";
+  const button = $("#wa-connect");
+  button.disabled = true;
+  hint.textContent = "Preparing WhatsApp…";
   try {
     await post("/api/whatsapp/pair", {});
   } catch (e) {
     hint.textContent = e.message || String(e);
+    button.disabled = false;
+    return;
   }
   startWaPoll();
 }
@@ -13218,14 +13244,14 @@ async function loadCompanion() {
 
 function renderCompanion(st) {
   const body = $("#companion-body");
+  if (setupExtra) { setupExtra.companion = st; refreshManageRow("channels"); }
   body.innerHTML = "";
   const paired = (st.devices || []).filter((d) => !d.pending);
   if (!paired.length) {
     const empty = el("div", "companion-empty");
-    empty.appendChild(el("div", "companion-empty-head", "No phone paired yet"));
     empty.appendChild(el("div", "hint",
-      "Install the Vira Companion app on the Android phone, then press " +
-      "“Pair a phone” and scan the code. The phone needs to reach " +
+      "For Android SMS, install the Vira Companion app, then choose " +
+      "Connect an Android phone and scan the code. The phone needs to reach " +
       "this machine — same Tailscale network (or same Wi‑Fi)."));
     body.appendChild(empty);
   }
@@ -13846,15 +13872,16 @@ async function loadSetup() {
 // sublines and the cards' first paint. Update is the un-fetched (local sha)
 // call; the slow network fetch only runs when the owner opens the card.
 async function loadSetupExtra() {
-  const [notify, companion, update, config, connections, banking] = await Promise.all([
+  const [notify, companion, update, config, connections, banking, whatsapp] = await Promise.all([
     api("/api/notify").then((r) => r.config).catch(() => null),
     api("/api/companion/status").catch(() => null),
     api("/api/update").catch(() => null),
     api("/api/config").catch(() => null),
     api("/api/data/connections").catch((e) => ({ error: errText(e) })),
     api("/api/banking").catch((e) => ({ error: errText(e) })),
+    api("/api/whatsapp/status").catch(() => null),
   ]);
-  return { notify, companion, update, config, connections, banking };
+  return { notify, companion, update, config, connections, banking, whatsapp };
 }
 
 function pollSetup() {
@@ -13876,7 +13903,7 @@ function pollSetup() {
     refreshGates(flow);
     if (!st.dossiers || !st.dossiers.running) {
       h.stop(); setupPollTimer = null;
-      toast("Dossier build finished");
+      toast("Profile build finished");
     }
   }, 2500);
 }
@@ -13985,10 +14012,9 @@ async function setupAct(btn, fn, okMsg, { refresh = true, onSaved = null } = {})
 // hero that names the one thing that needs attention, forms folded away).
 // Nothing here is stored — every word is re-read from /api/onboard.
 
-// Once a step is done its row stops being an instruction. "Connect mail"
-// is what you do; "Mail" is what you have.
+// Stable source names remain useful before and after a connection.
 const DASH_NOUNS = { disk: "Full Disk Access", contacts: "Contacts",
-                     dossiers: "Dossiers", brain: "Brain", mail: "Mail" };
+                     dossiers: "Profiles", brain: "Brain", mail: "Mail" };
 
 // The state word on the right of a row. The dot is the glance; the word is
 // what a glance cannot carry.
@@ -13997,7 +14023,7 @@ function dashWord(r) {
   if (r.attention) return "needs attention";
   return { done: "connected", todo: "not set up", blocked: "blocked",
            skipped: "not on this machine", running: "working",
-           manage: "" }[r.state] || "";
+           optional: "optional", manage: "settings" }[r.state] || "";
 }
 
 function dashPillClass(r) {
@@ -14007,9 +14033,9 @@ function dashPillClass(r) {
   return "p-dim";
 }
 
-// Expand one row and bring it into view — the hero's attention chips and
-// the fact tiles both land here.
+// Expand one row and bring it into view from an attention chip or link.
 function dashJump(id) {
+  if (id === "connections") id = "contacts"; // Previous storage links still land somewhere useful.
   leaveManageCard();
   setupActive = id;
   if (setupFlow && setupSt) renderSetup(setupFlow, setupSt);
@@ -14024,6 +14050,8 @@ function renderSetup(flow, st) {
   const body = $("#setup-body");
   if (!body) return;
   setupFlow = flow;
+  setupSt = st;
+  if (setupActive === "connections") setupActive = "contacts";
   const byId = {};
   flow.steps.forEach((s) => { byId[s.id] = s; });
   const ai = byId.ai || { providers: [], active_id: "" };
@@ -14036,20 +14064,18 @@ function renderSetup(flow, st) {
     title: pr.sub_name,
     // A disabled provider is a choice, not a gap: dimmed like a skipped
     // step, never a "todo" that nags to be set up.
-    state: pr.disabled ? "skipped" : pr.connected ? "done" : "todo",
+    state: pr.connected && !pr.disabled ? "done" : "optional",
     tag: pr.id === ai.active_id ? "go-to" : "",
-    pill: pr.disabled ? "disabled" : pr.connected ? "signed in" : "not connected",
-    sub: pr.disabled ? "Disabled by you - nothing runs on it" : pr.detail,
+    pill: pr.disabled ? "disabled" : pr.connected ? "signed in" : "optional",
+    sub: pr.disabled ? "Disabled by you" : pr.connected ? pr.detail : "Optional provider · " + pr.detail,
     render: (card) => provCard(card, pr, st, ai),
   }));
   aiRows.push({
     id: "models",
-    title: "Models & backend",
-    state: "manage",
-    pill: cfg.ai_backend ? (cfg.ai_backend === "cli" ? "subscription" : "API") : "",
-    sub: cfg.ai_backend
-      ? `${cfg.ai_backend === "cli" ? "subscription login" : "API"} · ${cfg.cli_model || "provider default"}`
-      : "default models per provider",
+    title: "Advanced AI settings",
+    state: (ai.providers || []).some((pr) => pr.connected && !pr.disabled) ? "done" : "optional",
+    pill: (ai.providers || []).some((pr) => pr.connected && !pr.disabled) ? "configured" : "optional",
+    sub: "App-wide defaults and available models · change only if you want to",
     render: (card) => backendBlock(card),
   });
 
@@ -14058,10 +14084,10 @@ function renderSetup(flow, st) {
     if (!s) return null;
     return {
       id,
-      title: (s.state === "done" && DASH_NOUNS[id]) || s.title,
+      title: DASH_NOUNS[id] || s.title,
       state: s.state,
       attention: s.attention || "",
-      sub: s.state === "skipped" ? s.detail
+      sub: s.state === "skipped" ? "Unavailable on this platform · " + s.detail
         : (s.blocker ? "blocked — " + s.blocker : s.detail),
       render: (card) => {
         ({ disk: cardDisk, contacts: cardContacts, dossiers: cardDossiers,
@@ -14075,27 +14101,25 @@ function renderSetup(flow, st) {
   };
   const manageRow = (id) => {
     const m = SETUP_MANAGE.find((x) => x.id === id);
-    return { id, title: m.title, state: "manage", sub: manageSubline(id),
+    return { id, title: m.title, state: manageState(id), attention: manageAttention(id), sub: manageSubline(id),
              pill: managePill(id), render: (card) => m.render(card, st) };
   };
 
   const groups = [
     { title: "AI", rows: aiRows },
     { title: "Your data",
-      rows: [{ id: "connections", title: "Storage & connections", state: "manage",
-        sub: "CRM, self record and Reader folders", render: cardDataConnections },
-        ...["disk", "contacts", "dossiers", "brain", "mail"].map(stepRow).filter(Boolean),
-        { id: "banking", title: "Banking", state: x.banking?.mercury?.configured ? "done" : "todo",
+      rows: [...["disk", "contacts", "dossiers", "brain", "mail"].map(stepRow).filter(Boolean),
+        { id: "banking", title: "Banking", state: x.banking?.mercury?.configured ? "done" : "optional",
           sub: x.banking?.error ? "Status unavailable: " + x.banking.error
             : x.banking?.mercury?.configured ? "Mercury token configured"
-            : "Connect a read-only transaction feed for Subscriptions",
-          render: cardBanking }] },
-    { title: "Channels", rows: [manageRow("channels")] },
-    { title: "Notifications", rows: [manageRow("notifications")] },
-    { title: "System", rows: [
+            : "Optional · connect a read-only transaction feed for Subscriptions",
+          render: cardBanking },
+        manageRow("channels"), manageRow("whatsapp")] },
+    { title: "Preferences & maintenance", rows: [
+      manageRow("notifications"),
       manageRow("updates"),
-      { id: "welcome", title: "Welcome setup", state: "manage",
-        sub: "re-run the first-run connect flow",
+      { id: "welcome", title: "Welcome tour", state: "optional", pill: "optional",
+        sub: "Replay the introduction whenever you like",
         run: () => openFirstrun() },
     ] },
   ];
@@ -14112,12 +14136,11 @@ function renderSetup(flow, st) {
   const hard = attn.filter((a) => !a.soft);
 
   const mode = $("#setup-mode");
-  if (mode) mode.textContent = hard.length
-    ? `${hard.length} need${hard.length === 1 ? "s" : ""} attention`
-    : flow.complete ? "all set" : `${flow.done} of ${flow.total} configured`;
+  if (mode) mode.textContent = ""; // The hero already states overall readiness.
 
   body.replaceChildren();
   body.appendChild(dashHero(flow, st, ai, attn, hard));
+  body.appendChild(el("p", "dash-legend", "Green: connected or enabled. Gray: optional or unavailable on this platform. Amber: needs attention."));
   const wrap = el("div", "dash");
   groups.forEach((g) => {
     const sec = el("section", "dash-group");
@@ -14128,49 +14151,23 @@ function renderSetup(flow, st) {
   body.appendChild(wrap);
 }
 
-// The hero: one sentence about the whole install, a strip of facts (each
-// a door into its row), and the attention chips. Every number on it is
-// read off the status payload that the rows themselves render from.
+// One setup summary. Counts belong in their source rows, not a duplicate
+// strip of links. Attention chips open only genuine problems or updates.
 function dashHero(flow, st, ai, attn, hard) {
   const hero = el("div", "dash-hero" + (hard.length ? " attn" : flow.complete ? " ok" : ""));
   const title = hard.length
     ? (hard.length === 1 ? "One thing needs your attention."
                          : `${hard.length} things need your attention.`)
-    : flow.complete ? "Everything is connected."
+    : flow.complete ? "You're all set."
     : `${flow.done} of ${flow.total} set up.`;
   hero.appendChild(el("div", "dash-hero-title", title));
   const sub = hard.length
-    ? "Everything else is running. Fix it below and this line goes quiet."
+    ? "Review the highlighted items below."
     : flow.complete
-      ? "Vira is reading this machine, your contacts and your mail on its own. Nothing here needs you today."
-      : "Each row below opens to the one thing it needs. Nothing runs until you say so.";
+      ? "Your connected sources are ready. Optional connections and preferences are available below."
+      : "Connect the sources you want to use. Additional AI providers, Android and WhatsApp are optional.";
   hero.appendChild(el("div", "dash-hero-sub", sub));
 
-  const active = (ai.providers || []).find((p) => p.id === ai.active_id);
-  const nAi = (ai.providers || []).filter((p) => p.connected).length;
-  const m = st.mail || {};
-  const facts = [
-    { id: active ? "prov-" + active.id : "prov-anthropic", k: "go-to AI",
-      v: active ? active.sub_name : "none", ok: !!active },
-    { id: "disk", k: "this Mac", v: st.feed.chat_db === "ok" ? "granted" : "no access",
-      ok: st.feed.chat_db === "ok", na: st.feed.chat_db === "missing" && !(st.platform === "mac") },
-    { id: "contacts", k: "people", v: fmtNum(st.crm.people), ok: st.crm.people > 0 },
-    { id: "dossiers", k: "dossiers", v: fmtNum(st.crm.profiles), ok: st.crm.profiles > 0 },
-    { id: "brain", k: "files", v: st.vault.notes == null ? "—" : (st.vault.notes_capped ? "≥ " : "") + fmtNum(st.vault.notes), ok: st.vault.connected },
-    { id: "mail", k: "mailboxes",
-      v: m.accounts ? (m.failing ? `${m.ok} of ${m.accounts}` : String(m.accounts)) : "0",
-      ok: m.accounts > 0 && !m.failing, attn: !!m.failing },
-  ];
-  if (nAi > 1) facts[0].v += ` +${nAi - 1}`;
-  const strip = el("div", "dash-facts");
-  facts.forEach((f) => {
-    const b = el("button", "dash-fact" + (f.attn ? " attn" : f.ok ? " ok" : ""));
-    b.appendChild(el("span", "dash-fact-v", f.v));
-    b.appendChild(el("span", "dash-fact-k", f.k));
-    b.onclick = () => dashJump(f.id);
-    strip.appendChild(b);
-  });
-  hero.appendChild(strip);
   if (attn.length) {
     const chips = el("div", "dash-attn");
     attn.forEach((a) => {
@@ -14196,6 +14193,7 @@ function fmtNum(n) {
 // card.
 function dashRow(r, flow, st) {
   const item = el("div", "dash-item");
+  item.dataset.setupId = r.id;
   const open = setupActive === r.id && r.render;
   if (open) item.classList.add("on");
   const row = el("button",
@@ -14383,11 +14381,11 @@ function provCard(card, pr, st, ai) {
   card.appendChild(el("p", "hint", pr.detail));
   if (!pr.can.sessions)
     card.appendChild(el("p", "hint",
-      "Drafts, dossiers and the brief are available. This provider does not "
+      "Drafts, profiles and the brief are available. This provider does not "
       + "yet expose Vira's live-session contract."));
   else if (pr.sessions_quality === "best_effort")
     card.appendChild(el("p", "hint",
-      "Drafts, dossiers, the brief, and live agent sessions (best-effort: "
+      "Drafts, profiles, the brief, and live agent sessions (best-effort: "
       + "no per-tool approval cards — the provider's own sandbox contains "
       + "them)."));
   if (pr.can.sessions && pr.capabilities
@@ -14402,7 +14400,7 @@ function provCard(card, pr, st, ai) {
   if (pr.connected) {
     if (pr.id === ai.active_id) {
       card.appendChild(el("p", "hint setup-ok",
-        "This is Vira's go-to AI — drafts, dossiers and the brief run on it."));
+        "This is Vira's go-to AI — drafts, profiles and the brief run on it."));
     } else {
       const use = el("button", "btn primary", "Make it Vira's go-to AI");
       use.onclick = () => setupAct(use,
@@ -14465,8 +14463,11 @@ function provCard(card, pr, st, ai) {
     () => "Key saved — " + pr.label + " connected");
   krow.appendChild(inp);
   krow.appendChild(save);
-  card.appendChild(krow);
-  card.appendChild(el("p", "hint", keyStoreSentence(st)));
+  const keyHost = pr.connected ? el("details", "data-connection-section") : card;
+  if (pr.connected) keyHost.appendChild(el("summary", "setup-sub", "API key (optional)"));
+  keyHost.appendChild(krow);
+  keyHost.appendChild(el("p", "hint", keyStoreSentence(st)));
+  if (pr.connected) card.appendChild(keyHost);
 }
 
 function urlHost(u) {
@@ -14474,32 +14475,37 @@ function urlHost(u) {
 }
 
 function backendBlock(card) {
-  // Backend + default models. Always on screen, never behind a disclosure
-  // twisty: this is live config, not trivia. Every draft, dossier and
-  // brief runs through the backend picked here, and an agent session that
-  // names no model of its own starts on the CLI model. The dropdowns are
-  // built from the model catalog — the aliases this Mac's CLI accepts and,
-  // when a key is on file, the live list that key can reach — so the menu
-  // can never offer something the owner has no way to run.
+  // Advanced app-wide defaults use the connected providers' live catalogs.
+  // API configuration stays out of the way for subscription-login users.
   const adv = el("section", "setup-adv");
-  adv.appendChild(el("div", "setup-sub", "Backend & default models"));
+  adv.appendChild(el("div", "setup-sub", "App-wide AI defaults"));
   adv.appendChild(el("p", "hint",
-    "Reply drafts, dossiers and the daily brief run on the backend picked "
-    + "here. Agent sessions — cockpit runs, circuits, loops — start on the "
-    + "CLI model unless the run or circuit stage names its own."));
+    "These defaults apply to drafts, profiles and the daily brief. A model "
+    + "picker in a window or run changes that window or run instead. "
+    + "Changing these defaults is optional."));
   const seg = el("div", "seg"); seg.id = "backend-seg";
   [["cli", "Subscription login (CLI)"], ["api", "API"]].forEach(([v, label]) => {
     const b = el("button", "seg-btn", label); b.dataset.v = v;
-    b.onclick = () => seg.querySelectorAll(".seg-btn")
-      .forEach((x) => x.classList.toggle("on", x === b));
+    b.onclick = () => {
+      seg.querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("on", x === b));
+      showBackend(v);
+    };
     seg.appendChild(b);
   });
   adv.appendChild(seg);
   const mbox = el("div", "setup-models"); adv.appendChild(mbox);
+  const loading = el("p", "hint", "Loading AI settings…"); adv.appendChild(loading);
   const ahint = el("p", "hint", ""); ahint.id = "cfg-api-hint"; adv.appendChild(ahint);
+  const showBackend = (kind) => {
+    ahint.hidden = kind !== "api";
+    mbox.querySelectorAll(".setup-api-model").forEach((field) => { field.hidden = kind !== "api"; });
+  };
+  ahint.hidden = true;
   const abar = el("div", "setup-row");
   const asave = el("button", "btn primary", "Save");
-  abar.appendChild(asave); adv.appendChild(abar);
+  asave.disabled = true;
+  const retry = el("button", "btn", "Retry loading settings"); retry.hidden = true;
+  abar.appendChild(asave); abar.appendChild(retry); adv.appendChild(abar);
   card.appendChild(adv);
 
   const picks = [];        // {key, sel} — the config field each writes
@@ -14509,7 +14515,11 @@ function backendBlock(card) {
     await backendSave(body);
     return {};
   }, () => "Saved");
-  Promise.all([api("/api/config"), modelCatalog(true)]).then(([cfg, cat]) => {
+  const load = () => {
+    loading.hidden = false; loading.textContent = "Loading AI settings…";
+    retry.hidden = true; asave.disabled = true;
+    return Promise.all([api("/api/config"), modelCatalog(true)]).then(([cfg, cat]) => {
+    if (cat.error) throw new Error(cat.error);
     ahint.textContent = cfg.api_key_present
       ? "API key detected (" + cfg.api_key_env + ")."
       : "No API key found — set " + cfg.api_key_env + " to enable the API backend.";
@@ -14519,6 +14529,7 @@ function backendBlock(card) {
     // connected yet the first one still renders, so its config keys never
     // become unreachable.
     const provs = (cat.providers || []).filter((p) => p.connected);
+    picks.length = 0;
     mbox.innerHTML = "";
     (provs.length ? provs : (cat.providers || []).slice(0, 1)).forEach((p) => {
       const g = el("div", "setup-mgroup");
@@ -14531,6 +14542,7 @@ function backendBlock(card) {
        ["API model", "api"]].forEach(([label, kind]) => {
         if (!p.config_keys[kind]) return;   // API-only providers have no CLI
         const f = el("label", "field", label);
+        if (kind === "api") f.classList.add("setup-api-model");
         // "" is a real choice on both backends, not an absence: on the CLI
         // it means the provider's own configured model, on the API it means
         // "newest of the cli tier, resolved from the live list at call
@@ -14549,11 +14561,19 @@ function backendBlock(card) {
       // No "showing Vira's own list" tail any more — there IS no such
       // list. A curated fallback is exactly what kept stale names on
       // screen, so an unverifiable API list is empty and says why.
-      g.appendChild(el("p", "hint", "API models: " + p.api_detail));
+      g.appendChild(el("p", "hint setup-api-model", "API models: " + p.api_detail));
       mbox.appendChild(g);
     });
+    showBackend(cfg.ai_backend || "cli");
     rosterBlock(card, cat);
-  }).catch(() => {});
+    loading.hidden = true; asave.disabled = false;
+    }).catch((error) => {
+      loading.textContent = "AI settings unavailable: " + errText(error);
+      retry.hidden = false;
+    });
+  };
+  retry.onclick = load;
+  load();
 }
 
 // ---- the model roster (the Cursor pattern, owner's ask 2026-07-28) ----
@@ -14760,7 +14780,7 @@ function cardDisk(card, step, st) {
      "birthdays",
    "Incoming texts arrive with instant context on who's writing and " +
      "what's open with them",
-   "Dossiers write themselves from real conversation history",
+   "Profiles write themselves from real conversation history",
    "Ask for 'the PDF Alex sent in March' and Vira finds it",
    "Owed replies and friends going quiet surface on their own",
   ].forEach((t) => brags.appendChild(el("li", "", t)));
@@ -14870,26 +14890,25 @@ const SRC_ACTIONS = {
 };
 
 function cardContacts(card, step, st) {
-  card.appendChild(el("p", "hint",
-    `${st.crm.people} ${st.crm.people === 1 ? "person" : "people"} in your ` +
-    `CRM (${st.crm.root}). Importing reads what this machine already has — ` +
-    `it never sends anything anywhere.`));
-  const connection = el("button", "btn", "Choose CRM storage or connect an existing CRM");
-  connection.onclick = () => dashJump("connections");
-  card.appendChild(connection);
+  card.appendChild(el("p", "hint", "Contacts and profiles are saved in your Vira contact folder. Imports read your address books locally."));
+  const importHost = st.crm.people ? el("details", "data-connection-section") : card;
+  if (st.crm.people) importHost.appendChild(el("summary", "setup-sub", "Import more contacts (optional)"));
   (step.sources || []).forEach((row) => {
     const tile = srcTile(row, { on: "imported" });
     (SRC_ACTIONS[row.card] || (() => {}))(tile, row);
-    card.appendChild(tile);
+    importHost.appendChild(tile);
   });
+  if (st.crm.people) card.appendChild(importHost);
+  connectionSection(card, "Contact storage (advanced)",
+    "You do not need to choose a new folder to import contacts.", cardContactStorage);
 }
 
 function connectionSummary(container, summary) {
   const rows = [["Folder", summary.root]];
   if (summary.effective_root && summary.effective_root !== summary.root)
     rows.push(["Active demo location until contacts are imported", summary.effective_root]);
-  if (summary.people != null) rows.push(["Contacts", String(summary.people)], ["Dossiers", String(summary.profiles)]);
-  if (summary.canon) rows.push(["Career evidence", summary.career_ready ? "Ready" : "Not ready"],
+  if (summary.people != null) rows.push(["Contacts", String(summary.people)], ["Profiles", String(summary.profiles)]);
+  if (summary.canon) rows.push(["Career evidence", summary.career_ready ? "Ready" : "Not added (optional)"],
     ["Canon", summary.canon], ["Analysis output", summary.analysis], ["Application packages", summary.packages]);
   if (summary.self_record_after) {
     rows.push(["Self record now", summary.self_record_before], ["Self record after saving", summary.self_record_after.root],
@@ -14937,7 +14956,7 @@ function dataConnectionForm(container, kind, initial, { mode = "existing", remov
       const option = el("option", "", text); option.value = value; selfChoice.appendChild(option);
     });
     selfChoice.onchange = invalidate; field.appendChild(selfChoice); form.appendChild(field);
-    form.appendChild(el("p", "hint", "An existing CRM is connected in place. IDs and dossiers are preserved. A different CRM must retain your current person IDs; migrations are separate."));
+    form.appendChild(el("p", "hint", "An existing CRM is connected in place. IDs and profiles are preserved. A different CRM must retain your current person IDs; migrations are separate."));
   }
   if (kind === "reader" && !removal) {
     const textField = (title, value) => {
@@ -14989,44 +15008,54 @@ function dataConnectionForm(container, kind, initial, { mode = "existing", remov
   container.appendChild(form);
 }
 
-function cardDataConnections(card) {
+function connectionState(card) {
   const state = setupExtra?.connections;
-  if (!state || state.version !== 1) {
-    card.appendChild(el("p", "vault-config-error", state?.error || "Storage settings are unavailable from this server. Restart Vira after active sessions finish, then reopen Config."));
-    return;
-  }
-  card.appendChild(el("p", "hint", "Connect stores independently. CRM imports and edits update your registry and profiles; imported company/title facts stay in registry provenance. External master evidence is read, never rewritten by imports. Brain controls its own capture and model access; Applications and authorized agent work have separate write paths."));
-  const section = (title, render) => {
-    const details = el("details", "data-connection-section");
-    details.appendChild(el("summary", "setup-sub", title)); render(details); card.appendChild(details); return details;
-  };
-  const crm = section("CRM storage", (body) => {
-    connectionSummary(body, state.crm);
-    if (!state.crm.available) body.appendChild(el("p", "hint", "Folder unavailable or not created yet."));
-    dataConnectionForm(body, "crm", state.crm.root, { mode: state.crm.registry_present ? "existing" : "fresh" });
-  });
-  crm.open = true;
-  section("Self record", (body) => {
-    connectionSummary(body, state.self_record);
-    body.appendChild(el("p", "hint", state.self_record.explicit ? "This location is configured independently of the CRM." : "This location follows the configured CRM. Keeping it during a CRM change makes it independent."));
-    if (!state.self_record.available) body.appendChild(el("p", "hint", "Self-record folder unavailable."));
-    body.appendChild(el("p", "hint", "Applications may write analysis and packages. Connecting here does not connect Brain or grant AI access to your notes."));
-    dataConnectionForm(body, "self", state.self_record.root);
-  });
-  section("Reader folders", (body) => {
-    body.appendChild(el("p", "hint", "Reader reads connected folders without copying or editing their documents. Scan in Reader after adding a folder."));
-    (state.reader_sources || []).forEach((source) => {
-      const item = el("details", "data-connection-section");
-      item.appendChild(el("summary", "hint", `${source.label || "Reader folder"}${source.available ? "" : " - unavailable"}`));
-      connectionSummary(item, { root: source.path });
-      item.appendChild(el("p", "hint", `${source.kind || "dossier"} files matching ${source.glob || "*.html"}, plus index.html bundles`));
-      dataConnectionForm(item, "reader", source.path, { removal: source }); body.appendChild(item);
+  if (state?.version === 1) return state;
+  card.appendChild(el("p", "vault-config-error", state?.error || "Folder settings are unavailable. Try reopening Config."));
+  return null;
+}
+
+function connectionSection(card, title, description, render) {
+  const details = el("details", "data-connection-section");
+  const summary = el("summary", "setup-sub", title);
+  summary.dataset.busy = "off"; details.appendChild(summary);
+  details.appendChild(el("p", "hint", description));
+  render(details); card.appendChild(details); return details;
+}
+
+function cardContactStorage(card) {
+  const state = connectionState(card);
+  if (!state) return;
+  connectionSummary(card, state.crm);
+  card.appendChild(el("p", "hint", "This folder holds your contact list and profiles. " + (state.crm.available ? "The current location is already in use; change it only to connect another Vira CRM." : "Vira creates the default folder when you import contacts; choosing another location is optional.")));
+  dataConnectionForm(card, "crm", state.crm.root, { mode: state.crm.registry_present ? "existing" : "fresh" });
+  connectionSection(card, "Career record storage (advanced)",
+    "Your own career evidence and application outputs live here. This is separate from the notes you connect to Brain.", (body) => {
+      connectionSummary(body, state.self_record);
+      body.appendChild(el("p", "hint", state.self_record.explicit ? "Uses its own folder." : "Uses the self folder inside your contact storage."));
+      dataConnectionForm(body, "self", state.self_record.root);
     });
-    dataConnectionForm(body, "reader", "");
+}
+
+function cardReaderFolders(card) {
+  const state = connectionState(card);
+  if (!state) return;
+  card.appendChild(el("p", "hint", "Reader displays HTML dossiers and other generated documents from these folders. Brain vaults above provide searchable Markdown notes. Adding either is optional."));
+  (state.reader_sources || []).forEach((source) => {
+    const item = el("details", "data-connection-section");
+    item.appendChild(el("summary", "hint", `${source.label || "Reader folder"}${source.available ? "" : " - unavailable"}`));
+    connectionSummary(item, { root: source.path });
+    item.appendChild(el("p", "hint", `${source.kind || "dossier"} files matching ${source.glob || "*.html"}, plus index.html bundles`));
+    dataConnectionForm(item, "reader", source.path, { removal: source }); card.appendChild(item);
   });
-  const brain = el("button", "btn", "Review Brain vault permissions and capture destinations");
-  brain.onclick = () => dashJump("brain"); card.appendChild(brain);
-  card.appendChild(el("p", "hint", "Brain's protected folders apply to Brain writes. Review Applications and agent destinations separately before authorizing work on your self record."));
+  card.appendChild(el("p", "hint", "Files stay in their original folders. Scan in Reader after adding a folder."));
+  dataConnectionForm(card, "reader", "");
+}
+
+// Compatibility for callers of the former combined storage card.
+function cardDataConnections(card) {
+  cardContactStorage(card);
+  cardReaderFolders(card);
 }
 
 function cardDossiers(card, step, st) {
@@ -15036,7 +15065,7 @@ function cardDossiers(card, step, st) {
   }
   card.appendChild(el("p", "hint",
     "Vira reads your most active iMessage threads and writes a first " +
-    "dossier per person — relationship, conversation hooks you can tap to " +
+    "profile per person — relationship, conversation hooks you can tap to " +
     "draft an opener, open loops."));
   card.appendChild(el("p", "hint",
     "This is the step where message content goes to the model you " +
@@ -15048,16 +15077,22 @@ function cardDossiers(card, step, st) {
     return;
   }
   card.appendChild(el("p", "setup-cost", step.cost || ""));
+  if (window.ModuleModels) {
+    const modelRow = el("div", "setup-row");
+    modelRow.appendChild(el("span", "hint", "Profile build model (optional override)"));
+    modelRow.appendChild(window.ModuleModels.button("setup"));
+    card.appendChild(modelRow);
+  }
   const row = el("div", "setup-row");
   const db = el("button", "btn primary",
-    st.crm.profiles ? "Build more dossiers" : "Build first dossiers");
+    st.crm.profiles ? "Build more profiles" : "Build first profiles");
   db.disabled = step.state === "blocked";
   db.onclick = () => setupAct(db,
     () => api("/api/onboard/dossiers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ limit: 25 }),
-    }), (r) => `Building ${r.total} dossiers`);
+    }), (r) => `Building ${r.total} profiles`);
   row.appendChild(db);
   if (step.state === "blocked")
     row.appendChild(el("span", "hint", step.blocker));
@@ -15408,7 +15443,7 @@ function cardBrain(card, step, st) {
   const vault = st.vault || {};
   const sources = (Array.isArray(vault.sources) ? vault.sources : []).filter((source) => source && (!source.primary || vault.root));
   if (!brainPolicySupported(vault)) { brainServerUpdateNotice(card, sources); return; }
-  card.appendChild(el("p", "card-lede", "All your vaults, connected in one place. Choose a folder to start using it."));
+  card.appendChild(el("p", "card-lede", "Brain uses these vaults for your notes, search and AI answers. Permissions are set per vault."));
   const add = el("form", "vault-config-add");
   add.appendChild(el("div", "setup-sub", "Add a vault"));
   const addFields = el("div", "vault-config-fields");
@@ -15445,10 +15480,18 @@ function cardBrain(card, step, st) {
     }, (source) => `${source.name} connected and ready`,
       { refresh: false, onSaved: (result) => brainApplyVaultChange(card, step, st, result) });
   };
-  card.appendChild(add);
+  const addHost = sources.length ? el("details", "data-connection-section") : card;
+  if (sources.length) {
+    const summary = el("summary", "setup-sub", "Add another vault (optional)");
+    summary.dataset.busy = "off"; addHost.appendChild(summary);
+  }
+  addHost.appendChild(add);
+  if (sources.length) card.appendChild(addHost);
   card.appendChild(el("div", "setup-sub", `Connected vaults${sources.length ? " · " + sources.length : ""}`));
   if (!sources.length) card.appendChild(el("p", "hint", "Your first vault will appear here."));
   sources.forEach((source) => brainSourceEditor(card, source, step, st));
+  connectionSection(card, "Reader document folders (optional)",
+    "Display existing documents in Reader without adding a notes vault.", cardReaderFolders);
   const selected = vault.default_destination;
   if (selected && !sources.some((source) => source.id === selected && source.connected && source.write_enabled)) {
     card.appendChild(el("p", "vault-config-error", "The default vault is unavailable or read only. Choose another default in its settings."));
@@ -15493,23 +15536,72 @@ function cardMail(card, step, st) {
 // (companion, WhatsApp, notify, update) — this is only their new home.
 
 const SETUP_MANAGE = [
-  { id: "channels", title: "Phone & channels", render: cardChannels },
+  { id: "channels", title: "Phone messages", render: cardChannels },
+  { id: "whatsapp", title: "WhatsApp", render: cardWhatsApp },
   { id: "notifications", title: "Notifications", render: cardNotifications },
   { id: "updates", title: "Updates", render: cardUpdates },
 ];
 
+function pairedAndroidCount() {
+  return (setupExtra?.companion?.devices || []).filter((d) => !d.pending).length;
+}
+
+function iphoneMessagesReady() {
+  return setupSt?.platform === "mac" && setupSt?.feed?.chat_db === "ok";
+}
+
+function manageState(id) {
+  const x = setupExtra || {};
+  if (id === "channels") return iphoneMessagesReady() || pairedAndroidCount() ? "done" : "optional";
+  if (id === "whatsapp") return x.whatsapp?.sidecar?.connected ? "done" : "optional";
+  if (id === "notifications")
+    return x.notify?.enabled && (x.notify.handle || pairedAndroidCount()) ? "done" : "optional";
+  if (id === "updates") return x.update?.git && !x.update.behind ? "done" : "optional";
+  return "optional";
+}
+
+function manageAttention(id) {
+  const wa = setupExtra?.whatsapp;
+  if (id !== "whatsapp") return "";
+  if (wa?.pairing?.error) return "WhatsApp connection failed";
+  if (wa?.sidecar?.logged_out) return "WhatsApp was unlinked; reconnect if you want to keep using it";
+  if (wa?.linked && wa?.watcher?.state === "error") return "WhatsApp cannot receive messages";
+  return "";
+}
+
+function refreshManageRow(id) {
+  const row = $(`#setup-body [data-setup-id="${id}"] .dash-row`);
+  if (!row) return;
+  const state = manageState(id), attention = manageAttention(id);
+  ["done", "optional", "manage"].forEach((name) => row.classList.toggle("s-" + name, state === name));
+  row.classList.toggle("s-attn", !!attention);
+  row.querySelector(".setup-step-sub").textContent = attention || manageSubline(id);
+  const pill = row.querySelector(".dash-pill");
+  if (pill) {
+    pill.textContent = attention ? "needs attention" : managePill(id);
+    pill.className = "dash-pill " + dashPillClass({state, attention});
+  }
+}
+
 function manageSubline(id) {
   const x = setupExtra || {};
   if (id === "channels") {
-    const n = (x.companion && (x.companion.devices || [])
-      .filter((d) => !d.pending).length) || 0;
-    return n ? `${n} phone${n === 1 ? "" : "s"} paired` : "phone · WhatsApp";
+    const n = pairedAndroidCount();
+    return iphoneMessagesReady()
+      ? "Your iPhone messages can be read" + (n ? ` · ${n} Android paired` : "")
+      : n ? `${n} Android phone${n === 1 ? "" : "s"} paired`
+      : "Optional · connect an Android phone for SMS";
   }
+  if (id === "whatsapp") return x.whatsapp?.sidecar?.connected ? "Connected · incoming messages"
+    : x.whatsapp?.linked ? "Previously linked · open to reconnect"
+    : "Optional · link WhatsApp on iPhone or Android";
   if (id === "notifications")
-    return x.notify ? (x.notify.enabled ? "on" : "off") : "";
+    return manageState(id) === "done" ? "Enabled · new-mail alerts"
+      : x.notify?.enabled ? "Optional · choose where to receive alerts" : "Optional · alerts are off";
   if (id === "updates") {
-    if (!x.update || !x.update.git) return "";
-    return x.update.behind > 0 ? `${x.update.behind} available` : "up to date";
+    if (!x.update) return "Update status unavailable";
+    if (!x.update.git) return "Manual installation · automatic updates unavailable";
+    return x.update.behind > 0 ? `Optional · ${x.update.behind} update${x.update.behind > 1 ? "s" : ""} available` : "Up to date";
   }
   return "";
 }
@@ -15517,15 +15609,14 @@ function manageSubline(id) {
 // The state word for a manage row — a fact where there is one, else nothing.
 function managePill(id) {
   const x = setupExtra || {};
-  if (id === "notifications" && x.notify) return x.notify.enabled ? "on" : "off";
+  if (id === "notifications") return manageState(id) === "done" ? "enabled" : "optional";
   if (id === "updates" && x.update && x.update.git)
     return x.update.behind > 0 ? `${x.update.behind} available` : "up to date";
   if (id === "channels") {
-    const n = (x.companion && (x.companion.devices || [])
-      .filter((d) => !d.pending).length) || 0;
-    return n ? `${n} paired` : "";
+    return manageState(id) === "done" ? "connected" : "optional";
   }
-  return "";
+  if (id === "whatsapp") return manageState(id) === "done" ? "connected" : "optional";
+  return "optional";
 }
 
 // Stop the channel-card pollers when the owner navigates away from it.
@@ -15535,16 +15626,15 @@ function leaveManageCard() {
 }
 
 function cardChannels(card) {
-  card.appendChild(el("p", "hint",
-    "Bring other messaging channels into Vira. On this Mac iMessage is " +
-    "already covered by Full Disk Access — pair an Android phone or link " +
-    "WhatsApp to fold the rest into the feed. Both are receive-only, and " +
-    "everything stays on this machine."));
+  card.appendChild(el("p", iphoneMessagesReady() ? "hint setup-ok" : "hint",
+    iphoneMessagesReady() ? "Your iPhone messages can be read through Messages on this Mac. No phone pairing is needed."
+    : setupSt?.platform === "mac" ? "Messages on this Mac uses the Full Disk Access setting above."
+    : "Android SMS can be received through the Vira Companion app."));
 
   // Android phone (the companion) — reuses loadCompanion / companionPairStart.
-  card.appendChild(el("div", "setup-sub", "Android phone"));
+  card.appendChild(el("div", "setup-sub", "Android phone (optional)"));
   const cbar = el("div", "setup-row");
-  const cpair = el("button", "btn primary", "Pair a phone");
+  const cpair = el("button", "btn", "Connect an Android phone");
   cpair.id = "companion-pair";
   cpair.onclick = () => companionPairStart();
   const cref = el("button", "btn", "Refresh");
@@ -15561,9 +15651,38 @@ function cardChannels(card) {
   // from the document and would miss it mid-build, leaving the section empty
   // until a manual Refresh (same bug class as cardNotifications' loadNotify).
   setTimeout(() => loadCompanion().catch(() => {}), 0);
+  connectionSection(card, "Use Vira on your phone (optional)",
+    "Open Vira in Safari or Chrome on either iPhone or Android. Tailscale lets your phone reach this computer away from home; it is not needed to read iPhone messages on this Mac.", (body) => {
+      const url = setupExtra?.companion?.hub_url;
+      const usableUrl = url && !/^https?:\/\/localhost[:/]/.test(url);
+      let localAddress = false;
+      try {
+        const host = new URL(url).hostname;
+        localAddress = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[f[cd]|\[fe80:)/.test(host)
+          || host.endsWith(".local");
+      } catch { /* No address has been detected yet. */ }
+      if (usableUrl) {
+        body.appendChild(el("p", "hint data-connection-path", (localAddress ? "Same Wi-Fi address: " : "Phone address: ") + url));
+        const copy = el("button", "btn", "Copy phone address");
+        copy.onclick = () => { copyText(url); toast("Phone address copied"); };
+        body.appendChild(copy);
+      }
+      const list = el("ol", "setup-steps");
+      ["For remote access, install Tailscale on this computer and your phone, then sign both into the same Tailscale account.",
+       localAddress ? "The address above works on the same Wi-Fi. For access away from home, connect Tailscale and reopen this card to get your Tailscale address."
+         : usableUrl ? "Open the phone address above in the phone browser. Keep Tailscale connected on both devices when away from home."
+         : "After connecting Tailscale, reopen this card to see your phone address. Open that address in the phone browser.",
+       "You can add Vira to the phone's Home Screen. Android SMS pairing is a separate, optional connection."].forEach((text) => list.appendChild(el("li", "", text)));
+      body.appendChild(list);
+      const guide = el("button", "btn", "Open Tailscale setup guide");
+      guide.onclick = () => window.open("https://tailscale.com/docs/how-to/quickstart", "_blank", "noopener");
+      body.appendChild(guide);
+    });
+}
 
+function cardWhatsApp(card) {
   // WhatsApp — reuses waTick / waConnect; the poll runs only while shown.
-  card.appendChild(el("div", "setup-sub", "WhatsApp"));
+  card.appendChild(el("p", "hint", "Optional. Link WhatsApp on your iPhone or Android to receive new messages in Incoming. Vira does not send WhatsApp messages."));
   const wbar = el("div", "setup-row");
   const wc = el("button", "btn", "Connect WhatsApp"); wc.id = "wa-connect";
   wc.onclick = () => waConnect();
@@ -15746,7 +15865,7 @@ function frAlready(pr) {
       "nothing here is running on a real account. This is the screen a " +
       "stranger sees when their machine is already signed in."
     : `This machine is signed in to ${pr.sub_name}, so Vira connected ` +
-      "itself — replies in your voice, dossiers, and the daily brief all " +
+      "itself — replies in your voice, profiles, and the daily brief all " +
       "run on your own account. Nothing to configure."));
   const row = el("div", "fr-row");
   const go = el("button", "btn primary fr-big", "Take me to Vira");

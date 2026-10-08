@@ -872,7 +872,7 @@ def catalog(pid, refresh=False):
         cli, cli_detail = _codex_catalog(refresh)
     elif spec["models"]["cli"]:
         cli_detail = ("CLI aliases; the installed CLI chooses the version. "
-                      "The session shows the exact model after startup. " + detail)
+                      "The session shows the exact model after startup.")
     elif cli:
         cli_detail = f"read from {spec['cli_config']['path']}"
     else:

@@ -3086,6 +3086,7 @@ def api_whatsapp_status():
             "installed": whatsapp.installed(),
             "instance": instance.metadata(),
             "watcher": whatsapp_watcher.status,
+            "pairing": whatsapp.pairing_status(),
             "sidecar": whatsapp.sidecar_status()}
 
 
@@ -3096,11 +3097,8 @@ def api_whatsapp_qr():
 
 @app.post("/api/whatsapp/pair")
 def api_whatsapp_pair():
-    """Start (or find) the sidecar so its pairing QR becomes available."""
-    try:
-        return {"sidecar": whatsapp.ensure_sidecar()}
-    except RuntimeError as e:
-        raise HTTPException(400, str(e))
+    """Prepare the connector and pairing QR without blocking the request."""
+    return {"pairing": whatsapp.start_pairing()}
 
 
 @app.post("/api/whatsapp/poll")

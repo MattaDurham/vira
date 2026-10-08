@@ -52,11 +52,14 @@ const view = (id) => {
 const findView = view("find"), peopleView = view("people"), feedView = view("feed");
 peopleView.appendChild(el("div", "section-head")); // Networking has its own heading.
 const plainView = view("research");
+const setupView = view("setup");
 let modules = [
   { id: "find", windows: ["find"], kind: "completion", title: "Find",
     description: "Used for new answers.", selection: null,
     effective: { provider: "anthropic", backend: "cli", model: "fable" } },
   { id: "people", windows: ["people", "feed"], kind: "completion", title: "People",
+    selection: null, effective: { provider: "anthropic", backend: "cli", model: "fable" } },
+  { id: "setup", windows: ["setup"], kind: "session", title: "Config",
     selection: null, effective: { provider: "anthropic", backend: "cli", model: "fable" } },
 ];
 const catalog = { roster: [], providers: [
@@ -126,6 +129,20 @@ const gpt = { provider: "openai", backend: "cli", model: "gpt-future" };
   assert.equal(findView.querySelectorAll("[data-module-model]").length, 1, "refresh does not duplicate controls");
   assert.equal(peopleView.querySelectorAll("[data-module-model]").length, 2, "both People tabs expose the shared choice");
   assert.equal(plainView.querySelectorAll("[data-module-model]").length, 0);
+  assert.equal(setupView.querySelectorAll("[data-module-model]").length, 0,
+    "Config has no competing model picker in its heading");
+  const app = fs.readFileSync("static/app.js", "utf8");
+  vm.runInContext(app.slice(app.indexOf("function cardDossiers("), app.indexOf("let brainOpenSource")), context);
+  const dossierCard = el("div"); setupView.appendChild(dossierCard);
+  context.cardDossiers(dossierCard, {state:"done"}, {crm:{profiles:2}});
+  assert.match(dossierCard.querySelector(".primary").textContent, /Build more profiles/);
+  assert(dossierCard.querySelectorAll("span").some(node => node.textContent === "Profile build model (optional override)"));
+  const dossierModel = dossierCard.querySelector("[data-module-model]");
+  assert(dossierModel, "the effective model stays available beside the action that uses it");
+  assert.match(dossierModel.textContent, /fable/);
+  await models.open("setup", dossierModel);
+  assert.match(currentPopup().querySelector(".ctx-head").textContent, /Config model/);
+  await control("Cancel").emit("click");
   const anchor = findView.querySelector("button");
   assert.match(anchor.textContent, /fable/);
   await models.open("find", anchor);

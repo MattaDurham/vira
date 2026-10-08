@@ -25,7 +25,7 @@ MODULES = {
     "design": ("Design Studio", "Design analysis and new design runs", "session"),
     "evidence": ("Evidence Ledger", "Compose evidence cases", "completion"),
     "map": ("System Map", "Refresh the system map", "session"),
-    "setup": ("Config", "Build initial contact dossiers and setup runs", "session"),
+    "setup": ("Config", "Build initial contact profiles and setup runs", "session"),
 }
 ALIASES = {"feed": "people", "find-cloud": "find", "find-related": "find",
            "brain": "find", "search": "find", "radar": "people"}

@@ -622,11 +622,11 @@ def clusters(c, pids, edges, anchor_org=None):
 
 NARRATE_PROMPT = """You are {owner}'s chief of staff. Below are pairs of \
 {owner}'s contacts that the Contact Atlas found strongly connected, with \
-the deterministic signals behind each edge and a short dossier per person.
+the deterministic signals behind each edge and a short profile per person.
 
 For each pair, write ONE short sentence (max 20 words) explaining HOW these \
 two people most plausibly know each other or what connects them, grounded \
-ONLY in the given signals and dossiers. Never invent facts.
+ONLY in the given signals and profiles. Never invent facts.
 
 Return ONLY a JSON object:
 {{"labels": [{{"a_id": "...", "b_id": "...", "why": "..."}}]}}

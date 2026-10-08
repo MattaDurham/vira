@@ -238,11 +238,11 @@ def _probe_whatsapp(ctx):
         detail = ("Link Vira as a WhatsApp device to feed inbound messages "
                   "into the feed. Receive-only.")
     else:
-        detail = ("Sidecar not installed — run: cd bridge/whatsapp && "
-                  "npm install, then link in Settings > WhatsApp.")
+        detail = ("Optional — Connect WhatsApp in Config prepares the connector "
+                  "and displays the device-link code. Requires Node.js 20 or newer.")
     return {"present": whatsapp.installed(), "configured": linked,
             "count": 0, "detail": detail,
-            "action": "" if linked else "Connect in Settings > WhatsApp"}
+            "action": "" if linked else "Connect in Config > WhatsApp"}
 
 
 # ---------- the table ----------

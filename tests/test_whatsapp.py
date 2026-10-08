@@ -281,5 +281,107 @@ class SurfaceTests(unittest.TestCase):
         self.assertIn("whatsapp", main.api_feed(limit=1))
 
 
+class PairingPreparationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.bridge = self.root / "bridge"
+        self.bridge.mkdir()
+        self.node = self.root / "bin" / "node"
+        self.node.parent.mkdir()
+        self.node.touch()
+        (self.node.parent / ("npm.cmd" if settings.IS_WIN else "npm")).touch()
+        self.patches = [
+            mock.patch.object(whatsapp, "ROOT", self.root),
+            mock.patch.object(whatsapp, "DATA_DIR", self.root / "connector"),
+            mock.patch.object(whatsapp, "BRIDGE_DIR", self.bridge),
+            mock.patch.object(whatsapp, "_pairing", {"running": False, "stage": "idle", "error": ""}),
+            mock.patch.object(whatsapp, "_last_spawn", {"t": 0}),
+            mock.patch.object(whatsapp, "_node_binary", return_value=str(self.node)),
+            mock.patch.object(settings, "fixture_mode", return_value=False),
+            mock.patch.object(settings, "get", return_value=18377),
+            mock.patch.object(whatsapp.instance, "is_branch", return_value=False),
+            mock.patch.object(whatsapp.instance, "primary_root",
+                              side_effect=AssertionError("pairing test reached a real store")),
+            mock.patch.object(whatsapp.instance, "primary_id", return_value="primary"),
+            mock.patch.object(main.instance, "metadata", return_value={}),
+        ]
+        for patch in self.patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _complete_install(self):
+        for name in ("baileys", "pino", "qrcode"):
+            package = self.bridge / "node_modules" / name / "package.json"
+            package.parent.mkdir(parents=True)
+            package.write_text('{}', encoding="utf-8")
+
+    def test_connect_installs_then_starts_and_reports_pairing_ready(self):
+        """Real route -> worker -> install -> spawn -> status, no real process."""
+        running = []
+
+        def run(command, **kwargs):
+            if "--version" in command:
+                return subprocess.CompletedProcess(command, 0, stdout="v22.0.0")
+            self.assertFalse(whatsapp.installed())
+            self.assertEqual(whatsapp.pairing_status()["stage"], "preparing")
+            self.assertEqual(kwargs["timeout"], 240)
+            self._complete_install()
+            return subprocess.CompletedProcess(command, 0)
+
+        def spawn(*args, **kwargs):
+            self.assertTrue(whatsapp.installed(), "connector is installed before it starts")
+            self.assertEqual(whatsapp.pairing_status()["stage"], "starting")
+            running.append(True)
+
+        with mock.patch.object(whatsapp.subprocess, "run", side_effect=run), \
+             mock.patch.object(whatsapp.subprocess, "Popen", side_effect=spawn), \
+             mock.patch.object(whatsapp, "sidecar_status", side_effect=lambda:
+                               {"needs_pair": True, "connected": False} if running else None), \
+             mock.patch.object(whatsapp, "_start_pairing_worker", side_effect=whatsapp._pair_worker):
+            result = main.api_whatsapp_pair()
+            status = main.api_whatsapp_status()
+        self.assertEqual(result["pairing"]["stage"], "ready")
+        self.assertTrue(status["installed"])
+        self.assertFalse(status["linked"])
+        self.assertTrue(status["sidecar"]["needs_pair"])
+        self.assertFalse(status["pairing"]["running"])
+
+    def test_pair_route_returns_progress_and_duplicate_click_does_not_spawn(self):
+        with mock.patch.object(whatsapp, "_start_pairing_worker") as start:
+            first = main.api_whatsapp_pair()
+            second = main.api_whatsapp_pair()
+        self.assertTrue(first["pairing"]["running"])
+        self.assertEqual(first, second)
+        start.assert_called_once_with()
+
+    def test_install_failure_is_visible_and_retry_is_allowed(self):
+        with mock.patch.object(whatsapp, "_install_connector", side_effect=RuntimeError("Network unavailable")), \
+             mock.patch.object(whatsapp, "ensure_sidecar") as ensure, \
+             mock.patch.object(whatsapp, "_start_pairing_worker", side_effect=whatsapp._pair_worker):
+            failure = main.api_whatsapp_pair()["pairing"]
+        self.assertFalse(failure["running"])
+        self.assertEqual(failure["error"], "Network unavailable")
+        ensure.assert_not_called()
+        with mock.patch.object(whatsapp, "_start_pairing_worker") as start:
+            retry = main.api_whatsapp_pair()["pairing"]
+        self.assertTrue(retry["running"])
+        self.assertEqual(retry["error"], "")
+        start.assert_called_once_with()
+
+    def test_existing_connector_does_not_reinstall_or_touch_session(self):
+        self._complete_install()
+        session = self.root / "connector" / "session" / "creds.json"
+        session.parent.mkdir(parents=True)
+        session.write_text('{"fixture": true}', encoding="utf-8")
+        with mock.patch.object(whatsapp, "_install_connector") as install, \
+             mock.patch.object(whatsapp, "ensure_sidecar", return_value={"connected": True}), \
+             mock.patch.object(whatsapp, "_start_pairing_worker", side_effect=whatsapp._pair_worker):
+            main.api_whatsapp_pair()
+        install.assert_not_called()
+        self.assertEqual(session.read_text(encoding="utf-8"), '{"fixture": true}')
+
+
 if __name__ == "__main__":
     unittest.main()

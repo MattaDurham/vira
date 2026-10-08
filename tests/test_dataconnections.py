@@ -208,7 +208,7 @@ class ConnectionTests(unittest.TestCase):
         with mock.patch.object(session.sessions, "recent", return_value=[{"status": "running"}]), self.assertRaisesRegex(ValueError, "sessions"):
             connections.connect(request, plan["revision"])
         onboard._build["running"] = True
-        with self.assertRaisesRegex(ValueError, "dossier"):
+        with self.assertRaisesRegex(ValueError, "profile"):
             connections.connect(request, plan["revision"])
         onboard._build["running"] = False
         joblog.STORE.write_text(json.dumps({"jobs": [{"status": "running", "instance_id": instance.id()}]}), encoding="utf-8")

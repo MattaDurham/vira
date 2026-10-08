@@ -355,6 +355,16 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual([m["id"] for m in cat["cli"]],
                          ["sonnet", "opus", "haiku", "fable"])
 
+    def test_cli_description_does_not_request_an_optional_api_key(self):
+        with mock.patch.object(models, "_live_models",
+                               return_value=([], "no API key on file")), \
+             mock.patch.object(models, "cli_models",
+                               return_value=[{"id": "sonnet", "label": "Sonnet"}]):
+            cat = models.catalog("anthropic")
+        self.assertIn("installed CLI", cat["cli_detail"])
+        self.assertNotIn("API key", cat["cli_detail"])
+        self.assertIn("no API key", cat["api_detail"])
+
     def test_no_shipped_model_id_names_a_generation(self):
         # The ratchet: any literal model id reintroduced into PROVIDERS is
         # a name only an admin edit and a push can ever refresh. Aliases

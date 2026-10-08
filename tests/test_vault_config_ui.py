@@ -56,6 +56,8 @@ const context = vm.createContext({
   CSS: { escape: (text) => text },
   document: { querySelector: () => null },
   setupSt: null, setupFlow: null, setupVaultRevision: 0,
+  connectionSection: () => {},
+  cardReaderFolders: () => {},
   busyWhile: (_button, fn) => Promise.resolve(fn()),
   loadSetup: async () => { loads++; },
   toast: (text) => { toasts.push(text); },

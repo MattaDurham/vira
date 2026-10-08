@@ -34,15 +34,17 @@ window.ModuleModels = (() => {
     return rows;
   }
 
+  function paintButton(button) {
+    const module = moduleFor(button.dataset.moduleModel);
+    if (!module) return;
+    const current = label(module.selection || module.effective);
+    button.textContent = "Model: " + current;
+    button.title = `${module.title}: ${current}${module.selection ? "" : " (app default)"}. Choose model.`;
+    button.setAttribute("aria-label", button.title);
+  }
+
   function paint() {
-    document.querySelectorAll("[data-module-model]").forEach((button) => {
-      const module = moduleFor(button.dataset.moduleModel);
-      if (!module) return;
-      const current = label(module.selection || module.effective);
-      button.textContent = "Model: " + current;
-      button.title = `${module.title}: ${current}${module.selection ? "" : " (app default)"}. Choose model.`;
-      button.setAttribute("aria-label", button.title);
-    });
+    document.querySelectorAll("[data-module-model]").forEach(paintButton);
   }
 
   function button(id) {
@@ -51,12 +53,14 @@ window.ModuleModels = (() => {
     node.dataset.moduleModel = id;
     node.setAttribute("aria-haspopup", "dialog");
     node.addEventListener("click", () => open(id, node));
+    paintButton(node);
     return node;
   }
 
   function mount() {
     for (const module of modules) {
       for (const id of module.windows || [module.id]) {
+        if (id === "setup") continue; // Config's task model belongs beside dossier builds.
         const view = document.getElementById("view-" + id);
         const heads = id === "people" ? (view?.querySelectorAll(".section-head") || [])
           : [view?.querySelector(".section-head")];

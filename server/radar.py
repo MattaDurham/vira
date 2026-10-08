@@ -595,7 +595,7 @@ CURATE_PROMPT = """You are {owner}'s chief of staff, deciding which of \
 {owner}'s contacts are worth putting in a room together right now.
 
 Below are candidate GROUPINGS — two to five people who share real ground, \
-each with the shared topics, a short dossier per person, and the trigger \
+each with the shared topics, a short profile per person, and the trigger \
 that surfaced them. Some were surfaced by a live item someone actually \
 shared; those are the strongest, because there is a reason to reach out \
 TODAY. Each candidate also says whether the members already know each \
