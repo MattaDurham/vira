@@ -57,7 +57,7 @@ from . import jsonstore, settings, vault, worldgraph
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "library"
 SUBSETS = ROOT / "data" / "library-subsets.json"
-VERSION = 1
+VERSION = 2   # 2: similar pages stored flat
 
 # ---------- the tree's shape ----------
 # k for a split is sqrt(n/12), held between 3 and 9: past nine boxes a
@@ -159,6 +159,10 @@ STALE_BUILD_S = 1800
 # The attachment name index is rebuilt at most this often: a walk of a
 # large vault takes a second, and a new image is rare between reads.
 ASSET_INDEX_TTL_S = 600
+# A large vault's index holds a few hundred MB once parsed. The server
+# keeps it only while the Library is in use: one idle this long is dropped
+# and parsed again (well under a second) on the next request.
+IDLE_EVICT_S = 900
 
 # ---------- saved subsets ----------
 # The saved list is a menu read on every open; past a couple of hundred
@@ -203,6 +207,7 @@ _cache = {}            # vault id -> {"key": (mtime_ns, size), "idx": ...}
 _payload_cache = {}    # (vault, machine, build, names, dirs) -> (raw, gzip)
 _asset_cache = {}      # vault id -> (built monotonic, {basename: rel})
 _running = {}          # vault id -> Popen of the build child
+_reaper = {"started": False}
 
 
 class LibraryError(ValueError):
@@ -852,7 +857,10 @@ def build(vault_id):
             "leaf": [leaf[i] for i in range(len(pages))],
             "emb": [1 if i in vecs else 0 for i in range(len(pages))],
         },
-        "links": links, "near": near,
+        "links": links,
+        # Flat [page, pct, page, pct, ...] per page: one list per page, not
+        # one per pair, which is most of the parsed index's size.
+        "near": [[x for pair in row for x in pair] for row in near],
     }
     jsonstore.write_atomic(_index_path(vault_id), idx, separators=(",", ":"),
                            ensure_ascii=False)
@@ -948,6 +956,7 @@ def load(vault_id):
     with _lock:
         hit = _cache.get(vault_id)
         if hit and hit["key"] == key:
+            hit["used"] = time.monotonic()
             return hit["idx"]
     idx = jsonstore.read(path, None)
     if not isinstance(idx, dict) or idx.get("version") != VERSION:
@@ -967,8 +976,34 @@ def load(vault_id):
     idx["_members"] = members
     idx["_resolve"] = _Resolver(P["rel"], P["title"])
     with _lock:
-        _cache[vault_id] = {"key": key, "idx": idx}
+        _cache[vault_id] = {"key": key, "idx": idx, "used": time.monotonic()}
+    _start_reaper()
     return idx
+
+
+def _evict_idle(now=None):
+    now = time.monotonic() if now is None else now
+    with _lock:
+        for vault_id in [v for v, hit in _cache.items()
+                         if now - hit["used"] > IDLE_EVICT_S]:
+            _cache.pop(vault_id, None)
+            for key in [k for k in _payload_cache if k[0] == vault_id]:
+                _payload_cache.pop(key, None)
+
+
+def _reap():
+    while True:
+        time.sleep(60)
+        _evict_idle()
+
+
+def _start_reaper():
+    """The one place the idle-index reaper starts (tests patch this)."""
+    with _lock:
+        if _reaper["started"]:
+            return
+        _reaper["started"] = True
+    threading.Thread(target=_reap, daemon=True, name="library-reaper").start()
 
 
 def _need(vault_id):
@@ -1244,7 +1279,9 @@ def page(vault_id, rel, machine=False):
                    constellation={"nodes": [], "edges": []})
         return out
     leaf = P["leaf"][i]
-    outl, back, sim = list(idx["links"][i]), list(idx["_back"][i]), list(idx["near"][i])
+    row = idx["near"][i]
+    outl, back = list(idx["links"][i]), list(idx["_back"][i])
+    sim = list(zip(row[::2], row[1::2]))
     siblings = [j for j in idx["_members"].get(leaf, []) if j == i or shown(j)]
     pos = siblings.index(i)
     out.update(

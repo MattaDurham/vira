@@ -152,6 +152,7 @@ class Base(unittest.TestCase):
                               (self.root / path).read_text(encoding="utf-8")),
             mock.patch.object(settings, "raw", lambda: self.cfg),
             mock.patch.object(onboard, "config_set", self._config_set),
+            mock.patch.object(library, "_start_reaper", lambda: None),
         ]
         for p in patches:
             p.start()
@@ -222,7 +223,7 @@ class TheBuild(Base):
         targets = {idx["pages"]["rel"][j] for j in idx["links"][g0]}
         self.assertEqual(targets, {"wiki/garden-01.md", "wiki/garden-02.md",
                                    "wiki/garden-03.md"})
-        near = [idx["pages"]["rel"][j] for j, _s in idx["near"][at["wiki/rocket-05.md"]]]
+        near = [idx["pages"]["rel"][j] for j in idx["near"][at["wiki/rocket-05.md"]][::2]]
         self.assertTrue(near)
         self.assertTrue(all(r.startswith("wiki/rocket-") for r in near))
 
@@ -339,6 +340,19 @@ class TheReader(Base):
         self.assertTrue(any(r == "similar" for r in rings.values()))
         for a, b in c["edges"]:
             self.assertLess(max(a, b), len(c["nodes"]))
+
+    def test_an_idle_index_is_dropped_and_comes_back(self):
+        self.build()
+        first = library.load("primary")
+        library.map_payload("primary")
+        library._evict_idle(now=library._cache["primary"]["used"] + library.IDLE_EVICT_S - 1)
+        self.assertIs(library.load("primary"), first, "kept while in use")
+        library._evict_idle(now=library._cache["primary"]["used"] + library.IDLE_EVICT_S + 1)
+        self.assertNotIn("primary", library._cache)
+        self.assertFalse([k for k in library._payload_cache if k[0] == "primary"])
+        again = library.load("primary")
+        self.assertIsNot(again, first)
+        self.assertEqual(again["pages"]["rel"], first["pages"]["rel"])
 
     def test_a_group_detail_lists_its_children(self):
         self.build()
