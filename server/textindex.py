@@ -36,6 +36,8 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import runtimework
+
 # A full-history mailbox walk starts at UID watermark 0, and the UID
 # SEARCH reply listing a 20-year mailbox overflows imaplib's default 1MB
 # line cap ("got more than 1000000 bytes"). Hit on the first real
@@ -435,6 +437,7 @@ def backfill(limit=None, log=print):
     return n
 
 
+@runtimework.tracked("Message indexing")
 def incremental(log=lambda *a: None):
     """The background tick: new messages since the watermark, plus a
     bounded mail sweep."""

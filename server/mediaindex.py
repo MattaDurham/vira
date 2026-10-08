@@ -40,6 +40,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+from . import runtimework
+
 from . import data as crm
 from . import retrieval
 from .imessage import _connect, apple_dt, msg_text
@@ -718,6 +720,7 @@ def backfill_transcripts(log=print, limit=None):
 
 # ---------- reconcile + status ----------
 
+@runtimework.tracked("Media reconciliation")
 def reconcile(log=print):
     """Mark purged files; keep index rows (still searchable by context).
 
@@ -795,6 +798,7 @@ def backfill_email(log=print):
     return mailindex.backfill(full=True, log=log)
 
 
+@runtimework.tracked("Media indexing")
 def run_incremental(log=lambda *a: None):
     """Index whatever is new since the watermarks: metadata + context,
     then the cheap per-item stages. Captions/transcripts ride the

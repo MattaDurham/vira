@@ -11115,27 +11115,9 @@ async function updCheck(btn) {
 }
 
 async function applyUpdate(btn) {
-  const hint = $("#upd-hint");
-  btn.disabled = true;
-  hint.textContent = "Pulling…";
-  try {
-    const r = await post("/api/update/apply", {});
-    if (!r.updated) { hint.textContent = r.note || "Nothing to update."; btn.disabled = false; return; }
-    hint.textContent = `Updated to ${r.sha} — restarting…`;
-    // poll until the restarted server answers, then reload the app
-    const t0 = Date.now();
-    startPoll(async (h) => {
-      try {
-        await api("/api/config");
-        h.stop();
-        location.reload();
-      } catch { if (Date.now() - t0 > 60000) { h.stop(); hint.textContent = "Server did not come back — restart it manually."; } }
-    }, 1500);
-  } catch (e) {
-    hint.textContent = "Update failed: " + e.message;
-    btn.disabled = false;
-  }
+  await openRestart("update");
 }
+
 
 // background check shortly after load: a quiet toast when the remote is ahead
 setTimeout(async () => {
@@ -15764,7 +15746,9 @@ function cardUpdates(card) {
   ap.onclick = () => applyUpdate(ap);
   const hint = el("span", "hint"); hint.id = "upd-hint";
   hint.style.alignSelf = "center";
-  bar.appendChild(chk); bar.appendChild(ap); bar.appendChild(hint);
+  const restart = el("button", "btn", "Restart Vira");
+  restart.onclick = () => openRestart();
+  bar.append(chk, ap, restart, hint);
   card.appendChild(bar);
   // Deferred past card attach (see cardChannels) — a detached #upd-current
   // miss left the card stuck on "Checking…" until a manual check.
@@ -19412,19 +19396,7 @@ function restartStrip() {
   strip.appendChild(el("span", null,
     "Vira is still running the old code — restart to load the change."));
   const go = el("button", "brief-act primary", "Restart Vira");
-  go.addEventListener("click", async () => {
-    go.disabled = true;
-    go.textContent = "Restarting…";
-    try {
-      await post("/api/restart", {});
-      setTimeout(() => location.reload(), 4000);
-    } catch (e) {
-      go.disabled = false;
-      go.textContent = "Restart Vira";
-      alert("Could not restart: " + errText(e)
-            + "\n\nRestart from a terminal instead.");
-    }
-  });
+  go.addEventListener("click", () => openRestart());
   strip.appendChild(go);
   const dismiss = el("button", "brief-act", "later");
   dismiss.addEventListener("click", () => strip.remove());

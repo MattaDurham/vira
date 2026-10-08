@@ -44,6 +44,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import runtimework
+
 from . import data as crm
 from . import jsonstore, mediaindex, radar, settings
 from .filelock import locked
@@ -748,6 +750,7 @@ def _validate_source():
             raise ValueError("CRM registry has no people list")
 
 
+@runtimework.tracked("Contact Atlas rebuild")
 def build_graph(narrate=False):
     """Assemble the full materialized view and write it to disk. Safe to
     call from a background thread; serialized against concurrent builds."""
@@ -848,6 +851,7 @@ def _after_build(graph):
         pass
 
 
+@runtimework.tracked("Starting Contact Atlas rebuild")
 def refresh(narrate=False):
     """Schedule one rebuild, marking it busy before the worker starts."""
     global _retry_at, _build_error

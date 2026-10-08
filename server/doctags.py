@@ -53,6 +53,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import runtimework
+
 from . import ideatags, jsonstore, readinglist, suggest
 from .filelock import locked
 
@@ -416,6 +418,7 @@ def _pending(items, s):
 
 
 @modulemodels.scoped("reader")
+@runtimework.tracked("Document tagging")
 def tag_pending(items=None, batches=1):
     """Tag up to `batches` batches. Rung 1 first for everything pending (free),
     then rung 2 on what is left over — so a model outage still improves the

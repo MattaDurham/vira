@@ -28,6 +28,8 @@ import time
 from datetime import date
 from pathlib import Path
 
+from . import runtimework
+
 DATA = Path(__file__).resolve().parent.parent / "data"
 DEST = Path.home() / ".vira-backups"
 FILES = ("ideas.json", "config.json", "subscriptions.json",
@@ -82,6 +84,7 @@ DIRS = (
 KEEP = 14
 
 
+@runtimework.tracked("Local backup")
 def snapshot():
     stamp = date.today().isoformat()
     for name in FILES:

@@ -29,6 +29,8 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+from . import runtimework
+
 from . import data as crm
 from . import retrieval, settings
 
@@ -113,6 +115,7 @@ def _person_text(p, master, profile):
     return " \n".join(b for b in bits if b)[:8000]
 
 
+@runtimework.tracked("Contact indexing")
 def refresh(force=False, log=lambda *a: None):
     """Rebuild the index when the CRM files moved underneath it. Full
     rebuild, not incremental: at this size it costs milliseconds and
@@ -182,6 +185,7 @@ def refresh(force=False, log=lambda *a: None):
     return {"rebuilt": True, "people": len(rows)}
 
 
+@runtimework.tracked("Contact vectors")
 def embed_pending(limit=128, log=lambda *a: None):
     """Fill vectors for rows FTS is already serving. Runs in the
     background tick; a search never waits for it."""

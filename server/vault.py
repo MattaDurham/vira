@@ -34,6 +34,8 @@ from datetime import date, datetime
 from datetime import time as dtime
 from pathlib import Path
 
+from . import runtimework
+
 from qocha import Config as _QochaConfig, Vault as _QochaVault
 from qocha.chunker import (CHUNK_MAX, CHUNK_TARGET,  # noqa: F401 — re-export
                            chunk_markdown)
@@ -343,6 +345,7 @@ def _hit(row, hit):
 
 # ---------- the public surface (unchanged) ----------
 
+@runtimework.tracked("Vault scan")
 def scan_once():
     total = {"changed": 0, "removed": 0, "seen": 0, "vaults": []}
     for row in _vault_rows():
@@ -358,6 +361,7 @@ def scan_once():
     return total
 
 
+@runtimework.tracked("Vault vectors")
 def embed_pending(limit=2000):
     total = 0
     left = max(0, int(limit))

@@ -1253,6 +1253,21 @@
   </div>
 </div>
 
+<div id="restart-sheet" class="sheet">
+  <section class="sheet-card restart-card" role="dialog" aria-modal="true" aria-labelledby="restart-title">
+    <div class="sheet-head"><h3 id="restart-title">Are you sure?</h3></div>
+    <p id="restart-explanation" class="hint"></p>
+    <p id="restart-state" class="hint" aria-live="polite"></p>
+    <div id="restart-activities" class="restart-activities"></div>
+    <div class="row-end restart-actions">
+      <button id="restart-close" class="btn">Cancel</button>
+      <button id="restart-cancel-queued" class="btn" hidden>Cancel queued restart</button>
+      <button id="restart-wait" class="btn primary" disabled>Wait, then restart</button>
+      <button id="restart-now" class="btn" disabled>Restart now</button>
+    </div>
+  </section>
+</div>
+
 <script src="/forge-spatial.js"></script>
 <script src="/forge.js"></script>
 <script src="/assistant.js"></script>
@@ -1261,6 +1276,7 @@
 <script src="/folder-picker.js"></script>
 <script src="/module-models.js"></script>
 <script src="/app.js"></script>
+<script src="/restart.js"></script>
 <script src="/reminder-stickies.js"></script>
 <script src="/research.js"></script>
 <script src="/atlas.js"></script>
