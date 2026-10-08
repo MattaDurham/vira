@@ -19,6 +19,29 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   list, so it stays current as the sources grow; steps stack, so a subset
   can be narrowed again or a cluster laid out on its own. Each saved subset
   keeps its own camera. Store: `data/world-subsets.json` (backed up).
+- Library, a window for browsing a vault by subject and reading it whole.
+  Each connected vault gets a subject tree, built in its own process
+  (`python -m server.library build <vault>`, or Build in the window): areas
+  are top-level folders, then spherical k-means over each page's local
+  embedding finds regions, subjects and sub-subjects (pages not embedded
+  yet are placed by their words). The map is a squarified treemap: a
+  double-click (or a detail's "Break it apart", or a double-tap) breaks a
+  box into its subjects, down to title cards for single pages; a trail and
+  "Up a level" go back. The reader beside it renders the page with its
+  properties, images, tables and callouts; `[[links]]` and `raw/` sources
+  open in place with back and forward. Its action bar carries links out,
+  backlinks, similar pages, the same subject, previous and next in the
+  subject, an ask box grounded in the page, a constellation of the page's
+  connections (click a star to walk there), Show in galaxy (laid out on its
+  own through World subsets), a deep link in a new tab and the path.
+  Machine output (generated reports, session logs, bulk captures) is hidden
+  until shown; the build suggests which folders count from general signals
+  and `library_machine_dirs` holds the owner's choice. A Vira job names the
+  subjects through the validated `save_library_names` tool, and a rebuild
+  keeps a name with the group that kept most of its pages. Any drilled box
+  or filter can be saved as a subset (`data/library-subsets.json`, backed
+  up) and opened in the galaxy. Derived index: `data/library/` (git-ignored,
+  rebuildable).
 
 ### Changed
 

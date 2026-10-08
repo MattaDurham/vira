@@ -23,6 +23,7 @@
 <link rel="stylesheet" href="/skin-active.css">
 <link rel="stylesheet" href="/forge.css">
 <link rel="stylesheet" href="/research.css">
+<link rel="stylesheet" href="/library.css">
 <link rel="stylesheet" href="/orbits.css">
 <link rel="stylesheet" href="/assistant.css">
 <link rel="stylesheet" href="/work-results.css">
@@ -774,6 +775,15 @@
             module, what it does, how they connect" loading="lazy"></iframe>
   </section>
 
+  <!-- LIBRARY (browse a vault by subject and read it whole: server/library.py
+       builds each vault's subject tree; static/library.js owns this view) -->
+  <section id="view-library" class="view">
+    <div class="section-head"><h2>Library</h2>
+      <span class="hint" id="library-status" style="margin-left:auto"></span>
+    </div>
+    <div id="lib-root" class="lib-root"></div>
+  </section>
+
   <!-- MAPS (the System Map's layered diagram, of anything you ask for:
        server/maps.py validates and stores each one, static/maps/view.html
        draws it) -->
@@ -1317,6 +1327,7 @@
 <script src="/restart.js"></script>
 <script src="/reminder-stickies.js"></script>
 <script src="/research.js"></script>
+<script src="/library.js"></script>
 <script src="/atlas.js"></script>
 </body>
 </html>

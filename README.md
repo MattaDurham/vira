@@ -115,7 +115,9 @@ Local-first by design, with every egress path named and opt-in:
 - Plus a **System Map** (a live module atlas the app keeps current about
   itself), **Maps** (ask for a map of anything and a session researches
   it and draws it in the System Map's layered style, refreshable on
-  demand) and a **Design Studio** (edit the app's design tokens against
+  demand), a **Library** (any vault as a subject map you break apart down
+  to single pages, with a reader, the page's connections and saved
+  subsets beside it) and a **Design Studio** (edit the app's design tokens against
   the running app, save straight to the stylesheet).
 
 ## Quickstart (macOS)

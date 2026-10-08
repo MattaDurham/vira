@@ -254,7 +254,7 @@ _KIND_BY_META = {
     "text-reply": "Text reply", "chat": "Chat", "journal": "Journal",
     "board-score": "Score roles", "board-rescore": "Rescore roles",
     "profile-explore": "Profile explore", "map-refresh": "System map",
-    "map-build": "Map",
+    "map-build": "Map", "library-names": "Library names",
     "room-update": "Room refresh", "judge": "Judge",
     "muse": "Routine", "watch": "Routine", "digest": "Routine",
     "circuit": "Routine", "custom": "Routine",

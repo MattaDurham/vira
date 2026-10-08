@@ -1179,6 +1179,27 @@
     return true;
   }
 
+  // Another window hands the galaxy a slice to lay out on its own: the
+  // Library's boxes, saved subsets and a page with its connections. A
+  // saved World subset opens by id (its own camera); anything else opens
+  // unsaved, with the subset bar's Save to keep it. Waits for the World
+  // to finish loading, since the caller has just opened this window.
+  window.worldOpenSubset = async ({ name, ids, worldSubset } = {}) => {
+    if (!S.world && !S.loading) await atlasLoad();
+    for (let t = 0; (S.loading || !S.world) && t < 600; t++)
+      await new Promise((done) => setTimeout(done, 100));
+    if (!S.world) return null;
+    let sub = null;
+    if (worldSubset) {
+      S.subsets = (await api("/api/world/subsets").catch(() => ({ subsets: S.subsets }))).subsets || [];
+      sub = S.subsets.find((row) => row.id === worldSubset) || null;
+    }
+    sub = sub || { id: null, name: String(name || "Library set").slice(0, 80),
+                   recipe: { steps: [{ seeds: (ids || []).slice(), hops: 0 }] },
+                   dirty: true };
+    return (await openSubset(sub)) ? { id: S.subset?.id || null } : null;
+  };
+
   function closeSubset() {
     if (!S.subset || !S.world) return;
     const st = S.subsetStash;

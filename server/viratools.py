@@ -1160,6 +1160,27 @@ async def _t_save_map(args):
         args.get("brief")))
 
 
+def _save_library_names_text(vault_id, names_json, build=None):
+    from . import library
+    try:
+        mapping = json.loads(names_json or "")
+    except json.JSONDecodeError as e:
+        return (f"error: names_json is not valid JSON ({e}). Pass one JSON "
+                "object mapping each group id to its name.")
+    try:
+        return library.save_names(vault_id or "primary", mapping, build)
+    except library.LibraryError as e:
+        return f"error: {e}"
+    except OSError as e:
+        return f"error: could not write the names ({e})"
+
+
+async def _t_save_library_names(args):
+    return _txt(await asyncio.to_thread(
+        _save_library_names_text, args.get("vault"), args.get("names_json"),
+        args.get("build")))
+
+
 # ---------- first-run setup writes (server/frontdoor.py) ----------
 # Both are dispatched only by a module's front door, and both exist so the
 # setup session never touches config or the served page tree by hand.
@@ -1474,6 +1495,15 @@ TOOL_SPECS = [
      "refreshed later. Validated server-side: an error names what to fix. "
      "Never write map files or HTML by hand.",
      {"slug": str, "spec_json": str, "brief": str}, _t_save_map),
+    ("save_library_names",
+     "Name subjects on the owner's Library map (the subject tree of a "
+     "vault, found by clustering). Pass vault (the vault id the job names), "
+     "build (the map's build stamp, given in the job) and names_json, one "
+     "JSON object mapping group ids to names: 2-5 "
+     "plain words, at most 48 characters each. Each call adds names; a "
+     "group the current build does not have, or a name out of bounds, "
+     "comes back as an error naming it. Never write Library files by hand.",
+     {"vault": str, "build": str, "names_json": str}, _t_save_library_names),
     ("create_reading_room",
      "Build a reading room — a researched consumption queue — live in the "
      "owner's Reader. Pass the COMPLETE item array as items_json (a JSON "
@@ -1576,6 +1606,7 @@ WRITE_TOOLS = {
     "mcp__vira__vault_update",
     "mcp__vira__update_module_map",
     "mcp__vira__save_map",
+    "mcp__vira__save_library_names",
     "mcp__vira__create_reading_room",
     "mcp__vira__add_reading_room_items",
     "mcp__vira__configure_applications",
