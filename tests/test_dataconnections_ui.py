@@ -13,7 +13,7 @@ const app = fs.readFileSync('static/app.js', 'utf8');
 class Element {
   constructor(tag, cls = '', text = '') {
     this.tag = tag; this.className = cls; this._text = text;
-    this.children = []; this.value = ''; this.disabled = false; this.isConnected = true;
+    this.children = []; this.dataset = {}; this.value = ''; this.disabled = false; this.isConnected = true;
   }
   appendChild(child) { this.children.push(child); return child; }
   replaceChildren(...children) { this.children = children; this._text = ''; }
@@ -53,8 +53,8 @@ const plan = (request = {kind: 'crm', path: '/fixture/crm'}) => ({valid: true, e
 const render = () => {const host = new Element('div'); context.dataConnectionForm(host, 'crm', '/fixture/crm'); return host;};
 (async () => {
   const card = new Element('div'); context.cardDataConnections(card);
-  assert.match(card.textContent, /Brain's protected folders apply to Brain writes/);
-  assert.match(card.textContent, /Reader reads connected folders/);
+  assert.match(card.textContent, /This folder holds your contact list and dossiers/);
+  assert.match(card.textContent, /Reader displays HTML dossiers/);
   assert.match(card.textContent, /unavailable/);
   const form = render();
   const inspect = button(form, 'Inspect folder'), save = button(form, 'Connect folder');

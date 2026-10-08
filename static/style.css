@@ -6910,17 +6910,17 @@ a.rm-name:hover { color: var(--accent); }
 }
 .setup-step.s-blocked .setup-step-sub { color: var(--red); }
 
-/* the dot IS the state — done fills, blocked reads red, todo stays hollow */
+/* Solid state dots: connected green, optional gray, blocked amber. */
 .setup-dot {
   flex: none; width: 9px; height: 9px; border-radius: 50%;
-  margin-top: 4px; border: 1.5px solid var(--text-dim);
+  margin-top: 4px; border: 1.5px solid var(--text-dim); background: var(--text-dim);
 }
 .setup-step.s-done .setup-dot { background: var(--green); border-color: var(--green); }
 .setup-step.s-running .setup-dot { background: var(--accent); border-color: var(--accent); }
-.setup-step.s-blocked .setup-dot { border-color: var(--red); }
+.setup-step.s-blocked .setup-dot { background: var(--oxidized); border-color: var(--oxidized); }
 /* skipped = the source can't exist on this platform; visible, dimmed, honest */
 .setup-step.s-skipped { opacity: 0.55; }
-.setup-step.s-skipped .setup-dot { border-style: dashed; }
+.setup-step.s-skipped .setup-dot { border-style: solid; }
 
 .setup-unlocks {
   margin-top: 10px; font-size: 12px; color: var(--text-dim);
@@ -6990,9 +6990,10 @@ a.rm-name:hover { color: var(--accent); }
   .vault-config-add .search { width: 100%; box-sizing: border-box; }
 }
 
-/* Manage-flavored rows (channels, notifications, updates, welcome): state
-   is "configured elsewhere", so the dot stays neutral-dotted. */
-.setup-step.s-manage .setup-dot { border-style: dotted; opacity: .75; }
+/* Optional preferences use a solid gray dot, not an unfinished-step ring. */
+.setup-step.s-manage .setup-dot,
+.setup-step.s-optional .setup-dot { border-style: solid; opacity: .75; }
+.dash-legend { margin: -6px 0 16px; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
 
 /* A labelled subsection inside a card (e.g. "Android phone", "WhatsApp"). */
 .setup-sub {
@@ -8854,3 +8855,5 @@ mark.doc-term {
 .graph-copy-item { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .graph-copy-item > span { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 .graph-copy-item .btn { flex: 0 1 auto; max-width: 100%; white-space: normal; }
+
+.setup-adv [hidden] { display: none; }

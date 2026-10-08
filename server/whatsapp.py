@@ -9,8 +9,9 @@ is a byte offset into that file, so neither side restarting loses or
 re-emits messages. Message content never leaves the machine — the same
 privacy boundary as chat.db.
 
-Dormant until linked. Setup (one time): settings sheet > WhatsApp >
-Connect — Vira starts the sidecar, renders its pairing QR, and the owner
+Dormant until linked. Setup (one time): Config > WhatsApp >
+Connect — Vira installs the pinned connector packages when needed, starts
+the sidecar, renders its pairing QR, and the owner
 scans it from WhatsApp > Settings > Linked Devices. The session lives in
 data/whatsapp/session/ (git-ignored, owner-only). Deleting that directory
 unlinks the device — the same "never clean this up" class as the venv.
@@ -21,6 +22,8 @@ can start the shared connector from either instance; only its owner may stop
 it. A cross-process lock prevents simultaneous starts against one session.
 """
 import json
+import os
+import shutil
 import subprocess
 import threading
 import time
@@ -42,6 +45,8 @@ STATE = ROOT / "data" / "whatsapp-state.json"
 
 _ingest_lock = threading.Lock()   # watcher tick and the poll route serialize
 _last_spawn = {"t": 0.0}
+_pair_lock = threading.Lock()
+_pairing = {"running": False, "stage": "idle", "error": ""}
 
 
 def connector_dir():
@@ -74,7 +79,96 @@ def linked():
 
 
 def installed():
-    return (BRIDGE_DIR / "node_modules").is_dir()
+    return all((BRIDGE_DIR / "node_modules" / name / "package.json").is_file()
+               for name in ("baileys", "pino", "qrcode"))
+
+
+def pairing_status():
+    with _pair_lock:
+        return dict(_pairing)
+
+
+def _pair_state(**values):
+    with _pair_lock:
+        _pairing.update(values)
+
+
+def _node_binary():
+    configured = str(settings.get("whatsapp_node_bin"))
+    found = shutil.which(configured)
+    if found:
+        return found
+    if configured == "node" and settings.IS_MAC:
+        for candidate in ("/opt/homebrew/bin/node", "/usr/local/bin/node"):
+            if Path(candidate).is_file():
+                return candidate
+    raise RuntimeError("WhatsApp needs Node.js 20 or newer. Install Node.js, then try Connect WhatsApp again.")
+
+
+def _install_connector():
+    # Pairing alone installs packages. The background watcher never installs
+    # optional software without the owner's Connect action.
+    with locked(DATA_DIR / "connector-install"):
+        if installed():
+            return
+        node = _node_binary()
+        version = subprocess.run([node, "--version"], capture_output=True,
+                                 text=True, encoding="utf-8", timeout=10, check=True)
+        try:
+            major = int(version.stdout.strip().lstrip("v").split(".")[0])
+        except ValueError:
+            major = 0
+        if major < 20:
+            raise RuntimeError("WhatsApp needs Node.js 20 or newer. Update Node.js, then try again.")
+        npm_name = "npm.cmd" if settings.IS_WIN else "npm"
+        sibling = Path(node).parent / npm_name
+        npm = str(sibling) if sibling.is_file() else shutil.which(npm_name)
+        if not npm:
+            raise RuntimeError("npm is unavailable. Reinstall Node.js with npm, then try again.")
+        env = os.environ.copy()
+        env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
+        command = [npm, "ci", "--no-fund", "--no-audit"]
+        if settings.IS_WIN:
+            command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command]
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = DATA_DIR / "install.log"
+        with open(log_path, "wb") as log:
+            try:
+                result = subprocess.run(command, cwd=str(BRIDGE_DIR), env=env,
+                                        stdout=log, stderr=subprocess.STDOUT, timeout=240)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError("WhatsApp preparation timed out. Check your connection and try again.") from error
+        if result.returncode or not installed():
+            raise RuntimeError(f"WhatsApp preparation failed. Details are in {log_path}. Retry Connect WhatsApp after checking the error.")
+
+
+def _pair_worker():
+    try:
+        if not installed():
+            _install_connector()
+        _pair_state(stage="starting")
+        ensure_sidecar(wait_seconds=12)
+        _pair_state(running=False, stage="ready", error="")
+    except Exception as error:  # Keep the failure visible; the button can retry.
+        _pair_state(running=False, stage="error", error=str(error)[:500])
+
+
+def _start_pairing_worker():
+    threading.Thread(target=_pair_worker, daemon=True,
+                     name="vira-whatsapp-pair").start()
+
+
+def start_pairing():
+    """Return immediately; preparation and startup report through status."""
+    with _pair_lock:
+        if _pairing["running"]:
+            return dict(_pairing)
+        _pairing.update(running=True, stage="preparing", error="")
+    try:
+        _start_pairing_worker()
+    except Exception as error:
+        _pair_state(running=False, stage="error", error=str(error)[:500])
+    return pairing_status()
 
 
 def _bridge_get(path, timeout=4):
@@ -130,7 +224,7 @@ def ensure_sidecar(wait_seconds=8):
 def _spawn_sidecar(wait_seconds):
     if not installed():
         raise RuntimeError(
-            "sidecar not installed — run: cd bridge/whatsapp && npm install")
+            "WhatsApp connector is not prepared. Choose Connect WhatsApp in Config.")
     # Throttle respawn so a crash-looping sidecar can't be relaunched
     # every poll tick.
     now = time.time()
@@ -141,7 +235,7 @@ def _spawn_sidecar(wait_seconds):
     data_dir = connector_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     sidecar_log = data_dir / "sidecar.log"
-    cmd = [settings.get("whatsapp_node_bin"), str(BRIDGE_DIR / "sidecar.js"),
+    cmd = [_node_binary(), str(BRIDGE_DIR / "sidecar.js"),
            "--port", str(bridge_port()),
            "--owner-id", connector_owner(),
            "--session-dir", str(data_dir / "session"),

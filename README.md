@@ -217,7 +217,7 @@ PC the wizard skips what does not exist there - see **Windows** above):
    CSV export. Vira writes them into its own CRM store (`crm_root`,
    default `~/.vira/crm`) and flips out of demo mode on its own. Already
    keep CRM data in Vira's shape (`people.json` / `master.json` /
-   `profiles/`)? Open **Config > Storage & connections > CRM storage**,
+   `profiles/`)? Open **Config > Contacts > Contact storage (advanced)**,
    choose **Use an existing Vira CRM**, select its folder, and inspect it
    before connecting. IDs and dossiers stay in place. A switch from an
    established CRM must retain its person IDs so saved contact references
@@ -240,7 +240,7 @@ PC the wizard skips what does not exist there - see **Windows** above):
    Semantic indexing wants [Ollama](https://ollama.com) with `nomic-embed-text`
    pulled; without it the Brain still supports full-text search. Captures,
    plans, definitions, and ingested notes keep their selected destination.
-5. **Mail** - open Config > Connect mail and add a Gmail/IMAP or Microsoft
+5. **Mail** - open Config > Mail and add a Gmail/IMAP or Microsoft
    365 mailbox. Choosing **Microsoft 365** starts setup automatically. Vira checks for an existing registration,
    restores a complete, unambiguous result, and opens sign-in in the
    computer's **system browser**, identifying the mailbox automatically.
@@ -285,13 +285,18 @@ PC the wizard skips what does not exist there - see **Windows** above):
    for identity details: your name, the iMessage handle Vira texts
    notifications to, family calendar names. Every key is optional; an
    absent value leaves that feature dormant.
-7. **Phone access** - Vira binds `0.0.0.0:8377`; put the Mac on a tailnet
-   and the phone URL just works.
+7. **Phone access (optional)** - open **Config > Phone messages > Use Vira
+   on your phone** for the detected phone address and a copy button.
+   Vira binds `0.0.0.0:8377`. Install Tailscale on the computer and phone,
+   sign both into the same account, and open that address on the phone.
+   Reading iPhone messages through Messages on the Mac does not require
+   phone pairing. The Android Companion connection is separately optional.
 8. **Run at login** - a launchd agent keeps it alive; set `launchd_label`
    in the config so the in-app updater can restart the service cleanly.
    (Windows: `scripts\run.ps1 -Register` does both - see **Windows**.)
 
-**Config > Storage & connections** also connects an existing self record
+**Config > Contacts > Contact storage (advanced) > Career record storage**
+also connects an existing self record
 independently and displays the resulting career-evidence, analysis and package
 locations. Existing output-path overrides are preserved. A folder without
 `canon/MASTER_HISTORY.md` can be connected but is not ready for career evidence.
@@ -300,13 +305,27 @@ This does not grant Brain or model access: connect the folder separately in
 protected folders govern Brain writes, not every Applications or separately
 authorized coding-agent write.
 
-The same section connects external **Reader folders** with a filename pattern
+**Config > Brain > Reader document folders (optional)** connects external
+Reader folders with a filename pattern
 and document kind. Reader reads matching files and `index.html` bundles without
 copying or editing them; run **Scan** in Reader after connecting. Disconnecting
 revokes Reader access and leaves the source documents intact. Data connections
 are inspected before saving, and a changed folder or configuration requires a
 new inspection. Finish running Vira sessions and dossier builds before switching
 CRM or self-record locations.
+
+**Config > WhatsApp > Connect WhatsApp** prepares the connector automatically
+using its pinned packages, then displays a QR code. Node.js 20 or newer with
+npm must be installed on the computer. On either iPhone or Android, open
+WhatsApp > Settings > Linked Devices > Link a Device and scan the code.
+Preparation progress and failures appear in the card; retrying preserves
+an existing device session. This optional connection receives messages only.
+
+Config uses green dots for connected or enabled items and gray dots for
+optional or unavailable items. **Advanced AI settings** holds app-wide model
+defaults; a model picker in a window or run applies to that window or run.
+The Config task-model picker is beside dossier builds, rather than in the
+Config heading.
 
 ## Working across vaults
 
