@@ -19,8 +19,8 @@ plus a deterministic label-propagation pass.
 
 The graph is a MATERIALIZED VIEW: build_graph() writes
 data/atlas-graph.json under the cross-process file lock, GET /api/atlas
-serves the cached file, and refresh happens on demand or on the weekly
-routine — never per page load (the radar-groupings discipline). The one
+serves the cached file, and refresh happens when its CRM fingerprint changes,
+on demand, or on the weekly routine. Unchanged reads never rebuild. The one
 optional AI step, narrate_edges(), labels the strongest cross-cluster
 edges with a one-line "why" via suggest.complete; deterministic signal
 labels render without it.
@@ -32,17 +32,20 @@ no AddressBook contact photo.
 """
 
 from . import modulemodels
+import hashlib
 import json
+import logging
 import re
 import sqlite3
 import subprocess
 import threading
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import data as crm
-from . import mediaindex, radar, settings
+from . import jsonstore, mediaindex, radar, settings
 from .filelock import locked
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +77,11 @@ FAMILY_WORDS = re.compile(
 _lock = threading.Lock()            # in-process store access
 _refresh_lock = threading.Lock()    # serialize builds
 _building = threading.Event()
+_schedule_lock = threading.Lock()
+_retry_at = 0.0
+_build_error = None
+RETRY_SECONDS = 30  # Avoid spawning a failing rebuild on every browser poll.
+_log = logging.getLogger(__name__)
 
 
 # ---------- settings ----------
@@ -688,25 +696,51 @@ def narrate_edges(graph, c=None, top_n=NARRATE_TOP):
 # ---------- build / store ----------
 
 def _read():
-    try:
-        return json.loads(GRAPH.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    return jsonstore.read(GRAPH, None)
 
 
 def _write(graph):
-    GRAPH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = GRAPH.with_name(GRAPH.name + ".tmp")
-    tmp.write_text(json.dumps(graph, ensure_ascii=False))
-    tmp.replace(GRAPH)
+    jsonstore.write_atomic(GRAPH, graph, ensure_ascii=False)
+
+
+def _source_stamp():
+    """Fingerprint effective CRM inputs, including the transition out of demo.
+
+    Only metadata is read here; graph construction stays in the worker. Hash
+    paths so the served payload does not expose private filesystem locations.
+    Stat failures other than absence propagate, never become a cached fact.
+    """
+    root = crm._crm().resolve()
+    files = [root / name for name in
+             ("people.json", "master.json", "imessage-archive/index.json")]
+    files.extend(sorted((root / "profiles").glob("p_*.json")))
+    parts = [str(root), settings.get("owner_name"),
+             settings.raw().get("notify_handle"), _max_nodes(),
+             _min_weight(), _anchor_org()]
+    for path in files:
+        try:
+            stat = path.stat()
+            parts.append([str(path.relative_to(root)), stat.st_mtime_ns,
+                          stat.st_ctime_ns, stat.st_size])
+        except FileNotFoundError:
+            parts.append([str(path.relative_to(root)), None])
+    return hashlib.sha256(json.dumps(parts).encode("utf-8")).hexdigest()
 
 
 def build_graph(narrate=False):
     """Assemble the full materialized view and write it to disk. Safe to
     call from a background thread; serialized against concurrent builds."""
     with _refresh_lock:
+        owns_busy = not _building.is_set()
         _building.set()
         try:
+            source = _source_stamp()
+            # A failed registry read must not replace a good graph with an
+            # empty one. The general CRM reader tolerates missing/corrupt data.
+            registry = json.loads((crm._crm() / "people.json").read_text(encoding="utf-8"))
+            if not isinstance(registry.get("people"), list):
+                raise ValueError("CRM registry has no people list")
+            crm.invalidate()  # File changes can precede the CRM reader's TTL.
             c = crm._load()
             own = owner_pid(c)
             people = select_nodes(c)
@@ -750,6 +784,7 @@ def build_graph(narrate=False):
                     "act": _activity(p),
                 })
             graph = {
+                "source": source,
                 "generated": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"),
                 "owner": {"name": settings.get("owner_name") or "me",
@@ -772,12 +807,15 @@ def build_graph(narrate=False):
                     e["narrative"] = why
             if narrate:
                 narrate_edges(graph, c)
+            if source != _source_stamp():
+                raise RuntimeError("CRM changed during graph build; retrying")
             with _lock, locked(GRAPH):
                 _write(graph)
             _after_build(graph)
             return graph
         finally:
-            _building.clear()
+            if owns_busy:
+                _building.clear()
 
 
 def _after_build(graph):
@@ -792,9 +830,51 @@ def _after_build(graph):
 
 
 def refresh(narrate=False):
-    """Rebuild in a background thread (the /api/radar/intros pattern)."""
-    threading.Thread(target=build_graph, kwargs={"narrate": narrate},
+    """Schedule one rebuild, marking it busy before the worker starts."""
+    global _retry_at, _build_error
+    with _schedule_lock:
+        if _building.is_set():
+            return
+        _building.set()
+        _build_error = None
+        _retry_at = 0.0
+        try:
+            _spawn_refresh(narrate)
+        except Exception:
+            _building.clear()
+            raise
+
+
+def _spawn_refresh(narrate):
+    threading.Thread(target=_run_refresh, args=(narrate,),
                      daemon=True, name="vira-atlas-refresh").start()
+
+
+def _run_refresh(narrate):
+    global _retry_at, _build_error
+    try:
+        build_graph(narrate=narrate)
+    except Exception:
+        _log.exception("Contact graph rebuild failed")
+        _build_error = "Contact graph rebuild failed; retrying automatically"
+        _retry_at = time.monotonic() + RETRY_SECONDS
+    finally:
+        _building.clear()
+
+
+def _freshness(graph):
+    """Repair old installations and new connections through the same read path."""
+    try:
+        stale = not graph or graph.get("source") != _source_stamp()
+    except OSError:
+        return {"stale": True, "building": _building.is_set(),
+                "error": "CRM source unavailable; retry when access returns"}
+    if stale and time.monotonic() >= _retry_at:
+        refresh()
+    out = {"stale": stale, "building": _building.is_set()}
+    if stale and _build_error:
+        out["error"] = _build_error
+    return out
 
 
 def compose(vault=False):
@@ -805,8 +885,9 @@ def compose(vault=False):
     CRM-only so every other consumer is untouched."""
     with _lock:
         graph = _read()
+    freshness = _freshness(graph)
     if not graph:
-        return {"status": "empty", "building": _building.is_set()}
+        return {"status": "empty", **freshness}
     # Circle names first, then the owner's group edits: apply_overrides
     # keys its dissolve list on the label, so it must see the name the
     # legend showed when the owner removed it (server/circles.py).
@@ -824,7 +905,7 @@ def compose(vault=False):
             graph["vault"] = {"people": 0, "ties": 0, "linked": 0,
                               "error": "vault overlay unavailable"}
     graph["status"] = "ok"
-    graph["building"] = _building.is_set()
+    graph.update(freshness)
     _overlay_recency(graph)
     # Lenses are a regroup of the nodes this payload already carries, so
     # they are derived per read rather than stored — an override applied

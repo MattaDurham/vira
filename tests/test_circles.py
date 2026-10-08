@@ -157,6 +157,7 @@ class CirclesBase(unittest.TestCase):
             mock.patch.object(crm, "_load", lambda: self.cache),
             mock.patch.object(atlas, "GRAPH", root / "atlas-graph.json"),
             mock.patch.object(atlas, "GROUPS", root / "atlas-groups.json"),
+            mock.patch.object(atlas, "_freshness", return_value={"stale": False, "building": False}),
             mock.patch.object(circles, "STORE", root / "atlas-circles.json"),
             mock.patch.object(imessage, "CHAT_DB", self.db),
             mock.patch.object(settings, "fixture_mode", lambda: False),

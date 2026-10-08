@@ -95,6 +95,7 @@ class AtlasTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
+        (root / "people.json").write_text(json.dumps({"people": []}), encoding="utf-8")
         faces = root / "media-index.sqlite"
         _faces_db(faces)
         self.cache = _fixture_cache()
@@ -104,6 +105,11 @@ class AtlasTests(unittest.TestCase):
                     "notify_handle": "owner@example.com"}
         patches = [
             mock.patch.object(crm, "_load", lambda: self.cache),
+            mock.patch.object(crm, "_crm", return_value=root),
+            mock.patch.object(atlas, "refresh"),
+            mock.patch("server.brief._live_imsg_last", return_value={}),
+            mock.patch("server.atlaslens._ab_index", return_value={}),
+            mock.patch("server.circles.apply", side_effect=lambda g: g),
             mock.patch.object(atlas, "GRAPH", root / "atlas-graph.json"),
             mock.patch.object(atlas, "GROUPS", root / "atlas-groups.json"),
             # a build kicks the circles sync (server/circles.py), which

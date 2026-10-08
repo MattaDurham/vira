@@ -157,7 +157,7 @@ const S = {
   wedges: [], spin: 0, spinV: 0, spinning: true, reduced: false,
   cam: { x: 0, y: 0, k: 1 }, cur: { x: 0, y: 0, k: 1 },
   sel: null, hover: null, nb1: new Set(), matches: null,
-  loading: false, loadedGen: null,
+  loading: false, loadedGen: null, loadedKey: null, nextCheck: 0,
   running: false, dirty: true, lastT: 0, migration: null,
   drag: null, pointers: new Map(), pinch: null,
   imgs: new Map(), detailSeq: 0, colors: {},
@@ -168,19 +168,25 @@ const S = {
 export async function load(force) {
   if (!S.stage) init();
   if (S.loading) return;
-  if (S.graph && !force && S.graph.generated === S.loadedGen) { resize(); wake(); return; }
   S.loading = true;
   try {
     const g = await api("/api/atlas");
+    S.nextCheck = Date.now() + (g.building ? 4000 : 30000);
     if (g.status === "empty") {
-      showEmpty(g.building);
-      if (g.building) setTimeout(() => load(true), 4000);
+      showEmpty(g.building, g.error);
       return;
     }
     S.emptyEl.style.display = "none";
-    S.loadedGen = g.generated;
-    setGraph(g);
+    const key = JSON.stringify([g.generated, g.nodes, g.edges, g.ego_edges, g.lenses]);
+    if (!force && key === S.loadedKey) { resize(); wake(); }
+    else {
+      S.loadedKey = key;
+      S.loadedGen = g.generated;
+      setGraph(g);
+    }
+    if (g.stale) showEmpty(g.building, g.error || "Updating contacts from the CRM...");
   } catch (e) {
+    S.nextCheck = Date.now() + 30000;
     showEmpty(false, "Network unavailable - " + (e && e.message));
   } finally {
     S.loading = false;
@@ -221,6 +227,11 @@ function init() {
   const io = new IntersectionObserver((ents) => ents.forEach((en) => en.isIntersecting ? wake() : sleep()));
   io.observe(S.stage);
   document.addEventListener("visibilitychange", () => document.hidden ? sleep() : wake());
+  // Recheck visible Orbits after connection/import/worker changes. Faster
+  // while the server builds, without resetting the camera on unchanged reads.
+  startPoll(() => {
+    if (!document.hidden && !S.stage.hidden && S.stage.clientWidth && Date.now() >= S.nextCheck) return load();
+  }, 4000);
   resize();
 }
 
