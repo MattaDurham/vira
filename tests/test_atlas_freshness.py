@@ -24,6 +24,7 @@ class FreshnessTests(unittest.TestCase):
         self.pending = []
         patches = [
             mock.patch.object(settings, "CONFIG_PATH", self.config),
+            mock.patch.object(Path, "home", return_value=self.root),
             mock.patch.object(crm, "_cache", {"loaded_at": 0}),
             mock.patch.object(contactcard, "STORE", self.root / "cards.json"),
             mock.patch.object(crmindex, "DB", self.root / "crm-index.sqlite"),
