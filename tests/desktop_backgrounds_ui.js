@@ -10,6 +10,7 @@ class Target {
 }
 let draws = 0, poses = [];
 const context = { clearRect() {}, save() {}, restore() {}, rotate() {},
+  transform() {}, scale() {},
   translate(x, y) { poses.push([x, y]); }, beginPath() {}, ellipse() {}, fill() {},
   stroke() {}, arc() {}, drawImage() { draws++; } };
 class Element extends Target {
@@ -20,6 +21,7 @@ class Element extends Target {
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(c => c !== this); }
   setAttribute(k, v) { this.attrs[k] = v; }
   contains(c) { return c === this || this.children.some(n => n.contains(c)); }
+  closest() { return this.tagName === "button" || this.control ? this : null; }
   focus() {}
   matches(s) {
     if (s.startsWith(".")) return this.className === s.slice(1);
@@ -31,7 +33,7 @@ class Element extends Target {
   querySelector(s) { return this.querySelectorAll(s)[0]; }
   set innerHTML(html) {
     // Only the fixed picker skeleton needs parsing in this harness.
-    for (const cls of ["background-options", "background-simple", "background-motion", "background-status", "background-close"]) {
+    for (const cls of ["background-options", "background-simple", "background-motion", "background-feed", "background-status", "background-close"]) {
       const c = new Element(cls.includes("motion") || cls.includes("close") ? "button" : "div");
       c.className = cls; this.appendChild(c);
     }
@@ -50,7 +52,7 @@ class Image {
   constructor() { this.width = 1600; this.height = 900; }
   set src(src) { pendingImages.set(src.split("/").pop(), this); }
 }
-const sandbox = { window: {}, document, matchMedia: () => reduced, Image,
+const sandbox = { window: { ViraKoiPond: require("../static/koi-pond.js") }, document, matchMedia: () => reduced, Image,
   innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
   requestAnimationFrame: fn => { frames.set(++nextFrame, fn); return nextFrame; },
   cancelAnimationFrame: id => frames.delete(id),
@@ -65,12 +67,14 @@ const host = () => document.body.children.find(c => c.id === "desktop-background
 const frame = () => { clock += 40; const work = [...frames.values()]; frames.clear(); work.forEach(fn => fn(clock)); };
 (async () => {
   sandbox.window.ViraBackgrounds.init({ read: () => ({ scene: "unknown", dim: 100 }),
+    canFeed: target => target === document.body,
     write: (key, value) => { assert.equal(key, "vira-background"); stored = { ...value }; },
     constellation: () => { constellations++; return () => { stops++; }; } });
   assert.equal(constellations, 1); assert.equal(pendingImages.size, 0);
   scene("koi"); scene("redwoods");
   assert.equal(stops, 1);
-  resolve("pond.jpg"); resolve("kohaku.webp"); resolve("ogon.webp"); await flush();
+  resolve("pond-perspective.jpg"); resolve("kohaku.webp"); resolve("ogon.webp");
+  resolve("showa.webp"); resolve("shusui.webp"); await flush();
   assert.equal(host().children.length, 0, "a stale load must not install its animation");
   resolve("redwoods.jpg"); await flush();
   assert.equal(host().children.length, 1); assert.equal(frames.size, 1);
@@ -87,6 +91,22 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   motion.emit("click"); frame();
   assert.deepEqual(poses.at(-1), before, "resume must retain the paused simulation time");
   assert.equal(frames.size, 1);
+  let prevented = false;
+  const click = { button: 0, clientX: 640, clientY: 360,
+    preventDefault() { prevented = true; }, defaultPrevented: false };
+  const prior = draws;
+  document.emit("click", { ...click, target: trigger });
+  assert.equal(draws, prior, "window controls must not feed or repaint the pond");
+  document.emit("click", { ...click, target: document.body });
+  assert.equal(prevented, true); assert.ok(draws > prior, "food and ripples paint immediately");
+  prevented = false;
+  document.emit("dblclick", { ...click, target: document.body });
+  assert.equal(prevented, true, "rapid feeding must protect the desktop's double-click gesture");
+  motion.emit("click");
+  const pausedDraws = draws;
+  document.emit("click", { ...click, target: document.body });
+  assert.equal(draws, pausedDraws, "feeding must respect paused motion");
+  motion.emit("click");
   document.hidden = true; document.emit("visibilitychange"); assert.equal(frames.size, 0);
   document.hidden = false; document.emit("visibilitychange"); assert.equal(frames.size, 1);
   reduced.matches = true; reduced.emit("change"); assert.equal(frames.size, 0);
@@ -97,6 +117,8 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   scene("none"); assert.equal(host(), undefined); assert.equal(frames.size, 0);
   assert.equal(document.listeners.get("visibilitychange").size, 0);
   assert.equal(windowEvents.listeners.get("resize").size, 0);
+  assert.equal(document.listeners.get("click").size, 0);
+  assert.equal(document.listeners.get("dblclick").size, 0);
   scene("aurora"); pendingImages.get("aurora.jpg").onerror(); await flush();
   assert.match(panel().querySelector(".background-status").textContent, /Could not load/);
   scene("aurora"); resolve("aurora.jpg"); await flush(); assert.equal(frames.size, 1);

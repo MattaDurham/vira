@@ -29,7 +29,7 @@ body.focus-mode #desktop-background { z-index: 700; }
 .background-choice span { display: block; margin: 0 10px; font-size: 11px;
   color: var(--text-dim); line-height: 1.5; }
 .background-simple { display: flex; gap: 8px; margin: 14px 0; }
-.background-simple button, .background-motion { font: inherit; font-size: 12px;
+.background-simple button, .background-motion, .background-feed { font: inherit; font-size: 12px;
   background: var(--bg-card); border: 1px solid var(--line); color: var(--text-dim);
   border-radius: 5px; padding: 7px 12px; cursor: pointer; }
 .background-simple button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
@@ -43,3 +43,5 @@ body.focus-mode #desktop-background { z-index: 700; }
 @media (max-width: 1099px) {
   #desktop-background, #background-btn, .background-studio-door, #background-picker { display: none !important; }
 }
+
+.background-feed[hidden] { display: none; }

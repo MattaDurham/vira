@@ -31090,7 +31090,8 @@ function initLayout() {
 function initDesktop() {
   document.body.classList.add("desktop");
   window.ViraBackgrounds.init({ read: lsGet, write: lsSet,
-    constellation: initConstellation });
+    constellation: initConstellation,
+    canFeed: target => !editing && isDesktopOpenSpace(target) });
   const stored = desktopStore();
   WINDOWS.forEach((spec, i) => {
     const st = stored[spec.id] || {};
