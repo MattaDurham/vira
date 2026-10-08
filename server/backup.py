@@ -68,6 +68,7 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          "ui-state.json",        # workspace layouts and owner arrangements
          "modules.json",         # module registry + owner enable/disable state
          "maps.json",            # saved maps, their briefs and undo copies
+         "library-subsets.json", # Library subsets the owner named and saved
          "orphan-work.json",     # orphaned-work ledger
          "doc-index.json",       # doc registry: curation + read state
          "pii-patterns.txt")     # anonymization scanner's learned patterns

@@ -403,6 +403,25 @@ DEFAULT_MODULES = [
      "endpoints": ["/api/maps", "/api/maps/ask"],
      "keywords": ["layered map", "save_map", "maps window", "map anything"],
      "updated": "2026-10-08"},
+    {"id": "library-engine", "name": "Library", "layer": "engine",
+     "group": "know", "kind": "out-of-process build + derived index",
+     "what": "A subject tree for each connected vault, built in its own "
+             "process into data/library/: areas are folders, and spherical "
+             "k-means over each page's local embedding (words for pages "
+             "not embedded yet) finds regions, subjects and sub-subjects. "
+             "The same pass resolves every link, finds each page's similar "
+             "pages and suggests which folders are machine output. A "
+             "session names the subjects through the validated "
+             "save_library_names tool; saved subsets are page lists in "
+             "data/library-subsets.json.",
+     "links": [{"to": "vault-src", "how": "reads every page of"},
+               {"to": "vault-index", "how": "averages page vectors from"},
+               {"to": "sessions", "how": "names subjects through"}],
+     "endpoints": ["/api/library", "/api/library/map", "/api/library/page",
+                   "/api/library/build"],
+     "keywords": ["library", "subject map", "save_library_names",
+                  "machine output", "saved subsets"],
+     "updated": "2026-10-08"},
     {"id": "evidence-engine", "name": "Evidence Ledger", "layer": "engine",
      "group": "operate", "kind": "derived episodes + one model call per case",
      "what": "Mines session retros, this checkout's git log, and the job "
@@ -663,6 +682,23 @@ DEFAULT_MODULES = [
      "links": [{"to": "maps-engine", "how": "asks and draws through"}],
      "endpoints": ["/maps/view.html"],
      "keywords": ["maps window", "layered map", "map anything"],
+     "updated": "2026-10-08"},
+    {"id": "library-win", "name": "Library", "layer": "surface",
+     "group": "know", "kind": "dock window",
+     "what": "Browse a vault by subject and read it whole. A treemap of "
+             "the vault's subjects breaks apart on a double-click (or the "
+             "detail's Break it apart button) down to single pages; the "
+             "reader beside it renders the page with its properties and "
+             "images, opens [[links]] in place with back and forward, and "
+             "carries the page's links, backlinks, similar pages, its "
+             "subject's neighbours, an ask box and a constellation of its "
+             "connections. Machine output is hidden until shown; any box "
+             "or filter can be saved as a subset and sent to the galaxy.",
+     "links": [{"to": "library-engine", "how": "maps and reads through"},
+               {"to": "vault-engine", "how": "asks about a page through"}],
+     "endpoints": ["#library"],
+     "keywords": ["library window", "subject map", "document browser",
+                  "constellation"],
      "updated": "2026-10-08"},
     {"id": "applications-win", "name": "Applications", "layer": "surface",
      "group": "operate", "kind": "dock window",

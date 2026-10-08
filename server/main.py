@@ -56,6 +56,7 @@ from . import (
                joblog,
                journal,
                judge,
+               library,
                lessonwatch,
                loopwatch,
                mail,
@@ -1263,6 +1264,162 @@ def api_maps_delete(slug: str):
     except maps.MapError as e:
         raise HTTPException(400, str(e)) from None
     return {"ok": True}
+
+
+# ---------- library (browse a vault by subject, read it whole) ----------
+
+class LibraryVaultReq(BaseModel):
+    vault: str = "primary"
+    machine: bool = False
+
+
+class LibraryAskReq(BaseModel):
+    vault: str = "primary"
+    path: str
+    question: str
+
+
+class LibraryMachineReq(BaseModel):
+    vault: str = "primary"
+    folder: str
+    machine: bool
+
+
+class LibrarySubsetReq(BaseModel):
+    vault: str = "primary"
+    name: str
+    rels: list = []
+    origin: dict = {}
+
+
+class LibraryIdsReq(BaseModel):
+    vault: str = "primary"
+    rels: list = []
+
+
+class LibraryWorldLinkReq(BaseModel):
+    world_subset: str = ""
+
+
+def _library(call, *args, **kwargs):
+    try:
+        return call(*args, **kwargs)
+    except library.LibraryError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.get("/api/library")
+def api_library():
+    return library.overview()
+
+
+@app.get("/api/library/map")
+def api_library_map(request: Request, vault: str = "primary", machine: int = 0):
+    """The map's pages and groups. Several MB for a large vault, so it is
+    served gzipped whenever the client takes it."""
+    with admission.cpu("library.map"):
+        raw, packed = _library(library.map_payload, vault, bool(machine))
+    if "gzip" in (request.headers.get("accept-encoding") or ""):
+        return Response(packed, media_type="application/json",
+                        headers={"Content-Encoding": "gzip",
+                                 "Vary": "Accept-Encoding"})
+    return Response(raw, media_type="application/json")
+
+
+@app.post("/api/library/build")
+def api_library_build(req: LibraryVaultReq):
+    """Rebuild a vault's subject tree in its own process; poll status."""
+    return _library(library.start_build, req.vault)
+
+
+@app.get("/api/library/status")
+def api_library_status(vault: str = "primary"):
+    return _library(library.status, vault)
+
+
+@app.get("/api/library/group")
+def api_library_group(vault: str = "primary", id: str = "", machine: int = 0):
+    with admission.cpu("library.group"):
+        return _library(library.group, vault, id, bool(machine))
+
+
+@app.get("/api/library/page")
+def api_library_page(vault: str = "primary", path: str = "", machine: int = 0):
+    with admission.cpu("library.page"):
+        return _library(library.page, vault, path, bool(machine))
+
+
+@app.post("/api/library/ask")
+def api_library_ask(req: LibraryAskReq):
+    """A grounded answer about one page (its chunks first, then the
+    vault's best hits), through the vault's own ask."""
+    try:
+        return _library(library.ask, req.vault, req.path, req.question)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - surface backend failures
+        raise HTTPException(502, str(e)[:400]) from None
+
+
+@app.post("/api/library/names")
+def api_library_names(req: LibraryVaultReq):
+    """Dispatch a session that names the vault's unnamed subjects through
+    save_library_names - watch it in Work; the names land on the map."""
+    prompt = _library(library.names_prompt, req.vault, req.machine)
+    try:
+        jid = jobs.launch(prompt, cwd=str(ROOT),
+                          meta={"kind": "library-names", "vault": req.vault},
+                          subject=f"Name the Library's subjects ({req.vault})",
+                          kind_label="Library names",
+                          about=("Name each subject on the Library's map "
+                                 "through save_library_names."))
+    except ValueError as e:
+        raise HTTPException(429, str(e)) from None
+    return {"job_id": jid}
+
+
+@app.post("/api/library/machine")
+def api_library_machine(req: LibraryMachineReq):
+    return _library(library.set_machine, req.vault, req.folder, req.machine)
+
+
+@app.get("/api/library/subsets")
+def api_library_subsets(vault: str = ""):
+    return {"subsets": library.subsets(vault or None)}
+
+
+@app.get("/api/library/subsets/{subset_id}")
+def api_library_subset(subset_id: str):
+    return _library(library.subset, subset_id)
+
+
+@app.post("/api/library/subsets")
+def api_library_subset_create(req: LibrarySubsetReq):
+    return _library(library.save_subset, req.vault,
+                    {"name": req.name, "rels": req.rels, "origin": req.origin})
+
+
+@app.put("/api/library/subsets/{subset_id}")
+def api_library_subset_update(subset_id: str, req: LibrarySubsetReq):
+    return _library(library.save_subset, req.vault,
+                    {"name": req.name, "rels": req.rels, "origin": req.origin},
+                    subset_id)
+
+
+@app.put("/api/library/subsets/{subset_id}/world")
+def api_library_subset_world(subset_id: str, req: LibraryWorldLinkReq):
+    return _library(library.link_world_subset, subset_id, req.world_subset)
+
+
+@app.delete("/api/library/subsets/{subset_id}")
+def api_library_subset_delete(subset_id: str):
+    return _library(library.delete_subset, subset_id)
+
+
+@app.post("/api/library/world-ids")
+def api_library_world_ids(req: LibraryIdsReq):
+    """World node ids for a set of pages, to hand the set to the galaxy."""
+    return {"ids": _library(library.world_ids, req.vault, req.rels)}
 
 
 # ---------- subscriptions (ledger + renewal radar + launchpad) ----------

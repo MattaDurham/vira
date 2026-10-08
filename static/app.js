@@ -16767,6 +16767,7 @@ function viewLoad(id) {
     }
   }
   if (id === "maps") loadMaps().catch((e) => mapsNote("Could not load maps: " + errText(e)));
+  if (id === "library") window.loadLibrary?.().catch(() => {});
   if (id === "imageatlas") loadImageAtlas().catch(() => {});
   if (id === "design") {
     const f = $("#design-frame");          // load the studio on first open
@@ -22473,6 +22474,8 @@ const WINDOWS = [
     icon: "M9 4L4 6v14l5-2 6 2 5-2V4l-5 2-6-2zM9 4v14M15 6v14" },
   { id: "maps", title: "Maps", w: 1000,
     icon: "M3 5h5v4H3zM3 15h5v4H3zM16 3h5v4h-5zM16 10h5v4h-5zM16 17h5v4h-5zM8 7c4 0 4-2 8-2M8 7c4 0 4 5 8 5M8 17c4 0 4-5 8-5M8 17c4 0 4 2 8 2" },
+  { id: "library", title: "Library", w: 1240,
+    icon: "M4 4h3v16H4zM8.5 4h3v16h-3zM13.2 5.2l2.9-.8 3.9 14.6-2.9.8zM4 8h3M8.5 8h3M4 16h3M8.5 16h3" },
   { id: "imageatlas", title: "Image Atlas", w: 1100,
     icon: "M12 12m-1.6 0a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0M12 12m-5.2 0a5.2 5.2 0 1 0 10.4 0a5.2 5.2 0 1 0-10.4 0M12 12m-8.8 0a8.8 8.8 0 1 0 17.6 0a8.8 8.8 0 1 0-17.6 0M6.6 8.4l1.5 1.2M17.4 15.6l-1.5-1.2M15.9 6.9l-1.1 1.5M8.1 17.1l1.1-1.5" },
   { id: "subs", title: "Subscriptions", w: 660,
@@ -26648,6 +26651,13 @@ const HASH_ROUTES = {
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
   // #maps, #maps/<slug> - the Maps window, opened on that map
+  // #library, #library/<vault>, #library/<vault>/<path/to/page.md>
+  "library": (rest) => {
+    const vault = rest[0] ? decodeURIComponent(rest[0]) : "";
+    const rel = rest.slice(1).map(decodeURIComponent).join("/");
+    if (window.openLibrary) window.openLibrary({ vault: vault || undefined, rel });
+    else openApp("library");
+  },
   "maps": (rest) => {
     if (rest[0]) lsSet("vira-maps-sel", decodeURIComponent(rest[0]));
     openApp("maps");

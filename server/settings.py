@@ -114,6 +114,10 @@ DEFAULTS = {
                                          # depth, in any connected vault. Use it to
                                          # take a tree while skipping one branch of
                                          # it (raw/ minus raw/instagram).
+    "library_machine_dirs": {},          # Library: {vault id: [folder, "!folder"]}
+                                         # machine-output folders the owner chose;
+                                         # a vault missing here uses the build's
+                                         # suggestion (server/library.py)
     "vault_sources": [],                 # connected markdown vaults with stable ids
                                          # and independent read/write/model policy
     "vault_primary": {},                # policy overrides for the primary source

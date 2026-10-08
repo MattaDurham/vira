@@ -27,6 +27,7 @@ MODULES = {
     "evidence": ("Evidence Ledger", "Compose evidence cases", "completion"),
     "map": ("System Map", "Refresh the system map", "session"),
     "maps": ("Maps", "New maps and map refreshes", "session"),
+    "library": ("Library", "Naming the subjects on the Library's map", "session"),
     "setup": ("Config", "Build initial contact profiles and setup runs", "session"),
 }
 ALIASES = {"feed": "people", "find-cloud": "find", "find-related": "find",
@@ -196,7 +197,8 @@ _PATHS = {
     "/api/orphanwork": "work", "/api/showroom": "work", "/api/judge": "work",
     "/api/reading": "reader", "/api/evidence": "evidence",
     "/api/subs": "subs", "/api/subs-visuals": "subs",
-    "/api/map": "map", "/api/maps": "maps", "/api/genre": "design",
+    "/api/map": "map", "/api/maps": "maps", "/api/library": "library",
+    "/api/genre": "design",
     "/api/design": "design", "/api/onboard/dossiers": "setup",
 }
 
