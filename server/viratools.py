@@ -1139,6 +1139,27 @@ async def _t_publish_research_topic(args):
         return _txt(f"error: {exc}")
 
 
+def _save_map_text(slug, spec_json, brief=None):
+    from . import maps
+    try:
+        spec = json.loads(spec_json or "")
+    except json.JSONDecodeError as e:
+        return (f"error: spec_json is not valid JSON ({e}). Pass the whole "
+                "map as one JSON string.")
+    try:
+        return maps.save(slug, spec, brief or "")
+    except maps.MapError as e:
+        return f"error: {e}"
+    except OSError as e:
+        return f"error: could not write the map ({e})"
+
+
+async def _t_save_map(args):
+    return _txt(await asyncio.to_thread(
+        _save_map_text, args.get("slug"), args.get("spec_json"),
+        args.get("brief")))
+
+
 # ---------- first-run setup writes (server/frontdoor.py) ----------
 # Both are dispatched only by a module's front door, and both exist so the
 # setup session never touches config or the served page tree by hand.
@@ -1439,6 +1460,20 @@ TOOL_SPECS = [
     ("publish_research_topic",
      "Publish a complete sourced research result for the current generation. Validates independently verified sources and located claim evidence, then saves canonical results, the local library note, Reader links and its refresh routine. Pass result_json as a complete JSON object. No external publication or messaging.",
      {"topic_id": str, "generation": str, "result_json": str}, _t_publish_research_topic),
+    ("save_map",
+     "Save a Vira map: the System Map's layered diagram, of any subject "
+     "the owner asks about. Columns read left to right as a flow, boxes "
+     "are coloured by a cross-cutting group, links say how one box feeds "
+     "or uses another; the Maps window draws it. Pass the WHOLE map as "
+     "spec_json, one JSON string: {title, intro, columns: [{id, title}], "
+     "groups: [{id, name}], nodes: [{id, name, column, group, kind, what, "
+     "links: [{to, how}]}]}. Ids are unique lowercase kebab-case; 1-6 "
+     "columns, up to 8 groups, up to 200 nodes. slug names the map "
+     "(kebab-case; the same slug replaces it, keeping the previous version "
+     "for undo); brief is the owner's request, verbatim, so the map can be "
+     "refreshed later. Validated server-side: an error names what to fix. "
+     "Never write map files or HTML by hand.",
+     {"slug": str, "spec_json": str, "brief": str}, _t_save_map),
     ("create_reading_room",
      "Build a reading room — a researched consumption queue — live in the "
      "owner's Reader. Pass the COMPLETE item array as items_json (a JSON "
@@ -1540,6 +1575,7 @@ WRITE_TOOLS = {
     "mcp__vira__vault_capture",
     "mcp__vira__vault_update",
     "mcp__vira__update_module_map",
+    "mcp__vira__save_map",
     "mcp__vira__create_reading_room",
     "mcp__vira__add_reading_room_items",
     "mcp__vira__configure_applications",

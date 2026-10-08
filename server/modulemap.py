@@ -391,6 +391,18 @@ DEFAULT_MODULES = [
      "endpoints": ["/api/changelog"],
      "keywords": ["change log", "changelog", "shipped", "scoped"],
      "updated": TODAY},
+    {"id": "maps-engine", "name": "Maps", "layer": "engine",
+     "group": "know", "kind": "validated spec + store",
+     "what": "This map's diagram type, for any subject. A request becomes "
+             "a session that researches it and saves one layered map "
+             "through the validated save_map tool; Refresh re-runs the "
+             "request and keeps the previous version for undo. The system "
+             "map itself is drawn from the module registry at read time.",
+     "links": [{"to": "sessions", "how": "researches maps through"},
+               {"to": "module-registry", "how": "draws the system map from"}],
+     "endpoints": ["/api/maps", "/api/maps/ask"],
+     "keywords": ["layered map", "save_map", "maps window", "map anything"],
+     "updated": "2026-10-08"},
     {"id": "evidence-engine", "name": "Evidence Ledger", "layer": "engine",
      "group": "operate", "kind": "derived episodes + one model call per case",
      "what": "Mines session retros, this checkout's git log, and the job "
@@ -642,6 +654,16 @@ DEFAULT_MODULES = [
      "endpoints": ["/api/map", "/api/map/refresh"],
      "keywords": ["system map", "modules page", "atlas"],
      "updated": TODAY},
+    {"id": "maps-win", "name": "Maps", "layer": "surface",
+     "group": "know", "kind": "dock window / full tab",
+     "what": "Layered maps of anything you ask about - type what to map and "
+             "a session researches it and draws it in the System Map's "
+             "style. Pick a map, refresh it against how things stand now, "
+             "undo a refresh, or open it in its own tab.",
+     "links": [{"to": "maps-engine", "how": "asks and draws through"}],
+     "endpoints": ["/maps/view.html"],
+     "keywords": ["maps window", "layered map", "map anything"],
+     "updated": "2026-10-08"},
     {"id": "applications-win", "name": "Applications", "layer": "surface",
      "group": "operate", "kind": "dock window",
      "what": "The job-application catalog: every role worth the owner's "
@@ -860,6 +882,13 @@ def _save(s):
 def list_modules():
     with _lock, locked(STORE):
         return _load()["modules"]
+
+
+def registry():
+    """The registry and its meta (seeded / last_refresh) without the change
+    log - what the built-in system map in server/maps.py draws."""
+    with _lock, locked(STORE):
+        return _load()
 
 
 def validate(mods, previous_ids=None):

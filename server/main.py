@@ -62,6 +62,7 @@ from . import (
                mailread,
                media,
                mediaarchive,
+               maps,
                mediaindex, mercury, models, modulemap, modulemodels, modulestory, msgraph,
                notify, onboard,
                orphanwork,
@@ -1183,6 +1184,85 @@ def api_map_refresh():
                              "update_module_map, so the System Map page "
                              "reflects what shipped."))
     return {"job_id": jid}
+
+
+# ---------- maps (the System Map's diagram type, for any subject) ----------
+
+class MapAskReq(BaseModel):
+    request: str
+
+
+@app.get("/api/maps")
+def api_maps():
+    return {"maps": maps.list_maps()}
+
+
+@app.get("/api/maps/{slug}")
+def api_maps_get(slug: str):
+    m = maps.get(slug)
+    if not m:
+        raise HTTPException(404, "no map by that name")
+    return m
+
+
+@app.post("/api/maps/ask")
+def api_maps_ask(req: MapAskReq):
+    """Dispatch a session that researches the request and saves the map
+    through save_map - watch it in Work; the map lands in the Maps window."""
+    try:
+        prompt = maps.ask_prompt(req.request)
+    except maps.MapError as e:
+        raise HTTPException(400, str(e)) from None
+    try:
+        jid = jobs.launch(prompt, cwd=str(ROOT), meta={"kind": "map-build"},
+                          subject=" ".join(req.request.split())[:120],
+                          kind_label="Map",
+                          about=("Research the subject and save it as a "
+                                 "layered map through save_map, for the "
+                                 "Maps window."))
+    except ValueError as e:
+        raise HTTPException(429, str(e)) from None
+    return {"job_id": jid}
+
+
+@app.post("/api/maps/{slug}/refresh")
+def api_maps_refresh(slug: str):
+    """Re-run a saved map's request against how things stand now. The
+    system map refreshes through /api/map/refresh instead."""
+    try:
+        prompt = maps.refresh_prompt(slug)
+    except maps.MapError as e:
+        raise HTTPException(404, str(e)) from None
+    title = maps.get(slug)["spec"]["title"]
+    try:
+        jid = jobs.launch(prompt, cwd=str(ROOT),
+                          meta={"kind": "map-build", "map": slug},
+                          subject=title, kind_label="Map refresh",
+                          about=("Bring the saved map up to date with how "
+                                 "things stand now, keeping ids stable."))
+    except ValueError as e:
+        raise HTTPException(429, str(e)) from None
+    return {"job_id": jid}
+
+
+@app.post("/api/maps/{slug}/undo")
+def api_maps_undo(slug: str):
+    try:
+        if not maps.undo(slug):
+            raise HTTPException(404, "no earlier version of that map")
+    except maps.MapError as e:
+        raise HTTPException(400, str(e)) from None
+    return {"ok": True}
+
+
+@app.delete("/api/maps/{slug}")
+def api_maps_delete(slug: str):
+    try:
+        if not maps.delete(slug):
+            raise HTTPException(404, "no map by that name")
+    except maps.MapError as e:
+        raise HTTPException(400, str(e)) from None
+    return {"ok": True}
 
 
 # ---------- subscriptions (ledger + renewal radar + launchpad) ----------

@@ -762,6 +762,34 @@
             module, what it does, how they connect" loading="lazy"></iframe>
   </section>
 
+  <!-- MAPS (the System Map's layered diagram, of anything you ask for:
+       server/maps.py validates and stores each one, static/maps/view.html
+       draws it) -->
+  <section id="view-maps" class="view">
+    <div class="section-head"><h2>Maps</h2>
+      <a class="fchip sm newtab" id="maps-fulltab" href="/maps/view.html"
+         target="_blank" rel="noopener"
+         style="margin-left:auto; text-decoration:none">Open full tab</a>
+    </div>
+    <form class="runbar maps-ask" id="maps-ask">
+      <input id="maps-ask-text" class="search" type="text" autocomplete="off"
+             placeholder="Map anything: e.g. every routine and skill, and what each one feeds"
+             aria-label="What should the map show?">
+      <button class="btn primary" type="submit">Map it</button>
+    </form>
+    <div class="runbar maps-bar">
+      <select id="maps-pick" class="idea-sort" aria-label="Choose a map"></select>
+      <button class="btn" id="maps-refresh" type="button"
+              title="Re-run this map's request against how things stand now">Refresh</button>
+      <button class="btn" id="maps-undo" type="button"
+              title="Swap back to the version before the last save; press again to swap forward">Undo last save</button>
+      <button class="btn" id="maps-delete" type="button">Delete</button>
+    </div>
+    <p class="hint maps-note" id="maps-note" hidden></p>
+    <iframe class="map-frame" id="maps-frame" title="The selected map"
+            loading="lazy"></iframe>
+  </section>
+
   <!-- IMAGE ATLAS (the vault's images as a navigable 3D galaxy — chaska) -->
   <section id="view-imageatlas" class="view">
     <div class="section-head"><h2>Image Atlas</h2>
