@@ -695,10 +695,17 @@ def compose(at=None, axis="valid", kinds=None):
     return result
 
 
-def node_detail(node_id):
+def current():
+    """The last composed full graph, composing it once if none exists yet.
+    Readers that only need "the graph the owner is looking at" (a node's
+    detail, a subset's layout) must not pay for a recompose on every call."""
     with _graph_cache_lock:
         graph = _graph_cache.get("result")
-    graph = graph or compose()
+    return graph or compose()
+
+
+def node_detail(node_id):
+    graph = current()
     node = next((item for item in graph["nodes"] if item["id"] == node_id),
                 None)
     if not node:

@@ -31,7 +31,8 @@ PCA_OVERSAMPLE = 8
 WORLD_RADIUS = 900.0
 
 _vector_cache = {"fingerprint": None, "vectors": {}, "dimensions": 0}
-_layout_cache = {"key": None, "positions": {}, "meta": {}}
+_layout_cache = {"key": None, "positions": {}, "meta": {},
+                 "page_to_node": {}}
 _lock = threading.Lock()
 
 
@@ -259,5 +260,121 @@ def positions(nodes, edges, page_to_node):
             semantic_nodes / max(1, len(node_ids)), 4),
     }
     with _lock:
-        _layout_cache.update(key=key, positions=out, meta=meta)
+        # The page -> node folding is kept beside the layout so a subset can
+        # find its members' vectors later without recomposing the graph.
+        _layout_cache.update(key=key, positions=out, meta=meta,
+                             page_to_node=dict(page_to_node))
     return out, meta
+
+
+def _ball_position(node_id, radius, center=(0.0, 0.0, 0.0)):
+    """A repeatable point INSIDE a ball, never on its surface.  The full
+    layout's fallback puts every unplaced item on one shell, which is what
+    makes an unplaced majority read as a giant hollow circle."""
+    direction = _hash_position(node_id, radius=1.0)
+    raw = hashlib.sha256(f"ball:{node_id}".encode("utf-8")).digest()
+    depth = int.from_bytes(raw[:4], "big") / 0xffffffff
+    reach = radius * (0.08 + 0.92 * depth) ** (1 / 3)
+    return [round(center[i] + direction[i] * reach, 3) for i in range(3)]
+
+
+def subset_vectors(ids):
+    """One unit vector per subset member that has one, keyed by node id:
+    the mean of its chunk vectors, with vault pages folded onto CRM people
+    exactly as the last composed graph folded them."""
+    wanted = {str(node_id) for node_id in ids}
+    vectors = {}
+    if np is None or not wanted:
+        return vectors
+    raw, _dimensions, _fingerprint = _raw_vectors(vault.source_specs())
+    with _lock:
+        page_to_node = dict(_layout_cache.get("page_to_node") or {})
+    grouped = defaultdict(list)
+    for raw_id, vector in raw.items():
+        canonical = page_to_node.get(raw_id, raw_id)
+        if canonical in wanted:
+            grouped[canonical].append(vector)
+    for node_id, rows in grouped.items():
+        vector = _unit(np.mean(rows, axis=0))
+        if vector is not None:
+            vectors[node_id] = vector
+    return vectors
+
+
+def subset_positions(ids, edges, radius, vectors=None):
+    """Coordinates for one subset of the composed World, fitted to it alone.
+
+    The full layout's three axes are the directions that separate the whole
+    vault, so a few hundred related notes share one small patch of it.  Here
+    the same projection is fitted to the subset's own vectors, so its axes
+    are the ones that separate these items.  Items without a vector take the
+    centroid of their placed neighbours inside the subset; whatever is still
+    unplaced (no vector, no path to a placed item) gathers in a small cloud
+    of its own below the main one, so it is visibly "not placed by meaning"
+    rather than mixed in with what was.
+
+    `vectors` is subset_vectors(ids) when the caller already has it.
+    Nothing is written.
+    """
+    node_ids = list(dict.fromkeys(str(node_id) for node_id in ids))
+    wanted = set(node_ids)
+    if vectors is None:
+        vectors = subset_vectors(node_ids)
+    vectors = {key: value for key, value in vectors.items() if key in wanted}
+
+    out = {}
+    placed = sorted(vectors)
+    if placed:
+        matrix = np.vstack([vectors[node_id] for node_id in placed])
+        coords = _project(placed, matrix) * (radius / WORLD_RADIUS)
+        out.update({node_id: [round(float(value), 3) for value in coords[i]]
+                    for i, node_id in enumerate(placed)})
+
+    adjacency = defaultdict(list)
+    for edge in edges:
+        a, b = edge.get("a"), edge.get("b")
+        if a in wanted and b in wanted:
+            adjacency[a].append(b)
+            adjacency[b].append(a)
+    neighbor_placed = set()
+    # Four passes, as in the full layout: enough to reach an item two
+    # derived hops from a vector without letting one vector place a chain.
+    for _ in range(4):
+        changed = False
+        for node_id in sorted(wanted - set(out)):
+            rows = [out[other] for other in adjacency.get(node_id, [])
+                    if other in out]
+            if not rows:
+                continue
+            jitter = _hash_position(node_id, radius=radius * 0.03)
+            out[node_id] = [round(sum(row[i] for row in rows) / len(rows)
+                                  + jitter[i], 3) for i in range(3)]
+            neighbor_placed.add(node_id)
+            changed = True
+        if not changed:
+            break
+
+    loose = sorted(wanted - set(out))
+    if loose:
+        if out:
+            # Its own small cloud at the main one's density, clear of its
+            # lower edge (the projection clips outliers at 1.6 radii).
+            loose_radius = max(radius * 0.18,
+                               radius * (len(loose) / len(wanted)) ** (1 / 3))
+            center = (0.0, -(radius * 1.7 + loose_radius), 0.0)
+        else:
+            loose_radius, center = radius, (0.0, 0.0, 0.0)
+        for node_id in loose:
+            out[node_id] = _ball_position(node_id, loose_radius, center)
+
+    semantic = len(placed) + len(neighbor_placed)
+    meta = {
+        "basis": "subset-embedding-pca" if placed else "subset-links-only",
+        "radius": round(float(radius), 3),
+        "vector_nodes": len(placed),
+        "neighbor_nodes": len(neighbor_placed),
+        "loose_nodes": len(loose),
+        "total_nodes": len(node_ids),
+        "semantic_coverage": round(semantic / max(1, len(node_ids)), 4),
+    }
+    return {node_id: out[node_id] for node_id in node_ids}, meta

@@ -28,6 +28,7 @@
                           "#8f7d96", "#a89a6a", "#6f948c", "#a08292",
                           "#8a9a6f", "#9c8f7a", "#a08a6f", "#96a38c"];
   const EGO_R = 26;
+  const MUTED_BAND = "#5f5b55";
 
   const S = {
     graph: null,          // the served payload
@@ -78,6 +79,13 @@
                distance: 1, semantic: 0.18 },
     loading: false,
     loadedGen: null,
+    // subsets (see "subsets" below): the full payload stays in `world`
+    // while `graph` holds whatever is on screen
+    world: null,
+    subset: null,            // {id|null, name, recipe, dirty, count, ...}
+    subsetStash: null,       // the full view's filters, restored on return
+    subsets: [],             // the saved list
+    subsetBusy: false,
   };
 
   const CONTROL_KEY = "vira-world-controls";
@@ -170,6 +178,10 @@
         onContext: hitContext,
         onEmpty: hitEmpty,
         onPhysicsScope: paintPhysicsStatus,
+        // each saved subset remembers its own camera; an unsaved one is
+        // framed fresh every time and never overwrites a saved pose
+        camScope: () => !S.subset ? "" : S.subset.id
+          ? "|subset:" + S.subset.id : null,
       });
       if (r) {
         R3 = r;
@@ -194,14 +206,27 @@
     S.loading = true;
     try {
       await ensure3D();
-      const g = await api("/api/world");
+      const [g, saved] = await Promise.all([
+        api("/api/world"),
+        api("/api/world/subsets").catch(() => ({ subsets: [] })),
+      ]);
       if (g.status === "empty") {
         showEmpty(false);
         return;
       }
       emptyEl.style.display = "none";
       S.loadedGen = g.generated;
-      initGraph(g);
+      S.world = g;
+      S.subsets = saved.subsets || [];
+      const remembered = lsGet(SUBSET_KEY, "");
+      const reopen = S.subset
+        || S.subsets.find((row) => row.id && row.id === remembered);
+      if (!(reopen && await openSubset(reopen))) {
+        S.subset = null;
+        S.subsetStash = null;
+        initGraph(g);
+      }
+      renderSubsets();
     } catch (e) {
       showEmpty(false, "Network unavailable — " + e.message);
     } finally {
@@ -251,6 +276,7 @@
     S.colors.clear();
     S.bands.forEach((b, i) => {
       const fallback = b.anchor ? "#a39c8d"
+        : b.muted ? MUTED_BAND
         : CLUSTER_COLORS[(i + (S.bands.some((x) => x.anchor) ? 0 : 1))
                          % CLUSTER_COLORS.length];
       S.colors.set(b.id, S.colorOverrides[`${S.lens}|${b.id}`] || fallback);
@@ -316,7 +342,10 @@
     S.graph = g;
     S.fixedLayout = !!g.layout?.basis;
     S.enabledKinds = new Set((g.kinds || []).map((row) => row.id));
-    S.lens = lsGet(LENS_KEY, null) || (g.lenses || [])[0]?.id || null;
+    // a subset opens on its own clusters; the full World on the owner's
+    // last lens
+    S.lens = g.default_lens || lsGet(LENS_KEY, null)
+      || (g.lenses || [])[0]?.id || null;
 
     const n = g.nodes.length;
     const ring = (d) => d === 1 ? 240 + 7 * Math.sqrt(n)
@@ -604,12 +633,19 @@
     return values.filter(Boolean).join(" ").toLowerCase();
   }
 
-  function matchesSearch(node) {
-    if (!S.match) return true;
-    return queryTerms(S.match).every((term) => {
+  function termsMatch(node, terms) {
+    return terms.every((term) => {
       const hit = searchText(node, term.key).includes(term.value);
       return term.not ? !hit : hit;
     });
+  }
+
+  let parsedMatch = { query: null, terms: [] };
+  function matchesSearch(node) {
+    if (!S.match) return true;
+    if (parsedMatch.query !== S.match)
+      parsedMatch = { query: S.match, terms: queryTerms(S.match) };
+    return termsMatch(node, parsedMatch.terms);
   }
 
   function passesNodeFilters(node) {
@@ -855,6 +891,510 @@
       isoChanged(false);
     });
     bar.appendChild(all);
+  }
+
+  // ---------- subsets ----------
+  //
+  // A subset is a slice of the World laid out on its own
+  // (server/worldsubsets.py). The full layout answers "where does this sit
+  // among everything", so forty notes about one subject share one patch of
+  // a ball of tens of thousands. A subset's RECIPE is narrowing steps,
+  // evaluated here with this file's own filter code so it means exactly
+  // what the panel showed; the server fits a layout to just those members
+  // and finds the clusters among their own links. The full payload stays
+  // in S.world, so going back is one initGraph and nothing is fetched twice.
+
+  const SUBSET_KEY = "vira-world-subset";
+  const MAX_HOPS = 3;          // server/worldsubsets.py MAX_HOPS
+  const BLANK_STEP = { query: "", kinds: null, start_kinds: null, seeds: [],
+                       hops: 0, hide_orphans: false };
+  let worldIdx = null;         // {world, byId, adj} over S.world
+
+  function worldIndex() {
+    if (worldIdx && worldIdx.world === S.world) return worldIdx;
+    const byId = new Map(), adj = new Map();
+    for (const node of S.world?.nodes || []) byId.set(node.id, node);
+    for (const e of S.world?.edges || []) {
+      if (!byId.has(e.a) || !byId.has(e.b)) continue;
+      if (!adj.has(e.a)) adj.set(e.a, []);
+      if (!adj.has(e.b)) adj.set(e.b, []);
+      adj.get(e.a).push(e.b);
+      adj.get(e.b).push(e.a);
+    }
+    worldIdx = { world: S.world, byId, adj };
+    return worldIdx;
+  }
+
+  // Each step narrows the one before it; the first narrows the World. A
+  // step starts from its seeds, or from everything that passes its filters
+  // (limited to start_kinds when set), then follows `hops` steps of links
+  // to items that also pass - the isolate bar's "+ connected items".
+  function subsetMembers(recipe) {
+    if (!S.world) return [];
+    const { byId, adj } = worldIndex();
+    let pool = null;
+    for (const step of recipe?.steps || []) {
+      const terms = queryTerms(step.query || "");
+      const kinds = step.kinds ? new Set(step.kinds) : null;
+      const start = step.start_kinds ? new Set(step.start_kinds) : null;
+      const inPool = (id) => !pool || pool.has(id);
+      // "unconnected" means no link inside what this step narrows, the
+      // same meaning the panel's toggle has inside an open subset
+      const linked = (id) => (adj.get(id) || []).some(inPool);
+      const passes = (node) => !!node && inPool(node.id)
+        && (!kinds || kinds.has(node.kind))
+        && (!step.hide_orphans || linked(node.id))
+        && termsMatch(node, terms);
+      const set = new Set();
+      if (step.seeds?.length) {
+        for (const id of step.seeds)
+          if (byId.has(id) && inPool(id)) set.add(id);
+      } else {
+        for (const node of S.world.nodes)
+          if ((!start || start.has(node.kind)) && passes(node))
+            set.add(node.id);
+      }
+      let frontier = [...set];
+      for (let r = 0; r < (step.hops || 0) && frontier.length; r++) {
+        const next = [];
+        for (const id of frontier)
+          for (const other of adj.get(id) || []) {
+            if (set.has(other) || !passes(byId.get(other))) continue;
+            set.add(other);
+            next.push(other);
+          }
+        frontier = next;
+      }
+      pool = set;
+    }
+    return pool ? [...pool] : [];
+  }
+
+  const stepNarrows = (step) => !!(step.query || step.kinds
+    || step.start_kinds || step.seeds.length || step.hide_orphans);
+
+  // What the panel shows right now, as one step, with a name for it. The
+  // time slider is deliberately not part of it: a subset gets its own
+  // timeline. Returns null when the view picks a seed set that is empty.
+  function captureStep() {
+    const step = { ...BLANK_STEP, query: S.filterSearch ? S.match : "",
+                   hops: S.iso.ring, hide_orphans: S.hideOrphans };
+    const all = (S.graph?.kinds || []).map((row) => row.id);
+    if (all.some((kind) => !S.enabledKinds.has(kind)))
+      step.kinds = all.filter((kind) => S.enabledKinds.has(kind));
+    let seeds = null, label = "";
+    if (S.iso.ids.size) {
+      const bands = [...S.iso.ids].map((id) =>
+        S.bands.find((b) => b.id === id)).filter(Boolean);
+      label = bands.map((b) => b.label).join(" + ");
+      if (bands.length && bands.every((b) => b.kind))
+        step.start_kinds = bands.map((b) => b.kind);
+      else seeds = new Set(S.nodes.filter((p) =>
+        p.band && S.iso.ids.has(p.band)).map((p) => p.id));
+    }
+    if (S.starredOnly) {
+      const starred = [...S.starred].filter((id) => S.byId.has(id));
+      seeds = new Set(seeds ? starred.filter((id) => seeds.has(id))
+                            : starred);
+      label = label ? label + " (starred)" : "Starred";
+    }
+    if (seeds) {
+      step.seeds = [...seeds].filter((id) =>
+        passesNodeFilters(S.byId.get(id)));
+      if (!step.seeds.length) return null;
+    }
+    if (step.query) label = label ? `${label}: ${step.query}` : step.query;
+    if (!label && step.kinds)
+      label = step.kinds.map((kind) => kindLabel(kind)).join(" + ");
+    if (!label && step.hide_orphans) label = "Connected items";
+    return { step, label };
+  }
+
+  function draftName(label) {
+    const name = label || "Subset";
+    return (S.subset ? `${S.subset.name} › ${name}` : name).slice(0, 80);
+  }
+
+  function subsetFromShown() {
+    const got = captureStep();
+    if (!got || !stepNarrows(got.step)) {
+      toast("Narrow the galaxy first: search, untick kinds, isolate a band, "
+            + "or star items");
+      return;
+    }
+    openSubset({ name: draftName(got.label), recipe: {
+      steps: [...(S.subset?.recipe.steps || []), got.step] } });
+  }
+
+  function subsetAround(nodes, hops = 1) {
+    const seeds = nodes.filter((p) => p && !p.ego).map((p) => p.id);
+    if (!seeds.length) return;
+    const first = firstLast(nodes[0].name) || "the selection";
+    const label = seeds.length === 1 ? `Around ${first}`
+      : `Around ${first} +${seeds.length - 1}`;
+    openSubset({ name: draftName(label), recipe: {
+      steps: [...(S.subset?.recipe.steps || []),
+              { ...BLANK_STEP, seeds, hops }] } });
+  }
+
+  function describeStep(step) {
+    const parts = [];
+    if (step.seeds?.length)
+      parts.push(step.seeds.length === 1 ? "around 1 item"
+        : `around ${step.seeds.length.toLocaleString()} items`);
+    if (step.start_kinds)
+      parts.push("starting from "
+        + step.start_kinds.map((k) => kindLabel(k)).join(" + "));
+    if (step.query) parts.push(`"${step.query}"`);
+    if (step.kinds)
+      parts.push(step.kinds.map((k) => kindLabel(k)).join(", ") + " only");
+    if (step.hide_orphans) parts.push("connected only");
+    if (step.hops)
+      parts.push(`+${step.hops} ${step.hops === 1 ? "step" : "steps"} out`);
+    return parts.join(", ");
+  }
+
+  const describeRecipe = (recipe) =>
+    (recipe?.steps || []).map(describeStep).join(" › ");
+
+  function timelineFor(nodes, edges) {
+    // the client-side twin of worldgraph._timeline, over the subset alone
+    const valid = [], recorded = [];
+    for (const item of [...nodes, ...edges]) {
+      if (item.valid_from) valid.push(item.valid_from);
+      if (item.valid_to) valid.push(item.valid_to);
+      if (item.recorded_at) recorded.push(item.recorded_at);
+    }
+    valid.sort();
+    recorded.sort();
+    const all = [...valid, ...recorded].sort();
+    const count = (fn) => nodes.filter(fn).length;
+    const validNodes = count((n) => n.valid_from || n.valid_to);
+    const recordedNodes = count((n) => n.recorded_at);
+    const dated = count((n) => n.valid_from || n.recorded_at);
+    const ends = (list) => ({ min: list[0] || null,
+                              max: list[list.length - 1] || null });
+    return { ...ends(all),
+      valid: { ...ends(valid), dated_nodes: validNodes,
+               undated_nodes: nodes.length - validNodes },
+      recorded: { ...ends(recorded), dated_nodes: recordedNodes,
+                  undated_nodes: nodes.length - recordedNodes },
+      dated_nodes: dated, undated_nodes: nodes.length - dated };
+  }
+
+  // The served payload's shape, cut to the members: the subset's own
+  // positions and clusters, links among members only, degree counted
+  // inside the subset ("unconnected" means unconnected HERE), and the Kinds
+  // lens recounted.
+  function subsetGraph(ids, r) {
+    const { byId } = worldIndex();
+    const keep = new Set(ids);
+    const edges = S.world.edges.filter((e) => keep.has(e.a) && keep.has(e.b));
+    const degree = new Map();
+    for (const e of edges) {
+      degree.set(e.a, (degree.get(e.a) || 0) + 1);
+      degree.set(e.b, (degree.get(e.b) || 0) + 1);
+    }
+    const nodes = [];
+    for (const id of ids) {
+      const node = byId.get(id);
+      if (node) nodes.push({ ...node, graph_degree: degree.get(id) || 0,
+                             position: r.positions[id] || node.position });
+    }
+    const counts = new Map();
+    for (const node of nodes)
+      counts.set(node.kind, (counts.get(node.kind) || 0) + 1);
+    const lenses = [r.lens];
+    const kindLens = (S.world.lenses || []).find((l) => l.id === "kind");
+    if (kindLens)
+      lenses.push({ ...kindLens, total: nodes.length, placed: nodes.length,
+        bands: kindLens.bands.filter((b) => counts.get(b.kind))
+          .map((b) => ({ ...b, size: counts.get(b.kind) })),
+        node_band: Object.fromEntries(nodes.map((n) =>
+          [n.id, `kind:${n.kind || "note"}`])) });
+    const L = r.layout || {};
+    return { ...S.world, nodes, edges,
+      ego_edges: (S.world.ego_edges || []).filter((e) => keep.has(e.b)),
+      lenses, default_lens: r.lens?.id,
+      kinds: (S.world.kinds || []).filter((row) => counts.get(row.id))
+        .map((row) => ({ ...row, count: counts.get(row.id) })),
+      timeline: timelineFor(nodes, edges),
+      layout: { basis: L.basis || "subset",
+                semantic_nodes: (L.vector_nodes || 0) + (L.neighbor_nodes || 0),
+                fallback_nodes: L.loose_nodes || 0 } };
+  }
+
+  function syncEgoButton() {
+    $("#atlas-ego")?.classList.toggle("on", S.hideEgo);
+  }
+
+  async function openSubset(sub) {
+    if (!S.world || S.subsetBusy) return false;
+    const ids = subsetMembers(sub.recipe);
+    if (!ids.length) {
+      toast(`Nothing in the World matches "${sub.name}" right now`);
+      return false;
+    }
+    S.subsetBusy = true;
+    paintSubsetBar(`Laying out ${ids.length.toLocaleString()} items…`);
+    let r = null;
+    try {
+      r = await post("/api/world/subsets/layout", { ids });
+    } catch (e) {
+      toast("Subset layout failed: " + errText(e));
+    } finally {
+      S.subsetBusy = false;
+    }
+    if (r?.status === "too_large")
+      toast(`That is ${r.count.toLocaleString()} items; a subset holds up to `
+            + `${r.limit.toLocaleString()}. Narrow it further.`);
+    if (r?.status !== "ok") { paintSubsetBar(); return false; }
+    // Remember the full view's filters to come back to - but only if the
+    // full view was ever on screen. Reopening a remembered subset at load
+    // happens before it is, and its untouched state is no state to restore.
+    if (!S.subset)
+      S.subsetStash = S.graph && S.graph === S.world
+        ? { match: S.match, kinds: new Set(S.enabledKinds),
+            iso: { ids: new Set(S.iso.ids), ring: S.iso.ring },
+            hideEgo: S.hideEgo }
+        : { match: "", kinds: null, iso: null, hideEgo: S.hideEgo };
+    const g = subsetGraph(ids, r);
+    S.subset = { id: sub.id || null, name: sub.name, recipe: sub.recipe,
+                 dirty: !!sub.dirty, count: g.nodes.length,
+                 links: g.edges.length, layout: r.layout,
+                 clusters: (r.lens?.bands || []).filter((b) => !b.muted).length };
+    S.match = "";
+    if ($("#atlas-search")) $("#atlas-search").value = "";
+    // "me" sits at the centre only when this slice holds my own ties
+    S.hideEgo = (S.subsetStash?.hideEgo ?? S.hideEgo) || !g.ego_edges.length;
+    syncEgoButton();
+    // Opens on the fitted layout as served, like the full World: heating
+    // the physics here pulled a densely linked slice (242 items, 2,994
+    // links) into one knot. The Forces panel still runs it on demand.
+    initGraph(g);
+    lsSet(SUBSET_KEY, S.subset.id || "");
+    renderSubsets();
+    paintSubsetBar();
+    recordSubsetStats();
+    return true;
+  }
+
+  function closeSubset() {
+    if (!S.subset || !S.world) return;
+    const st = S.subsetStash;
+    S.subset = null;
+    S.subsetStash = null;
+    lsSet(SUBSET_KEY, "");
+    if (st) { S.hideEgo = st.hideEgo; syncEgoButton(); }
+    initGraph(S.world);
+    if (st?.kinds) {
+      // back to exactly the narrowed view the subset was made from
+      S.match = st.match;
+      if ($("#atlas-search")) $("#atlas-search").value = st.match;
+      S.enabledKinds = new Set([...st.kinds].filter((kind) =>
+        (S.graph.kinds || []).some((row) => row.id === kind)));
+      S.iso = { ids: new Set([...st.iso.ids].filter((id) =>
+                  S.bands.some((b) => b.id === id))), ring: st.iso.ring };
+      renderKindFilters();
+      isoChanged(false);
+    }
+    renderSubsets();
+    paintSubsetBar();
+  }
+
+  const subsetStats = () => ({ items: S.subset.count, links: S.subset.links,
+                               clusters: S.subset.clusters });
+
+  async function recordSubsetStats() {
+    const sub = S.subset;
+    const row = sub?.id && S.subsets.find((r) => r.id === sub.id);
+    if (!row || sub.dirty) return;
+    const st = row.stats || {};
+    if (st.items === sub.count && st.links === sub.links
+        && st.clusters === sub.clusters) return;
+    try {
+      const r = await put(`/api/world/subsets/${sub.id}`,
+                          { stats: subsetStats() });
+      S.subsets = r.subsets;
+      renderSubsets();
+    } catch { /* the counts are a convenience; the subset is unaffected */ }
+  }
+
+  async function saveSubset() {
+    const sub = S.subset;
+    if (!sub) return;
+    try {
+      if (sub.id) {
+        const r = await put(`/api/world/subsets/${sub.id}`,
+                            { recipe: sub.recipe, stats: subsetStats() });
+        S.subsets = r.subsets;
+        sub.dirty = false;
+        toast("Subset updated");
+      } else {
+        const name = prompt("Name this subset", sub.name);
+        if (!name || !name.trim()) return;
+        const r = await post("/api/world/subsets", {
+          name: name.trim(), recipe: sub.recipe, stats: subsetStats() });
+        S.subsets = r.subsets;
+        sub.id = r.subset.id;
+        sub.name = r.subset.name;
+        lsSet(SUBSET_KEY, sub.id);
+        toast("Subset saved");
+      }
+    } catch (e) { toast("Save failed: " + errText(e)); }
+    renderSubsets();
+    paintSubsetBar();
+  }
+
+  async function renameSubset(row) {
+    const name = prompt("Subset name", row.name);
+    if (!name || !name.trim() || name.trim() === row.name) return;
+    try {
+      const r = await put(`/api/world/subsets/${row.id}`,
+                          { name: name.trim() });
+      S.subsets = r.subsets;
+      if (S.subset?.id === row.id) S.subset.name = r.subset.name;
+    } catch (e) { toast("Rename failed: " + errText(e)); }
+    renderSubsets();
+    paintSubsetBar();
+  }
+
+  async function deleteSubset(row) {
+    if (!confirm(`Delete the saved subset "${row.name}"? Nothing in the`
+                 + " World changes; only the saved recipe goes.")) return;
+    try {
+      S.subsets = (await del(`/api/world/subsets/${row.id}`)).subsets;
+      // an open subset stays on screen, now unsaved
+      if (S.subset?.id === row.id) {
+        S.subset.id = null;
+        lsSet(SUBSET_KEY, "");
+      }
+    } catch (e) { toast("Delete failed: " + errText(e)); }
+    renderSubsets();
+    paintSubsetBar();
+  }
+
+  function setSubsetHops(delta) {
+    const sub = S.subset;
+    if (!sub) return;
+    const steps = sub.recipe.steps.map((step) => ({ ...step }));
+    const last = steps[steps.length - 1];
+    last.hops = Math.max(0, Math.min(MAX_HOPS, (last.hops || 0) + delta));
+    openSubset({ ...sub, recipe: { steps }, dirty: !!sub.id });
+  }
+
+  function subsetMenu(x, y, row) {
+    showContextMenu(x, y, [
+      { head: row.name, sub: describeRecipe(row.recipe) },
+      { label: "Open", run: () => openSubset(row) },
+      { label: "Rename…", run: () => renameSubset(row) },
+      { sep: true },
+      { label: "Delete…", run: () => deleteSubset(row) },
+    ]);
+  }
+
+  function renderSubsets() {
+    const list = $("#atlas-subset-list");
+    if (list) {
+      list.innerHTML = "";
+      if (!S.subsets.length)
+        list.appendChild(el("div", "hint", "No saved subsets yet."));
+      for (const row of S.subsets) {
+        const item = el("div", "atlas-subset-row"
+                        + (S.subset?.id === row.id ? " on" : ""));
+        const open = el("button", "atlas-subset-open");
+        open.type = "button";
+        open.title = describeRecipe(row.recipe);
+        open.appendChild(el("b", null, row.name));
+        const st = row.stats;
+        open.appendChild(el("span", null, st?.items
+          ? `${st.items.toLocaleString()} items`
+            + (st.clusters ? ` · ${st.clusters} clusters` : "")
+          : describeRecipe(row.recipe)));
+        open.addEventListener("click", () => openSubset(row));
+        open.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          subsetMenu(e.clientX, e.clientY, row);
+        });
+        const more = el("button", "atlas-subset-more", "⋯");
+        more.type = "button";
+        more.setAttribute("aria-label", `More for ${row.name}`);
+        more.addEventListener("click", () => {
+          const box = more.getBoundingClientRect();
+          subsetMenu(box.left, box.bottom, row);
+        });
+        item.append(open, more);
+        list.appendChild(item);
+      }
+    }
+    paintSubsetActions();
+  }
+
+  function paintSubsetActions() {
+    const shown = $("#atlas-subset-shown");
+    if (shown) {
+      const got = S.graph && S.shown?.size ? captureStep() : null;
+      const ok = !!got && stepNarrows(got.step);
+      shown.disabled = !ok;
+      shown.textContent = ok
+        ? `Lay out these ${S.shown.size.toLocaleString()} on their own`
+        : "Lay out what's shown";
+      shown.title = ok ? describeStep(got.step)
+        : "Narrow the galaxy first: search, untick kinds, isolate a band, "
+          + "or star items";
+    }
+    const around = $("#atlas-subset-around");
+    if (around) {
+      around.disabled = !S.sel.size;
+      around.textContent = !S.sel.size ? "Around the selection"
+        : S.sel.size === 1 ? "Around the selected item"
+        : `Around the ${S.sel.size} selected`;
+    }
+  }
+
+  function paintSubsetBar(busy) {
+    const bar = $("#atlas-subset-bar");
+    if (!bar) return;
+    const sub = S.subset;
+    bar.innerHTML = "";
+    if (!sub && !busy) { bar.style.display = "none"; return; }
+    bar.style.display = "";
+    if (busy) {
+      bar.appendChild(el("span", "atlas-subset-label", busy));
+      return;
+    }
+    const label = el("span", "atlas-subset-label");
+    label.title = describeRecipe(sub.recipe);
+    label.appendChild(el("b", null, sub.name));
+    label.appendChild(el("span", "atlas-subset-meta",
+      `${sub.count.toLocaleString()} items · `
+      + `${sub.links.toLocaleString()} links · ${sub.clusters} `
+      + (sub.clusters === 1 ? "cluster" : "clusters")
+      + (!sub.id ? " · not saved" : sub.dirty ? " · changed" : "")));
+    bar.appendChild(label);
+    const last = sub.recipe.steps[sub.recipe.steps.length - 1];
+    if (last.seeds?.length || last.hops) {
+      const fewer = el("button", "fchip sm", "−");
+      fewer.title = "Follow one step fewer of connections";
+      fewer.disabled = !last.hops;
+      fewer.addEventListener("click", () => setSubsetHops(-1));
+      const more = el("button", "fchip sm", "+");
+      more.title = "Follow one more step of connections";
+      more.disabled = last.hops >= MAX_HOPS;
+      more.addEventListener("click", () => setSubsetHops(1));
+      bar.append(fewer, el("span", "atlas-subset-hops",
+        `${last.hops} ${last.hops === 1 ? "step" : "steps"} out`), more);
+    }
+    if (!sub.id || sub.dirty) {
+      const save = el("button", "fchip sm on",
+                      sub.id ? "Save changes" : "Save…");
+      save.addEventListener("click", saveSubset);
+      bar.appendChild(save);
+    }
+    const back = el("button", "fchip sm", "Everything");
+    back.title = "Back to the whole World";
+    back.addEventListener("click", closeSubset);
+    bar.appendChild(back);
   }
 
   // ---------- drawing ----------
@@ -1259,6 +1799,12 @@
           selectionChanged();
         } },
     ];
+    if (S.subset && c.id.startsWith("cluster:") && !c.muted)
+      items.push({ label: "Lay out this cluster on its own", run: () =>
+        openSubset({ name: `${S.subset.name} \u203a ${c.label}`,
+                     recipe: { steps: [...S.subset.recipe.steps,
+                       { ...BLANK_STEP, seeds: members.map((p) => p.id) }] },
+                   }) });
     // A circle with a stable identity (server/circles.py) has a story of
     // its own and a name the owner can override — that rename lives in
     // the circles store, keyed on the identity, so it survives rebuilds.
@@ -1440,6 +1986,7 @@
   // ---------- selection (multi) ----------
 
   function recomputeSel() {
+    paintSubsetActions();
     S.neighbors.clear(); S.shared.clear();
     S.selEdges.clear(); S.selPathEdges.clear(); S.selPathNodes.clear();
     S.chains = [];
@@ -2357,6 +2904,7 @@
       { label: isPerson ? "Open profile" : "Open source",
         run: () => openWorldNode(p) },
       { label: "Feature connections", run: () => setSelection([p]) },
+      { label: "Lay out around this", run: () => subsetAround([p]) },
       { label: S.sel.has(p) ? "Remove from selection"
                             : "Add to selection",
         run: () => toggleSelect(p) },
@@ -2606,6 +3154,10 @@
       if (!S.sel.has(hit)) toggleSelect(hit);
     }
   });
+
+  $("#atlas-subset-shown")?.addEventListener("click", subsetFromShown);
+  $("#atlas-subset-around")?.addEventListener("click",
+    () => subsetAround([...S.sel]));
 
   bindPercentRange("#atlas-geometry", S.display, "scale", .35, 2.5,
                    "positions");

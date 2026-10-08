@@ -644,7 +644,10 @@
     </div>
     <div class="atlas-stage" id="atlas-stage">
       <canvas id="atlas-canvas"></canvas>
-      <div class="atlas-iso" id="atlas-iso" style="display:none"></div>
+      <div class="atlas-topbars">
+        <div class="atlas-subset-bar" id="atlas-subset-bar" style="display:none"></div>
+        <div class="atlas-iso" id="atlas-iso" style="display:none"></div>
+      </div>
       <div class="atlas-tip" id="atlas-tip" style="display:none"></div>
       <div class="atlas-card" id="atlas-card" style="display:none"></div>
       <div class="atlas-empty" id="atlas-empty" style="display:none"></div>
@@ -653,6 +656,15 @@
           <strong>World controls</strong>
           <button class="linkish" id="atlas-reset-controls" type="button">Restore defaults</button>
         </div>
+        <details class="atlas-control-section" id="atlas-subsets" open>
+          <summary>Subsets</summary>
+          <div class="hint">Narrow the galaxy with a search, kinds, a band or a selection, then lay just those items out on their own, with their own clusters.</div>
+          <div class="atlas-bar atlas-subset-make">
+            <button class="fchip sm" id="atlas-subset-shown" type="button" disabled>Lay out what's shown</button>
+            <button class="fchip sm" id="atlas-subset-around" type="button" disabled>Around the selection</button>
+          </div>
+          <div class="atlas-subset-list" id="atlas-subset-list"></div>
+        </details>
         <details class="atlas-control-section" open>
           <summary>Filter</summary>
           <div class="atlas-bar">
