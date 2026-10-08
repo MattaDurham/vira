@@ -177,6 +177,14 @@ class ApplyTests(unittest.TestCase):
                 skins.apply_skin("neon-pond")
             self.assertEqual(self._style(), before)
 
+    def test_background_preset_can_select_each_desktop_scene(self):
+        path = skins.SKINS_DIR / "living-garden.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        for scene in ("koi", "redwoods", "aurora", "constellation", "none"):
+            manifest["background"]["scene"] = scene
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(skins.apply_skin("living-garden")["background"]["scene"], scene)
+
     def test_apply_phosphor_rewrites_root_swaps_glass_records_active(self):
         out = skins.apply_skin("phosphor-console")
         self.assertTrue(out["ok"])

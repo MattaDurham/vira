@@ -341,6 +341,13 @@ export function create({node,loaded,style,canFeed,onMessage,onLook,onPause,look:
   for(let j=0;j<96;j+=4)for(let i=0;i<32;i++)segment(i*97+j,(i+1)*97+j);
   const bedWire=new THREE.LineSegments(ownGeometry(new THREE.BufferGeometry().setAttribute("position",new THREE.Float32BufferAttribute(bedLines,3))),
     ownMaterial(new THREE.LineBasicMaterial({color:0x6652b1})));bedWire.visible=false;submerged.add(bedWire);
+  const surfaceLines=[];
+  const surfaceSegment=(i,j)=>{for(const k of [i,j])surfaceLines.push(waterPositions.getX(k),0,waterPositions.getZ(k));};
+  for(let i=4;i<=20;i+=4)for(let j=0;j<96;j++)surfaceSegment(i*97+j,i*97+j+1);
+  for(let j=0;j<96;j+=12)surfaceSegment(0,20*97+j);
+  const waterWire=new THREE.LineSegments(ownGeometry(new THREE.BufferGeometry().setAttribute("position",new THREE.Float32BufferAttribute(surfaceLines,3))),
+    ownMaterial(new THREE.LineBasicMaterial({color:0x167f95,transparent:true,opacity:.3,depthWrite:false})));
+  waterWire.visible=false;scene.add(waterWire);
   node.style.backgroundImage="";node.appendChild(canvas);
   canvas.dataset.pondDepth=String(size.depth);canvas.dataset.pondSpace="3d";
   let closed=false,running=true,exploring=false,failed=false,raf=0,last=0,painted=0,elapsed=0;
@@ -383,7 +390,7 @@ export function create({node,loaded,style,canFeed,onMessage,onLook,onPause,look:
     if(closed || failed)return;
     updateCamera();updateFish();
     if(look==="wireframe"){
-      submerged.visible=water.visible=pellets.visible=true;
+      submerged.visible=pellets.visible=true;water.visible=false;
       renderer.setRenderTarget(null);renderer.render(scene,camera);return;
     }
     water.visible=false;submerged.visible=false;pellets.visible=false;
@@ -451,8 +458,9 @@ export function create({node,loaded,style,canFeed,onMessage,onLook,onPause,look:
     for(const [object,material] of (wire?wireMaterials:naturalMaterials))object.material=material;
     scene.background=wire?new THREE.Color(0x050a16):sky;
     scene.environment=wire?null:environment.texture;grid.visible=wire;ground.visible=!wire;bed.visible=!wire;bedWire.visible=wire;
+    water.visible=!wire;waterWire.visible=wire;
     renderer.shadowMap.enabled=!wire;canvas.dataset.pondLook=look;
-    swimmers.forEach(s=>{s.bones.visible=wire || showBones;s.body.visible=!showBones || wire;});
+    swimmers.forEach(s=>{s.bones.visible=wire || showBones;s.body.visible=!showBones;});
     if(lookButton)lookButton.textContent=wire?"Show natural pond":"Show cyberpunk wireframe";
     paint();
   }

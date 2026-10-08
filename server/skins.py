@@ -126,7 +126,7 @@ def load_manifest(skin_id: str) -> dict:
     if background is not None:
         if (not isinstance(background, dict)
                 or set(background) != {"scene", "pond", "look", "dim", "paused"}
-                or background["scene"] != "koi"
+                or background["scene"] not in ("koi", "redwoods", "aurora", "constellation", "none")
                 or background["pond"] not in ("garden", "courtyard")
                 or background["look"] not in ("natural", "wireframe")
                 or type(background["paused"]) is not bool
