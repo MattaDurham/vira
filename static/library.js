@@ -1396,22 +1396,39 @@
   }
 
   /* Hand a set of pages to the galaxy, laid out on its own. The galaxy
-     owns that layout (World subsets); the Library sends World node ids. */
+     owns that layout (World subsets); the Library sends World node ids. A
+     saved Library subset is saved in the galaxy too, under its name, so
+     the galaxy lists it and keeps its camera; anything else opens there
+     unsaved. */
   async function toGalaxy(name, rels, subsetId) {
     if (!rels || !rels.length) { toast("Nothing to show: the set is empty"); return; }
+    if (typeof window.worldOpenSubset !== "function") {
+      toast("The galaxy cannot lay a set out on its own in this version of Vira.");
+      return;
+    }
     try {
       const { ids } = await post("/api/library/world-ids", { vault: S.vault, rels });
-      if (typeof window.worldOpenSubset === "function") {
-        openApp("atlas");
-        const res = await window.worldOpenSubset({ name, ids, librarySubset: subsetId || "" });
-        if (subsetId && res && res.id) {
-          put(`/api/library/subsets/${encodeURIComponent(subsetId)}/world`, { world_subset: res.id }).catch(() => {});
+      let worldSubset = "";
+      if (subsetId) {
+        const row = S.subsets.find((x) => x.id === subsetId) || {};
+        const recipe = { steps: [{ seeds: ids, hops: 0 }] };
+        if (row.world_subset) {
+          try {
+            await put(`/api/world/subsets/${encodeURIComponent(row.world_subset)}`, { name, recipe });
+            worldSubset = row.world_subset;
+          } catch (e) { /* deleted in the galaxy since: save it again */ }
         }
-        return;
+        if (!worldSubset) {
+          const made = await post("/api/world/subsets", { name, recipe });
+          worldSubset = made.subset.id;
+          await put(`/api/library/subsets/${encodeURIComponent(subsetId)}/world`,
+                    { world_subset: worldSubset });
+          row.world_subset = worldSubset;
+        }
       }
-      toast("The galaxy cannot lay a set out on its own yet: that arrives with World subsets. "
-        + "Opening the World instead.");
       openApp("atlas");
+      const res = await window.worldOpenSubset({ name, ids, worldSubset });
+      if (!res) toast("The galaxy could not lay that set out");
     } catch (e) {
       toast(`Could not send it to the galaxy: ${errText(e)}`);
     }

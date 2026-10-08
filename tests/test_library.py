@@ -506,7 +506,15 @@ class TheWindow(unittest.TestCase):
     def test_the_galaxy_gets_world_ids_and_its_own_layout(self):
         to = _body(self.js, "toGalaxy")
         self.assertIn('post("/api/library/world-ids"', to)
-        self.assertIn("window.worldOpenSubset", to)
+        self.assertIn("window.worldOpenSubset({ name, ids, worldSubset })", to)
+        # A saved Library subset is saved in the galaxy too, and linked.
+        self.assertIn('post("/api/world/subsets", { name, recipe })', to)
+        self.assertIn("/world`", to)
+        atlas = _strip((ROOT / "static" / "atlas.js").read_text(encoding="utf-8"))
+        hook = re.search(r"window\.worldOpenSubset = async .*?\n  \};", atlas, re.S).group(0)
+        self.assertIn("recipe: { steps: [{ seeds:", hook)
+        self.assertIn("await openSubset(sub)", hook)
+        self.assertIn("S.loading || !S.world", hook, "waits for the World to load")
 
     def test_nothing_is_wider_than_a_phone(self):
         self.assertIn("@media (max-width: 759px)", self.css)
