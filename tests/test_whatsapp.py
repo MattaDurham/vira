@@ -301,6 +301,9 @@ class PairingPreparationTests(unittest.TestCase):
             mock.patch.object(whatsapp, "_node_binary", return_value=str(self.node)),
             mock.patch.object(settings, "fixture_mode", return_value=False),
             mock.patch.object(settings, "get", return_value=18377),
+            mock.patch.object(whatsapp.instance, "is_branch", return_value=False),
+            mock.patch.object(whatsapp.instance, "primary_root",
+                              side_effect=AssertionError("pairing test reached a real store")),
             mock.patch.object(whatsapp.instance, "primary_id", return_value="primary"),
             mock.patch.object(main.instance, "metadata", return_value={}),
         ]
