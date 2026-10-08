@@ -1,0 +1,45 @@
+/* The scene belongs to the desktop, below every window and dock. */
+#desktop-background { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  overflow: hidden; background-position: center; background-size: cover; }
+#desktop-background canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#desktop-background::after { content: ""; position: absolute; inset: 0;
+  background: #050b0a; opacity: var(--scene-dim, .2); }
+body.focus-mode #desktop-background { z-index: 700; }
+.background-studio-door { display: flex; align-items: center; gap: 16px;
+  margin: 12px 0; color: var(--text-dim); font-size: 13px; }
+.background-studio-door button { margin-left: auto; }
+#background-picker { position: fixed; z-index: 4200; right: 18px; top: 54px;
+  width: min(600px, calc(100vw - 36px)); box-sizing: border-box; padding: 20px;
+  background: var(--bg-raised); color: var(--text); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 24px 80px rgba(0,0,0,.5); }
+#background-picker[hidden] { display: none; }
+.background-head { display: flex; align-items: start; gap: 16px; }
+.background-head h2 { font-size: 17px; font-weight: 500; margin: 0 0 6px; }
+.background-head p { font-size: 12px; color: var(--text-dim); margin: 0 0 18px; }
+.background-close { margin-left: auto; background: none; border: 0;
+  color: var(--text-dim); padding: 4px 8px; cursor: pointer; font-size: 20px; }
+.background-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.background-choice { min-width: 0; text-align: left; padding: 0 0 12px;
+  border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+  background: var(--bg-card); color: var(--text); cursor: pointer; font: inherit; }
+.background-choice[aria-pressed="true"] { border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent); }
+.background-choice img { display: block; width: 100%; aspect-ratio: 16/10; object-fit: cover; }
+.background-choice strong { display: block; margin: 10px 10px 5px; font-size: 13px; font-weight: 500; }
+.background-choice span { display: block; margin: 0 10px; font-size: 11px;
+  color: var(--text-dim); line-height: 1.5; }
+.background-simple { display: flex; gap: 8px; margin: 14px 0; }
+.background-simple button, .background-motion { font: inherit; font-size: 12px;
+  background: var(--bg-card); border: 1px solid var(--line); color: var(--text-dim);
+  border-radius: 5px; padding: 7px 12px; cursor: pointer; }
+.background-simple button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.background-controls { border-top: 1px solid var(--line); padding-top: 14px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; }
+.background-controls label { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.background-controls input { width: 105px; accent-color: var(--accent); }
+.background-status { font-size: 11px; color: var(--text-dim); margin: 12px 0 0; min-height: 16px; }
+#background-picker button:focus-visible, #background-picker input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 1099px) {
+  #desktop-background, #background-btn, .background-studio-door, #background-picker { display: none !important; }
+}
