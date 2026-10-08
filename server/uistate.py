@@ -45,7 +45,9 @@ KEYS = ("vira-desktop", "vira-dock-order", "vira-dock-hidden",
         "vira-layout",
         # the owner's named saved layouts (snapshots of the window
         # arrangement), captured from the layout menu
-        "vira-layouts")
+        "vira-layouts",
+        # the selected desktop scene, motion and dimming preferences
+        "vira-background")
 MAX_VALUE_BYTES = 262144  # a runaway client never bloats the store
 
 _lock = threading.Lock()

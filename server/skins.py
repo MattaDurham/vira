@@ -33,6 +33,7 @@ tweak it in the studio below.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -121,6 +122,18 @@ def load_manifest(skin_id: str) -> dict:
     extras = m.get("extras")
     if extras is not None and not EXTRAS_RE.match(str(extras)):
         raise HTTPException(500, f"skin {skin_id} has a bad extras name")
+    background = m.get("background")
+    if background is not None:
+        if (not isinstance(background, dict)
+                or set(background) != {"scene", "pond", "look", "dim", "paused"}
+                or background["scene"] not in ("koi", "redwoods", "aurora", "constellation", "none")
+                or background["pond"] not in ("garden", "courtyard")
+                or background["look"] not in ("natural", "wireframe")
+                or type(background["paused"]) is not bool
+                or type(background["dim"]) not in (int, float)
+                or not math.isfinite(background["dim"])
+                or not 0 <= background["dim"] <= .65):
+            raise HTTPException(500, f"skin {skin_id} has a bad background preset")
     return m
 
 
@@ -140,6 +153,7 @@ def _meta(m: dict) -> dict:
         "covenants": m.get("covenants") or [],
         "default": bool(m.get("default")),
         "has_glass": bool(m.get("extras")),
+        "background": m.get("background"),
     }
 
 
@@ -297,7 +311,8 @@ def apply_skin(skin_id: str) -> dict:
     # No git: a skin is a personal, local look. It takes effect on the reload
     # the client triggers next. Persisting a skin as the shipped default is a
     # deliberate commit the owner makes, never a side effect of applying one.
-    return {"ok": True, "active": skin_id, "changed": changed}
+    return {"ok": True, "active": skin_id, "changed": changed,
+            "background": skin.get("background")}
 
 
 # ---------------------------------------------------------------- routes

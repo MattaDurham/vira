@@ -25,6 +25,11 @@ class Base(unittest.TestCase):
         base = Path(self.tmp.name)
         self.pages = base / "pages"
         self.pages.mkdir()
+        # Builds and merges can notify as well as write room stores. Keep that
+        # boundary synthetic so tests never read real notification settings or
+        # start an outbound sender after their temporary stores close.
+        self.ping = self.enterContext(mock.patch("server.notify.agent_ping",
+                                                return_value=True))
         for target, attr, val in (
                 (reading, "PAGES_DIR", self.pages),
                 (reading, "STORE_DIR", base / "data" / "reading"),
@@ -185,6 +190,8 @@ class MergeItemsTest(Base):
         self.assertEqual(res["items"], 3)
         after = readingroom.load_room("test-room")["items"]
         self.assertEqual(after[:2], before)         # byte-identical carry
+        self.ping.assert_called_once()
+        self.assertIn("A new talk", self.ping.call_args.args[0])
 
     def test_a_duplicate_url_is_dropped_not_doubled(self):
         self.build()

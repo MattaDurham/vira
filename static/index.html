@@ -29,6 +29,7 @@
 <link rel="stylesheet" href="/work-results.css">
 <link rel="stylesheet" href="/workspace.css">
 <link rel="stylesheet" href="/reminder-stickies.css">
+<link rel="stylesheet" href="/desktop-backgrounds.css">
 </head>
 <body>
 <!-- Left nav drawer (mobile): swipe in from the left edge, or tap the brand.
@@ -62,6 +63,8 @@
           title="Decisions waiting on you — click to bring them back" hidden></button>
   <button class="icon-btn" id="layout-btn" title="Layout templates" hidden>layout</button>
   <button class="icon-btn" id="settings-btn" title="Settings">config</button>
+  <button class="icon-btn" id="background-btn" title="Choose a desktop background"
+          aria-expanded="false" aria-controls="background-picker" hidden>background</button>
 </header>
 
 <!-- AI-backend down banner: shown only when the deterministic health probe
@@ -830,6 +833,14 @@
          target="_blank" rel="noopener"
          style="margin-left:auto; text-decoration:none">Open full tab</a>
     </div>
+    <div class="background-studio-door">
+      <span>Living desktop backgrounds</span>
+      <select id="design-pond-look" aria-label="Design Studio pond look">
+        <option value="natural">Natural 3D pond</option>
+        <option value="wireframe">Cyberpunk wireframe pond</option>
+      </select>
+      <button class="fchip sm" id="design-background-btn">Choose background</button>
+    </div>
     <!-- Skins: genre-compiled jumping-off points. Pick one up here and Vira
          reloads wearing it; then tune it in the studio below. New skins ship
          as tracked data (static/skins/) and arrive over the update channel. -->
@@ -1323,6 +1334,8 @@
 <script src="/workspace-intake.js"></script>
 <script src="/folder-picker.js"></script>
 <script src="/module-models.js"></script>
+<script src="/koi-pond.js"></script>
+<script src="/desktop-backgrounds.js"></script>
 <script src="/app.js"></script>
 <script src="/restart.js"></script>
 <script src="/reminder-stickies.js"></script>

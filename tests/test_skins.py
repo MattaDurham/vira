@@ -115,7 +115,8 @@ class _Tree:
         (tmp / "data").mkdir()
         real = REPO / "static" / "skins"
         for name in ("darkmode.json", "light.json", "light.css",
-                     "phosphor-console.json", "phosphor-console.css"):
+                     "phosphor-console.json", "phosphor-console.css",
+                     "living-garden.json", "neon-pond.json"):
             shutil.copy(real / name, tmp / "static" / "skins" / name)
         # a style.css whose :root carries the base values for the tokens we assert on
         base = json.loads((real / "darkmode.json").read_text(encoding="utf-8"))["tokens"]
@@ -151,6 +152,38 @@ class ApplyTests(unittest.TestCase):
 
     def _style(self):
         return skins.STYLE_CSS.read_text(encoding="utf-8")
+
+    def test_living_skin_returns_preset_with_the_applied_tokens(self):
+        for skin_id, look in (("living-garden", "natural"), ("neon-pond", "wireframe")):
+            out = skins.apply_skin(skin_id)
+            self.assertEqual(out["background"]["look"], look)
+            self.assertEqual(out["background"]["scene"], "koi")
+            self.assertEqual(skins.active_id(), skin_id)
+            card = next(s for s in skins.list_skins()["skins"] if s["id"] == skin_id)
+            self.assertEqual(card["background"], out["background"])
+            self.assertIn(skins.load_manifest(skin_id)["tokens"]["--accent"], self._style())
+        self.assertIsNone(skins.apply_skin("darkmode")["background"])
+
+    def test_invalid_background_presets_fail_before_any_skin_write(self):
+        path = skins.SKINS_DIR / "neon-pond.json"
+        original = json.loads(path.read_text(encoding="utf-8"))
+        before = self._style()
+        for key, value in (("look", "unknown"), ("dim", float("nan")),
+                           ("paused", "false"), ("pond", "../other")):
+            manifest = dict(original)
+            manifest["background"] = {**original["background"], key: value}
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(HTTPException):
+                skins.apply_skin("neon-pond")
+            self.assertEqual(self._style(), before)
+
+    def test_background_preset_can_select_each_desktop_scene(self):
+        path = skins.SKINS_DIR / "living-garden.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        for scene in ("koi", "redwoods", "aurora", "constellation", "none"):
+            manifest["background"]["scene"] = scene
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(skins.apply_skin("living-garden")["background"]["scene"], scene)
 
     def test_apply_phosphor_rewrites_root_swaps_glass_records_active(self):
         out = skins.apply_skin("phosphor-console")

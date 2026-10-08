@@ -17119,7 +17119,12 @@ function armSkinApply(foot, s) {
 async function doApplySkin(s) {
   try {
     toast("Applying " + s.name + "…");
-    await post("/api/skins/" + encodeURIComponent(s.id) + "/apply", {});
+    const result = await post("/api/skins/" + encodeURIComponent(s.id) + "/apply", {});
+    if (result.background) {
+      const raw = lsSet("vira-background", result.background);
+      // Save before reloading: the usual UI debounce outlives this reload.
+      await post("/api/ui-state", { keys: { "vira-background": raw } });
+    }
     // reload to pick up the rewritten style.css + skin-active.css
     setTimeout(() => location.reload(), 450);
   } catch (e) {
@@ -25768,7 +25773,7 @@ function lpCommit(lists) {
 
 // particle constellation backdrop
 function initConstellation() {
-  if (REDUCED_MOTION) return;
+  let animated = !REDUCED_MOTION;
   const canvas = document.createElement("canvas");
   canvas.id = "constellation";
   document.body.prepend(canvas);
@@ -25788,10 +25793,10 @@ function initConstellation() {
   };
   build();
   addEventListener("resize", build);
-  addEventListener("pointermove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; },
-    { passive: true });
-  document.documentElement.addEventListener("pointerleave",
-    () => { mouse.x = mouse.y = -1e4; });
+  const move = (e) => { mouse.x = e.clientX; mouse.y = e.clientY; };
+  const leave = () => { mouse.x = mouse.y = -1e4; };
+  addEventListener("pointermove", move, { passive: true });
+  document.documentElement.addEventListener("pointerleave", leave);
 
   const LINK = 120, MLINK = 170;
   let last = performance.now();
@@ -25846,16 +25851,32 @@ function initConstellation() {
         ctx.stroke();
       }
     }
-    raf = requestAnimationFrame(step);
+    if (animated) raf = requestAnimationFrame(step);
   };
   raf = requestAnimationFrame(step);
-  document.addEventListener("visibilitychange", () => {
+  const visibility = () => {
     cancelAnimationFrame(raf);
-    if (!document.hidden) {
+    if (!document.hidden && animated) {
       last = performance.now();
       raf = requestAnimationFrame(step);
     }
-  });
+  };
+  document.addEventListener("visibilitychange", visibility);
+  const dispose = () => {
+    cancelAnimationFrame(raf);
+    removeEventListener("resize", build);
+    removeEventListener("pointermove", move);
+    document.documentElement.removeEventListener("pointerleave", leave);
+    document.removeEventListener("visibilitychange", visibility);
+    canvas.remove();
+  };
+  dispose.motion = (enabled) => {
+    animated = enabled;
+    cancelAnimationFrame(raf);
+    last = performance.now();
+    if (!document.hidden) step(last);
+  };
+  return dispose;
 }
 
 // ==================== Omni — talk (or type) to Vira ====================
@@ -31073,7 +31094,9 @@ function initLayout() {
 
 function initDesktop() {
   document.body.classList.add("desktop");
-  initConstellation();
+  window.ViraBackgrounds.init({ read: lsGet, write: (key, value) => uiPush(key, lsSet(key, value)),
+    constellation: initConstellation,
+    canFeed: target => !editing && isDesktopOpenSpace(target) });
   const stored = desktopStore();
   WINDOWS.forEach((spec, i) => {
     const st = stored[spec.id] || {};
@@ -31168,7 +31191,7 @@ function initDesktop() {
 // re-provisioned sandbox (2026-07-30).
 const UI_SYNC_KEYS = ["vira-desktop", "vira-dock-order", "vira-dock-hidden",
                       "vira-mobile-dock", "vira-setup-opened", "vira-layout",
-                      "vira-layouts", "vira-firstrun-done"];
+                      "vira-layouts", "vira-firstrun-done", "vira-background"];
 let uiPushTimer = null;
 let uiPushQueue = {};
 

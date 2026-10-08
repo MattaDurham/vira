@@ -1,0 +1,51 @@
+{
+  "id": "living-garden",
+  "name": "Living Garden",
+  "genre": "Living desktop",
+  "medium": "app-native",
+  "tagline": "Quiet green glass above a garden pond.",
+  "description": "Soft botanical accents paired with a rendered koi pond, stone banks and depth-sensitive water. Explore the pond or work above it.",
+  "swatch": [
+    "#111a15",
+    "#a9c5a0",
+    "#bb915e",
+    "#3a4d3c"
+  ],
+  "default": false,
+  "extras": null,
+  "tokens": {
+    "--bg": "#111a15",
+    "--bg-t": "rgba(17, 26, 21, 0)",
+    "--bg-raised": "#22352a",
+    "--bg-card": "rgba(34, 47, 37, 0.9)",
+    "--bg-window": "rgba(17, 27, 21, 0.94)",
+    "--bg-titlebar": "rgba(33, 46, 37, 0.94)",
+    "--bg-topbar": "rgba(23, 34, 27, 0.95)",
+    "--line": "#3a4d3c",
+    "--text": "#dce3d6",
+    "--text-dim": "#a2af9b",
+    "--text-faint": "#7d8d79",
+    "--text-head": "#e3ead9",
+    "--accent": "#a9c5a0",
+    "--accent-bright": "#d0dfb6",
+    "--accent-contrast": "#142416",
+    "--sel-line": "#a9c5a0",
+    "--sel-text": "#a9c5a0",
+    "--unread": "#a9c5a0",
+    "--oxidized": "#bb915e",
+    "--radius": "13px",
+    "--accent-soft": "rgba(169, 197, 160, 0.12)",
+    "--sel-bg": "rgba(169, 197, 160, 0.12)",
+    "--unread-line": "rgba(169, 197, 160, 0.35)",
+    "--accent-line": "rgba(169, 197, 160, 0.4)",
+    "--accent-veil": "rgba(169, 197, 160, 0.25)",
+    "--accent-glow": "rgba(169, 197, 160, 0.6)"
+  },
+  "background": {
+    "scene": "koi",
+    "pond": "garden",
+    "look": "natural",
+    "dim": 0.08,
+    "paused": false
+  }
+}
