@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import runtimework
+
 from . import data as crm
 from . import fixtures, settings
 
@@ -55,6 +57,7 @@ def _ab_stamp():
                default=0.0)
 
 
+@runtimework.tracked("Contact photo indexing")
 def build_index():
     """person_id -> cached thumbnail path. Safe to re-run. When a person's
     card exists in several AddressBook stores (On My Mac + iCloud), the most

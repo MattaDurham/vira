@@ -39,6 +39,8 @@ import uuid
 from datetime import date
 from pathlib import Path
 
+from . import runtimework
+
 from . import (instance, agentbackend, ideas, jobfiles, joblog, modulemodels, plans, settings,
                viratools, worktree)
 from .suggest import config
@@ -629,6 +631,7 @@ class Sessions:
 
     # ----- public registry API (thread-safe) -----
 
+    @runtimework.tracked("Starting a coding session")
     def launch(self, prompt, cwd=None, permission_mode=None, model=None,
                publish_plan=False, idea_id=None, mode=None,
                read_only=False, meta=None, provider=None,
@@ -1001,6 +1004,31 @@ class Sessions:
                         "finished": d["finished"], "mode": d["mode"],
                         "awaiting": d["awaiting"]})
             return sorted(rows, key=lambda j: j["started"], reverse=True)
+
+    def restart_activity(self):
+        """Fresh states, without loading session output or touching the ledger."""
+        with self.lock:
+            objects = list(self.sessions.values())
+        rows = []
+        for obj in objects:
+            if obj.kind == "detached":
+                state = obj.read_state() or obj.last_state or {}
+                spec = obj.spec
+                survives = True
+            else:
+                state = spec = obj.data
+                survives = False
+            if state.get("status", "running") != "running":
+                continue
+            awaiting = state.get("awaiting")
+            title = spec.get("subject") or joblog.command(spec) or "Coding session"
+            detail = ("Detached session continues; its live view reconnects."
+                      if survives else "Session is interrupted by a restart.")
+            if awaiting:
+                detail += f" Waiting for {awaiting}; may need your input before it finishes."
+            rows.append({"id": spec["id"], "title": title, "kind": "session",
+                         "awaiting": awaiting, "survives": survives, "detail": detail})
+        return rows
 
     def pending_all(self):
         """Every unanswered decision card across every live session, oldest

@@ -40,6 +40,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from . import runtimework
+
 from . import settings
 from .imessage import _connect
 
@@ -318,6 +320,7 @@ def _candidates(con_chat, known):
     return out
 
 
+@runtimework.tracked("Attachment archiving")
 def sweep(log=print, limit=None):
     """Archive every attachment still on disk that is not held yet.
 

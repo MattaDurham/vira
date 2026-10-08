@@ -2259,6 +2259,13 @@ html { scrollbar-width: thin; scrollbar-color: var(--line-warm) transparent; }
   background: var(--scrim); align-items: flex-end; justify-content: center;
 }
 .sheet.open { display: flex; }
+.restart-card { width: min(580px, 100%); min-width: 0; }
+.restart-activities { max-height: 40vh; overflow-y: auto; }
+.restart-activity { padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.restart-activity strong { display: block; }
+.restart-activity .hint { margin: 4px 0; }
+.restart-actions { flex-wrap: wrap; }
+.restart-actions .btn { white-space: normal; }
 .sheet-card {
   width: 100%; max-width: 560px; background: var(--bg-raised);
   border-radius: 2px 2px 0 0; padding: 20px 18px calc(20px + env(safe-area-inset-bottom));

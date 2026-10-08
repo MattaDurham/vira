@@ -78,7 +78,7 @@ from . import (
                routines,
                routinesrc,
                search as msearch, secrets, send, sendpref, session,
-               sessiondiag, settings,
+               sessiondiag, settings, restart, runtimework,
                genreroutes,
                skins,
                subs_visuals, worldgraph,
@@ -94,6 +94,7 @@ ROOT = Path(__file__).resolve().parent.parent
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 app = FastAPI(title="Vira")
+app.add_middleware(runtimework.Middleware)
 app.include_router(correspondence.router)
 app.include_router(reminderstickies.router)
 app.include_router(workresults.router)
@@ -4408,20 +4409,30 @@ def api_routine_hood_revert(rid: str, req: HoodRevertReq):
         raise HTTPException(400, str(e))
 
 
+class RestartReq(BaseModel):
+    mode: str = "when_idle"
+    operation: str = "restart"
+
+
+@app.get("/api/restart")
+def api_restart_status():
+    return restart.coordinator.status()
+
+
 @app.post("/api/restart")
-def api_restart():
-    """Restart the server after a source edit. Refuses exactly where
-    update.apply() refuses — an unsupervised process that exits has
-    nothing to bring it back."""
-    if os.environ.get("VIRA_SANDBOX"):
-        raise HTTPException(403, "this instance does not restart itself")
-    kind, name = update.supervisor()
-    if not name:
-        raise HTTPException(
-            400, f"no supervisor configured ({kind}) — restart from a "
-                 "terminal instead")
-    threading.Thread(target=update._restart, daemon=True).start()
-    return {"restarting": True, "supervisor": name}
+def api_restart(req: RestartReq):
+    try:
+        return restart.coordinator.request(req.mode, req.operation)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post("/api/restart/cancel")
+def api_restart_cancel():
+    try:
+        return restart.coordinator.cancel()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
 
 
 @app.get("/api/radar")
@@ -4966,11 +4977,9 @@ def api_update(fetch: bool = False):
 @app.post("/api/update/apply")
 def api_update_apply():
     try:
-        return update.apply()
+        return restart.coordinator.request("when_idle", "update")
     except ValueError as e:
         raise HTTPException(409, str(e))
-    except Exception as e:  # noqa: BLE001 — surface git errors to the UI
-        raise HTTPException(502, str(e)[:400])
 
 
 @app.get("/api/instance")

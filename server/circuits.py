@@ -30,7 +30,7 @@ Stores:
   data/circuit-runs.json  — runs; stages_def frozen per run at start
 """
 
-from . import instance, modulemodels
+from . import instance, modulemodels, runtimework
 import json
 import re
 import threading
@@ -808,12 +808,23 @@ def list_runs(limit=40):
                 list(reversed(_load_runs()["runs"]))[:max(1, min(limit, 200))]]
 
 
+def restart_activity():
+    """Read all active runs; a history display limit must not hide blockers."""
+    with _rlock, locked(RUNS):
+        return [{"id": r["id"], "title": r.get("circuit_name") or r.get("circuit_id") or "Flow",
+                 "kind": "flow", "survives": True,
+                 "detail": "Flow pauses during restart, then resumes from its saved stages."}
+                for r in _load_runs()["runs"]
+                if r.get("status") == "running" and instance.owns(r)]
+
+
 def get_run(run_id):
     with _rlock, locked(RUNS):
         return next((instance.record_view(r) for r in _load_runs()["runs"]
                      if r["id"] == run_id), None)
 
 
+@runtimework.tracked("Starting a flow")
 def start_run(cid, input_text, cwd=None, notify=False, source="manual",
               idea_id=None, overrides=None, flow_options=None, provider=None,
               vault_destination=None, vault_context=None):

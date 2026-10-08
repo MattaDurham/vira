@@ -49,6 +49,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import runtimework
+
 from . import ideas, jsonstore, localmodels, modelbudget, settings, suggest
 
 try:
@@ -966,6 +968,7 @@ def fold_analysis(idea_id, candidate_ids, items=None):
 PASS_TIMEOUT_S = 900       # a maintenance pass that runs this long is stuck
 
 
+@runtimework.tracked("Idea tagging and vectors")
 def run_pass(batches=1, timeout=PASS_TIMEOUT_S):
     """Run one maintenance pass in a SEPARATE PROCESS and return its result.
 
