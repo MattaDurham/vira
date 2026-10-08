@@ -16,6 +16,8 @@
     source: null,
     generation: 0,
     routing: false,
+    poll: null,
+    creating: false,
   };
 
   const dom = {};
@@ -147,6 +149,13 @@
     surface.append(nav, middle, inspector);
     root.replaceChildren(surface);
     renderLoading("Loading research…");
+    S.poll = startPoll(async () => {
+      if (S.creating || !dom.surface?.isConnected) return;
+      const view = $("#view-research"), win = $("#win-research");
+      if (!view?.classList.contains("active") && !win?.classList.contains("open")) return;
+      if (!projects().some((p) => ["running", "starting"].includes(p.status))) return;
+      await loadProject(S.slug, true);
+    }, 5000);
     return true;
   }
 
@@ -188,7 +197,12 @@
       await loadIndex(force);
       const available = projects();
       const chosen = slug || S.slug || projectSlug(available[0]);
-      if (!chosen) throw new Error("No research projects are available yet.");
+      if (!chosen) {
+        S.project = null;
+        renderNav();
+        await newTopic();
+        return;
+      }
       if (!force && S.project && S.slug === chosen) {
         renderNav();
         renderClaimList();
@@ -197,6 +211,7 @@
         else renderInspectorEmpty("Choose a claim to inspect its evidence and provenance.");
         return;
       }
+      S.creating = false;
       const data = await researchApi("/api/research/" + encodeURIComponent(chosen));
       if (generation !== S.generation) return;
       S.slug = chosen;
@@ -216,6 +231,101 @@
       renderError(error);
       renderInspectorEmpty("The research project could not be loaded.");
     }
+  }
+
+  async function newTopic() {
+    S.creating = true;
+    ++S.generation;
+    clear(dom.middle);
+    const box = el("form", "research-create");
+    box.appendChild(el("div", "research-kicker", "New topic"));
+    box.appendChild(el("h2", "research-claims-title", "Research anything"));
+    box.appendChild(el("p", "research-state-copy",
+      "Enter a question or subject. Vira inventories your knowledge, researches public sources, independently checks the evidence, and builds a topic you can revisit."));
+    const label = el("label", "research-nav-label", "Question or subject");
+    const question = el("textarea", "research-topic-input");
+    question.required = true; question.rows = 4;
+    question.placeholder = "What would you like to understand?";
+    question.setAttribute("aria-label", "Question or subject");
+    label.appendChild(question); box.appendChild(label);
+    const destinationLabel = el("label", "research-nav-label", "Library vault");
+    const destination = el("select", "research-topic-input");
+    destination.setAttribute("aria-label", "Library vault");
+    destinationLabel.appendChild(destination); box.appendChild(destinationLabel);
+    const cadenceLabel = el("label", "research-nav-label", "Keep it current");
+    const cadence = cadenceSelect(168);
+    cadenceLabel.appendChild(cadence); box.appendChild(cadenceLabel);
+    box.appendChild(el("p", "research-state-copy",
+      "Six agent stages use your configured model. Sources and results stay local. The refresh routine starts after the first complete publication."));
+    const error = el("div", "research-health research-health-warn");
+    const submit = button("btn", "Start research");
+    submit.type = "submit"; submit.disabled = true;
+    box.append(error, submit); dom.middle.appendChild(box);
+    renderInspectorEmpty("Each claim will link to its evidence, root sources and library note.");
+    try {
+      const data = await researchApi("/api/research/destinations");
+      if (!box.isConnected) return;
+      list(data.destinations).forEach((vault) => {
+        const option = el("option", null, vault.name);
+        option.value = vault.id; destination.appendChild(option);
+      });
+      submit.disabled = !destination.options.length;
+      if (submit.disabled) error.textContent = "Connect a writable vault with model access in Config to save research.";
+    } catch (e) { error.textContent = errText(e); }
+    box.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submit.disabled = true; error.textContent = "";
+      try {
+        const topic = await post("/api/research/topics", {question: question.value,
+          destination: destination.value, every_hours: Number(cadence.value)});
+        S.index = null; S.creating = false;
+        await loadProject(topic.id, true);
+      } catch (e) { error.textContent = errText(e); submit.disabled = false; }
+    });
+  }
+
+  function cadenceSelect(value) {
+    const select = el("select", "research-topic-input");
+    select.setAttribute("aria-label", "Refresh cadence");
+    const choices = [[0, "Manual updates"], [24, "Daily"], [168, "Weekly"], [720, "Every 30 days"]];
+    if (!choices.some(([hours]) => hours === Number(value))) choices.push([Number(value), `Every ${value} hours`]);
+    choices.forEach(([hours, title]) => {
+      const option = el("option", null, title); option.value = String(hours);
+      select.appendChild(option);
+    });
+    select.value = String(value);
+    return select;
+  }
+
+  function topicControls(head, project) {
+    if (!project.managed_topic) return;
+    const active = ["running", "starting"].includes(project.status);
+    const status = el("div", "research-topic-status", words(project.status));
+    if (project.error) status.appendChild(el("p", "research-health research-health-warn", project.error));
+    const stages = Object.entries(project.stages || {});
+    stages.forEach(([id, state]) => status.appendChild(el("span", "research-chip", `${words(id)}: ${state}`)));
+    head.appendChild(status);
+    const controls = el("div", "research-topic-controls");
+    const refresh = button("btn small", active ? "Researching…" : "Refresh now", async () => {
+      refresh.disabled = true;
+      try { await post(`/api/research/topics/${encodeURIComponent(S.slug)}/update`, {}); await loadProject(S.slug, true); }
+      catch (e) { toast(errText(e)); refresh.disabled = false; }
+    });
+    refresh.disabled = active; controls.appendChild(refresh);
+    if (active) controls.appendChild(button("btn small", "Stop this run", async () => {
+      try { await post(`/api/research/topics/${encodeURIComponent(S.slug)}/cancel`, {}); await loadProject(S.slug, true); }
+      catch (e) { toast(errText(e)); }
+    }));
+    const cadence = cadenceSelect(project.refresh_enabled === false ? 0 : project.every_hours);
+    cadence.addEventListener("change", async () => {
+      try { await put(`/api/research/topics/${encodeURIComponent(S.slug)}/refresh`, {every_hours: Number(cadence.value)}); await loadProject(S.slug, true); }
+      catch (e) { toast(errText(e)); cadence.value = String(project.every_hours); }
+    });
+    controls.appendChild(cadence);
+    if (project.built && project.vault_relative) controls.appendChild(button("btn small", "Read library note", () =>
+      openNoteWindow((project.destination === "primary" ? "" : `@${project.destination}/`) + project.vault_relative, project.name)));
+    if (project.run_id) controls.appendChild(button("btn small", "View agent run", () => traceFlowRun(project.run_id)));
+    head.appendChild(controls);
   }
 
   function overviewRecord() {
@@ -315,16 +425,17 @@
         `${number(coverage.unmaterialized_claim_count)} defined ${number(coverage.unmaterialized_claim_count) === 1 ? "claim has" : "claims have"} no attached evidence yet.`));
     }
     dom.nav.appendChild(head);
+    dom.nav.appendChild(button("btn small research-new-topic", "New research topic", () => newTopic().catch(renderError)));
 
     const projectRows = projects();
-    if (projectRows.length > 1) {
+    if (projectRows.length) {
       const section = el("div", "research-nav-section");
-      section.appendChild(el("div", "research-nav-label", "Projects"));
+      section.appendChild(el("div", "research-nav-label", "Topics"));
       const rows = el("div", "research-projects");
       projectRows.forEach((item) => {
         const slug = projectSlug(item);
         const row = button("research-nav-row" + (slug === S.slug ? " on" : ""),
-          projectTitle(item), () => loadProject(slug).catch(renderError));
+          projectTitle(item), () => { S.creating = false; loadProject(slug, true).catch(renderError); });
         const count = first(item.claim_count, item.count,
           item.manifest_counts?.claim_rollups, item.manifest_counts?.claims);
         if (typeof count === "number") row.appendChild(el("span", "research-nav-count", String(count)));
@@ -469,14 +580,24 @@
     const total = projectClaims().length;
     head.appendChild(el("div", "research-claims-summary",
       `${rows.length} of ${total} evidenced claims${defined > total ? ` · ${defined} defined` : ""}`));
+    topicControls(head, project);
     dom.middle.appendChild(head);
+    const overview = overviewRecord();
+    if (overview.summary) dom.middle.appendChild(el("p", "research-topic-summary", overview.summary));
+    for (const key of ["limitations", "gaps", "review_queue"]) {
+      if (list(overview[key]).length) {
+        const section = detailSection(words(key), false);
+        list(overview[key]).forEach((item) => section.body.appendChild(el("p", "research-state-copy", str(item))));
+        dom.middle.appendChild(section.details);
+      }
+    }
 
     const listNode = el("div", "research-claim-list");
     rows.forEach((claim) => listNode.appendChild(claimRow(claim)));
     if (!rows.length) {
       const empty = el("div", "research-state research-state-compact");
-      empty.appendChild(el("div", "research-state-title", "No claims match this view"));
-      empty.appendChild(el("div", "research-state-copy", "Clear the search or choose another lens."));
+      empty.appendChild(el("div", "research-state-title", project.managed_topic && !project.built ? "Research is in progress" : "No claims match this view"));
+      empty.appendChild(el("div", "research-state-copy", project.managed_topic && !project.built ? "The verified claim graph appears after publication. Follow the agent run above for progress." : "Clear the search or choose another lens."));
       listNode.appendChild(empty);
     }
     dom.middle.appendChild(listNode);
@@ -808,19 +929,19 @@
       "Source appearances, including distribution copies"));
     body.appendChild(metrics);
 
-    const evidence = detailSection("Anthropic evidence", true);
+    const evidence = detailSection("Primary evidence", true);
     const items = evidenceItems(detail);
     const organizationItems = items.filter((item) => item.evidence_scope !== "context");
     const contextualItems = items.filter((item) => item.evidence_scope === "context");
     organizationItems.forEach((item) => evidence.body.appendChild(evidenceCard(item)));
     if (!organizationItems.length) evidence.body.appendChild(el("div", "research-empty-copy",
-      "No Anthropic speaker or first-party evidence is attached to this claim yet."));
+      "No primary evidence is attached to this claim yet."));
     body.appendChild(evidence.details);
 
     if (contextualItems.length) {
       const context = detailSection(`Contextual material (${contextualItems.length})`, false);
       context.body.appendChild(el("div", "research-empty-copy research-context-note",
-        "Preserved for comparison, but excluded from Anthropic recurrence counts."));
+        "Preserved for comparison, but excluded from primary evidence counts."));
       contextualItems.forEach((item) => context.body.appendChild(evidenceCard(item)));
       body.appendChild(context.details);
     }

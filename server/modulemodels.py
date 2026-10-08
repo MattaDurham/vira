@@ -19,6 +19,7 @@ MODULES = {
     "journal": ("Journal", "Note extraction and follow-up runs", "session"),
     "work": ("Work", "New runs, idea tagging, lessons and work summaries", "session"),
     "applications": ("Applications", "Role scoring, draft checks and application runs", "session"),
+    "research": ("Research", "Reusable topic research and scheduled evidence refreshes", "session"),
     "reader": ("Reader", "Document tagging and reading-room updates", "session"),
     "atlas": ("World", "Circle reads and relationship explanations", "completion"),
     "subs": ("Subscriptions", "Receipt extraction and subscription update runs", "session"),

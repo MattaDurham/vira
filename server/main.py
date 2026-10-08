@@ -2021,6 +2021,74 @@ def api_research_catalog():
     return {"projects": research.catalog()}
 
 
+class ResearchTopicReq(BaseModel):
+    question: str
+    destination: str = ""
+    every_hours: float = 168
+
+
+class ResearchRefreshReq(BaseModel):
+    every_hours: float
+
+
+@app.get("/api/research/destinations")
+def api_research_destinations():
+    return {"destinations": [{"id": s["id"], "name": s["name"]}
+            for s in vault.source_specs() if s.get("write_enabled") and
+            s.get("model_exposure") and s["root"].is_dir()]}
+
+
+@app.post("/api/research/topics")
+def api_research_create(req: ResearchTopicReq):
+    from . import researchtopics
+    try:
+        return researchtopics.create(req.question, req.destination, req.every_hours)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/research/topics/{topic_id}")
+def api_research_topic(topic_id: str):
+    from . import researchtopics
+    topic = researchtopics.get(topic_id)
+    if topic is None:
+        raise HTTPException(404, "no such research topic")
+    return topic
+
+
+@app.post("/api/research/topics/{topic_id}/update")
+def api_research_topic_update(topic_id: str):
+    from . import researchtopics
+    try:
+        return researchtopics.launch(topic_id)
+    except KeyError as exc:
+        raise HTTPException(404, "no such research topic") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.put("/api/research/topics/{topic_id}/refresh")
+def api_research_topic_refresh(topic_id: str, req: ResearchRefreshReq):
+    from . import researchtopics
+    try:
+        return researchtopics.configure_refresh(topic_id, req.every_hours)
+    except KeyError as exc:
+        raise HTTPException(404, "no such research topic") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/research/topics/{topic_id}/cancel")
+def api_research_topic_cancel(topic_id: str):
+    from . import researchtopics
+    topic = researchtopics.get(topic_id)
+    if topic is None:
+        raise HTTPException(404, "no such research topic")
+    if topic.get("run_id"):
+        circuits.cancel_run(topic["run_id"])
+    return {"status": "canceled"}
+
+
 @app.get("/api/research/{graph_id}/claims/{claim_id}")
 def api_research_claim(graph_id: str, claim_id: str):
     try:

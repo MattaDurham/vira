@@ -272,7 +272,8 @@ def _public_graph(graph):
 
 def catalog():
     """Return every configured/discovered graph without opening its database."""
-    return [_public_graph(graph) for graph in _graphs()]
+    from . import researchtopics
+    return [_public_graph(graph) for graph in _graphs()] + researchtopics.catalog()
 
 
 def _graph(graph_id=None):
@@ -574,6 +575,9 @@ def _overview_scope(con, tables, claims):
 
 def overview(graph_id=None, claim_limit=200):
     """Summarize a graph from canonical rows, plus named build metadata."""
+    from . import researchtopics
+    if graph_id and researchtopics.get(graph_id):
+        return researchtopics.overview(graph_id)
     graph = _graph(graph_id)
     with closing(_connect(graph)) as con:
         tables = _tables(con)
@@ -666,6 +670,9 @@ def overview(graph_id=None, claim_limit=200):
 
 def claim_detail(claim_id_or_label, graph_id=None, limit=50):
     """Return one claim and its canonical evidence, without projection data."""
+    from . import researchtopics
+    if graph_id and researchtopics.get(graph_id):
+        return researchtopics.claim_detail(graph_id, claim_id_or_label)
     graph = _graph(graph_id)
     cap = max(0, int(limit))
     with closing(_connect(graph)) as con:
@@ -1283,6 +1290,9 @@ def _room_matches(urls, preferred=None):
 
 def source_detail(source_id, graph_id=None, limit=100):
     """Return one canonical source record with separately named projections."""
+    from . import researchtopics
+    if graph_id and researchtopics.get(graph_id):
+        return researchtopics.source_detail(graph_id, source_id)
     graph = _graph(graph_id)
     cap = max(0, int(limit))
     with closing(_connect(graph)) as con:

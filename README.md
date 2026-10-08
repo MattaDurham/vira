@@ -73,6 +73,17 @@ Local-first by design, with every egress path named and opt-in:
   actually sent you lately (links read locally from your own message
   history); when a shared item lands on exactly one person it becomes a
   conversation marker on their row instead.
+- **Research** - reusable, evidence-backed topics. Enter a subject, choose
+  a writable library vault and a refresh cadence. Six durable agent stages
+  scope the question, inventory existing knowledge and discover public sources
+  in parallel, independently verify citations and provenance, analyze claims,
+  and publish a sourced library note with Reader links. Reposts share an
+  underlying event; contextual evidence is counted separately. Refreshes retain
+  previous sources and reading progress and refuse to overwrite edited notes.
+  Manage or pause the topic's routine in Research or Agent Loops. New canonical
+  results live in backed-up local research stores; existing SQLite graphs remain
+  readable. Model-readable evidence goes to your configured model backend;
+  library publication is local and sends no messages.
 - **Circuits** - multi-model agent pipelines as executable DAGs: one
   model plans read-only, another builds on autopilot, and a fresh session
   judges the result against the original ask - with a grade gate that

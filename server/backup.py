@@ -32,7 +32,7 @@ from . import runtimework
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 DEST = Path.home() / ".vira-backups"
-FILES = ("ideas.json", "config.json", "subscriptions.json",
+FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.json",
          "routines.json", "circuit-runs.json", "brief-journal.json",
          # atlas-groups.json is created lazily on the FIRST group edit
          # (atlas._groups_write); until then it does not exist on disk and
@@ -71,6 +71,7 @@ FILES = ("ideas.json", "config.json", "subscriptions.json",
          "pii-patterns.txt")     # anonymization scanner's learned patterns
 # Sole-copy DIRECTORIES: one dated tree copy per day, same 14-day window.
 DIRS = (
+    "research-packets",  # resumable research stage receipts
     # WhatsApp device-link credentials (creds + signal keys). Losing this
     # unlinks the phone and nothing can regenerate it — the single most
     # unrecoverable thing under data/.

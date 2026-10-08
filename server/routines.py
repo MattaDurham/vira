@@ -435,6 +435,12 @@ def dispatch(r):
         if r.get("last_status") != "skipped — no AI connected":
             _stamp(r["id"], last_status="skipped — no AI connected")
         return {"skipped": "no_ai"}
+    if (r.get("prompt") or "").startswith("__research_topic__:"):
+        from . import researchtopics
+        topic = researchtopics.launch(r["prompt"].split(":", 1)[1])
+        _stamp(r["id"], last_run=_now_iso(), last_run_id=topic["run_id"],
+               last_job=None, last_status="running")
+        return {"run_id": topic["run_id"]}
     if r["kind"] == "circuit":
         cid = r.get("circuit_id") or ""
         run = circuits.start_run(cid, r.get("prompt") or r["name"],
