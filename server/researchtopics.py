@@ -160,7 +160,9 @@ def create(question, destination=None, every_hours=168):
 def _stage(sid, name, needs, prompt):
     from . import session
     return {"id": sid, "name": name, "needs": needs,
-            "mode": session.norm_mode(None), "model": "", "prompt": prompt}
+            "mode": session.norm_mode(session._scfg("session_default_mode"),
+                                      default=session.DEFAULT_MODE),
+            "model": "", "prompt": prompt}
 
 
 def circuit_definition():

@@ -85,6 +85,12 @@ class ResearchTopicsTests(unittest.TestCase):
         self.assertFalse(list(self.vault.rglob("*.md")))
         self.assertFalse(routines.list_routines())
 
+    def test_research_stages_use_the_configured_session_permission_rung(self):
+        for mode in ("manual", "acceptEdits", "bypassPermissions"):
+            with self.subTest(mode=mode), mock.patch("server.session._scfg", return_value=mode):
+                definition = topics.circuit_definition()
+                self.assertEqual({stage["mode"] for stage in definition["stages"]}, {mode})
+
     def test_publication_joins_graph_library_reader_and_refresh(self):
         topic = self.create()
         self.publish(topic)
