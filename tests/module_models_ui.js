@@ -126,11 +126,12 @@ const gpt = { provider: "openai", backend: "cli", model: "gpt-future" };
   assert(curated.some((r) => r.custom), "a curated roster retains custom model entry");
 
   await models.load(); await models.load();
-  assert.equal(findView.querySelectorAll("[data-module-model]").length, 1, "refresh does not duplicate controls");
-  assert.equal(peopleView.querySelectorAll("[data-module-model]").length, 2, "both People tabs expose the shared choice");
-  assert.equal(plainView.querySelectorAll("[data-module-model]").length, 0);
-  assert.equal(setupView.querySelectorAll("[data-module-model]").length, 0,
-    "Config has no competing model picker in its heading");
+  for (const view of [findView, peopleView, feedView, plainView, setupView]) {
+    assert.equal(view.querySelectorAll("[data-module-model]").length, 0,
+      view.id + " heading carries no model button; right-click is the entry point");
+  }
+  assert.match(models.contextItem(findView, 20, 30).hint, /fable/,
+    "the right-click row names the module's current model");
   const app = fs.readFileSync("static/app.js", "utf8");
   vm.runInContext(app.slice(app.indexOf("function cardDossiers("), app.indexOf("let brainOpenSource")), context);
   const dossierCard = el("div"); setupView.appendChild(dossierCard);
@@ -143,7 +144,8 @@ const gpt = { provider: "openai", backend: "cli", model: "gpt-future" };
   await models.open("setup", dossierModel);
   assert.match(currentPopup().querySelector(".ctx-head").textContent, /Config model/);
   await control("Cancel").emit("click");
-  const anchor = findView.querySelector("button");
+  // A button placed beside an action repaints when the module's choice changes.
+  const anchor = findView.appendChild(models.button("find"));
   assert.match(anchor.textContent, /fable/);
   await models.open("find", anchor);
   assert.equal(writes.length, 0, "opening a picker never changes preferences or starts work");
@@ -199,11 +201,12 @@ const gpt = { provider: "openai", backend: "cli", model: "gpt-future" };
   assert.deepEqual(writes.at(-1).payload, { provider: "google", backend: "api", model: "gemini-unlisted" });
 
   // Incoming and People are the same setting on desktop, mobile, and alias controls.
-  await models.open("feed", feedView.querySelector("button"));
+  models.contextItem(feedView, 20, 30).run();
+  await new Promise((resolve) => setImmediate(resolve));
   select = currentPopup().querySelector("select"); select.value = key(gpt); await select.emit("change");
   await control("Save").emit("click");
   assert.equal(writes.at(-1).url, "/api/module-models/people");
-  assert.equal(peopleView.querySelector("button").textContent, feedView.querySelector("button").textContent);
+  assert.equal(models.contextItem(peopleView, 20, 30).hint, models.contextItem(feedView, 20, 30).hint);
   const mobileItem = models.contextItem(feedView, 20, 30);
   assert.match(mobileItem.hint, /gpt-future/);
   const desktop = el("div", "fwin"); desktop.dataset.wid = "feed";

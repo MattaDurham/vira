@@ -57,25 +57,13 @@ window.ModuleModels = (() => {
     return node;
   }
 
-  function mount() {
-    for (const module of modules) {
-      for (const id of module.windows || [module.id]) {
-        if (id === "setup") continue; // Config's task model belongs beside dossier builds.
-        const view = document.getElementById("view-" + id);
-        const heads = id === "people" ? (view?.querySelectorAll(".section-head") || [])
-          : [view?.querySelector(".section-head")];
-        for (const head of heads) {
-          if (head && !head.querySelector("[data-module-model]")) head.appendChild(button(id));
-        }
-      }
-    }
-    paint();
-  }
-
+  // Module headings carry no model button: right-click > Choose model... is the
+  // one entry point (owner's call, 2026-10-08). Only buttons placed beside the
+  // action that uses the model, such as Config's profile build, are repainted.
   async function load() {
     const data = await api("/api/module-models");
     modules = data.modules || [];
-    mount();
+    paint();
     return modules;
   }
 

@@ -517,8 +517,8 @@ model ID confirmed at startup. A curated model roster in Config can hide new
 models; the preparation window reports that filtering. Custom IDs remain
 available, and selecting a model for one run does not change saved defaults.
 
-Modules that use a model have a **Model** button beside their heading and a
-**Choose model...** right-click action. Choose from the connected model catalog
+Modules that use a model have a **Choose model...** right-click action; the
+menu row shows the module's current model. Choose from the connected model catalog
 and save a default for that module, or choose **Use app default** to inherit
 the global setting again. These choices persist locally across reloads;
 explicit model choices for individual runs or flow stages take precedence.
