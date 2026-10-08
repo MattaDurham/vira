@@ -14494,6 +14494,7 @@ function backendBlock(card) {
   });
   adv.appendChild(seg);
   const mbox = el("div", "setup-models"); adv.appendChild(mbox);
+  const loading = el("p", "hint", "Loading AI settings…"); adv.appendChild(loading);
   const ahint = el("p", "hint", ""); ahint.id = "cfg-api-hint"; adv.appendChild(ahint);
   const showBackend = (kind) => {
     ahint.hidden = kind !== "api";
@@ -14502,7 +14503,9 @@ function backendBlock(card) {
   ahint.hidden = true;
   const abar = el("div", "setup-row");
   const asave = el("button", "btn primary", "Save");
-  abar.appendChild(asave); adv.appendChild(abar);
+  asave.disabled = true;
+  const retry = el("button", "btn", "Retry loading settings"); retry.hidden = true;
+  abar.appendChild(asave); abar.appendChild(retry); adv.appendChild(abar);
   card.appendChild(adv);
 
   const picks = [];        // {key, sel} — the config field each writes
@@ -14512,7 +14515,11 @@ function backendBlock(card) {
     await backendSave(body);
     return {};
   }, () => "Saved");
-  Promise.all([api("/api/config"), modelCatalog(true)]).then(([cfg, cat]) => {
+  const load = () => {
+    loading.hidden = false; loading.textContent = "Loading AI settings…";
+    retry.hidden = true; asave.disabled = true;
+    return Promise.all([api("/api/config"), modelCatalog(true)]).then(([cfg, cat]) => {
+    if (cat.error) throw new Error(cat.error);
     ahint.textContent = cfg.api_key_present
       ? "API key detected (" + cfg.api_key_env + ")."
       : "No API key found — set " + cfg.api_key_env + " to enable the API backend.";
@@ -14522,6 +14529,7 @@ function backendBlock(card) {
     // connected yet the first one still renders, so its config keys never
     // become unreachable.
     const provs = (cat.providers || []).filter((p) => p.connected);
+    picks.length = 0;
     mbox.innerHTML = "";
     (provs.length ? provs : (cat.providers || []).slice(0, 1)).forEach((p) => {
       const g = el("div", "setup-mgroup");
@@ -14558,7 +14566,14 @@ function backendBlock(card) {
     });
     showBackend(cfg.ai_backend || "cli");
     rosterBlock(card, cat);
-  }).catch(() => {});
+    loading.hidden = true; asave.disabled = false;
+    }).catch((error) => {
+      loading.textContent = "AI settings unavailable: " + errText(error);
+      retry.hidden = false;
+    });
+  };
+  retry.onclick = load;
+  load();
 }
 
 // ---- the model roster (the Cursor pattern, owner's ask 2026-07-28) ----
