@@ -82,7 +82,7 @@ from . import (
                sessiondiag, settings, restart, runtimework,
                genreroutes,
                skins,
-               subs_visuals, worldgraph,
+               subs_visuals, worldgraph, worldsubsets,
                subscriptions, suggest, threadread, triage, uistate, update, vault,
                doctags, walkthroughs,
                whatsapp)
@@ -4853,6 +4853,62 @@ def api_world_refresh():
     threading.Thread(target=vault.scan_once, daemon=True,
                      name="vira-world-vault-refresh").start()
     return {"refreshing": True}
+
+
+# Subsets: a slice of the World saved by recipe and laid out on its own
+# (server/worldsubsets.py). The galaxy picks the members with its own filter
+# code; the server fits the layout and finds the clusters.
+
+class WorldSubsetReq(BaseModel):
+    name: str | None = None
+    recipe: dict | None = None
+    stats: dict | None = None
+
+
+class WorldSubsetLayoutReq(BaseModel):
+    ids: list[str]
+
+
+@app.get("/api/world/subsets")
+def api_world_subsets():
+    return {"subsets": worldsubsets.list_all()}
+
+
+@app.post("/api/world/subsets")
+def api_world_subset_create(req: WorldSubsetReq):
+    try:
+        row = worldsubsets.create(req.name, req.recipe, req.stats)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"subset": row, "subsets": worldsubsets.list_all()}
+
+
+@app.post("/api/world/subsets/layout")
+def api_world_subset_layout(req: WorldSubsetLayoutReq):
+    # A fresh projection and a label-propagation pass: seconds of pure
+    # Python/numpy at the largest subset, so it shares the CPU gate.
+    with admission.cpu("world.subset"):
+        return worldsubsets.layout(req.ids)
+
+
+@app.put("/api/world/subsets/{subset_id}")
+def api_world_subset_update(subset_id: str, req: WorldSubsetReq):
+    try:
+        row = worldsubsets.update(subset_id, name=req.name,
+                                  recipe=req.recipe, stats=req.stats)
+    except KeyError:
+        raise HTTPException(404, "unknown subset")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"subset": row, "subsets": worldsubsets.list_all()}
+
+
+@app.delete("/api/world/subsets/{subset_id}")
+def api_world_subset_delete(subset_id: str):
+    try:
+        return {"subsets": worldsubsets.delete(subset_id)}
+    except KeyError:
+        raise HTTPException(404, "unknown subset")
 
 
 # ---------- the Showroom (every draft branch as a card) ----------

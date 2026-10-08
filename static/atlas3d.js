@@ -639,9 +639,12 @@ export function create(host) {
                          b.center[1] + dist * 0.35 / L,
                          b.center[2] + dist * 1.0 / L, false);
     // wherever you left it: restore the last camera pose (per-browser), and
-    // hold the idle drift until the first interaction so it doesn't walk away
+    // hold the idle drift until the first interaction so it doesn't walk away.
+    // Each saved subset keeps its own pose; an unsaved one is framed fresh.
+    restoredCam = false;
+    const key = camKey();
     try {
-      const c = JSON.parse(localStorage.getItem(CAM_KEY));
+      const c = key && JSON.parse(localStorage.getItem(key));
       if (c && c.p && c.t) {
         controls.setLookAt(c.p[0], c.p[1], c.p[2], c.t[0], c.t[1], c.t[2], false);
         restoredCam = true;
@@ -650,11 +653,19 @@ export function create(host) {
     requestRender();
   }
 
+  // host.camScope() names what is on screen: "" for the whole World, a
+  // suffix for a saved subset, null for a pose that must not be kept
+  function camKey() {
+    const scope = host.camScope ? host.camScope() : "";
+    return scope === null ? null : CAM_KEY + scope;
+  }
+
   function saveCam() {
-    if (!controls) return;
+    const key = camKey();
+    if (!controls || !key) return;
     try {
       const t = controls.getTarget(new THREE.Vector3());
-      localStorage.setItem(CAM_KEY, JSON.stringify({
+      localStorage.setItem(key, JSON.stringify({
         p: [camera.position.x, camera.position.y, camera.position.z],
         t: [t.x, t.y, t.z],
       }));

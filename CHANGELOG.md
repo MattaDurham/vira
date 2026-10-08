@@ -6,6 +6,20 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ## Unreleased
 
+### Added
+
+- World subsets. The galaxy can lay out any slice of the World on its own:
+  narrow it with a search, kinds, an isolated band, starred items or a
+  selection, then "Lay out these on their own" (or "Lay out around this" on
+  a node). The slice gets a layout fitted to its own members (the semantic
+  projection re-fitted to just their vectors, unplaced items gathered in a
+  cloud of their own instead of on the outer shell) and clusters found
+  among its own links, named from their tags or best-connected item and
+  shown as the Clusters lens. A subset is saved by recipe, not by member
+  list, so it stays current as the sources grow; steps stack, so a subset
+  can be narrowed again or a cluster laid out on its own. Each saved subset
+  keeps its own camera. Store: `data/world-subsets.json` (backed up).
+
 ### Changed
 
 - Agent instructions are a density ladder. `AGENTS.md` is a short router that
