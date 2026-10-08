@@ -135,6 +135,8 @@ const gpt = { provider: "openai", backend: "cli", model: "gpt-future" };
   vm.runInContext(app.slice(app.indexOf("function cardDossiers("), app.indexOf("let brainOpenSource")), context);
   const dossierCard = el("div"); setupView.appendChild(dossierCard);
   context.cardDossiers(dossierCard, {state:"done"}, {crm:{profiles:2}});
+  assert.match(dossierCard.querySelector(".primary").textContent, /Build more profiles/);
+  assert(dossierCard.querySelectorAll("span").some(node => node.textContent === "Profile build model (optional override)"));
   const dossierModel = dossierCard.querySelector("[data-module-model]");
   assert(dossierModel, "the effective model stays available beside the action that uses it");
   assert.match(dossierModel.textContent, /fable/);

@@ -10,7 +10,7 @@ plane. This module closes that seam two ways:
   lives inside).
 - sdk_server(): an in-process SDK MCP server named "vira" exposing Vira's
   own data plane — calendar (local Calendar.sqlitedb + M365 Graph), the
-  daily brief, CRM dossiers, mailbox search, iMessage threads, and the
+  daily brief, CRM profiles, mailbox search, iMessage threads, and the
   semantic media index — as first-class tools. Tool calls execute inside
   the Vira server process (the SDK routes them in-process; no subprocess,
   no localhost round-trip), so a session answers "do I have a doctor's
@@ -83,7 +83,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         f"Native tools: the {tool_prefix}* tools answer questions about "
         f"{owner}'s life directly from Vira's data plane — calendar (local "
         "macOS calendars + the M365 work calendar), the daily brief, CRM "
-        "dossiers, mail search across connected mailboxes, iMessage "
+        "profiles, mail search across connected mailboxes, iMessage "
         "threads, semantic search over everything ever shared in "
         f"iMessage, and {owner}'s knowledge vault (vault_search / "
         "vault_note — thousands of notes on companies, people, decisions; "
@@ -1280,7 +1280,7 @@ TOOL_SPECS = [
      "Returns validation, resulting locations and a revision for connect_data. Brain permissions remain separate.",
      {"request": dict}, _t_data_connections),
     ("connect_data", "Apply an owner-authorized data connection inspected by data_connections; pass its request and revision. "
-     "Revalidates before saving. Refuses CRM/self changes while Vira sessions, dossier builds or contact maintenance run. "
+     "Revalidates before saving. Refuses CRM/self changes while Vira sessions, profile builds or contact maintenance run. "
      "Never copies or migrates data; established CRM IDs must be preserved. Never hand-edit config.json.",
      {"request": dict, "revision": str}, _t_connect_data),
     ("answer_sources", "List this conversation's approved sources, current exposure policies and freshness basis.", {}, _t_answer_sources),
@@ -1307,7 +1307,7 @@ TOOL_SPECS = [
      "subscription renewals, queued drafts, triage count.",
      {}, _t_daily_brief),
     ("crm_lookup",
-     "CRM dossier for a person by name: role, company, relationship, "
+     "CRM profile for a person by name: role, company, relationship, "
      "conversation hooks, open loops, contact activity.",
      {"name": str}, _t_crm_lookup),
     ("circles",
@@ -1441,7 +1441,7 @@ TOOL_SPECS = [
      "reason and loses only itself.",
      {"scores_json": str}, _t_record_role_scores),
     ("update_person_profile",
-     "REPLACE a CRM person's dossier description with a refreshed one you "
+     "REPLACE a CRM person's profile description with a refreshed one you "
      "researched. person is the person id (preferred) or an unambiguous "
      "name; relationship_summary is 3-6 grounded sentences with evidence "
      "dates in brackets like [2019-04-02]; how_we_met is one sentence or "

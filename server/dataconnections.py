@@ -121,7 +121,7 @@ def _crm(root, mode):
     if orphaned:
         warnings.append(f"{orphaned} profiles have no matching person ID and will not appear as contacts.")
     if not count:
-        warnings.append("No matching dossiers found. You can build them after connecting contacts and AI.")
+        warnings.append("No matching profiles found. You can build them after connecting contacts and AI.")
     return {"root": str(root), "people": len(people), "profiles": count,
             "warnings": warnings}, people, stamps
 
@@ -305,7 +305,7 @@ def preview(request, cfg=None):
 def _idle():
     from . import instance, joblog, jobrescore, onboard, session
     if onboard._build.get("running"):
-        raise ConnectionError("Finish the dossier build before changing data locations.")
+        raise ConnectionError("Finish the profile build before changing data locations.")
     if any(r.get("status") == "running" for r in session.sessions.recent()):
         raise ConnectionError("Finish or close running Vira sessions before changing data locations.")
     if any(r.get("status") == "running" and instance.owns(r) for r in joblog._read()["jobs"]):

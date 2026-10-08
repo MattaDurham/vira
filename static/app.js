@@ -13903,7 +13903,7 @@ function pollSetup() {
     refreshGates(flow);
     if (!st.dossiers || !st.dossiers.running) {
       h.stop(); setupPollTimer = null;
-      toast("Dossier build finished");
+      toast("Profile build finished");
     }
   }, 2500);
 }
@@ -14014,7 +14014,7 @@ async function setupAct(btn, fn, okMsg, { refresh = true, onSaved = null } = {})
 
 // Stable source names remain useful before and after a connection.
 const DASH_NOUNS = { disk: "Full Disk Access", contacts: "Contacts",
-                     dossiers: "Dossiers", brain: "Brain", mail: "Mail" };
+                     dossiers: "Profiles", brain: "Brain", mail: "Mail" };
 
 // The state word on the right of a row. The dot is the glance; the word is
 // what a glance cannot carry.
@@ -14381,11 +14381,11 @@ function provCard(card, pr, st, ai) {
   card.appendChild(el("p", "hint", pr.detail));
   if (!pr.can.sessions)
     card.appendChild(el("p", "hint",
-      "Drafts, dossiers and the brief are available. This provider does not "
+      "Drafts, profiles and the brief are available. This provider does not "
       + "yet expose Vira's live-session contract."));
   else if (pr.sessions_quality === "best_effort")
     card.appendChild(el("p", "hint",
-      "Drafts, dossiers, the brief, and live agent sessions (best-effort: "
+      "Drafts, profiles, the brief, and live agent sessions (best-effort: "
       + "no per-tool approval cards — the provider's own sandbox contains "
       + "them)."));
   if (pr.can.sessions && pr.capabilities
@@ -14400,7 +14400,7 @@ function provCard(card, pr, st, ai) {
   if (pr.connected) {
     if (pr.id === ai.active_id) {
       card.appendChild(el("p", "hint setup-ok",
-        "This is Vira's go-to AI — drafts, dossiers and the brief run on it."));
+        "This is Vira's go-to AI — drafts, profiles and the brief run on it."));
     } else {
       const use = el("button", "btn primary", "Make it Vira's go-to AI");
       use.onclick = () => setupAct(use,
@@ -14480,7 +14480,7 @@ function backendBlock(card) {
   const adv = el("section", "setup-adv");
   adv.appendChild(el("div", "setup-sub", "App-wide AI defaults"));
   adv.appendChild(el("p", "hint",
-    "These defaults apply to drafts, dossiers and the daily brief. A model "
+    "These defaults apply to drafts, profiles and the daily brief. A model "
     + "picker in a window or run changes that window or run instead. "
     + "Changing these defaults is optional."));
   const seg = el("div", "seg"); seg.id = "backend-seg";
@@ -14780,7 +14780,7 @@ function cardDisk(card, step, st) {
      "birthdays",
    "Incoming texts arrive with instant context on who's writing and " +
      "what's open with them",
-   "Dossiers write themselves from real conversation history",
+   "Profiles write themselves from real conversation history",
    "Ask for 'the PDF Alex sent in March' and Vira finds it",
    "Owed replies and friends going quiet surface on their own",
   ].forEach((t) => brags.appendChild(el("li", "", t)));
@@ -14890,7 +14890,7 @@ const SRC_ACTIONS = {
 };
 
 function cardContacts(card, step, st) {
-  card.appendChild(el("p", "hint", "Contacts and dossiers are saved in your Vira contact folder. Imports read your address books locally."));
+  card.appendChild(el("p", "hint", "Contacts and profiles are saved in your Vira contact folder. Imports read your address books locally."));
   const importHost = st.crm.people ? el("details", "data-connection-section") : card;
   if (st.crm.people) importHost.appendChild(el("summary", "setup-sub", "Import more contacts (optional)"));
   (step.sources || []).forEach((row) => {
@@ -14907,7 +14907,7 @@ function connectionSummary(container, summary) {
   const rows = [["Folder", summary.root]];
   if (summary.effective_root && summary.effective_root !== summary.root)
     rows.push(["Active demo location until contacts are imported", summary.effective_root]);
-  if (summary.people != null) rows.push(["Contacts", String(summary.people)], ["Dossiers", String(summary.profiles)]);
+  if (summary.people != null) rows.push(["Contacts", String(summary.people)], ["Profiles", String(summary.profiles)]);
   if (summary.canon) rows.push(["Career evidence", summary.career_ready ? "Ready" : "Not added (optional)"],
     ["Canon", summary.canon], ["Analysis output", summary.analysis], ["Application packages", summary.packages]);
   if (summary.self_record_after) {
@@ -14956,7 +14956,7 @@ function dataConnectionForm(container, kind, initial, { mode = "existing", remov
       const option = el("option", "", text); option.value = value; selfChoice.appendChild(option);
     });
     selfChoice.onchange = invalidate; field.appendChild(selfChoice); form.appendChild(field);
-    form.appendChild(el("p", "hint", "An existing CRM is connected in place. IDs and dossiers are preserved. A different CRM must retain your current person IDs; migrations are separate."));
+    form.appendChild(el("p", "hint", "An existing CRM is connected in place. IDs and profiles are preserved. A different CRM must retain your current person IDs; migrations are separate."));
   }
   if (kind === "reader" && !removal) {
     const textField = (title, value) => {
@@ -15027,7 +15027,7 @@ function cardContactStorage(card) {
   const state = connectionState(card);
   if (!state) return;
   connectionSummary(card, state.crm);
-  card.appendChild(el("p", "hint", "This folder holds your contact list and dossiers. " + (state.crm.available ? "The current location is already in use; change it only to connect another Vira CRM." : "Vira creates the default folder when you import contacts; choosing another location is optional.")));
+  card.appendChild(el("p", "hint", "This folder holds your contact list and profiles. " + (state.crm.available ? "The current location is already in use; change it only to connect another Vira CRM." : "Vira creates the default folder when you import contacts; choosing another location is optional.")));
   dataConnectionForm(card, "crm", state.crm.root, { mode: state.crm.registry_present ? "existing" : "fresh" });
   connectionSection(card, "Career record storage (advanced)",
     "Your own career evidence and application outputs live here. This is separate from the notes you connect to Brain.", (body) => {
@@ -15065,7 +15065,7 @@ function cardDossiers(card, step, st) {
   }
   card.appendChild(el("p", "hint",
     "Vira reads your most active iMessage threads and writes a first " +
-    "dossier per person — relationship, conversation hooks you can tap to " +
+    "profile per person — relationship, conversation hooks you can tap to " +
     "draft an opener, open loops."));
   card.appendChild(el("p", "hint",
     "This is the step where message content goes to the model you " +
@@ -15079,20 +15079,20 @@ function cardDossiers(card, step, st) {
   card.appendChild(el("p", "setup-cost", step.cost || ""));
   if (window.ModuleModels) {
     const modelRow = el("div", "setup-row");
-    modelRow.appendChild(el("span", "hint", "Dossier build model (optional override)"));
+    modelRow.appendChild(el("span", "hint", "Profile build model (optional override)"));
     modelRow.appendChild(window.ModuleModels.button("setup"));
     card.appendChild(modelRow);
   }
   const row = el("div", "setup-row");
   const db = el("button", "btn primary",
-    st.crm.profiles ? "Build more dossiers" : "Build first dossiers");
+    st.crm.profiles ? "Build more profiles" : "Build first profiles");
   db.disabled = step.state === "blocked";
   db.onclick = () => setupAct(db,
     () => api("/api/onboard/dossiers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ limit: 25 }),
-    }), (r) => `Building ${r.total} dossiers`);
+    }), (r) => `Building ${r.total} profiles`);
   row.appendChild(db);
   if (step.state === "blocked")
     row.appendChild(el("span", "hint", step.blocker));
@@ -15865,7 +15865,7 @@ function frAlready(pr) {
       "nothing here is running on a real account. This is the screen a " +
       "stranger sees when their machine is already signed in."
     : `This machine is signed in to ${pr.sub_name}, so Vira connected ` +
-      "itself — replies in your voice, dossiers, and the daily brief all " +
+      "itself — replies in your voice, profiles, and the daily brief all " +
       "run on your own account. Nothing to configure."));
   const row = el("div", "fr-row");
   const go = el("button", "btn primary fr-big", "Take me to Vira");

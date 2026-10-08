@@ -2,7 +2,7 @@
 
 A personal AI chief of staff that runs entirely on your device. Vira watches
 your communications (messaging, email), joins every inbound message to a
-dossier of the person who sent it, and surfaces what deserves your
+profile of the person who sent it, and surfaces what deserves your
 attention - with drafted replies in your own voice, semantic search over
 everything ever shared with you, and a cockpit that dispatches coding
 agents at your own backlog.
@@ -32,7 +32,7 @@ Local-first by design, with every egress path named and opt-in:
 
 - **Feed** - a live wire of inbound iMessage and email, joined to the CRM,
   with read/unread and hide state synced across desktop and phone.
-- **People** - a dossier per contact: relationship summary, conversation
+- **People** - a profile per contact: relationship summary, conversation
   hooks (tap one to draft an opener in your voice), open loops, group
   threads, and everything ever shared with them (photos / links / docs).
 - **Daily Brief** - the morning answer to "who and what deserves my
@@ -198,7 +198,7 @@ radar, the cockpit's live agent sessions, and in-app updates.
    an Anthropic API key pasted into Setup lands in Windows Credential
    Manager, never a file). Import contacts as a Google Contacts CSV
    export. Wire the Brain at any folder of markdown. There is no Full
-   Disk Access step on Windows, and first dossiers stay blocked - they
+   Disk Access step on Windows, and first profiles stay blocked - they
    are built from a Mac's Messages history.
 
 ## Making it real
@@ -219,19 +219,20 @@ PC the wizard skips what does not exist there - see **Windows** above):
    keep CRM data in Vira's shape (`people.json` / `master.json` /
    `profiles/`)? Open **Config > Contacts > Contact storage (advanced)**,
    choose **Use an existing Vira CRM**, select its folder, and inspect it
-   before connecting. IDs and dossiers stay in place. A switch from an
+   before connecting. IDs and profiles stay in place. A switch from an
    established CRM must retain its person IDs so saved contact references
    keep working. Choose whether to keep the current self-record location or
    use the selected CRM's `self` folder. To start fresh elsewhere, select an
    empty folder there before importing. Imports back up `people.json` and
    retain company/title facts in registry provenance; external `master.json`
    evidence is never rewritten.
-3. **Build first dossiers** - Vira reads your most active iMessage threads
-   and writes a first dossier per person: relationship summary,
+3. **Build first profiles** - Vira reads your most active iMessage threads
+   and writes a first profile per person: relationship summary,
    conversation hooks you can tap to draft an opener, open loops. One call
    per person to your own model backend - the same privacy boundary as
-   reply drafting. Re-run any time; people who already have a dossier are
-   skipped.
+   reply drafting. Re-run any time; people who already have a profile are
+   skipped. These person documents are **profiles**; **dossiers** are the
+   HTML explainer documents displayed in Reader.
 4. **Wire the Brain** - in **Config > Brain**, choose a vault folder,
    navigate to it in the popup, click **Select this folder**, then **Connect
    vault**. Use **New folder** in the picker to start an empty vault. Repeat
@@ -311,7 +312,7 @@ and document kind. Reader reads matching files and `index.html` bundles without
 copying or editing them; run **Scan** in Reader after connecting. Disconnecting
 revokes Reader access and leaves the source documents intact. Data connections
 are inspected before saving, and a changed folder or configuration requires a
-new inspection. Finish running Vira sessions and dossier builds before switching
+new inspection. Finish running Vira sessions and profile builds before switching
 CRM or self-record locations.
 
 **Config > WhatsApp > Connect WhatsApp** prepares the connector automatically
@@ -324,7 +325,7 @@ an existing device session. This optional connection receives messages only.
 Config uses green dots for connected or enabled items and gray dots for
 optional or unavailable items. **Advanced AI settings** holds app-wide model
 defaults; a model picker in a window or run applies to that window or run.
-The Config task-model picker is beside dossier builds, rather than in the
+The Config task-model picker is beside profile builds, rather than in the
 Config heading.
 
 ## Working across vaults
@@ -392,7 +393,7 @@ plan-and-approve workflow.
 
 ## Modules that set themselves up
 
-Setup covers the core - the model, disk access, contacts, dossiers, the
+Setup covers the core - the model, disk access, contacts, profiles, the
 Brain, mail. Two modules are deliberately NOT in it, because neither is
 something everybody wants and neither belongs in a first-run wizard:
 

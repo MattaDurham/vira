@@ -237,7 +237,7 @@ def import_google_csv(text):
 # Flagged, not changed.
 DOSSIER_MESSAGES = 60
 
-DOSSIER_PROMPT = """You are building a first CRM dossier for {owner}'s \
+DOSSIER_PROMPT = """You are building a first CRM profile for {owner}'s \
 private assistant. Below is their recent iMessage history with {name}.
 
 Return STRICT JSON only, no prose:
@@ -380,11 +380,11 @@ def start_dossiers(limit=25):
     """Kick the builder thread. Refused in fixture mode (nothing real to
     build from) and while a build is already running."""
     if settings.fixture_mode():
-        raise RuntimeError("connect your contacts first — dossiers are "
+        raise RuntimeError("connect your contacts first — profiles are "
                            "built from your real data")
     with _build_lock:
         if _build["running"]:
-            raise RuntimeError("a dossier build is already running")
+            raise RuntimeError("a profile build is already running")
         _build.update(running=True, done=0, total=0, current="",
                       built=[], errors=[],
                       started=time.strftime("%H:%M:%S"), finished=None)
@@ -858,7 +858,7 @@ STEP_ORDER = (
     ("ai",        "Connect your AI",     None),
     ("disk",      "Full Disk Access",    None),
     ("contacts",  "Import contacts",     "people"),
-    ("dossiers",  "Build first dossiers", "brief"),
+    ("dossiers",  "Build first profiles", "brief"),
     ("brain",     "Wire the Brain",      "brain"),
     ("mail",      "Connect mail",        "feed"),
 )
@@ -874,7 +874,7 @@ def _cost_line(people):
     mode = provider.auth_mode()
     n = min(people, DOSSIER_LIMIT)
     if mode == "subscription":
-        return f"Included in your plan — up to {n} dossiers this run."
+        return f"Included in your plan — up to {n} profiles this run."
     if mode == "key":
         try:
             per = float(settings.raw().get("dossier_cost_estimate_usd") or 0.25)
@@ -882,7 +882,7 @@ def _cost_line(people):
             per = 0.25
         return (f"About ${per * n:.2f} on your API key "
                 f"— roughly ${per:.2f} per person, up to {n} this run.")
-    return "Connect your AI first to build dossiers."
+    return "Connect your AI first to build profiles."
 
 
 def steps():
@@ -987,7 +987,7 @@ def steps():
                 # fault when nothing they do here can clear it.
                 out.append(mk(
                     sid, title, opens, "skipped",
-                    "Dossiers are built from your message threads, and the "
+                    "Profiles are built from your message threads, and the "
                     "builder reads only a Mac's iMessage store for now. A "
                     "paired Android phone (Phone Link) feeds new texts "
                     "into the live feed and triage instead.",

@@ -41,6 +41,8 @@ context.setupExtra={companion:{devices:[],hub_url:'http://example-host:8377'},no
 context.renderSetup(flow,state);
 const titles=byClass(nodes['#setup-body'],'setup-step-title').map(n=>n.textContent);
 assert(titles.includes('Advanced AI settings'));
+assert(titles.includes('Profiles'));
+assert(!titles.includes('Dossiers'));
 assert(!titles.includes('Storage & connections'));
 assert(!byClass(nodes['#setup-body'],'dash-group-title').some(n=>n.textContent==='Channels'));
 assert.equal(byClass(nodes['#setup-body'],'dash-facts').length,0,'counts are not repeated in a second navigation strip');

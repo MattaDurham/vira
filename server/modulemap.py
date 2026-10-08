@@ -59,7 +59,7 @@ DEFAULT_MODULES = [
     {"id": "crm-data", "name": "CRM stores", "layer": "source",
      "group": "communicate", "kind": "JSON files (~/workspace/crm)",
      "what": "The memory: ~1,000 people in people.json, evidence-rich "
-             "master records, one synthesized dossier per active person, "
+             "master records, one synthesized profile per active person, "
              "and the exported iMessage archive. Vira reads them in place "
              "and writes back exactly three things: hooks, open loops, and "
              "new/renamed people — atomically, stamped, backed up.",
@@ -236,10 +236,10 @@ DEFAULT_MODULES = [
     {"id": "suggest", "name": "Reply drafting", "layer": "engine",
      "group": "communicate", "kind": "headless model calls",
      "what": "Voice-matched suggested replies and hook openers, drafted "
-             "from the dossier plus the live thread. The one place message "
+             "from the profile plus the live thread. The one place message "
              "content meets the model; Max-plan CLI by default, API "
              "optional.",
-     "links": [{"to": "crm-data", "how": "reads dossiers from"},
+     "links": [{"to": "crm-data", "how": "reads profiles from"},
                {"to": "chat-db", "how": "reads threads from"}],
      "endpoints": ["/api/suggest"],
      "keywords": ["suggest", "reply", "draft", "voice"],
@@ -512,7 +512,7 @@ DEFAULT_MODULES = [
      "updated": TODAY},
     {"id": "people-win", "name": "People", "layer": "surface",
      "group": "communicate", "kind": "dock window / mobile tab",
-     "what": "The CRM directory and the person pages behind it: dossier on "
+     "what": "The CRM directory and the person pages behind it: profile on "
              "the left, live conversation on the right, hooks and open "
              "loops editable in place. Its search box filters the "
              "directory by name, email, or phone — navigation, not "
@@ -804,7 +804,7 @@ DEFAULT_MODULES = [
      "group": "operate",
      "kind": "dock window",
      "what": "The dashboard for everything Vira is wired into: your AI "
-             "providers, disk access, contacts, dossiers, the vault, mail, "
+             "providers, disk access, contacts, profiles, the vault, mail, "
              "phone and channels, notifications, and updates - each a row "
              "showing its live state that opens in place. A brand-new "
              "install doesn't start here; it starts on one screen asking "
