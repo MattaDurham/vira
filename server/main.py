@@ -1186,6 +1186,54 @@ def api_map_refresh():
 
 # ---------- subscriptions (ledger + renewal radar + launchpad) ----------
 
+class BankingConnectReq(BaseModel):
+    token: str
+    read_only: bool = False
+
+
+class BankingSetupReq(BaseModel):
+    service: str = ""
+    model: str | None = None
+
+
+@app.get("/api/banking")
+def api_banking():
+    from . import banking
+    return {**banking.status(), "poller": mercury_poller.status}
+
+
+@app.post("/api/banking/mercury")
+def api_banking_mercury(req: BankingConnectReq):
+    from . import banking
+    try:
+        result = banking.connect_mercury(req.token, req.read_only)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    mercury_poller.poll_now()
+    return result
+
+
+@app.delete("/api/banking/mercury")
+def api_banking_mercury_disconnect():
+    from . import banking
+    try:
+        return banking.disconnect_mercury()
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/banking/setup")
+def api_banking_setup(req: BankingSetupReq):
+    from . import banking
+    try:
+        jid = jobs.launch(banking.setup_prompt(req.service), str(ROOT), None,
+                          req.model, subject="Connect a bank to Subscriptions",
+                          kind_label="Bank setup",
+                          about="Interview the owner and guide read-only bank access.")
+    except ValueError as e:
+        raise HTTPException(429, str(e)) from None
+    return {"job_id": jid}
+
 @app.get("/api/subs")
 def api_subs():
     r = subscriptions.reconcile()

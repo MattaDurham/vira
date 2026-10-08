@@ -93,60 +93,6 @@ CYCLES_PER_YEAR = {c: n for _, _, c, _, n in BANDS}
 _reg_lock = threading.Lock()
 
 
-# ---------- fixture mode (fresh public clone) ----------
-
-def _fixture_seed():
-    """Demo data for a fresh clone: the first touch of either store in
-    fixture mode seeds a synthetic registry + ledger from fixtures/ into
-    data/ (the crm_root copytree pattern), with charge dates generated
-    relative to today so the demo always reads as live. Real mode — the
-    CRM root exists — never enters here, and existing files are never
-    overwritten."""
-    try:
-        if not settings.fixture_mode():
-            return
-    except Exception:  # noqa: BLE001 — settings trouble must not brick the engine
-        return
-    fx = settings.FIXTURES
-    if not REGISTRY.exists() and (fx / "subscriptions.json").exists():
-        REGISTRY.parent.mkdir(parents=True, exist_ok=True)
-        REGISTRY.write_bytes((fx / "subscriptions.json").read_bytes())
-    if LEDGER.exists() or not (fx / "subs-charges.json").exists():
-        return
-    LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(LEDGER))        # direct connect: ledger_connect
-    conn.executescript(SCHEMA)                 # calls back into this seeder
-    today = date.today().toordinal()
-    charges = json.loads((fx / "subs-charges.json").read_text())
-    for i, c in enumerate(charges):
-        posted = date.fromordinal(today - int(c["days_ago"])).isoformat() \
-            + "T12:00:00Z"
-        conn.execute(
-            "INSERT OR IGNORE INTO charges (merchant_id, amount, posted_at, "
-            "source, counterparty, bank_description, mercury_note, "
-            "mercury_category, dedup_key) VALUES (?,?,?,?,?,?,?,?,?)",
-            (c["merchant_id"], c["amount"], posted, "fixture",
-             c.get("counterparty", c["merchant_id"]), c.get("desc", ""),
-             c.get("note", ""), "", f"fx-{i}"))
-    try:
-        evidence = json.loads((fx / "subs-evidence.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        evidence = []
-    for e in evidence:
-        nbd = (date.fromordinal(today + int(e["next_in_days"])).isoformat()
-               if e.get("next_in_days") is not None else None)
-        conn.execute(
-            "INSERT INTO evidence (merchant_id, kind, date, amount, "
-            "next_billing_date, plan, message_ref, account) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (e["merchant_id"], e["kind"],
-             date.fromordinal(today - int(e["days_ago"])).isoformat(),
-             e.get("amount"), nbd, e.get("plan", ""),
-             e.get("message_ref", "fixture"), e.get("account", "fixture")))
-    conn.commit()
-    conn.close()
-
-
 # ---------- registry ----------
 
 def _blank_registry():
@@ -154,9 +100,8 @@ def _blank_registry():
 
 
 def load_registry():
-    _fixture_seed()
     try:
-        reg = json.loads(REGISTRY.read_text())
+        reg = json.loads(REGISTRY.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return _blank_registry()
     if not isinstance(reg, dict) or "merchants" not in reg:
@@ -264,11 +209,12 @@ def merchant_evidence(mid, conn=None):
         charges = [dict(r) for r in conn.execute(
             "SELECT amount, posted_at, source, bank_description, "
             "mercury_note, mercury_category FROM charges "
-            "WHERE merchant_id=? ORDER BY posted_at DESC", (mid,))]
+            "WHERE merchant_id=? AND source!='fixture' ORDER BY posted_at DESC", (mid,))]
         evidence = [dict(r) for r in conn.execute(
             "SELECT kind, date, amount, next_billing_date, plan, "
             "message_ref, account FROM evidence "
-            "WHERE merchant_id=? ORDER BY date DESC", (mid,))]
+            "WHERE merchant_id=? AND COALESCE(account,'') NOT IN ('fixture','demo@fixture') "
+            "AND COALESCE(message_ref,'')!='fixture' ORDER BY date DESC", (mid,))]
     finally:
         if own:
             conn.close()
@@ -341,8 +287,6 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 
 def ledger_connect(path=None):
-    if path is None:
-        _fixture_seed()
     path = Path(path) if path else LEDGER
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -751,6 +695,19 @@ def reconcile(conn=None, registry=None):
         if own:
             conn.close()
 
+    # Older installs auto-seeded demo rows. Exclude their explicit provenance
+    # without deleting history or hiding a merchant that has real evidence.
+    demo_ids = {r["merchant_id"] for r in rows if r["source"] == "fixture"}
+    def demo_evidence(row):
+        return (row["account"] in ("fixture", "demo@fixture")
+                or row["message_ref"] == "fixture")
+    demo_ids.update(r["merchant_id"] for r in ev_rows if demo_evidence(r))
+    rows = [r for r in rows if r["source"] != "fixture"]
+    ev_rows = [r for r in ev_rows if not demo_evidence(r)]
+    real_ids = {r["merchant_id"] for r in rows}
+    real_ids.update(r["merchant_id"] for r in ev_rows)
+    demo_only = demo_ids - real_ids
+
     by_merchant = {}
     for r in rows:
         by_merchant.setdefault(r["merchant_id"], []).append(dict(r))
@@ -762,6 +719,8 @@ def reconcile(conn=None, registry=None):
     merchants = []
     known = set()
     for m in reg["merchants"]:
+        if m["id"] in demo_only:
+            continue
         known.add(m["id"])
         merchants.append(merchant_view(m, by_merchant.get(m["id"], []),
                                        data_through,
