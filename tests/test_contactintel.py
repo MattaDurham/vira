@@ -394,7 +394,7 @@ class FindingsTests(AssistantFixture):
         self.calendar_stage.assert_called_once()
         self.assertTrue(self.calendar_stage.call_args.args[1]["is_from_me"])
         self.assertEqual(self.profile(), before)
-        self.assertIn("outside a human contact dossier", self.model.call_args.args[0])
+        self.assertIn("outside a human contact profile", self.model.call_args.args[0])
         self.assertEqual(commitments.snapshot("owner:self")["open_loops"][0]["what"], "Work on the report")
 
     def test_company_and_unknown_sender_obligations_live_outside_crm(self):

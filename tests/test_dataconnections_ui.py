@@ -53,7 +53,7 @@ const plan = (request = {kind: 'crm', path: '/fixture/crm'}) => ({valid: true, e
 const render = () => {const host = new Element('div'); context.dataConnectionForm(host, 'crm', '/fixture/crm'); return host;};
 (async () => {
   const card = new Element('div'); context.cardDataConnections(card);
-  assert.match(card.textContent, /This folder holds your contact list and dossiers/);
+  assert.match(card.textContent, /This folder holds your contact list and profiles/);
   assert.match(card.textContent, /Reader displays HTML dossiers/);
   assert.match(card.textContent, /unavailable/);
   const form = render();
@@ -61,7 +61,7 @@ const render = () => {const host = new Element('div'); context.dataConnectionFor
   assert(save.disabled, 'cannot connect without inspecting');
   replies.push({valid: false, errors: ['Duplicate IDs'], warnings: []});
   await inspect.onclick(); assert(save.disabled); assert.match(form.textContent, /Duplicate IDs/);
-  replies.push(plan()); await inspect.onclick(); assert(!save.disabled); assert.match(form.textContent, /Dossiers:  1/);
+  replies.push(plan()); await inspect.onclick(); assert(!save.disabled); assert.match(form.textContent, /Profiles:  1/);
   const select = all(form).filter(n => n.tag === 'select')[1];
   select.value = 'follow'; select.onchange();
   assert(save.disabled, 'a changed self policy invalidates inspection');
