@@ -475,7 +475,7 @@ export function create({node,loaded,style,canFeed,onMessage,onLook,onPause,look:
     explorer.setAttribute("role","dialog");explorer.setAttribute("aria-modal","true");explorer.setAttribute("aria-label","Explore koi pond");
     const bar=document.createElement("div");bar.className="pond-explorer-bar";
     const caption=document.createElement("div");caption.innerHTML=`<strong>${style==="courtyard"?"Courtyard":"Garden"} pond</strong>
-      <span>6 m wide, up to 1.8 m deep. Drag to orbit. Scroll to zoom. Click water to feed.</span>`;
+      <span>6 metres wide. Maximum depth: 1.8 metres. Drag to orbit. Scroll to zoom. Click water to feed.</span>`;
     bar.appendChild(caption);
     lookButton=document.createElement("button");
     lookButton.textContent=look==="wireframe"?"Show natural pond":"Show cyberpunk wireframe";
@@ -483,9 +483,9 @@ export function create({node,loaded,style,canFeed,onMessage,onLook,onPause,look:
       const next=look==="wireframe"?"natural":"wireframe";
       if(onLook)onLook(next);else setLook(next);
     });bar.appendChild(lookButton);
-    anatomyButton=document.createElement("button");anatomyButton.textContent=showBones?"Show fish skin":"Show fish anatomy";
+    anatomyButton=document.createElement("button");anatomyButton.textContent=showBones?"Show skin":"Show anatomy";
     anatomyButton.addEventListener("click",()=>{
-      showBones=!showBones;anatomyButton.textContent=showBones?"Show fish skin":"Show fish anatomy";setLook(look);
+      showBones=!showBones;anatomyButton.textContent=showBones?"Show skin":"Show anatomy";setLook(look);
     });bar.appendChild(anatomyButton);
     motionButton=document.createElement("button");motionButton.textContent=running?"Pause motion":"Resume motion";
     motionButton.addEventListener("click",()=>{if(onPause)onPause();else dispose.motion(!running);});bar.appendChild(motionButton);
