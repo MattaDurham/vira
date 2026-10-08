@@ -85,6 +85,11 @@ def make_vault(root, db):
             links = f"[[{topic}-{(n + 1) % PER_TOPIC:02d}]] and [[{topic}-{(n + 2) % PER_TOPIC:02d}]]"
             body = " ".join(w[(n + k) % len(w)] for k in range(40))
             extra = ""
+            # A template section on most wiki pages (100 of 180) but under
+            # a fifth of the vault, and only in two subjects: only the
+            # per-area rule can tell it is template, not subject.
+            if topic in ("garden", "rocket") and n < 50:
+                extra += "\n\n## Visuals\n\nvisuals storyboard\n"
             if topic == "garden" and n == 0:
                 extra = ("\n\nSee [[no-such-page]] and the plot:\n\n![[wiki/assets/plot.png]]\n\n"
                          "| Bed | Crop |\n|---|---|\n| A | [[garden-03|three]] |\n")
@@ -208,11 +213,14 @@ class TheBuild(Base):
             self.assertEqual(max(set(topics), key=topics.count), topic)
 
     def test_template_words_never_describe_a_subject(self):
-        self.build()
+        # More words per group than each subject has of its own, so a
+        # template word would surface if nothing removed it.
+        with mock.patch.object(library, "TERMS", 14):
+            self.build()
         for grp in self.idx()["groups"]:
             if grp["level"] in ("region", "subject", "detail"):
                 self.assertTrue(grp["terms"], grp["id"])
-                for word in ("summary", "takeaways", "cat", "related"):
+                for word in ("summary", "takeaways", "cat", "related", "visuals", "storyboard"):
                     self.assertNotIn(word, grp["terms"], grp["id"])
 
     def test_links_resolve_and_similar_pages_share_a_subject(self):
@@ -542,6 +550,12 @@ class TheWindow(unittest.TestCase):
         self.assertIn("recipe: { steps: [{ seeds:", hook)
         self.assertIn("await openSubset(sub)", hook)
         self.assertIn("S.loading || !S.world", hook, "waits for the World to load")
+
+    def test_hidden_parts_never_cover_the_map(self):
+        # .lib-empty sets display, which beats the hidden attribute: the
+        # hidden empty state lay over the map and swallowed every click.
+        self.assertRegex(self.css, r"\.lib-root \[hidden\] \{ display: none !important; \}")
+        self.assertRegex(self.css, r"\.lib-empty \{[^}]*display: flex")
 
     def test_nothing_is_wider_than_a_phone(self):
         self.assertIn("@media (max-width: 759px)", self.css)
