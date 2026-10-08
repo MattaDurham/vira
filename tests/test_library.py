@@ -88,7 +88,8 @@ def make_vault(root, db):
             if topic == "garden" and n == 0:
                 extra = ("\n\nSee [[no-such-page]] and the plot:\n\n![[wiki/assets/plot.png]]\n\n"
                          "| Bed | Crop |\n|---|---|\n| A | [[garden-03|three]] |\n")
-            _write(root, rel, f"---\ntitle: {topic.title()} note {n}\ntype: concept\n"
+            source = "source: raw/articles/article-1.md\n" if (topic, n) == ("garden", 0) else ""
+            _write(root, rel, f"---\ntitle: {topic.title()} note {n}\ntype: concept\n{source}"
                               f"tags: [{topic}, cat/{topic}]\n---\n\n## Summary\n\n{body}\n\n"
                               f"## Takeaways\n\nRelated: {links}{extra}\n")
             if n < PER_TOPIC - UNEMBEDDED:
@@ -319,6 +320,8 @@ class TheReader(Base):
         self.assertEqual(lm["garden-03"]["rel"], "wiki/garden-03.md")
         self.assertIsNone(lm["no-such-page"])
         self.assertEqual(lm["wiki/assets/plot.png"], {"asset": "wiki/assets/plot.png"})
+        # A property naming a page by its path opens in the reader too.
+        self.assertEqual(lm["raw/articles/article-1.md"]["rel"], "raw/articles/article-1.md")
         self.assertIn("index.md", [b["rel"] for b in d["backlinks"]])
         self.assertEqual(d["world_id"], library.world_id("primary", "wiki/garden-00.md"))
         sub = d["subject"]

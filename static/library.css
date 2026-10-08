@@ -44,6 +44,9 @@
   padding: 24px 28px; color: var(--text-dim); max-width: 620px; }
 .lib-empty h3 { margin: 0 0 8px; color: var(--text-head); font-weight: 500; }
 .lib-empty .btn { align-self: flex-start; margin-top: 8px; }
+/* A rule that sets display beats the hidden attribute; without this the
+   empty state, hidden, still lay over the map and swallowed every click. */
+.lib-root [hidden] { display: none !important; }
 .lib-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-top: 6px; font-size: 11.5px;
   color: var(--text-dim); min-height: 22px; }
 .lib-legend span { display: inline-flex; align-items: center; gap: 5px; }
@@ -95,6 +98,7 @@
 .lib-props th { text-align: left; vertical-align: top; color: var(--text-faint); font-weight: 500;
   padding: 4px 10px; width: 28%; word-break: break-word; }
 .lib-props td { padding: 4px 10px 4px 0; color: var(--text); word-break: break-word; }
+.lib-props a { color: var(--accent-bright); }
 .lib-prop-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 0 7px; border: 1px solid var(--line);
   border-radius: 2px; font-size: 11.5px; color: var(--text-dim); }
 
@@ -156,8 +160,7 @@
 /* the action bar */
 .lib-dock { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px;
   border-top: 1px solid var(--line); background: var(--bg-raised); min-width: 0; }
-.lib-dock-btns { display: flex; align-items: center; gap: 4px; overflow-x: auto; min-width: 0;
-  scrollbar-width: thin; }
+.lib-dock-btns { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; min-width: 0; }
 .lib-dbtn { flex: none; background: none; border: 1px solid transparent; color: var(--text-dim);
   font: inherit; font-size: 12px; padding: 5px 8px; cursor: pointer; border-radius: 2px; white-space: nowrap; }
 .lib-dbtn b { font-weight: 500; color: var(--text); font-family: var(--mono); font-size: 11px; }
@@ -203,6 +206,15 @@
 .lib-save-form label { font-size: 12.5px; color: var(--text-dim); }
 .lib-save-form .search { margin: 0; padding: 8px 10px; font-size: 16px; }
 
+/* a window too narrow for map and reader side by side shows the map, and
+   brings a detail or page up over it (the phone's sheet, inside the window) */
+#view-library { container-type: inline-size; container-name: lib; }
+@container lib (max-width: 879px) {
+  .lib-root { grid-template-columns: minmax(0, 1fr); }
+  .lib-side { display: none; }
+  .lib-root.lib-sheet-open .lib-side { display: flex; position: absolute; inset: 0; z-index: 40; }
+}
+
 /* the Library fills its floating window */
 @media (min-width: 1100px) {
   #win-library .fwin-body { display: flex; flex-direction: column; overflow: hidden; }
@@ -223,6 +235,4 @@
   .lib-const { height: 260px; }
   .lib-dock { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
 }
-@media (min-width: 760px) and (max-width: 1099px) {
-  .lib-root { grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr); }
-}
+

@@ -620,7 +620,7 @@ def _describe(tree, pages, leaf, inbound, vecs):
                 template[g] = mine > AREA_BOILERPLATE_SHARE * len(idx)
             area = _chain(groups, g)[0]
             score = np.where(mine >= 2, mine / len(idx) - theirs, -1.0)
-            if area in template and group["level"] != "area":
+            if area in template:
                 masked = np.where(template[area], -1.0, score)
                 # A group whose every distinguishing word is template keeps
                 # them: some words beat a blank box.
@@ -1224,6 +1224,17 @@ def page(vault_id, rel, machine=False):
         asset = _asset_for(spec, rel, target)
         if asset:
             linkmap[target.lower()] = {"asset": public_path(spec, asset)}
+    # A property that names a vault page by its path (source: raw/x.md)
+    # opens in the reader too, like a [[link]].
+    meta, _body, _line = worldgraph._frontmatter(text or "")
+    for value in meta.values():
+        for item in (value if isinstance(value, list) else [value]):
+            item = str(item or "").strip()
+            if (item.lower().endswith(".md") and "[[" not in item
+                    and item.lower() not in linkmap and len(item) < 400):
+                j = idx["_by_rel"].get(item.lstrip("/"))
+                if j is not None:
+                    linkmap[item.lower()] = {"rel": P["rel"][j], "title": P["title"][j]}
     out = {"vault": spec["id"], "rel": rel, "path": path, "text": text,
            "linkmap": linkmap, "indexed": i is not None,
            "world_id": world_id(spec["id"], rel), "machine": is_machine(rel, dirs)}

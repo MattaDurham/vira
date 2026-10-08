@@ -38,6 +38,13 @@ for (let a = 0; a < rects.length; a++) {
   }
 }
 
+// ---- a label cut to fit always ends, and always fits ----
+const measure = (s) => s.length * 7;
+const cut = L.fitText(measure, "A very long subject name that cannot fit", 70);
+assert.ok(cut.endsWith("\u2026") && measure(cut) <= 70, cut);
+assert.equal(L.fitText(measure, "Short", 70), "Short");
+assert.equal(L.fitText(measure, "Anything", 1), "A\u2026", "never loops on a box too narrow for any label");
+
 // ---- pages are gridded inside their box ----
 const grid = L.placeIn(10, { x: 0, y: 0, w: 200, h: 100 });
 assert.equal(grid.pts.length, 10);

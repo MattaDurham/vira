@@ -103,6 +103,17 @@
     return out;
   }
 
+  /* A label cut to fit a width, ending in an ellipsis when cut. It
+     shortens the label itself and adds the ellipsis once: trimming a
+     label that already ends in "..." made it longer on every pass, and
+     the map hung on a box too narrow for its name. */
+  function fitText(measure, text, maxW) {
+    if (measure(text) <= maxW) return text;
+    let stem = String(text);
+    while (stem.length > 1 && measure(stem + "\u2026") > maxW) stem = stem.slice(0, -1);
+    return stem.trimEnd() + "\u2026";
+  }
+
   /* Where n pages sit inside one box: a grid under the box's label when
      the box is big enough to carry one. */
   function placeIn(n, r, fixedCols) {
@@ -484,9 +495,14 @@
     const rows = props.map((p) => {
       const vals = p.values.length ? p.values : [""];
       const tagLike = /^(tags?|aliases|cssclasses)$/i.test(p.key);
-      const cell = vals.map((v) => tagLike
-        ? `<span class="lib-prop-chip">${esc(v)}</span>`
-        : `<span class="lib-prop-val">${inline(v, ctx)}</span>`).join(tagLike ? "" : "<br>");
+      const cell = vals.map((v) => {
+        if (tagLike) return `<span class="lib-prop-chip">${esc(v)}</span>`;
+        // A plain vault path in a property (source: raw/x.md) opens too.
+        const hit = !/\[\[|\]\(/.test(v) && lookup(ctx, v);
+        if (hit && hit.rel) return `<a class="lib-link" data-rel="${esc(hit.rel)}">${esc(v)}</a>`;
+        if (hit && hit.asset) return `<a class="lib-link asset" data-asset="${esc(hit.asset)}">${esc(v)}</a>`;
+        return `<span class="lib-prop-val">${inline(v, ctx)}</span>`;
+      }).join(tagLike ? "" : "<br>");
       return `<tr><th>${esc(p.key)}</th><td>${cell}</td></tr>`;
     }).join("");
     return `<details class="lib-props" open><summary>Properties <span class="lib-faint">${props.length}</span></summary><table>${rows}</table></details>`;
@@ -622,7 +638,9 @@
   }
 
   const narrow = () => window.innerWidth < 1100 || matchMedia("(pointer: coarse)").matches;
-  const sheetMode = () => window.innerWidth < 760;
+  // The sheet (a detail or page over the map) whenever the Library itself
+  // is too narrow for both side by side: a phone, or a narrow window.
+  const sheetMode = () => (dom.root ? dom.root.clientWidth : window.innerWidth) < 880;
 
   function saveState() {
     lsSet(STORE_KEY, { vault: S.vault, machine: S.machine, rel: S.page?.rel || "" });
@@ -903,8 +921,8 @@
     if (out.length < maxL) { out.push(line); i = words.length; }
     let last = out[out.length - 1] || "";
     if (i < words.length || ctx.measureText(last).width > maxW) {
-      while (last.length > 1 && ctx.measureText(last + "...").width > maxW) last = last.slice(0, -1);
-      out[out.length - 1] = last + "...";
+      while (last.length > 1 && ctx.measureText(last + "\u2026").width > maxW) last = last.slice(0, -1);
+      out[out.length - 1] = last + "\u2026";
     }
     return out;
   }
@@ -994,8 +1012,7 @@
     ctx.font = `${isWords ? "italic 500" : "600"} ${small ? 11 : 12.5}px ${C.font}`;
     ctx.fillStyle = isWords ? C.dim : C.ink;
     ctx.textBaseline = "top";
-    let t = label;
-    while (ctx.measureText(t + "  " + fmt(n)).width > r.w - 16 && t.length > 4) t = t.slice(0, -2).trimEnd() + "...";
+    const t = fitText((s) => ctx.measureText(s + "  " + fmt(n)).width, label, r.w - 16);
     ctx.fillText(t, r.x + 8, r.y + 8);
     const tw = ctx.measureText(t + "  ").width;
     ctx.font = `500 ${small ? 10.5 : 11.5}px ${cssVar("--mono", "monospace")}`;
@@ -1829,7 +1846,10 @@
       const g = svgEl("g", { class: `lib-c-node ${it.ring}`, tabindex: k ? "0" : "-1" });
       const r = it.ring === "center" ? 9 : it.ring === "similar" ? 4.5 : 6;
       g.appendChild(svgEl("circle", { r, fill: it.ring === "center" ? "var(--accent-bright)" : leafColor(it.leaf, cl) }));
-      const label = svgEl("text", { y: it.ring === "center" ? -14 : -9, "text-anchor": "middle" });
+      // Labels near the sides hang inward, so none is cut off at the edge.
+      const side = it.at[0] < W * 0.22 ? "start" : it.at[0] > W * 0.78 ? "end" : "middle";
+      const label = svgEl("text", { y: it.ring === "center" ? -14 : -9, "text-anchor": side,
+                                    x: side === "start" ? -6 : side === "end" ? 6 : 0 });
       const short = it.title.length > 26 ? it.title.slice(0, 24) + "..." : it.title;
       label.textContent = it.ring === "center" || nodes.length <= 14 || it.ring !== "similar" && nodes.length <= 24 ? short : "";
       g.appendChild(label);
@@ -1894,7 +1914,7 @@
   };
   window.openLibrary = openLibrary;
   if (window.__VIRA_TEST__) window.__VIRA_LIBRARY_TESTS__ = {
-    squarify, placeIn, splitOf, parseQuery, matchPage, splitFrontmatter,
+    squarify, placeIn, splitOf, fitText, parseQuery, matchPage, splitFrontmatter,
     renderMarkdown, inline, constellationLayout,
   };
 })();
