@@ -16,9 +16,10 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from server import instance, orphanwork, showroom
+from server import attention, instance, orphanwork, showroom, workresults
 
 _REAL_KICK = showroom._kick_describe
+_REAL_RESWEEP = showroom._resweep
 
 
 def _git(*args, cwd):
@@ -57,6 +58,20 @@ class _RepoCase(unittest.TestCase):
         pin(showroom, "ROOT", self.root)
         pin(showroom, "STORE", self.root / "data" / "showroom.json")
         pin(showroom, "_kick_describe", lambda: None)
+        # Both composes start a quiet re-sweep on a thread when refs moved.
+        # A thread that outlives this fixture would sweep whatever ROOT and
+        # STORE are by then - the real ones - so each is recorded, not run.
+        self.spawned = []
+        pin(orphanwork, "_spawn", lambda fn, name: self.spawned.append(fn))
+        pin(orphanwork, "_resweeping", False)
+        pin(showroom, "_resweep", lambda: self.spawned.append("showroom"))
+        # The sweeper asks the PR index to refresh (gh, on a thread) and
+        # every row reads it: neither may reach gh or the checkout's own
+        # data/pr-index.json (test_orphanwork's fixture pins the same two).
+        from server import prindex
+        pin(prindex, "STORE", self.root / "data" / "pr-index.json")
+        pin(prindex, "refresh_async", lambda *a, **k: False)
+        prindex._cache["mtime"] = None
         self.ledger = []
         lp = mock.patch("server.joblog.list_records",
                         side_effect=lambda: list(self.ledger))
@@ -324,6 +339,166 @@ class Inventory(_RepoCase):
         self.assertEqual(out["items"][0]["instance"], {"port": 8390, "alive": True,
                                                        "snapshot": False})
         self.assertEqual(out["running"], 1)
+
+
+class LandedElsewhere(_RepoCase):
+    """2026-10-09: a branch merged and deleted from a terminal session kept
+    reading "waiting on you" in Attention and "Ready for review" in Work
+    results, with a WIP commit that no longer existed, because both
+    inventories are a sweep's snapshot and nothing re-swept. Driven through
+    the real Attention and Work results reads; git is changed with plain
+    git, the way branch.sh or another session changes it, never through a
+    Vira call that could refresh the stores itself."""
+
+    def setUp(self):
+        super().setUp()
+        # Every read here must see git as it is now, not a ref read from the
+        # last few seconds (the production cache bounds polling cost).
+        for target, attr, value in (
+                (orphanwork, "REFS_TTL_S", 0),
+                (workresults.circuits, "list_runs", lambda limit=200: []),
+                (workresults.changelog, "groups", lambda: []),
+                (workresults, "_live_jobs", lambda: []),
+                (workresults.settings, "fixture_mode", lambda: False)):
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        data = Path(__file__).resolve().parents[1] / "data"
+        self.real = {f: (f.stat().st_mtime if f.exists() else None)
+                     for f in (data / "orphan-work.json", data / "showroom.json")}
+
+    def tearDown(self):
+        for p, before in self.real.items():
+            self.assertEqual(p.stat().st_mtime if p.exists() else None, before,
+                             f"a real store changed: {p}")
+
+    def attention_branches(self):
+        return [r.get("orphan_branch") for r in attention._orphan_rows()]
+
+    def results_status(self, branch):
+        row = next((r for r in workresults.compose()["items"]
+                    if r.get("branch") == branch), None)
+        return row and row["status"]
+
+    def land_outside_vira(self, slug):
+        wt = self.root / ".worktrees" / slug
+        if _git("status", "--porcelain", cwd=wt).stdout.strip():
+            _git("add", "-A", cwd=wt)
+            _git("commit", "-qm", "finish", cwd=wt)
+        self.land(slug)
+        _git("worktree", "remove", "--force", str(wt), cwd=self.root)
+        _git("branch", "-D", f"claude/{slug}", cwd=self.root)
+
+    def run_spawned(self):
+        todo, self.spawned[:] = list(self.spawned), []
+        for fn in todo:
+            if fn == "showroom":
+                with mock.patch.object(showroom, "_spawn",
+                                       lambda target, name: target()):
+                    _REAL_RESWEEP()
+            else:
+                fn()
+
+    def test_a_branch_landed_outside_vira_leaves_every_surface_at_once(self):
+        self.make_worktree("feat", commits=1, dirty=True)
+        showroom.refresh()
+        self.assertEqual(self.attention_branches(), ["claude/feat"])
+        self.assertEqual(self.results_status("claude/feat"), "unlanded")
+        self.land_outside_vira("feat")
+        # Gone on the very next read - before any re-sweep has run.
+        self.assertEqual(self.attention_branches(), [])
+        self.assertIsNone(self.results_status("claude/feat"))
+        self.assertTrue(self.spawned, "moved refs started no re-sweep")
+        self.run_spawned()
+        self.assertEqual(orphanwork._read()["items"], [])
+        self.assertNotIn("claude/feat",
+                         [it["branch"] for it in showroom._read()["items"]])
+
+    def test_a_new_commit_is_picked_up_quietly_and_pinged_later(self):
+        """The re-sweep a read starts brings rows up to date without a phone
+        ping or a model pass; the routine's next sweep still pings the new
+        work, so a quiet sweep never swallows one."""
+        wt = self.make_worktree("feat", commits=1)
+        orphanwork.refresh()                      # baseline: nothing pinged
+        (wt / "more.py").write_text("# more\n", encoding="utf-8")
+        _git("add", "-A", cwd=wt)
+        _git("commit", "-qm", "more", cwd=wt)
+        assess = mock.Mock()
+        with mock.patch.object(orphanwork, "_kick_assess", assess), \
+                mock.patch("server.notify.agent_ping") as ping:
+            orphanwork.compose()
+            self.run_spawned()
+            (item,) = orphanwork.compose()["items"]
+            self.assertEqual(item["ahead"], 2)
+            ping.assert_not_called()
+            assess.assert_not_called()
+            orphanwork.refresh()                  # the routine's loud sweep
+            ping.assert_called_once()
+            assess.assert_called_once()
+
+    def test_nothing_moved_means_no_resweep(self):
+        self.make_worktree("feat", commits=1)
+        showroom.refresh()
+        showroom.compose()
+        orphanwork.compose()
+        workresults.compose()
+        self.assertEqual(self.spawned, [])
+
+    def test_a_store_swept_before_refs_were_recorded_resweeps_once(self):
+        self.make_worktree("feat", commits=1)
+        orphanwork.refresh()
+        orphanwork.jsonstore.mutate(orphanwork.STORE,
+                                    lambda s: {**s, "refs": None},
+                                    orphanwork._blank())
+        orphanwork.compose()
+        self.assertEqual(len(self.spawned), 1)
+        self.run_spawned()
+        orphanwork.compose()
+        self.assertEqual(self.spawned, [])
+
+    def test_reads_join_the_resweep_in_flight(self):
+        self.make_worktree("feat", commits=1)
+        orphanwork.refresh()
+        _git("branch", "claude/other", cwd=self.root)
+        for _ in range(3):
+            orphanwork.compose()
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_a_quiet_sweep_some_other_sweep_caught_up_with_does_nothing(self):
+        self.make_worktree("feat", commits=1)
+        orphanwork.refresh()
+        with mock.patch.object(orphanwork, "sweep", wraps=orphanwork.sweep) as sw:
+            orphanwork.refresh(quiet=True)
+            sw.assert_not_called()
+            orphanwork.refresh()
+            sw.assert_called_once()
+
+    def test_the_showroom_resweep_brings_the_orphan_join_along(self):
+        """Its cards join the sweeper's key and verdict, so a sweeper store
+        from before the merge must be re-swept with it, not trusted for its
+        age alone."""
+        self.make_worktree("feat", commits=1)
+        self.make_worktree("kept", commits=1)
+        showroom.refresh()
+        self.land_outside_vira("feat")
+        showroom.refresh(quiet=True)
+        self.assertEqual([it["branch"] for it in orphanwork._read()["items"]],
+                         ["claude/kept"])
+        self.assertEqual(orphanwork._read()["refs"], showroom._read()["refs"])
+
+    def test_uncommitted_work_in_a_removed_worktree_is_not_served(self):
+        wt = self.make_worktree("scratch", dirty=True)
+        orphanwork.refresh()
+        self.assertEqual(self.attention_branches(), ["claude/scratch"])
+        _git("worktree", "remove", "--force", str(wt), cwd=self.root)
+        self.assertEqual(self.attention_branches(), [])
+
+    def test_without_git_the_stored_rows_are_served_as_they_are(self):
+        self.make_worktree("feat", commits=1)
+        orphanwork.refresh()
+        with mock.patch.object(orphanwork, "ref_state", lambda fresh=False: None):
+            self.assertEqual(self.attention_branches(), ["claude/feat"])
+        self.assertEqual(self.spawned, [])
 
 
 class Describing(_RepoCase):

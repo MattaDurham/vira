@@ -88,6 +88,15 @@ class _RepoCase(unittest.TestCase):
         ka = mock.patch.object(orphanwork, "_kick_assess", lambda: None)
         ka.start()
         self.addCleanup(ka.stop)
+        # compose() starts a quiet re-sweep on a thread when refs moved. A
+        # thread that outlives this fixture would sweep whatever ROOT and
+        # STORE are by then - the real ones - so it is recorded, not run.
+        self.spawned = []
+        for target, value in (("_spawn", lambda fn, name: self.spawned.append(fn)),
+                              ("_resweeping", False)):
+            sp = mock.patch.object(orphanwork, target, value)
+            sp.start()
+            self.addCleanup(sp.stop)
         # sweep() asks the PR index to refresh (a gh call, on a thread) and
         # every row reads it; the fixture must neither shell to gh nor
         # read the checkout's own data/pr-index.json.

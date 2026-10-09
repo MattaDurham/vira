@@ -67,9 +67,15 @@ ACTION_TIMEOUT = 600         # branch.sh merge/discard, same ceiling worktree.py
 DIRTY_MTIME_CAP = 50         # dirty paths stat'd for the "when was this touched" signal
 LAND_WAIT_S = 3 * 3600       # ceiling on waiting for a landing session to finish
 LAND_POLL_S = 20             # how often the landing watcher re-reads the ledger
+REFS_TTL_S = 5.0             # Attention polls every 5 s: at most one ref read per poll
 
 _actions_lock = threading.Lock()
 _actions = {}                 # branch -> {name, status, output, started, finished}
+_refs_lock = threading.Lock()
+_refs_cache = {}              # str(ROOT) -> (monotonic, state)
+_refresh_lock = threading.Lock()
+_resweep_lock = threading.Lock()
+_resweeping = False
 
 
 def _now_iso():
@@ -81,6 +87,92 @@ def _parse_iso(s):
         return datetime.fromisoformat(s)
     except (TypeError, ValueError):
         return None
+
+
+def _spawn(target, name):
+    """The one place this module starts a background thread - a SEAM the
+    tests pin to run the target inline (showroom._spawn's rule: never patch
+    threading.Thread, which breaks subprocess pipes on Windows)."""
+    threading.Thread(target=target, daemon=True, name=name[:60]).start()
+
+
+# ---------------------------------------------------------------- refs
+
+# WHY THE STORES CHECK GIT ON READ (2026-10-09). Both inventories, this
+# store and the Showroom's, are a sweep's snapshot of git, and only the
+# daily routine or a window that asks for a sweep refreshed them. A branch
+# merged and deleted from a terminal session stayed "waiting on you" in
+# Attention and "Ready for review" in Work results, showing a WIP commit
+# that no longer existed, until the next sweep. A sweep now records the refs
+# it ran against, and a read compares them with git's current refs: a row
+# whose branch is gone is dropped at once, and any other move triggers a
+# quiet re-sweep. Work done inside Vira and outside it reads the same way,
+# because git is the one thing both change.
+
+def ref_state(fresh=False):
+    """{refname: (sha, commit epoch)} for every local branch and
+    remote-tracking ref, from ONE for-each-ref, or None when git cannot
+    answer. A spawn out of the server process is the expensive part (see
+    showroom._ref_facts), so a read reuses one under REFS_TTL_S old unless
+    `fresh`; a sweep always reads fresh."""
+    key = str(ROOT)
+    if not fresh:
+        with _refs_lock:
+            hit = _refs_cache.get(key)
+        if hit and time.monotonic() - hit[0] < REFS_TTL_S:
+            return hit[1]
+    try:
+        out = gitutil.git(ROOT, "for-each-ref", "refs/heads/", "refs/remotes/",
+                          "--format=%(refname)%09%(objectname)%09%(committerdate:unix)",
+                          timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    state = {}
+    for line in (out.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        try:
+            state[parts[0]] = (parts[1], float(parts[2] or 0))
+        except ValueError:
+            continue
+    with _refs_lock:
+        _refs_cache[key] = (time.monotonic(), state)
+    return state
+
+
+def refs_fingerprint(state):
+    """A short stable digest of `state`, stored with each sweep."""
+    if state is None:
+        return None
+    body = "\n".join(f"{ref} {sha}" for ref, (sha, _) in sorted(state.items()))
+    return hashlib.sha1(body.encode("utf-8")).hexdigest()[:16]
+
+
+def local_heads(state):
+    """{branch: sha} for the local branches in `state`."""
+    pre = "refs/heads/"
+    return {ref[len(pre):]: sha for ref, (sha, _) in (state or {}).items()
+            if ref.startswith(pre)}
+
+
+def row_still_there(it, heads):
+    """False when git already contradicts a stored row outright: its
+    branch no longer exists, or all it held was uncommitted work in a
+    worktree that is gone. Everything subtler (a new commit, a merge with
+    the branch kept) waits for the re-sweep, which the moved refs trigger."""
+    branch = it.get("branch") or ""
+    if not branch or it.get("kind") == "unpushed":
+        return True
+    if branch not in heads:
+        return False
+    wt = it.get("worktree") or ""
+    if (wt and int(it.get("dirty") or 0) and not int(it.get("ahead") or 0)
+            and not Path(wt).is_dir()):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------- sweep
@@ -359,7 +451,7 @@ def sweep():
 
 def _blank():
     return {"last_sweep": None, "items": [], "dismissed": {}, "notified": {},
-            "reads": {}, "baseline_done": False}
+            "reads": {}, "baseline_done": False, "refs": None}
 
 
 def _read():
@@ -371,13 +463,32 @@ def _read():
     return s
 
 
-def refresh():
+def refresh(quiet=False, state=None):
     """Regenerate the store from a fresh sweep and ping on genuinely new
     orphans. The FIRST sweep ever (baseline_done False) stamps every key
     into `notified` without pinging — announcing the whole standing
     backlog the first time this ships would bury the one ping that
     matters, the same rule jobboards.py uses for a newly-registered
-    board. Safe to call from any thread."""
+    board. Safe to call from any thread.
+
+    `state` is the ref_state() the caller already read (the Showroom's
+    sweep shares its one ref read); otherwise refresh reads it fresh,
+    BEFORE sweeping, so a ref that moves mid-sweep reads as stale next
+    time. `quiet` is the re-sweep a read triggers when refs moved: it only
+    brings the rows up to date. No ping, no `notified` stamp and no model
+    assessment, so those keep the cadence of the routine and of the
+    windows that ask for a sweep. A quiet call whose refs some other sweep
+    already caught up with does nothing."""
+    with _refresh_lock:
+        if state is None:
+            state = ref_state(fresh=True)
+        refs = refs_fingerprint(state)
+        if quiet and refs is not None and _read().get("refs") == refs:
+            return _read().get("items") or []
+        return _refresh_locked(quiet, refs)
+
+
+def _refresh_locked(quiet, refs):
     items = sweep()
     now = _now_iso()
     keys = {it["key"] for it in items}
@@ -386,6 +497,9 @@ def refresh():
     def fn(s):
         s["items"] = items
         s["last_sweep"] = now
+        s["refs"] = refs
+        if quiet:
+            return s
         notified = dict(s.get("notified") or {})
         dismissed = dict(s.get("dismissed") or {})
         new_keys = sorted(k for k in keys if k not in notified)
@@ -414,6 +528,8 @@ def refresh():
         return s
 
     jsonstore.mutate(STORE, fn, _blank(), indent=1, ensure_ascii=False)
+    if quiet:
+        return items
     if ping.get("text"):
         try:
             from . import notify
@@ -424,15 +540,48 @@ def refresh():
     return items
 
 
+def _resweep():
+    """A quiet refresh on a daemon thread, one at a time: Attention polls
+    every 5 s and a sweep can outlast that, so later reads join the one in
+    flight instead of queueing more."""
+    global _resweeping
+    with _resweep_lock:
+        if _resweeping:
+            return
+        _resweeping = True
+
+    def run():
+        global _resweeping
+        try:
+            refresh(quiet=True)
+        except Exception:  # noqa: BLE001 — the next read tries again
+            pass
+        finally:
+            with _resweep_lock:
+                _resweeping = False
+    _spawn(run, "vira-orphan-resweep")
+
+
 def compose():
     """Every non-dismissed item, stalest-first, with any in-flight action
     state folded in. `unpushed-main` is pinned last — it has no age worth
-    sorting on and it is not a worktree to resume."""
+    sorting on and it is not a worktree to resume.
+
+    Checked against git on the way out (see ref_state): a row git already
+    contradicts is not served, and refs that moved since the sweep start a
+    quiet re-sweep. When git cannot answer, the stored rows are served as
+    they are."""
     s = _read()
     dismissed = set(s.get("dismissed") or {})
     reads = s.get("reads") or {}
     items = [dict(it) for it in (s.get("items") or [])
              if it.get("key") not in dismissed]
+    state = ref_state()
+    if state is not None:
+        heads = local_heads(state)
+        items = [it for it in items if row_still_there(it, heads)]
+        if refs_fingerprint(state) != s.get("refs"):
+            _resweep()
     with _actions_lock:
         for it in items:
             # The assessment is keyed on the item KEY, which embeds tip sha
