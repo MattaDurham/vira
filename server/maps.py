@@ -441,8 +441,30 @@ _SAVE = (
     "Call mcp__vira__save_map ONCE with the whole map. It validates and "
     "stores the map, and the Maps window draws it - do NOT write HTML or "
     "any file yourself, and do not change anything else on this machine. "
+    # Every writing session is placed in a branch worktree, and the session
+    # preamble then talks about landing a branch. A map job has nothing to
+    # land, so say so here rather than leave the two to contradict.
+    "You may be working in a git worktree; that is only where Vira places "
+    "every session that can write. This job changes no files there: the "
+    "save_map call is its whole output, so there is no branch to land. "
+    # 2026-10-08: sessions fanned out to Explore agents and ended the turn
+    # waiting on them; saving on half the findings is the failure to rule
+    # out.
+    "If you split the research across subagents, save only after every "
+    "one of them has reported back. "
     "If the tool returns an error, fix the payload and call it again.\n\n"
     "spec_json shape (one JSON string):\n" + SPEC_SHAPE + "\n" + LIMITS_LINE)
+
+
+def _taken_slugs():
+    """The slugs already in use, for the ask prompt. A session has no tool
+    that lists maps, so the prompt used to ask it to "check" something it
+    could not see; now it is told."""
+    saved = _read()["maps"]
+    if not saved:
+        return "the owner has no saved maps yet"
+    return "slugs already in use: " + ", ".join(
+        f"{slug} ('{rec['spec']['title']}')" for slug, rec in saved.items())
 
 
 def ask_prompt(request):
@@ -453,9 +475,11 @@ def ask_prompt(request):
         f"  \"{request}\"\n\n" + _DESIGN +
         "THEN SAVE IT\n" + _SAVE + "\n"
         "Arguments: slug = a short kebab-case name for the subject (e.g. "
-        "'routines-and-skills'; check it is not one the owner already "
-        "has unless you mean to replace it); brief = the owner's request "
-        "above, verbatim (Refresh re-runs it); spec_json = the map.\n\n"
+        f"'routines-and-skills'; {_taken_slugs()} and 'system' is "
+        "reserved - saving to a slug in use REPLACES that map, so pick a "
+        "new one unless the request is to rebuild it); brief = the owner's "
+        "request above, verbatim (Refresh re-runs it); spec_json = the "
+        "map.\n\n"
         "When the tool reports success, say in two or three sentences what "
         "the map shows and anything you could not find.")
 
@@ -481,5 +505,10 @@ def refresh_prompt(slug):
         f"Arguments: slug = {slug} (the same map); brief = the request "
         "above, verbatim; spec_json = the full updated map, every box, not "
         "a diff.\n\n"
+        # The ask prompt always said how to close; this one never did, so
+        # a refresh ended however the model felt like ending it.
+        "When the tool reports success, say in two or three sentences what "
+        "changed - boxes added, removed and rewritten - and anything you "
+        "could not verify.\n\n"
         "CURRENT MAP:\n"
         + json.dumps(m["spec"], indent=1, ensure_ascii=False))

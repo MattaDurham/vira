@@ -9291,8 +9291,48 @@ function appendInline(parent, text) {
   if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
 }
 
-function renderTermLine(line) {
+// A subagent's line, as the runner writes it (runner.AGENT_LANE):
+// "  \u250a <label> \u00b7 <text>". The label never contains " \u00b7 ".
+const AGENT_LANE_RE = /^\u250a (.+?) \u00b7 (.*)$/;
+// Lane colours, in launch order. The terminal is always dark (--term-bg),
+// so these are fixed tones rather than theme tokens.
+const AGENT_LANE_COLORS = 6;
+
+// label -> lane index, from the session's agents in launch order, so a
+// lane in the feed and its card in the strip share a colour.
+function agentLaneIndex(agents) {
+  const m = new Map();
+  (agents || []).forEach((a) => {
+    if (a && a.label && !m.has(a.label)) m.set(a.label, m.size);
+  });
+  return m;
+}
+
+function renderAgentLine(m, lanes) {
+  const [, label, body] = m;
+  if (!lanes.has(label)) lanes.set(label, lanes.size);
+  const div = el("div", "term-line term-agent lane-"
+    + (lanes.get(label) % AGENT_LANE_COLORS));
+  div.appendChild(el("span", "agent-tag", label));
+  const tool = body.match(/^\u2192\s+([A-Za-z_]+)(.*)$/);
+  if (tool) {
+    const span = el("span", "term-tool");
+    span.appendChild(document.createTextNode("\u2192 "));
+    span.appendChild(el("span", "tname", tool[1]));
+    span.appendChild(document.createTextNode(tool[2]));
+    div.appendChild(span);
+  } else {
+    const span = el("span", "term-text");
+    appendInline(span, body);
+    div.appendChild(span);
+  }
+  return div;
+}
+
+function renderTermLine(line, lanes) {
   const t = line.replace(/^\s+/, "");
+  const lane = t.match(AGENT_LANE_RE);
+  if (lane) return renderAgentLine(lane, lanes || new Map());
   const div = document.createElement("div");
   if (/^\[vira\] (plan saved|plan published|plan could not be saved|plan publish failed|job failed|session failed|permission|approved|denied|interrupt|session closed|session interrupted)/.test(t)) {
     div.className = "term-line term-note"; appendLinkified(div, line);
@@ -9818,6 +9858,83 @@ function onSessionEvent(ev) {
 }
 let alertPoke = null;
 
+// ----- the agents strip: one card per subagent, above the reply box -----
+//
+// A session that fans out to subagents used to show them only as lines
+// blended into the main agent's, with the status bar reading "complete -
+// nothing pending" over four agents still working (owner, 2026-10-08:
+// "If Vira sessions do spawn subagents, they need to be visual"). Each
+// card says what the agent is, whether it is still running, how much it
+// has done, and opens to its full report. Its colour matches its lane.
+
+function agentClock(a) {
+  const end = a.finished_t || Date.now() / 1000;
+  const s = Math.max(0, Math.round(end - (a.started_t || end)));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+const AGENT_STATUS_WORD = { running: "running", completed: "done",
+                            failed: "failed", stopped: "stopped" };
+
+function renderAgentStrip(box, j) {
+  const agents = j.agents || [];
+  box.classList.toggle("on", agents.length > 0);
+  // Rebuild only when something a card shows has changed, so an open
+  // report is not collapsed by the 800ms poll. The running clock is the
+  // exception: it ticks in place.
+  const key = JSON.stringify(agents.map((a) => [a.id, a.status, a.tool_uses,
+    a.last, (a.report || "").length]));
+  if (box.dataset.key === key) {
+    box.querySelectorAll("[data-clock]").forEach((n) => {
+      const a = agents.find((x) => x.id === n.dataset.clock);
+      if (a) n.textContent = agentClock(a);
+    });
+    return;
+  }
+  box.dataset.key = key;
+  const open = new Set([...box.querySelectorAll(".agent-card.open")]
+    .map((n) => n.dataset.id));
+  box.innerHTML = "";
+  if (!agents.length) return;
+  const live = agents.filter((a) => a.status === "running").length;
+  box.appendChild(el("div", "agents-head", live
+    ? `Agents · ${live} of ${agents.length} running`
+    : `Agents · all ${agents.length} reported`));
+  const list = el("div", "agents-list");
+  agents.forEach((a, i) => {
+    const card = el("div", "agent-card lane-" + (i % AGENT_LANE_COLORS)
+      + " st-" + a.status);
+    card.dataset.id = a.id;
+    if (open.has(a.id)) card.classList.add("open");
+    const row = el("div", "agent-row");
+    row.appendChild(el("span", "agent-dot"));
+    row.appendChild(el("span", "agent-name", a.label || "agent"));
+    if (a.type) row.appendChild(el("span", "agent-type", a.type));
+    const calls = a.tool_uses || 0;
+    const meta = el("span", "agent-meta");
+    meta.appendChild(document.createTextNode(
+      `${AGENT_STATUS_WORD[a.status] || a.status} · ${calls} tool call`
+      + `${calls === 1 ? "" : "s"} · `));
+    const clock = el("span", "", agentClock(a));
+    if (a.status === "running") clock.dataset.clock = a.id;
+    meta.appendChild(clock);
+    row.appendChild(meta);
+    card.appendChild(row);
+    if (a.status === "running" && a.last)
+      card.appendChild(el("div", "agent-last", a.last));
+    if (a.report) {
+      const rep = el("div", "agent-report");
+      appendInline(rep, a.report);
+      card.appendChild(rep);
+      row.classList.add("has-report");
+      row.title = "Show or hide this agent's report";
+      row.addEventListener("click", () => card.classList.toggle("open"));
+    }
+    list.appendChild(card);
+  });
+  box.appendChild(list);
+}
+
 function createJobTerm(jid, refs) {
   // refs: { banner, output, pending, composebar, say, send, stopBtn,
   //         statusbar, led, title, scroller }
@@ -9871,12 +9988,20 @@ function createJobTerm(jid, refs) {
       // A parked turn is COMPLETE, not waiting — see jobPhase. The bar
       // stays live underneath (composeState), so the session is still
       // steerable; it just stops claiming to be an active job.
+      // Subagents still running mean the work is NOT done, whatever the
+      // main agent's last turn said - the runner holds the session as
+      // "agents" until each one reports and the next turn concludes.
+      const agentsLive = j.status === "running"
+        ? (j.agents || []).filter((a) => a.status === "running").length : 0;
+      const agentsWord = agentsLive
+        ? ` — ${agentsLive} agent${agentsLive === 1 ? "" : "s"} running` : "";
       const st = j.status === "running"
         ? (waiting ? "waiting on you"
           : asking ? "waiting on your answer"
           : j.awaiting === "paused" ? "paused — you stopped it"
-          : replying ? "complete — nothing pending" : "working")
+          : replying ? "complete — nothing pending" : "working" + agentsWord)
         : (j.status || "");
+      if (r.agents) renderAgentStrip(r.agents, j);
       r.led.className = "term-dot " + (waiting || asking ? "wait"
         : j.awaiting === "paused" ? "wait"
         : replying ? "done"
@@ -9907,8 +10032,11 @@ function createJobTerm(jid, refs) {
       // with a few lines, which reads as having lost the work.
       this.lastOutput = j.output || "";
       const out = ((this.carry || "") + (j.output || "")).replace(/\n+$/, "");
-      if (out.trim()) out.split("\n").forEach((ln) =>
-        r.output.appendChild(renderTermLine(ln)));
+      if (out.trim()) {
+        const lanes = agentLaneIndex(j.agents);
+        out.split("\n").forEach((ln) =>
+          r.output.appendChild(renderTermLine(ln, lanes)));
+      }
       if (j.status === "running" && !waiting && !replying)
         r.output.appendChild(el("span", "term-cursor"));
       this.renderPending(j);
@@ -9968,8 +10096,11 @@ function createJobTerm(jid, refs) {
       // that cannot act is the failure mode this repo keeps writing down.
       r.stopBtn.disabled = !live;
       r.stopBtn.style.display = live ? "" : "none";
+      const onAgents = live && j.awaiting === "agents";
       r.say.placeholder = ended
         ? "Pick this up — it resumes with its full context"
+        : onAgents
+        ? "Message the session — its agents keep working"
         : j.awaiting === "paused"
         ? "Stopped — tell it what to do instead, or Finish to close it"
         : replying
@@ -9978,7 +10109,9 @@ function createJobTerm(jid, refs) {
       r.stopBtn.textContent = replying ? "Finish" : "Stop";
       r.stopBtn.title = replying
         ? "Close the session — its work is already done and recorded"
-        : "End the current turn — queued messages still deliver";
+        : onAgents
+        ? "Stop the running agents — the session stays open"
+        : "End the current turn and any running agents — queued messages still deliver";
     },
     start() {
       activeTerms[this.jid] = this;
@@ -10064,9 +10197,11 @@ function openJobPanel(jid) {
   $("#job-cmd").innerHTML = "";
   $("#job-output").innerHTML = "";
   $("#job-pending").innerHTML = "";
+  $("#job-agents").innerHTML = "";
   panelTerm = createJobTerm(jid, {
     banner: $("#job-banner"), cmd: $("#job-cmd"), output: $("#job-output"),
-    pending: $("#job-pending"), composebar: $("#job-composebar"),
+    pending: $("#job-pending"), agents: $("#job-agents"),
+    composebar: $("#job-composebar"),
     say: $("#job-say"), send: $("#job-send"), stopBtn: $("#job-stop"),
     statusbar: $("#job-statusbar"), led: $("#job-runled"),
     title: $("#job-title"), scroller: $("#job-output").parentElement,
@@ -10250,7 +10385,11 @@ function openJobWindow(jid) {
   composebar.appendChild(send);
   composebar.appendChild(stopBtn);
   const statusbar = el("div", "cc-statusbar");
+  // The session's subagents, pinned above the box so they stay in view
+  // however far the feed has scrolled (renderAgentStrip).
+  const agents = el("div", "term-agents");
   body.appendChild(scroll);
+  body.appendChild(agents);
   body.appendChild(composebar);
   body.appendChild(statusbar);
   win.appendChild(bar);
@@ -10285,7 +10424,7 @@ function openJobWindow(jid) {
   armTermRetreat(win);
   const term = createJobTerm(jid, {
     banner, cmd, output, pending, composebar, say, send, stopBtn,
-    statusbar, led, scroller: scroll,
+    statusbar, led, scroller: scroll, agents,
     onName: (n) => { win.dataset.wname = n; },
   });
   jobWindows[jid] = { win, term };

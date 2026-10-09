@@ -1563,6 +1563,51 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
 .term-dot.wait { background: var(--accent); box-shadow: 0 0 9px var(--accent);
   animation: termpulse 1.1s ease-in-out infinite; }
 
+/* ---------- subagents: a lane per agent in the feed, a card per agent
+   above the box (renderAgentLine / renderAgentStrip). Lane colours follow
+   launch order; red and the Claude orange are left out on purpose, since
+   they already mean "error" and "the main agent's tool" here. ---------- */
+.lane-0 { --lane: #7fb3ff; }
+.lane-1 { --lane: #d9b64a; }
+.lane-2 { --lane: #5dd39e; }
+.lane-3 { --lane: #c792ea; }
+.lane-4 { --lane: #6fd0e0; }
+.lane-5 { --lane: #e39b6b; }
+.term-agent { border-left: 2px solid var(--lane); padding-left: 10px;
+  margin-left: 2px; color: var(--term-mut); }
+.term-agent .agent-tag { color: var(--lane); margin-right: 8px; font-size: 11.5px; }
+.term-agent .term-text { color: var(--term-mut); }
+.term-agents { display: none; flex: none; max-height: 36%; overflow-y: auto;
+  border-top: 1px solid var(--term-line); background: var(--term-chrome);
+  padding: 8px 14px 6px; color: var(--term-fg); font-size: 12px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+.term-agents.on { display: block; }
+.agents-head { color: var(--term-mut); font-size: 11px; letter-spacing: .05em;
+  text-transform: uppercase; margin-bottom: 6px; }
+.agent-card { border-left: 2px solid var(--lane); padding: 3px 0 3px 10px;
+  margin-bottom: 4px; min-width: 0; }
+.agent-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px;
+  min-width: 0; }
+.agent-row.has-report { cursor: pointer; }
+.agent-row.has-report:hover .agent-name { text-decoration: underline; }
+.agent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lane);
+  flex: none; }
+.agent-card.st-running .agent-dot { box-shadow: 0 0 7px var(--lane);
+  animation: termpulse 1.1s ease-in-out infinite; }
+.agent-card.st-failed .agent-dot { background: var(--red); }
+.agent-card.st-stopped .agent-dot { background: var(--term-dim); }
+.agent-name { color: var(--term-fg); min-width: 0; flex: 0 1 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-type { color: var(--lane); font-size: 11px; flex: none; }
+.agent-meta { color: var(--term-mut); margin-left: auto; flex: none;
+  white-space: nowrap; }
+.agent-last { color: var(--term-dim); padding-left: 15px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-report { display: none; white-space: pre-wrap; word-break: break-word;
+  color: var(--term-fg); padding: 6px 4px 4px 15px; max-height: 260px;
+  overflow-y: auto; line-height: 1.5; }
+.agent-card.open .agent-report { display: block; }
+
 /* ---------- live sessions: permission cards + compose bar ---------- */
 .perm-stack { padding: 0 18px 16px; margin-top: -44px; display: flex;
   flex-direction: column; gap: 10px;

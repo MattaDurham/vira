@@ -51,6 +51,10 @@ try:
         PermissionResultDeny,
         ResultMessage,
         SystemMessage,
+        TaskNotificationMessage,
+        TaskProgressMessage,
+        TaskStartedMessage,
+        TaskUpdatedMessage,
         TextBlock,
         ThinkingBlock,
         ToolUseBlock,
@@ -62,6 +66,7 @@ except Exception as e:  # noqa: BLE001 — tolerated for CLI-exec jobs
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = HookMatcher = None
     ResultMessage = None
     SystemMessage = TextBlock = ThinkingBlock = ToolUseBlock = ToolResultBlock = UserMessage = None
+    TaskNotificationMessage = TaskProgressMessage = TaskStartedMessage = TaskUpdatedMessage = None
 
     # The Vira gate is provider-neutral even when the Claude SDK is absent.
     # These two tiny stand-ins preserve its allow/deny contract for Codex;
@@ -138,6 +143,27 @@ def _max_buffer_bytes():
         mb = 0
     return max(int(mb * 1024 * 1024), _SDK_DEFAULT_BUFFER)
 
+
+def _cli_path():
+    """The Claude Code binary a session runs: the owner's installed CLI,
+    found the way every other Vira call finds it (models.find_binary -
+    suggest.py and the auth check already run that one). None hands the
+    choice back to the SDK, whose first pick is its own BUNDLED copy.
+
+    That bundled copy is frozen at whatever shipped with the pinned SDK,
+    and it resolves model aliases from its own build date. Measured
+    2026-10-08: the bundled CLI (2.1.206, SDK 0.2.115) runs `--model opus`
+    as claude-opus-4-8, while the installed CLI (2.1.283) runs it as
+    claude-opus-5-5. Every session was a generation behind the one-shot
+    calls on the same machine, and the status bar said so truthfully."""
+    from . import models
+    return models.find_binary("anthropic") or None
+
+
+# CLI tools that schedule a prompt into the session for later (see the
+# disallowed_tools comment in run_session).
+CLI_TIMER_TOOLS = ("ScheduleWakeup", "CronCreate")
+
 # Who the mid-turn steering is from, in the words the model will read.
 OWNER_LABEL = settings.get("owner_name") or "The owner"
 
@@ -195,6 +221,60 @@ PR_TIMEOUT = 120
 # than answering. Distinct from a message so an empty Finish can't be
 # mistaken for a blank steer.
 _END = object()
+
+# ---------- subagents and turns the CLI starts by itself ----------
+#
+# A session may fan work out to subagents (the Agent tool, "Task" on older
+# CLIs), and the CLI runs them in the BACKGROUND by default: the Agent call
+# returns at once, the main agent can end its turn "waiting on the agents",
+# and when one finishes the CLI starts the next turn ON ITS OWN with the
+# agent's report. Measured on CLI 2.1.283 (2026-10-08): task_started /
+# task_progress / task_notification system messages bracket each agent,
+# every message an agent produces carries parent_tool_use_id = the Agent
+# call's id, and each report-back arrives as a fresh init + turn + result
+# that nobody sent a query for.
+#
+# The runner used to read the stream only between its own query and the
+# next ResultMessage. On 2026-10-08 three map sessions ended their first
+# turn with four Explore agents still running, the runner parked with
+# "complete - nothing pending", and stopped reading. The agents kept
+# working into the SDK's 100-message buffer until it filled; then the SDK's
+# reader blocked, so the CLI's permission requests (can_use_tool) were never
+# read, and the whole session hung for good with its last agent mid-call.
+# The feed had also shown every agent's lines blended into the main
+# agent's, with nothing saying who was talking.
+#
+# So: one pump reads every message for the life of the session; a turn the
+# CLI starts by itself is a real turn; each agent is tracked (state
+# "agents") and its lines are written in its own lane.
+AGENT_TOOLS = ("Agent", "Task")
+# An agent's transcript line: "  <AGENT_LANE> <label> · <text>". app.js
+# (renderTermLine) parses exactly this shape into a coloured lane.
+AGENT_LANE = "┊"
+# Lines of one agent message shown in the main feed. An Explore agent's
+# report runs to 100+ lines; four of them inline buried the main agent's
+# own words. The whole report is kept on the agent's card instead.
+AGENT_TEXT_LINES = 8
+# Characters of an agent's final report kept for its card in the agents
+# strip: enough for a full Explore report, small enough that state.json
+# (rewritten on every flush) stays cheap with a dozen agents.
+AGENT_REPORT_KEEP = 8000
+# Agents kept in state.json, newest last. A ceiling, not a target.
+AGENTS_KEEP = 40
+# Task statuses that end a task, across both lifecycle vocabularies
+# (task_notification says "stopped", task_updated says "killed").
+TERMINAL_TASK = ("completed", "failed", "stopped", "killed")
+# Seconds to wait, after the last background task ends, for the turn the
+# CLI starts with its report. If none comes the boundary is decided again
+# as if the agents had never run, so a lost notification cannot hold a
+# session "working" for the length of the reply window.
+SETTLE_GRACE = 20.0
+# How often a parked runner re-checks for a turn the CLI started by itself.
+HOLD_POLL = 0.5
+# Pump -> main loop sentinels.
+_STREAM_END = object()   # the CLI's stream ended (process exit)
+_CLI_TURN = object()     # the CLI started a turn by itself
+_SETTLED = object()      # background work ended with no report turn
 
 
 class _EngineDone(Exception):
@@ -287,6 +367,21 @@ class Runner:
         # a new turn, so a genuine mid-turn Stop still reads as aborted.
         self.finished_cleanly = False
         self._consumed = 0               # control.jsonl lines handled
+        # The pump (see AGENT_TOOLS above). `_results` carries one
+        # (result_text, ok) per finished turn to the main loop, unbounded on
+        # purpose: the pump must never wait on the main loop, or the SDK's
+        # reader stalls behind it and the CLI's permission requests go
+        # unread. `_turn_open` says a turn is in flight, whoever started it.
+        self._results = asyncio.Queue()
+        self._turn_open = False
+        self._stream_error = ""
+        # Subagents by the Agent call's tool_use_id, in launch order, and
+        # every CLI task by task_id (agents AND background shells - either
+        # one finishing starts a turn).
+        self.agents = {}
+        self.tasks = {}
+        self._settled_t = 0.0            # when the last background task ended
+        self._reported = ""              # label of the agent that ended last
         self.flush_state()
 
     # ----- files -----
@@ -360,20 +455,43 @@ class Runner:
             self._lease = None
         self.state.get("runtime", {}).pop("execution_lease", None)
 
-    async def begin_turn(self, turn_id=None):
+    def _open_turn_record(self, ident, status, phase, **event):
+        """Reset the per-turn execution record. Shared by the turns Vira
+        starts (begin_turn) and the ones the CLI starts (begin_cli_turn)."""
+        # Set FIRST, before anything can yield: the pump reads it to decide
+        # whether a message it sees is the start of a turn nobody announced.
+        self._turn_open = True
         if self._deadline_task:
             self._deadline_task.cancel()
-        ident = turn_id or uuid.uuid4().hex
+            self._deadline_task = None
         self._execution_elapsed = 0.0
         self.state["error"] = ""
         self.state["result_text"] = ""
-        self.state["execution"] = {"turn_id": ident, "status": "queued", "phase": "admission",
+        self.state["execution"] = {"turn_id": ident, "status": status, "phase": phase,
                                    "started_t": time.time(), "updated_t": time.time(),
                                    "message_items": [], "usage": {}}
         public = copy.deepcopy(self.state["runtime"])
         public.pop("execution_lease", None)
         self.state["execution"]["runtime"] = public
-        self.record_event("turn_started", runtime=public)
+        self.record_event("turn_started", runtime=public, **event)
+
+    def begin_cli_turn(self):
+        """A turn the CLI started by itself - a background agent (or shell)
+        reported back. Synchronous because the pump calls it and the pump
+        must never wait. No admission lease: the model call is already
+        under way and Vira cannot queue it, so taking a slot would only
+        make the admission ledger claim a control it does not have."""
+        self._open_turn_record(uuid.uuid4().hex, "running", "model", origin="cli")
+        self.state["turn"] = int(self.state.get("turn") or 0) + 1
+        # Named by whatever ended last, then cleared: a turn the CLI starts
+        # for some other reason must not reuse an earlier agent's name.
+        who, self._reported = self._reported or "background work", ""
+        self.append(f"[vira] {who} reported back - the session continues\n")
+        self.flush_state()
+
+    async def begin_turn(self, turn_id=None):
+        ident = turn_id or uuid.uuid4().hex
+        self._open_turn_record(ident, "queued", "admission")
         await self.acquire_execution()
         limit = (self.state["runtime"].get("latency_budget") or {}).get("hard_limit_s")
         if limit:
@@ -405,6 +523,10 @@ class Runner:
         self.flush_state()
 
     def end_turn(self, status, answer=""):
+        # Every engine ends its turns here (the Claude pump, Codex, the API
+        # agents), so this - not the pump - is where a turn stops being in
+        # flight; await_reply reads it through _cli_busy on every engine.
+        self._turn_open = False
         if self._deadline_task:
             self._deadline_task.cancel()
             self._deadline_task = None
@@ -587,6 +709,14 @@ class Runner:
         elif op == "landing":
             await self.handle_landing(cmd)
         elif op == "interrupt":
+            if self.awaiting_reply and self.background_running():
+                # Parked on running agents: the work is NOT done, so Stop
+                # means stop it (the agents), never Finish. The boundary
+                # then settles as a paused session with the box still open.
+                self.interrupted = True
+                self.append("[vira] stopping the running agents…\n")
+                await self.stop_background()
+                return
             if self.awaiting_reply:
                 # The turn is already over — Stop here is the Finish button,
                 # "I have nothing to add", not an abandoned run.
@@ -628,6 +758,10 @@ class Runner:
                 await self.client.interrupt()
             except Exception as e:  # noqa: BLE001 — surface, don't crash
                 self.append(f"[vira] interrupt failed: {e}\n")
+            # Interrupting the turn leaves background agents running, and
+            # each would start a fresh turn when it finished - a Stop that
+            # the session talks straight through. Stop means all of it.
+            await self.stop_background()
         elif self.exec_proc is not None:
             # The CLI-exec path has no in-band interrupt; ending the child
             # ends the turn (the runner's loop then finalizes as aborted).
@@ -753,24 +887,64 @@ class Runner:
         # talk over it.
         self.flush_state()
         try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(self.inbox.get(),
-                                                  self.reply_window)
-                except asyncio.TimeoutError:
-                    hrs = self.reply_window / 3600
-                    self.append(f"[vira] no reply in {hrs:.0f}h — closing "
-                                f"the session\n")
-                    return None
-                if item is _END:
-                    return None
-                text = (item or "").strip()
-                if text:
-                    return text
+            return await self._hold()
         finally:
             self.awaiting_reply = False
             self.state["awaiting"] = None
             self.flush_state()
+
+    async def await_agents(self):
+        """Hold a turn boundary that ended while background work is still
+        running. The work is NOT complete: the main agent ended its turn
+        "waiting on the agents", and each agent's report will start the
+        next turn by itself. So the session reads as working ("agents"),
+        no landing card goes up, the run is not marked finished, and the
+        box stays live - the owner can still message it or Stop it.
+        Returns like await_reply, plus _CLI_TURN and _SETTLED."""
+        self.release_execution("waiting on agents")
+        if self.closing:
+            return None
+        self.awaiting_reply = True
+        self.state["awaiting"] = "agents"
+        self.flush_state()
+        try:
+            return await self._hold(agents=True)
+        finally:
+            self.awaiting_reply = False
+            self.state["awaiting"] = None
+            self.flush_state()
+
+    async def _hold(self, agents=False):
+        """Wait at a turn boundary for the first of: the owner's message
+        (returned as text); Finish or the window running out (None); the
+        CLI starting a turn by itself (_CLI_TURN); or, while holding for
+        agents, the background work ending with no report turn after
+        SETTLE_GRACE (_SETTLED)."""
+        deadline = time.monotonic() + self.reply_window
+        while True:
+            if self._cli_busy():
+                return _CLI_TURN
+            if (agents and not self.background_running()
+                    and time.monotonic() - self._settled_t >= SETTLE_GRACE):
+                return _SETTLED
+            left = deadline - time.monotonic()
+            if left <= 0:
+                hrs = self.reply_window / 3600
+                self.append(
+                    f"[vira] agents still running after {hrs:.0f}h — closing "
+                    "the session\n" if agents else
+                    f"[vira] no reply in {hrs:.0f}h — closing the session\n")
+                return None
+            try:
+                item = await asyncio.wait_for(self.inbox.get(),
+                                              min(HOLD_POLL, left))
+            except asyncio.TimeoutError:
+                continue
+            if item is _END:
+                return None
+            text = (item or "").strip()
+            if text:
+                return text
 
 
     # ----- the landing card: the harness asks merge / keep / discard -----
@@ -1262,9 +1436,251 @@ class Runner:
 
     # ----- transcript rendering -----
 
+    # ----- subagents (see AGENT_TOOLS) -----
+
+    def _agent_label(self, text):
+        """One line, no lane delimiters, so app.js can split it back out."""
+        s = " ".join(str(text or "").split())
+        s = s.replace(AGENT_LANE, "").replace(" \u00b7 ", " - ")
+        return s[:60].rstrip() or "agent"
+
+    def _lane(self, parent_id, body):
+        a = self.agents.get(parent_id)
+        label = a["label"] if a else "agent"
+        return f"  {AGENT_LANE} {label} \u00b7 {body}\n"
+
+    def _publish_agents(self):
+        self.state["agents"] = list(self.agents.values())[-AGENTS_KEEP:]
+
+    def _agent_launched(self, tool_use_id, inp, label=None, kind=None):
+        """An Agent call (or a task_started for one we never saw called)."""
+        inp = inp if isinstance(inp, dict) else {}
+        if tool_use_id in self.agents:
+            return self.agents[tool_use_id]
+        a = {"id": tool_use_id,
+             "label": self._agent_label(label or inp.get("description")
+                                        or inp.get("subagent_type") or "agent"),
+             "type": str(kind or inp.get("subagent_type") or "")[:40],
+             "status": "running", "background": bool(inp.get("run_in_background")),
+             "task_id": "", "started_t": time.time(), "finished_t": None,
+             "tool_uses": 0, "tokens": 0, "last": "", "report": ""}
+        self.agents[tool_use_id] = a
+        self._publish_agents()
+        return a
+
+    def _agent_finished(self, a, status, summary="", assumed=False):
+        """Close an agent's card once, whichever lifecycle message gets here
+        first (the notification, a terminal task_updated, the snapshot, or a
+        foreground Agent call returning). `assumed` is the snapshot's
+        inference - it knows the agent stopped running, not how it ended -
+        so a real status arriving later still corrects the card."""
+        status = "stopped" if status == "killed" else status
+        word = {"completed": "done", "failed": "failed", "stopped": "stopped"}
+        calls = a["tool_uses"]
+        tail = f" - {calls} tool call{'' if calls == 1 else 's'}"
+        if a["status"] != "running":
+            if a.pop("assumed", False) and not assumed:
+                a["status"] = status
+                if status != "completed":
+                    self.append(self._lane(a["id"], word.get(status, status) + tail))
+                self._publish_agents()
+            return
+        a["status"] = status
+        a["finished_t"] = time.time()
+        if assumed:
+            a["assumed"] = True
+        if summary and not a["report"]:
+            a["report"] = str(summary)[:AGENT_REPORT_KEEP]
+        self.append(self._lane(a["id"], ("finished" if assumed
+                                         else word.get(status, status)) + tail))
+        self._reported = a["label"]
+        self._publish_agents()
+
+    def _task_ended(self, task_id, status, summary="", assumed=False):
+        t = self.tasks.get(task_id)
+        if t is None:
+            return
+        was_running = t["status"] not in TERMINAL_TASK
+        t["status"] = status
+        a = self.agents.get(t.get("tool_use_id") or "")
+        if a is not None and a.get("task_id") == task_id:
+            self._agent_finished(a, status, summary, assumed=assumed)
+        elif was_running and t.get("background") and not t.get("owned"):
+            # the main agent's own background shell: its end starts a turn
+            # too, and the turn's marker should name it
+            self._reported = t.get("label") or ""
+        if was_running and t.get("background") and not self.background_running():
+            self._settled_t = time.monotonic()
+
+    def background_running(self):
+        """Whether background work is still out - each piece starts a turn
+        of its own when it ends, so the session is not finished yet."""
+        return any(t.get("background") and t["status"] not in TERMINAL_TASK
+                   for t in self.tasks.values())
+
+    async def stop_background(self):
+        """Stop every running background task (the owner's Stop)."""
+        if self.client is None:
+            return
+        for task_id, t in list(self.tasks.items()):
+            if t.get("background") and t["status"] not in TERMINAL_TASK:
+                try:
+                    await self.client.stop_task(task_id)
+                except Exception as e:  # noqa: BLE001 — surface, don't crash
+                    self.append(f"[vira] could not stop {t.get('label') or task_id}: {e}\n")
+
+    def _render_task(self, msg):
+        """The CLI's task lifecycle: agents and background shells."""
+        d = msg.data if isinstance(getattr(msg, "data", None), dict) else {}
+        if isinstance(msg, TaskStartedMessage):
+            # Backgrounded is the CLI's own word for it. An older CLI that
+            # does not say defaults to "an agent the main agent launched
+            # runs in the background", which is the CLI default.
+            bg = d.get("is_backgrounded")
+            if bg is None:
+                bg = (msg.task_type == "local_agent"
+                      and not d.get("owned_by_subagent"))
+            self.tasks[msg.task_id] = {
+                "status": "running", "background": bool(bg),
+                "type": msg.task_type or "", "tool_use_id": msg.tool_use_id or "",
+                "owned": bool(d.get("owned_by_subagent")),
+                "label": self._agent_label(msg.description)}
+            if msg.task_type == "local_agent" and msg.tool_use_id:
+                a = self._agent_launched(msg.tool_use_id, {},
+                                         label=msg.description,
+                                         kind=d.get("subagent_type"))
+                a["task_id"] = msg.task_id
+                a["background"] = a["background"] or bool(bg)
+                if a["status"] != "running":
+                    # RESUMED. Measured 2026-10-08: an agent that left its
+                    # own shell running in the background "finishes", then
+                    # the CLI restarts it - same task_id, a second
+                    # task_started - when the shell ends, and it finishes
+                    # again later. Its card reopens with it.
+                    a.update(status="running", finished_t=None)
+                    a.pop("assumed", None)
+                self._publish_agents()
+        elif isinstance(msg, TaskProgressMessage):
+            a = self.agents.get(msg.tool_use_id or "")
+            if a is not None:
+                usage = msg.usage or {}
+                a["tool_uses"] = max(a["tool_uses"], int(usage.get("tool_uses") or 0))
+                a["tokens"] = int(usage.get("total_tokens") or a["tokens"])
+                a["last"] = str(msg.description or msg.last_tool_name or "")[:120]
+                self._publish_agents()
+        elif isinstance(msg, TaskNotificationMessage):
+            self._task_ended(msg.task_id, msg.status, msg.summary)
+        elif isinstance(msg, TaskUpdatedMessage):
+            if msg.status in TERMINAL_TASK:
+                self._task_ended(msg.task_id, msg.status)
+        self.flush_state()
+
+    def _reconcile_tasks(self, data):
+        """background_tasks_changed lists every background task still
+        running: anything we hold as running that is not on it has ended,
+        even if its own notification never arrives."""
+        live = {str(t.get("task_id")) for t in (data.get("tasks") or [])
+                if isinstance(t, dict)}
+        for task_id, t in list(self.tasks.items()):
+            if (t.get("background") and t["status"] not in TERMINAL_TASK
+                    and task_id not in live):
+                self._task_ended(task_id, "completed", assumed=True)
+        self.flush_state()
+
+    def _render_agent_message(self, parent_id, msg):
+        """One message from inside a subagent: written to its lane, never
+        to the main agent's message stream (that stream is the session's
+        answer, which chat and the reply channel read back)."""
+        a = self.agents.get(parent_id)
+        if a is None:
+            a = self._agent_launched(parent_id, {})
+        if not isinstance(msg, AssistantMessage):
+            return
+        out = ""
+        for b in msg.content:
+            if isinstance(b, TextBlock):
+                txt = (b.text or "").strip()
+                if not txt:
+                    continue
+                a["report"] = txt[:AGENT_REPORT_KEEP]
+                lines = [ln for ln in txt.splitlines() if ln.strip()]
+                for ln in lines[:AGENT_TEXT_LINES]:
+                    out += self._lane(parent_id, ln)
+                if len(lines) > AGENT_TEXT_LINES:
+                    out += self._lane(parent_id, f"\u2026 {len(lines) - AGENT_TEXT_LINES} "
+                                                 "more lines on the agent's card")
+            elif isinstance(b, ToolUseBlock):
+                summary = _tool_summary({"name": b.name, "input": b.input})
+                out += self._lane(parent_id, "\u2192 " + summary)
+                a["tool_uses"] += 1
+                a["last"] = summary[:120]
+                if b.name in AGENT_TOOLS:
+                    self._agent_launched(b.id, b.input)
+        self.append(out)
+        self._publish_agents()
+        self.flush_state()
+
+    def _opens_turn(self, msg):
+        """Whether a message seen with no turn in flight is the CLI starting
+        one by itself: its init, or main-agent speech. Task lifecycle and
+        subagent lines are not - agents run between turns by design."""
+        if getattr(msg, "parent_tool_use_id", None):
+            return False
+        if isinstance(msg, (AssistantMessage, UserMessage)):
+            return True
+        return (isinstance(msg, SystemMessage) and not isinstance(
+            msg, (TaskStartedMessage, TaskProgressMessage,
+                  TaskNotificationMessage, TaskUpdatedMessage))
+                and msg.subtype == "init")
+
+    def ingest(self, msg):
+        """Everything the CLI emits passes through here, in order, from the
+        pump. Returns (result_text, ok) when a main-agent turn ends."""
+        if not self._turn_open and self._opens_turn(msg):
+            self.begin_cli_turn()
+        r = self.render_message(msg)
+        if r is not None:                # end_turn has closed the turn
+            self._results.put_nowait(r)
+        return r
+
+    async def pump(self, client):
+        """Read the CLI's stream for the whole life of the session - never
+        only between a query and its result (see AGENT_TOOLS)."""
+        try:
+            async for msg in client.receive_messages():
+                self.ingest(msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — reported by the main loop
+            self._stream_error = str(e) or type(e).__name__
+        finally:
+            self._results.put_nowait(_STREAM_END)
+
+    def _cli_busy(self):
+        """The CLI is already on (or has finished) a turn nobody here has
+        handled yet - so this boundary is not a resting point."""
+        return self._turn_open or not self._results.empty()
+
+    async def next_result(self):
+        """The next finished turn's (result_text, ok), or None once the
+        stream has ended. A stream that died with an error raises it."""
+        item = await self._results.get()
+        if item is _STREAM_END:
+            self._results.put_nowait(_STREAM_END)   # every later call sees it too
+            if self._stream_error:
+                raise RuntimeError(self._stream_error)
+            return None
+        return item
+
+    # ----- transcript rendering -----
+
     def render_message(self, msg):
         """Same shapes the in-process path produced, so renderTermLine keeps
         working. Returns (result_text, ok) on the terminal ResultMessage."""
+        parent = getattr(msg, "parent_tool_use_id", None)
+        if parent and isinstance(msg, (AssistantMessage, UserMessage)):
+            self._render_agent_message(parent, msg)
+            return None
         if isinstance(msg, AssistantMessage):
             out = ""
             for b in msg.content:
@@ -1277,6 +1693,8 @@ class Runner:
                 elif isinstance(b, ToolUseBlock):
                     out += "  → " + _tool_summary(
                         {"name": b.name, "input": b.input}) + "\n"
+                    if b.name in AGENT_TOOLS:
+                        self._agent_launched(b.id, b.input)
                     if not b.name.startswith("mcp__vira__"):
                         self.native_tool(b.id, b.name, b.input)
                 elif isinstance(b, ThinkingBlock):
@@ -1285,12 +1703,34 @@ class Runner:
             return None
         if isinstance(msg, UserMessage) and isinstance(msg.content, list):
             for block in msg.content:
-                if isinstance(block, ToolResultBlock) and block.tool_use_id in self._native_tools:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                a = self.agents.get(block.tool_use_id)
+                if a is not None and not a["background"]:
+                    # A FOREGROUND agent's call returns its report, so the
+                    # agent is done. A background one returns "launched" at
+                    # once and finishes later, on its task notification.
+                    text = (block.content if isinstance(block.content, str)
+                            else json.dumps(block.content, default=str))
+                    if "agent launched" in (text or "")[:200].lower():
+                        a["background"] = True
+                    else:
+                        self._agent_finished(
+                            a, "failed" if block.is_error else "completed")
+                if block.tool_use_id in self._native_tools:
                     content = block.content
                     if isinstance(content, str):
                         content = [{"type": "text", "text": content}]
                     self.native_tool(block.tool_use_id, "tool", result={
                         "content": content or [], "isError": bool(block.is_error)}, completed=True)
+            return None
+        if TaskStartedMessage is not None and isinstance(
+                msg, (TaskStartedMessage, TaskProgressMessage,
+                      TaskNotificationMessage, TaskUpdatedMessage)):
+            self._render_task(msg)
+            return None
+        if isinstance(msg, SystemMessage) and msg.subtype == "background_tasks_changed":
+            self._reconcile_tasks(msg.data or {})
             return None
         if isinstance(msg, SystemMessage) and msg.subtype == "init":
             sid = msg.data.get("session_id") or ""
@@ -1320,6 +1760,8 @@ class Runner:
             self.append(f"[vira] {model} working…{tail}\n")
             return None
         if isinstance(msg, ResultMessage):
+            if parent:
+                return None   # a subagent's own result is not a main turn
             usage = getattr(msg, "usage", None)
             if usage:
                 self.record_usage(usage)
@@ -1405,7 +1847,8 @@ class Runner:
                                    branch=spec.get("branch") or "",
                                    live_root=spec.get("live_root") or "",
                                    vault_destination=spec.get("vault_destination"),
-                                   vault_context=spec.get("vault_context"))},
+                                   vault_context=spec.get("vault_context"),
+                                   subagents=True)},
                 mcp_servers={"vira": vira_srv} if vira_srv else {},
                 allowed_tools=list(viratools.TOOL_NAMES) if vira_srv else [],
                 # ALWAYS "default" + ALWAYS our gate. Handing the SDK its own
@@ -1430,68 +1873,115 @@ class Runner:
                 # model's context entirely; anything else risky is denied
                 # by the gate.
                 disallowed_tools=(["Write", "Edit", "NotebookEdit",
-                                   "Task", "WebSearch"]
-                                  if spec.get("read_only") else []),
+                                   "Task", "Agent", "WebSearch"]
+                                  if spec.get("read_only") else [])
+                # Timers the CLI fires later, by itself, into this session.
+                # A Vira session's state cannot show a timer waiting (it
+                # would read "complete" and then start talking), and
+                # scheduling belongs to Vira's routines. Background agents
+                # need neither: each one's report starts the next turn.
+                + list(CLI_TIMER_TOOLS),
+                # The owner's installed CLI, not the SDK's bundled copy - see
+                # _cli_path.
+                cli_path=_cli_path(),
             )
             async with ClaudeSDKClient(options) as client:
                 self.client = client
-                await self.begin_turn()
-                await client.query(spec["prompt"])
-                done = False
-                while not done:
-                    async for msg in client.receive_response():
-                        r = self.render_message(msg)
-                        if r is not None:
-                            result_text, ok = r
-                    if self.closing:
-                        break
-                    # Turn boundary: deliver queued steering first.
-                    steered = False
-                    while not self.interrupted and not self.inbox.empty():
-                        try:
-                            item = self.inbox.get_nowait()
-                        except asyncio.QueueEmpty:
+                # The pump starts before the first query and reads until the
+                # session ends - see AGENT_TOOLS for the hang it prevents.
+                # This loop only ever sees finished turns, through
+                # next_result, whoever started them.
+                pump = asyncio.ensure_future(self.pump(client))
+                try:
+                    await self.begin_turn()
+                    await client.query(spec["prompt"])
+                    while True:
+                        r = await self.next_result()
+                        if r is None:
+                            # The stream ended cleanly. Between turns that
+                            # is just the end; under a turn it means the CLI
+                            # died beneath it, which is a failure.
+                            if self._turn_open and not self.closing:
+                                ok = False
+                                self.state["error"] = "the Claude CLI exited mid-turn"
+                                self.append("\n[vira] session failed: the Claude "
+                                            "CLI exited mid-turn\n")
                             break
-                        if item is _END:
+                        result_text, ok = r
+                        if self.closing:
+                            break
+                        # An agent reported back while this turn was ending
+                        # and the CLI is already on the next one: there is no
+                        # boundary here to rest at.
+                        if self._cli_busy():
                             continue
-                        self.finished_cleanly = False
-                        self.append("[vira] steering delivered\n")
-                        await self.begin_turn()
-                        await client.query(item)
-                        steered = True
-                    if steered:
-                        continue
-                    # Nothing queued. The agent has stopped talking — and it
-                    # may have just ASKED the owner something (the merge /
-                    # test / discard decision every branch session ends on).
-                    # Hold the session open so that answer lands in this
-                    # conversation instead of arriving after it died.
-                    #
-                    # Two runs finalize immediately instead. A FAILED turn
-                    # must surface as an error now — parking it would show a
-                    # dead session as alive for hours and hide exactly the
-                    # auth failures the AI-health watcher exists to catch.
-                    # And a PLAN session's whole deliverable is published in
-                    # the epilogue, so lingering would withhold its own
-                    # output; refine a plan by running Plan again. The same
-                    # goes for every machine-dispatched run — see
-                    # parks_at_turn_end for the full reasoning.
-                    # A parked session has FINISHED its work — the turn
-                    # ended on its own — so its answer exists now. Publish
-                    # it before parking: state["result_text"] was only
-                    # written in the epilogue, so a session waiting in its
-                    # reply window reported no result at all, and anything
-                    # reading the answer at the turn boundary (the reply
-                    # channel texts it back) got an empty string. The
-                    # epilogue's own assignment still wins at finalize.
-                    self.state["result_text"] = (result_text or "")[:RESULT_KEEP]
-                    park = self.should_park(ok)
-                    if park:
-                        park = await self.offer_landing()
-                    reply = await self.await_reply() if park else None
-                    if reply is None:
-                        done = True
-                    else:
+                        # Turn boundary: deliver queued steering first.
+                        steered = False
+                        while not self.interrupted and not self.inbox.empty():
+                            try:
+                                item = self.inbox.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                            if item is _END:
+                                continue
+                            self.finished_cleanly = False
+                            self.append("[vira] steering delivered\n")
+                            await self.begin_turn()
+                            await client.query(item)
+                            steered = True
+                        if steered:
+                            continue
+                        # Nothing queued. The agent has stopped talking — and it
+                        # may have just ASKED the owner something (the merge /
+                        # test / discard decision every branch session ends on).
+                        # Hold the session open so that answer lands in this
+                        # conversation instead of arriving after it died.
+                        #
+                        # Two runs finalize immediately instead. A FAILED turn
+                        # must surface as an error now — parking it would show a
+                        # dead session as alive for hours and hide exactly the
+                        # auth failures the AI-health watcher exists to catch.
+                        # And a PLAN session's whole deliverable is published in
+                        # the epilogue, so lingering would withhold its own
+                        # output; refine a plan by running Plan again. The same
+                        # goes for every machine-dispatched run — see
+                        # parks_at_turn_end for the full reasoning.
+                        # A parked session has FINISHED its work — the turn
+                        # ended on its own — so its answer exists now. Publish
+                        # it before parking: state["result_text"] was only
+                        # written in the epilogue, so a session waiting in its
+                        # reply window reported no result at all, and anything
+                        # reading the answer at the turn boundary (the reply
+                        # channel texts it back) got an empty string. The
+                        # epilogue's own assignment still wins at finalize.
+                        self.state["result_text"] = (result_text or "")[:RESULT_KEEP]
+                        while True:
+                            # Background agents still out means the work is
+                            # NOT done, whatever the turn's last words were -
+                            # for machine runs too, whose deliverable comes in
+                            # the turn after the last report. A failed turn
+                            # still finalizes at once (see above).
+                            if self.background_running() and (ok or self.interrupted):
+                                reply = await self.await_agents()
+                                if reply is _SETTLED:
+                                    continue      # decide again, as a finished turn
+                                break
+                            park = self.should_park(ok)
+                            if park:
+                                park = await self.offer_landing()
+                            reply = await self.await_reply() if park else None
+                            break
+                        if reply is None:
+                            break
+                        if reply is _CLI_TURN:
+                            # begin_cli_turn has opened it; its result comes
+                            # through next_result like any other turn's. Work
+                            # resuming is "keep playing", as a typed reply is:
+                            # a landing card comes down and returns when this
+                            # turn ends.
+                            self.finished_cleanly = False
+                            self._drop_landing_card()
+                            continue
                         self.finished_cleanly = False
                         # The reply answers the Stop, so the interrupt is
                         # served: this turn starts clean and is judged on
@@ -1505,6 +1995,9 @@ class Runner:
                         self.flush_state()
                         await self.begin_turn()
                         await client.query(reply)
+                finally:
+                    pump.cancel()
+                    await asyncio.gather(pump, return_exceptions=True)
         except _EngineDone:
             pass                     # CLI-exec engine finished; epilogue below
         except Exception as e:  # noqa: BLE001 — session surface, report all
