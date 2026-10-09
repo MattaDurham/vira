@@ -23,6 +23,9 @@
   function load(name) {
     if (!images.has(name)) images.set(name, new Promise((resolve, reject) => {
       const image = new Image();
+      // Selected scene assets should not wait behind the desktop polling traffic.
+      image.fetchPriority = "high";
+      image.decoding = "async";
       image.onload = () => resolve(image);
       image.onerror = () => { images.delete(name); reject(new Error("Could not load " + name)); };
       image.src = asset(name);
