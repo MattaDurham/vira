@@ -3,7 +3,7 @@
 The animated pond uses a reduced model informed by carp research, with coefficients
 tuned visually for a desktop background. It is not a calibrated animal simulation
 or a full fluid solver. Fish lengths and water-plane velocities are normalized;
-the rendered world uses metres in a six-metre-wide pond with a 1.8-metre basin.
+the rendered world uses metres in a six-metre swimming area beneath open water with a 1.8-metre floor.
 
 ## Sources and what they informed
 
@@ -58,9 +58,8 @@ rig. Pause and hidden tabs retain the pose and momentum without advancing time.
 
 Depth commands first change pitch through angular damping. Tail thrust acts along
 the pitched body, with vertical drag and nominal neutral buoyancy; there is no
-independent depth spring lifting a stationary fish. Deep fish keep swimming in an
-ascending approach near food rather than stopping directly beneath it. A
-conservative hull envelope keeps the entire bending body above the sloped floor.
+independent depth spring lifting a stationary fish. Swimmers pitch and propel themselves toward their chosen depth. A conservative
+hull envelope keeps the entire bending body above the flat floor.
 The maximum tuned burst speed is 0.9 m/s. Fin movements, effective mass, joint
 stiffness, drag and burst timing remain animation choices, not measured koi values.
 Full three-dimensional fluid flow, detailed buoyancy regulation and fin lift are
@@ -68,7 +67,7 @@ not solved.
 
 ## Camera and underwater light
 
-The basin, fish, food and surface occupy the same metre-scaled world and perspective
+The floor, fish and surface occupy the same metre-scaled world and perspective
 camera. The water is at y=0, with the deepest floor at y=-1.8; fish depth changes
 physical position. Look around moves this same camera, with bounded orbit and zoom.
 Natural and cyberpunk looks change materials without rebuilding the world or
@@ -78,33 +77,38 @@ resetting the fish. The anatomy view exposes the same moving rig.
 informs the air/water exit-point calculation using Snell's law and refractive index
 1.333. Submerged vertices are projected through that exit point, preserving depth
 ordering and avoiding single-view ray-marching trails. An offscreen pass carries
-actual underwater geometry; a mirrored camera supplies bank and sky reflections.
+actual underwater geometry; a procedural blue night sky supplies quiet reflections without a visible horizon.
 The surface combines the two with a Fresnel approximation and small wave normals.
 [PBRT's transmittance model](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance)
 informs exponential color attenuation with underwater optical path. Deeper fish
 lose warm light and contrast, and their image softens beneath the reflected surface.
 Turbidity, caustics, wave amplitude and sky illumination are visually tuned.
 Refraction assumes a locally flat interface; ripple slopes add a small distortion,
-not a full wave-surface ray trace. The garden's procedural materials and lighting
-are a realistic rendering direction, not photographic reconstruction.
+not a full wave-surface ray trace. The procedural materials and lighting are a realistic rendering direction,
+not photographic reconstruction.
 
-If the 3D renderer cannot start, the picker explicitly names its photographic
+If the 3D renderer cannot start, the picker explicitly names its flat-water
 approximation. That older renderer retains an articulated photo skin and fitted
 oblique camera. Graphics-context loss names the failure and retains a static pond;
 choosing the pond again retries. Motion freezes for pause, reduced motion and hidden
-tabs. Render resolution and shadow maps are bounded because the scene runs behind
-working desktop windows.
+tabs. The renderer supports native 4K and retina sampling on smaller monitors, with
+an 8.4-million-pixel budget and the graphics device texture limit. The underwater
+pass matches the output resolution. Motion is capped at 30 frames per second.
 
-## Classic pond settings
+## Open water and interaction
 
-The rendered garden and courtyard use an enclosed basin, stone banks, planting
-and a lantern or deck. Their design is informed by the broad pond, stone banks and
-garden planting shown in the official [Portland Strolling Pond Garden](https://japanesegarden.org/garden-spaces/strolling-pond-garden/)
-and [Seattle Japanese Garden's stroll-garden design](https://www.seattlejapanesegarden.org/blog/2019/7/22/the-seattle-japanese-garden-designed-in-the-stroll-garden-style).
-Portland's [koi article](https://japanesegarden.org/2024/05/23/koi/) identifies
-its lower pond as the koi habitat. The design interpretation here is quiet, deep
-open water with planted, intentional banks rather than a visible river-stone bed.
-The older generated plates remain as thumbnails and fallbacks and depict no specific
-garden. Their prompts and the dorsal fish textures are recorded in `provenance.json`.
-Living Garden and Neon Pond skin manifests include the scene, setting and material
-look; applying either carries that preset through the normal synced UI preference.
+The surface and dark floor extend beyond the camera frustum. There are no banks,
+landscape props or visible basin edges, including in the orbit view. The legacy
+`garden` and `courtyard` preference values remain valid for saved skins; both now
+use the open-water scene. The natural and wireframe materials share the simulation.
+`open-water.svg` is a code-created picker thumbnail and static fallback, with no
+photographic landscape. Earlier generated pond plates remain archived assets;
+the fish texture provenance is recorded in `provenance.json`.
+
+Cursor attention blends each fish's wandering target with a loose, moving offset
+around the pointer. Clicking the water makes a stronger ripple. Shallow fish near
+the impact escape using the existing bend/counterstroke propulsion; more distant
+fish can investigate after individual delays. Deeper and faraway swimmers can
+ignore the disturbance. Temporary responses expire, and pointer attention clears
+when the pointer leaves or passes over desktop controls. There are no food pellets,
+feeding controls or feeding state.

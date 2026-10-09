@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <radialGradient id="water"><stop stop-color="#112c35"/><stop offset="1" stop-color="#040b14"/></radialGradient>
+    <linearGradient id="scales"><stop stop-color="#c5b6a0"/><stop offset=".4" stop-color="#ad4a28"/><stop offset=".6" stop-color="#c5b6a0"/><stop offset="1" stop-color="#586a6b"/></linearGradient>
+    <g id="koi"><path fill="url(#scales)" d="M-100 0Q-90-23-50-22Q5-18 60-2L89-23L79 0L89 23L60 2Q5 18-50 22Q-90 23-100 0Z"/><path fill="#8e9a91" opacity=".6" d="M-55-16L-35-40L-15-19M-55 16L-35 40L-15 19"/></g>
+  </defs>
+  <path fill="url(#water)" d="M0 0h1600v900H0z"/>
+  <g fill="none" stroke="#56818d" stroke-width="1" opacity=".13"><ellipse cx="1020" cy="360" rx="95" ry="60"/><ellipse cx="1020" cy="360" rx="120" ry="76"/><ellipse cx="520" cy="650" rx="75" ry="43"/></g>
+</svg>

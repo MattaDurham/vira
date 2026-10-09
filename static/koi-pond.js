@@ -12,23 +12,9 @@
     cos:Math.cos(50*Math.PI/180), centerY:.51, waterY:WATER_Y, width:6 };
   const space={width:6,length:6/WATER_Y,depth:1.8,radiusX:.46*6,radiusZ:.44*6/WATER_Y};
   const world=f=>({x:(f.x-.5)*space.width,y:-f.depth,z:(f.y-.5)*space.length});
-  function floorAt(x,z){
-    const r=clamp(Math.hypot(x/space.radiusX,z/space.radiusZ),0,1);
-    return -space.depth+.24*r*r+1.54*Math.pow(r,8);
-  }
-  function safeBottom(f){
-    // Reserve room for the whole curved/pitched hull, not just its centre.
-    const r=radius(f.x,f.y)+.18*f.size;
-    return Math.max(.10,-floorAt(r*space.radiusX,0)-.18*f.size);
-  }
-  function swimRadius(f){
-    let low=0,high=1;
-    for(let i=0;i<12;i++){
-      const mid=(low+high)*.5;
-      if(-floorAt(mid*space.radiusX,0)>f.depth+.18*f.size)low=mid;else high=mid;
-    }
-    return Math.max(.12,low-.18*f.size);
-  }
+  function floorAt(){ return -space.depth; }
+  function safeBottom(f){ return space.depth-.18*f.size; }
+  function swimRadius(f){ return 1-.18*f.size; }
   function bodyPoint(f,s,lateral=0,up=0){
     s=clamp(s,0,1);
     const i=Math.min(BONES-1,Math.max(0,f.spine.findIndex(p=>p.s>=s)-1));
@@ -124,7 +110,7 @@
   const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
   const radius = (x, y) => Math.hypot((x - .5) / .46, (y - .5) / .44);
   const inWater = (x, y) => Number.isFinite(x) && Number.isFinite(y) && radius(x, y) < .94;
-  // Far water compresses in both axes. The inverse is also used for feeding,
+  // Far water compresses in both axes. The inverse is also used for cursor attention,
   // so a clicked ripple and a fish's destination remain aligned when cropped.
   const project = (x, y, depth=0) => {
     const X=x-.5, Y=(y-.5)/WATER_Y, Z=-depth/lens.width*apparentDepth;
@@ -238,7 +224,8 @@
   }
   function create(random = Math.random) {
     let time = 0, nextDrop = 1.2;
-    const fish = [], food = [], drops = [];
+    const fish = [], drops = [];
+    let cursor = null;
     const between = (a, b) => a + (b - a) * random();
     const point = () => {
       const a = random() * TAU, r = Math.sqrt(random()) * .82;
@@ -264,7 +251,7 @@
         finPhase: i*2.1, finLeft: 1, finRight: 1, thrust: 0,
         startAge: 1, startSign: 0, startCooldown: 0,
         size: between(.82,1.15), depth: between(.18,1.2), depthVelocity:0, pitch:0, pitchVelocity:0,target: point(),
-        eating: 0, attention: 0, mode: "cruise", pace: .025, timer: 0, targetDepth: .5 };
+        curiosity: between(.3,.65), reaction: null, mode: "cruise", pace: .025, timer: 0, targetDepth: .5 };
       change(f); f.timer = between(.5,3.5);f.depth=Math.min(f.depth,safeBottom(f)-.03);buildSpine(f);fish.push(f);
     });
     function ripple(x, y, strength) {
@@ -273,19 +260,33 @@
       if (drops.length === 12) drops.shift();
       drops.push({ x, y, strength, age: 0 });
     }
-    function feed(x, y) {
-      if (!inWater(x, y)) return false;
-      // Three small feedings can coexist; bounding them keeps click bursts cheap.
-      while (food.length > 16) food.shift();
-      for (let i = 0; i < 8; i++) {
-        const a = i * TAU / 8, r = between(.006,.021);
-        let px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
-        const edge = radius(px,py);
-        if (edge > .92) { px=.5+(px-.5)*.92/edge; py=.5+(py-.5)*.92/edge; }
-        food.push({ x: px, y: py, life: 15 });
+    const bounded = (x,y) => {
+      const r=radius(x,y),scale=r>.68?.68/r:1;
+      return {x:.5+(x-.5)*scale,y:.5+(y-.5)*scale};
+    };
+    function follow(x,y){
+      cursor=Number.isFinite(x)&&Number.isFinite(y)?bounded(x,y):null;
+    }
+    function flick(x,y){
+      if(!Number.isFinite(x)||!Number.isFinite(y))return false;
+      ripple(x,y,1.5);
+      for(const f of fish){
+        const dx=f.x-x,dy=(f.y-y)/WATER_Y,d=Math.hypot(dx,dy)*space.width;
+        // A close surface disturbance loads a C-start; deeper fish hear a
+        // weaker impulse. Others investigate after an individual hesitation.
+        if(d<.85 && f.depth<1.35){
+          const a=Math.atan2(dy,dx || .0001)+(random()-.5)*.5;
+          f.reaction={kind:"flee",life:between(1.4,2.3),delay:0,
+            target:bounded(f.x+Math.cos(a)*.24,f.y+Math.sin(a)*.24*WATER_Y),
+            depth:Math.min(1.45,f.depth+.3),pace:.13};
+          f.startCooldown=0;
+        }else if(d<2.5 && random()<.8){
+          const a=between(0,TAU),r=between(.05,.10);
+          f.reaction={kind:"inspect",life:between(3.5,5.5),delay:between(.25,1.1),
+            target:bounded(x+Math.cos(a)*r,y+Math.sin(a)*r*WATER_Y),
+            depth:between(.3,.65),pace:between(.035,.065)};
+        }
       }
-      ripple(x, y, 1);
-      fish.forEach(f => { f.attention = between(.12,.9); f.eating = 0; });
       return true;
     }
     function advance(dt) {
@@ -298,62 +299,41 @@
         drops[i].age += dt;
         if (drops[i].age > 3.5) drops.splice(i,1);
       }
-      for (let i = food.length - 1; i >= 0; i--) {
-        food[i].life -= dt;
-        if (food[i].life <= 0) food.splice(i,1);
-      }
       for (const f of fish) {
-        f.attention = Math.max(0,f.attention-dt);
-        f.eating = Math.max(0,f.eating-dt);
         f.timer -= dt;
         if (f.timer <= 0) change(f);
-        let pellet = null, distance = Infinity;
-        if (!f.attention && !f.eating) {
-          for (const p of food) {
-            const d = separation(p.x-f.x,p.y-f.y);
-            if (d < distance) { distance = d; pellet = p; }
-          }
+        let target=f.target,pace=f.pace,depth=f.targetDepth,engaged=false;
+        if(cursor){
+          const a=f.id*2.4+time*.25,r=.07+.025*Math.sin(time*.4+f.id);
+          const nearby=bounded(cursor.x+Math.cos(a)*r,cursor.y+Math.sin(a)*r*WATER_Y);
+          const weight=f.curiosity;
+          target={x:target.x*(1-weight)+nearby.x*weight,y:target.y*(1-weight)+nearby.y*weight};
+          pace=Math.min(.05,Math.max(.018,pace));engaged=true;
         }
-        let target = f.target, pace = f.eating ? .001 : f.pace;
-        let depth = f.targetDepth;
-        if (pellet) {
-          target = pellet;
-          // An accelerating approach becomes a slow nibble near the food.
-          pace = distance > .13 ? .115 : distance > .045 ? .040 : .010;
-          depth = .10;
-          const nose = { x: f.x+Math.cos(f.heading)*.035*f.size,
-            y: f.y+Math.sin(f.heading)*.035*f.size*WATER_Y };
-          if (f.depth < .22 && (separation(nose.x-pellet.x,nose.y-pellet.y) < .022 || distance < .016)) {
-            food.splice(food.indexOf(pellet),1);
-            f.eating = between(.45,.95); pace = .001;
-            ripple(pellet.x,pellet.y,.22);
-          }
-        } else if (f.eating) {
-          depth = .10;
-        } else if (separation(target.x-f.x,target.y-f.y) < .055 && f.mode !== "hover") {
-          f.target = point(); target = f.target;
+        const reaction=f.reaction;
+        if(reaction){
+          reaction.life-=dt;reaction.delay=Math.max(0,reaction.delay-dt);
+          if(reaction.life<=0)f.reaction=null;
+          else if(!reaction.delay){target=reaction.target;pace=reaction.pace;depth=reaction.depth;engaged=true;}
+        }
+        if(!engaged && separation(target.x-f.x,target.y-f.y)<.055 && f.mode!=="hover"){
+          f.target=point();target=f.target;
         }
         const bottom=safeBottom(f);
         depth=Math.min(depth,Math.max(.10,bottom-.15));
         const depthError=f.depth-depth;
-        // A deep fish makes an ascending approach around food, rather than
-        // stopping underneath it and being lifted vertically by a depth spring.
-        if(pellet && distance<.075 && f.depth>.25){
-          const a=Math.atan2((f.y-pellet.y)/WATER_Y,f.x-pellet.x)+.8;
-          target={x:pellet.x+Math.cos(a)*.055,y:pellet.y+Math.sin(a)*.055*WATER_Y};
-          pace=Math.max(pace,.055);
-        }else if(!f.eating && f.mode!=="hover" && Math.abs(depthError)>.18)pace=Math.max(pace,.035);
-        const desiredPitch=f.eating?0:clamp(Math.atan2(depthError*.85,Math.max(.35,f.speed*space.width)),-.56,.56);
+        if((engaged || f.mode!=="hover") && Math.abs(depthError)>.18)pace=Math.max(pace,.035);
+        const desiredPitch=clamp(Math.atan2(depthError*.85,Math.max(.35,f.speed*space.width)),-.56,.56);
         f.pitchVelocity+=((desiredPitch-f.pitch)*9-f.pitchVelocity*5)*dt;
         f.pitch=clamp(f.pitch+f.pitchVelocity*dt,-.60,.60);
         let dx = target.x-f.x, dy = (target.y-f.y)/WATER_Y;
-        // A soft shoreline turns fish inward before their bodies meet the bank.
+        // Keep swimmers within their roaming area, beyond which the water continues.
         const shore=swimRadius(f);
         if (radius(f.x,f.y) > shore-.12) {
-          const strength=pellet ? 1 : 3;
+          const strength=3;
           dx += (.5-f.x)*strength; dy += (.5-f.y)*strength/WATER_Y;
         }
-        if (!f.eating) for (const other of fish) {
+        for (const other of fish) {
           if (other === f) continue;
           const sx = f.x-other.x, sy = (f.y-other.y)/WATER_Y, d = Math.hypot(sx,sy);
           if (d > .001 && d < .065) {
@@ -362,7 +342,7 @@
           }
         }
         const error = angleDiff(Math.atan2(dy,dx),f.heading);
-        const resting = f.eating || f.mode === "hover" && !pellet;
+        const resting = f.mode === "hover" && !engaged;
         f.startCooldown = Math.max(0,f.startCooldown-dt);
         if (!resting && pace-f.speed > .045 && Math.abs(error) > .8 && !f.startCooldown) {
           // A bend loads first; the subsequent counterstroke supplies the burst.
@@ -430,7 +410,7 @@
       const dt = clamp(delta,0,.25), count = Math.ceil(dt*120);
       for (let i=0;i<count;i++) advance(dt/count);
     }
-    return { fish, food, drops, feed, step, get time() { return time; } };
+    return { fish, drops, follow, flick, step, get time() { return time; } };
   }
   const api = { create, project, unproject, inWater, skinMesh, projectedMesh, camera, optics, lens,
     space, world, floorAt, bodyPoint, bodyRadius, volumeMesh,skeletalMesh,anatomy,segments };

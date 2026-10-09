@@ -29,7 +29,7 @@ body.focus-mode #desktop-background { z-index: 700; }
 .background-choice span { display: block; margin: 0 10px; font-size: 11px;
   color: var(--text-dim); line-height: 1.5; }
 .background-simple { display: flex; gap: 8px; margin: 14px 0; }
-.background-simple button, .background-motion, .background-feed { font: inherit; font-size: 12px;
+.background-simple button, .background-motion { font: inherit; font-size: 12px;
   background: var(--bg-card); border: 1px solid var(--line); color: var(--text-dim);
   border-radius: 5px; padding: 7px 12px; cursor: pointer; }
 .background-simple button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
@@ -44,14 +44,13 @@ body.focus-mode #desktop-background { z-index: 700; }
   #desktop-background, #background-btn, .background-studio-door, #background-picker { display: none !important; }
 }
 
-.background-feed[hidden] { display: none; }
 .background-explore[hidden] { display:none; }
 .background-explore { font:inherit; font-size:12px; color:var(--accent); background:var(--bg-card);
   border:1px solid var(--line); border-radius:5px; padding:7px 12px; cursor:pointer; }
-.background-pond-setting, .background-look-setting { display:flex; align-items:center; gap:12px;
+.background-look-setting { display:flex; align-items:center; gap:12px;
   margin-top:12px; font-size:12px; color:var(--text-dim); }
-.background-pond-setting[hidden], .background-look-setting[hidden] { display:none; }
-.background-pond-setting select, .background-look-setting select, #design-pond-look { min-width:0; font:inherit; color:var(--text);
+.background-look-setting[hidden] { display:none; }
+.background-look-setting select, #design-pond-look { min-width:0; font:inherit; color:var(--text);
   background:var(--bg-card); border:1px solid var(--line); border-radius:5px; padding:6px 10px; }
 #background-picker select:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .background-studio-door { flex-wrap:wrap; }
