@@ -58,6 +58,20 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   vault operations, and background workers. Explicit instance metadata keeps
   the UI, agent prompts, and lifecycle controls attached to the right server.
 
+### Fixed
+
+- A session that ends with nothing on its branch no longer leaves the branch
+  and its worktree behind. Map builds and refreshes, the System map refresh
+  and other jobs whose only writes go through Vira's own tools are placed in
+  a worktree like any writing session. The empty worktree was meant to go
+  when the session ended, but that was skipped whenever an open window read
+  the session's final state before the supervisor did, and for every session
+  that ended while the server was restarting. The supervisor now records
+  that it handled a session's end, and a boot handles the ends it missed.
+  A worktree with uncommitted changes or commits, or one another running
+  session is in, is kept as before. The session preamble now tells a session
+  that changes no file that there is nothing to land.
+
 ## 2026-08-27
 
 ### Added

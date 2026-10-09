@@ -437,16 +437,13 @@ _DESIGN = (
     "5. `intro` is one or two sentences telling the owner how to read the "
     "map, left to right.\n\n")
 
+# No word here about the worktree a map job is placed in: the session
+# preamble tells every placed session that changing no file means nothing to
+# land, and session._tidy_worktree removes the empty branch when it ends.
 _SAVE = (
     "Call mcp__vira__save_map ONCE with the whole map. It validates and "
     "stores the map, and the Maps window draws it - do NOT write HTML or "
     "any file yourself, and do not change anything else on this machine. "
-    # Every writing session is placed in a branch worktree, and the session
-    # preamble then talks about landing a branch. A map job has nothing to
-    # land, so say so here rather than leave the two to contradict.
-    "You may be working in a git worktree; that is only where Vira places "
-    "every session that can write. This job changes no files there: the "
-    "save_map call is its whole output, so there is no branch to land. "
     # 2026-10-08: sessions fanned out to Explore agents and ended the turn
     # waiting on them; saving on half the findings is the failure to rule
     # out.

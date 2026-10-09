@@ -516,10 +516,11 @@ class MapPrompts(unittest.TestCase):
         p = maps.refresh_prompt("routines")
         self.assertIn("say in two or three sentences what changed", p)
 
-    def test_both_prompts_settle_the_worktree_and_the_agents(self):
+    def test_both_prompts_wait_for_every_agent(self):
+        # The worktree half moved to the session preamble, which says it for
+        # every placed session (test_landing_card.ThePreamble).
         maps.save("routines", self._spec("Routines"), "map my routines")
         for p in (maps.ask_prompt("x"), maps.refresh_prompt("routines")):
-            self.assertIn("no branch to land", p)
             self.assertIn("save only after every one of them has reported", p)
 
 

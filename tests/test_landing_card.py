@@ -449,6 +449,18 @@ class ThePreamble(unittest.TestCase):
             self.assertIn("Do NOT ask whether to merge, test or discard", p)
         self.assertNotIn("VIRA HANDLES THE LANDING", viratools.preamble(True))
 
+    def test_a_session_that_changes_no_file_is_not_promised_a_landing(self):
+        """offer_landing raises no card over a branch with nothing on it
+        (TheCard, work=(0, 0)), and a map build is placed like any writing
+        session while its only output is save_map. Promising every placed
+        session a test instance and a card contradicted the map prompt."""
+        kw = dict(worktree_path="/tmp/wt", branch="claude/x",
+                  live_root="/tmp/live")
+        for native in (True, False):
+            p = viratools.preamble(native, **kw)
+            self.assertIn("If you changed files on this branch", p)
+            self.assertIn("there is nothing to land: no card goes up", p)
+
 
 class TheSurfaces(unittest.TestCase):
     """Every pending-card surface renders a landing card as a picker. The

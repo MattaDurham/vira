@@ -27,6 +27,7 @@ Run: .venv/bin/python -m unittest discover tests
 import asyncio
 import json
 import os
+import queue
 import subprocess
 import tempfile
 import time
@@ -412,7 +413,8 @@ class TidyIsWired(unittest.TestCase):
         self.reg = session.Sessions()
 
     def _handle(self, status, awaiting=None):
-        spec = {"id": "j1", "worktree": "/tmp/wt", "branch": "claude/x",
+        spec = {"id": "j1", "prompt": "Map the content ingestion",
+                "cwd": "/tmp/wt", "worktree": "/tmp/wt", "branch": "claude/x",
                 "live_root": "/tmp/live"}
         h = session.DetachedJob("j1", self.jdir, spec)
         h.last_state = {"id": "j1", "status": "running"}
@@ -443,10 +445,38 @@ class TidyIsWired(unittest.TestCase):
         self.assertIn("/tmp/wt", log)
         self.assertIn("uncommitted", log)
 
+    def test_a_ui_read_that_sees_the_end_first_does_not_swallow_it(self):
+        """2026-10-08: a map session the owner finished while watching it kept
+        its empty worktree, with no worktree line in its transcript. The open
+        session's snapshot (polled every 800 ms) refreshed the same cache the
+        supervisor compared against, so the snapshot saw `done` first and the
+        supervisor never saw the session leave `running`. Driven through the
+        real get(), not a hand-set cache."""
+        q = queue.Queue()
+        self.reg.subscribe(q)
+        self._handle("done")
+        self.assertEqual(self.reg.get("j1")["status"], "done")
+        self.reg._poll_once()
+        self.assertEqual(len(self.calls), 1, "the UI read swallowed the end")
+        self.assertIn("[vira] worktree:",
+                      (self.jdir / "output.log").read_text(encoding="utf-8"))
+        kinds = [q.get_nowait()["kind"] for _ in range(q.qsize())]
+        self.assertIn("status", kinds, "other viewers never heard it ended")
+
+    def test_an_end_is_handled_once(self):
+        self._handle("done")
+        self.reg.get("j1")
+        self.reg._poll_once()
+        self.reg._poll_once()
+        self.reg.get("j1")
+        self.reg._poll_once()
+        self.assertEqual(len(self.calls), 1)
+
     def test_a_parked_session_is_left_alone(self):
         """The reply window keeps status `running` on purpose: the session is
         still the owner's to answer and its tree still theirs to look at."""
         self._handle("running", awaiting="reply")
+        self.reg.get("j1")
         self.reg._poll_once()
         self.assertEqual(self.calls, [])
 
@@ -488,6 +518,223 @@ class TidyIsWired(unittest.TestCase):
         self.reg._poll_once()   # must not raise
         self.assertIn("tidy failed",
                       (self.jdir / "output.log").read_text(encoding="utf-8"))
+
+    def test_a_tree_another_running_session_is_in_is_kept(self):
+        """Orphan-work Resume and Land launch into an existing worktree. A
+        finished session's tidy must not pull that tree out from under the
+        session now running in it."""
+        self._handle("done")
+        jdir2 = Path(self.tmp.name) / "job2"
+        jdir2.mkdir()
+        running = {"id": "j2", "status": "running", "awaiting": None,
+                   "heartbeat": time.time(), "pid": os.getpid(), "pending": []}
+        jobfiles.write_json_atomic(jdir2 / "state.json", running)
+        other = session.DetachedJob("j2", jdir2, {
+            "id": "j2", "cwd": "/tmp/wt", "worktree": "/tmp/wt",
+            "branch": "claude/x", "live_root": "/tmp/live"})
+        other.last_state = dict(running)
+        self.reg.sessions["j2"] = other
+        self.reg._poll_once()
+        self.assertEqual(self.calls, [])
+        self.assertIn("j2 is still running in it",
+                      (self.jdir / "output.log").read_text(encoding="utf-8"))
+
+
+class BootHandlesEndsNobodyWatched(unittest.TestCase):
+    """A runner outlives the server, so a session can end while no
+    supervisor is watching: the server was restarting when the runner wrote
+    its finish, or the runner died meanwhile. Both used to be skipped at boot
+    and kept their worktree for good. Driven through the real
+    start_supervisor() boot pass over job dirs on disk, then the first
+    supervisor tick, which is where the tidy runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.jobs = Path(self.tmp.name) / "jobs"
+        self.jobs.mkdir()
+        self.calls = []
+        mock.patch.object(
+            session.worktree, "tidy",
+            lambda *a: (self.calls.append(a), (True, "removed"))[1]).start()
+        mock.patch.object(session.jobfiles, "JOBS_DIR", self.jobs).start()
+        mock.patch.object(joblog, "STORE",
+                          Path(self.tmp.name) / "jobs-log.json").start()
+        # boot only; the poll thread is not under test here
+        mock.patch.object(session.joblog, "sweep_orphans",
+                          lambda alive: None).start()
+        self.addCleanup(mock.patch.stopall)
+        self.reg = session.Sessions()
+        self.reg._sup = object()
+
+    def _job(self, jid, status, *, pending_marker, alive=True, placed=True):
+        jdir = self.jobs / jid
+        jdir.mkdir()
+        spec = {"id": jid, "prompt": "Map the content ingestion",
+                "cwd": f"/tmp/wt-{jid}", "instance_id": session.instance.id()}
+        if placed:
+            spec.update({"worktree": f"/tmp/wt-{jid}",
+                         "branch": f"claude/{jid}", "live_root": "/tmp/live"})
+        st = {"id": jid, "status": status, "awaiting": None, "pending": [],
+              "heartbeat": time.time() if alive else 1.0,
+              "pid": os.getpid() if alive else 2147483646}
+        jobfiles.write_json_atomic(jdir / "job.json", spec)
+        jobfiles.write_json_atomic(jdir / "state.json", st)
+        (jdir / "output.log").write_text("work\n", encoding="utf-8")
+        if pending_marker:
+            (jdir / session.TIDY_PENDING).touch()
+        return jdir
+
+    def tidied(self):
+        return [a[1] for a in self.calls]
+
+    def boot(self, reg=None):
+        reg = reg or self.reg
+        reg.start_supervisor()
+        reg._poll_once()
+
+    def test_a_session_that_finished_while_the_server_was_down(self):
+        jdir = self._job("a1", "done", pending_marker=True)
+        self.reg.start_supervisor()
+        self.assertEqual(self.calls, [], "branch.sh ran on the startup path")
+        self.reg._poll_once()
+        self.assertEqual(self.tidied(), ["/tmp/wt-a1"])
+        self.assertFalse((jdir / session.TIDY_PENDING).exists())
+        self.assertIn("[vira] worktree:",
+                      (jdir / "output.log").read_text(encoding="utf-8"))
+
+    def test_a_runner_that_died_while_the_server_was_down(self):
+        self._job("a2", "running", pending_marker=False, alive=False)
+        self.boot()
+        self.assertEqual(self.tidied(), ["/tmp/wt-a2"])
+
+    def test_history_a_supervisor_already_handled_is_left_alone(self):
+        """No marker: its end was handled (or it predates the marker). A boot
+        must not reach back into every finished job on disk."""
+        self._job("a3", "done", pending_marker=False)
+        self.boot()
+        self.assertEqual(self.calls, [])
+
+    def test_a_survivor_is_reattached_and_marked_not_tidied(self):
+        jdir = self._job("a4", "running", pending_marker=False)
+        self.boot()
+        self.assertEqual(self.calls, [])
+        self.assertIn("a4", self.reg.sessions)
+        self.assertTrue((jdir / session.TIDY_PENDING).exists(),
+                        "a session spawned before the marker would be "
+                        "missed if it ends during the next restart")
+
+    def test_a_tree_a_survivor_is_running_in_is_kept(self):
+        """Whatever order the job dirs are read in: the survivor re-entered
+        the finished session's tree, so it must not be pulled away."""
+        self._job("b1", "done", pending_marker=True)
+        jdir = self._job("b2", "running", pending_marker=False)
+        spec = jobfiles.read_json(jdir / "job.json")
+        spec.update({"cwd": "/tmp/wt-b1", "worktree": "/tmp/wt-b1",
+                     "branch": "claude/b1"})
+        jobfiles.write_json_atomic(jdir / "job.json", spec)
+        self.boot()
+        self.assertEqual(self.calls, [])
+        self.assertIn("b2 is still running in it",
+                      (self.jobs / "b1" / "output.log").read_text(encoding="utf-8"))
+
+    def test_the_next_boot_does_not_tidy_it_twice(self):
+        self._job("a5", "done", pending_marker=True)
+        self.boot()
+        again = session.Sessions()
+        again._sup = object()
+        self.boot(again)
+        self.assertEqual(len(self.calls), 1)
+
+
+@unittest.skipUnless(os.name == "posix",
+                     "branch.sh is POSIX-only dev tooling")
+class EmptyWorktreeTeardownJoin(unittest.TestCase):
+    """The whole chain for a job whose only writes go through Vira's native
+    tools (a map build, meta kind map-build): the real launch() places it in
+    a worktree, the real _spawn_runner writes the job dir, the owner's open
+    window reads the finished state, the real supervisor tick handles the
+    end, and the real branch.sh discard takes the empty branch away. Only the
+    runner process is stood in for, by writing the state.json its final
+    flush writes. On 2026-10-08 four such branches were left behind."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = make_branch_first_repo(Path(self.tmp.name) / "repo")
+        self.jobs = Path(self.tmp.name) / "jobs"
+        self.jobs.mkdir()
+        mock.patch.object(session.subprocess, "Popen",
+                          runner_only_popen()).start()
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(session.jobfiles, "job_dir",
+                          lambda jid: self.jobs / jid).start()
+        mock.patch.object(session.joblog, "record_launch",
+                          lambda job: None).start()
+        mock.patch.object(session, "SDK_AVAILABLE", True).start()
+        self.reg = session.Sessions()
+        self.jid = self.reg.launch("Map the content ingestion pipeline",
+                                   cwd=str(self.root),
+                                   meta={"kind": "map-build"})
+        self.spec = json.loads((self.jobs / self.jid / "job.json")
+                               .read_text(encoding="utf-8"))
+        self.wt = Path(self.spec["worktree"])
+
+    def finish(self):
+        """What the runner's last flush_state writes."""
+        jobfiles.write_json_atomic(self.jobs / self.jid / "state.json", {
+            "id": self.jid, "status": "done", "finished": time.time(),
+            "awaiting": None, "pending": [], "heartbeat": time.time(),
+            "pid": os.getpid(), "finished_by_owner": True})
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.root), *args],
+                              capture_output=True, text=True,
+                              check=False).stdout
+
+    def test_a_tool_only_job_leaves_no_branch_behind(self):
+        self.assertTrue(self.wt.is_dir())
+        self.assertTrue((self.jobs / self.jid / session.TIDY_PENDING).exists())
+        self.finish()
+        self.assertEqual(self.reg.get(self.jid)["status"], "done")
+        self.reg._poll_once()
+        self.assertFalse(self.wt.exists(), "the empty worktree is still there")
+        self.assertEqual(self.git("branch", "--list", self.spec["branch"]), "")
+        self.assertNotIn(str(self.wt), self.git("worktree", "list"))
+        self.assertEqual(self.git("status", "--porcelain").strip(), "")
+        self.assertFalse((self.jobs / self.jid / session.TIDY_PENDING).exists())
+
+    def test_uncommitted_work_is_kept(self):
+        (self.wt / "server" / "main.py").write_text("# the session's work\n",
+                                                    encoding="utf-8")
+        self.finish()
+        self.reg.get(self.jid)
+        self.reg._poll_once()
+        self.assertEqual((self.wt / "server" / "main.py")
+                         .read_text(encoding="utf-8"), "# the session's work\n")
+        self.assertIn("uncommitted", (self.jobs / self.jid / "output.log")
+                      .read_text(encoding="utf-8"))
+
+    def test_a_commit_is_kept(self):
+        (self.wt / "server" / "new.py").write_text("x = 1\n", encoding="utf-8")
+        _git("add", "-A", cwd=self.wt)
+        _git("commit", "-qm", "the session's work", cwd=self.wt)
+        self.finish()
+        self.reg.get(self.jid)
+        self.reg._poll_once()
+        self.assertTrue(self.wt.is_dir())
+        self.assertIn(self.spec["branch"],
+                      self.git("branch", "--list", self.spec["branch"]))
+
+    def test_a_parked_session_keeps_its_tree(self):
+        """The runner is still alive in its reply window: never remove the
+        tree a session can still be steered back into."""
+        jobfiles.write_json_atomic(self.jobs / self.jid / "state.json", {
+            "id": self.jid, "status": "running", "awaiting": "reply",
+            "pending": [], "heartbeat": time.time(), "pid": os.getpid()})
+        self.reg.get(self.jid)
+        self.reg._poll_once()
+        self.assertTrue(self.wt.is_dir())
 
 
 class SpecDerivationContract(unittest.TestCase):

@@ -149,12 +149,24 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             # in a transcript is how a branch drifts into the orphan sweeper
             # (owner, 2026-09-02). runner.offer_landing serves the test
             # instance and raises the card the moment the turn parks.
-            "WHEN YOUR TURN ENDS, VIRA HANDLES THE LANDING. It serves a "
-            "fully functional instance of this branch and raises the merge / "
-            "keep playing / discard decision card itself. Do NOT ask "
-            "whether to merge, test or discard, and do not end on that "
-            "question - end with what you built and what to look at on the "
-            "test instance.\n\n")
+            #
+            # The card goes up only over WORK (offer_landing reads git), so
+            # the promise is conditional here too. Every writing session is
+            # placed, including jobs whose only output is a native tool call
+            # (save_map, update_module_map); told unconditionally that a
+            # landing follows, those read a contradiction with their own
+            # prompt. Their empty branch is removed at session end
+            # (session._tidy_worktree).
+            "WHEN YOUR TURN ENDS, VIRA HANDLES THE LANDING. If you changed "
+            "files on this branch, it serves a fully functional instance of "
+            "it and raises the merge / keep playing / discard decision card "
+            "itself. Do NOT ask whether to merge, test or discard, and do "
+            "not end on that question - end with what you built and what to "
+            "look at on the test instance. If you changed no file (your "
+            "work went through Vira's tools, or you only read and "
+            "reported), there is nothing to land: no card goes up, the "
+            "empty branch is removed when the session ends, and you end "
+            "with what you did.\n\n")
     ask_para = (
         f"WHEN YOU NEED A DECISION, ASK WITH {tool_prefix}ask_owner. It shows "
         f"{owner} a card with clickable options, in the app and on their "

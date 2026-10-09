@@ -63,6 +63,12 @@ PLAN_HOOK = LIB / "scripts" / "plan-html-deploy.py"
 
 OUTPUT_CAP = 200_000
 SUPERVISOR_TICK = 0.4        # job-dir poll cadence (SSE pokes ride on this)
+# In the job dir of a session placed in a worktree, from the moment a
+# supervisor takes it on until one has handled its end (_tidy_worktree). A
+# runner outlives the server, so a session can end while no supervisor is
+# watching; at boot this file is how such an end is told apart from one a
+# supervisor already handled.
+TIDY_PENDING = "tidy.pending"
 
 # Session defaults — overridable per key in data/config.json (see
 # config.example.json). session_auto_allow is the read-only tool set the
@@ -517,6 +523,13 @@ class DetachedJob:
         self.last_state = None
         self._out_size = -1
         self._state_mtime = -1.0
+        # Whether the supervisor has handled this session's end (the worktree
+        # tidy and the status poke). Its own flag, because last_state is NOT
+        # the supervisor's alone: a UI snapshot, an answer or a permission
+        # click refreshes it too, and when one of those read `done` first the
+        # supervisor compared done with done, saw no transition, and the
+        # session's empty worktree was never tidied (2026-10-08).
+        self.ended = False
 
     def read_state(self):
         st = jobfiles.read_json(self.dir / "state.json")
@@ -604,6 +617,10 @@ class Sessions:
         self.lock = threading.Lock()
         self.listeners = []               # queue.Queue fan-out (SSE)
         self._sup = None                  # supervisor thread
+        # Ends the boot found that no supervisor saw (see _boot_reattach).
+        # The first tick handles them, on the supervisor thread: tidying
+        # runs branch.sh discard, which must not hold up server startup.
+        self._unwatched = []
 
     # ----- wiring -----
 
@@ -883,6 +900,8 @@ class Sessions:
         data["runtime"] = spec["runtime"]
         jobfiles.write_json_atomic(jdir / "job.json", spec)
         (jdir / "control.jsonl").touch()
+        if spec.get("worktree"):
+            (jdir / TIDY_PENDING).touch()
         joblog.record_launch(data)
         log = open(jdir / "runner.log", "ab")
         # The runner must outlive this server (restart survival). POSIX:
@@ -1259,7 +1278,7 @@ class Sessions:
             self._sup.start()
 
     def _boot_reattach(self):
-        alive = []
+        alive, unwatched = [], []
         if not jobfiles.JOBS_DIR.is_dir():
             return alive
         for jdir in jobfiles.JOBS_DIR.iterdir():
@@ -1270,15 +1289,30 @@ class Sessions:
             if not instance.owns(spec):
                 continue
             if state.get("status") != "running":
+                # The runner wrote its finish while the server was down, so
+                # no supervisor saw it end. Without the marker this is old
+                # history whose end was handled long ago (or predates the
+                # marker); either way it is not this boot's to tidy.
+                if (jdir / TIDY_PENDING).exists():
+                    unwatched.append(DetachedJob(spec["id"], jdir, spec))
                 continue
             if jobfiles.runner_dead(state):
+                # Died while the server was down: still `running` on disk,
+                # so nothing has handled its end. The supervisor tidies an
+                # orphan it declares itself; one declared here gets the same.
                 self._finalize_dead(jdir, state)
+                unwatched.append(DetachedJob(spec["id"], jdir, spec))
                 continue
             h = DetachedJob(spec["id"], jdir, spec)
             h.last_state = state
+            if spec.get("worktree"):
+                # A session spawned before the marker existed carries none.
+                (jdir / TIDY_PENDING).touch()
             with self.lock:
                 self.sessions[h.id] = h
             alive.append(h.id)
+        with self.lock:
+            self._unwatched.extend(unwatched)
         return alive
 
     def _finalize_dead(self, jdir, state):
@@ -1308,31 +1342,69 @@ class Sessions:
         The outcome is appended to the transcript either way. A directory
         that silently appears and silently vanishes is how the owner ended
         up asking where these came from; a kept one has a reason, and that
-        reason is the thing worth reading."""
+        reason is the thing worth reading.
+
+        This is how a job whose only writes go through Vira's native tools
+        (a map build, the System map refresh) stops leaving a branch behind:
+        it is placed like any writing session, changes no file, and its
+        empty worktree goes here when it ends."""
         spec = h.spec or {}
         wt, root, branch = (spec.get("worktree"), spec.get("live_root"),
                             spec.get("branch"))
         if not (wt and root and branch):
             return
-        try:
-            removed, detail = worktree.tidy(root, wt, branch)
-        except Exception as e:  # noqa: BLE001 — the supervisor never dies
-            removed, detail = False, f"tidy failed: {e}"
+        other = self._running_in(wt, h)
+        if other:
+            removed, detail = False, f"session {other} is still running in it"
+        else:
+            try:
+                removed, detail = worktree.tidy(root, wt, branch)
+            except Exception as e:  # noqa: BLE001 — the supervisor never dies
+                removed, detail = False, f"tidy failed: {e}"
         try:
             with (h.dir / "output.log").open("a", encoding="utf-8") as f:
                 f.write(f"\n[vira] worktree: {detail}\n" if removed else
                         f"\n[vira] worktree kept at {wt} — {detail}\n")
         except OSError:
             pass
+        try:
+            (h.dir / TIDY_PENDING).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _running_in(self, wt, h):
+        """The id of another registered session still running in `wt`, or "".
+        A finished session's tree can be re-entered (orphan-work Resume and
+        Land launch into an existing worktree), and removing it would pull
+        the cwd out from under that session."""
+        with self.lock:
+            others = [x for x in self.sessions.values()
+                      if x is not h and x.kind == "detached"]
+        for x in others:
+            if x.status() == "running" and str(wt) in (
+                    str(x.spec.get("worktree") or ""), str(x.spec.get("cwd") or "")):
+                return x.id
+        return ""
 
     def _poll_once(self):
         with self.lock:
             handles = [x for x in self.sessions.values()
                        if x.kind == "detached"]
+            unwatched, self._unwatched = self._unwatched, []
+        # Boot has registered every survivor by now, so a tree one of them is
+        # still running in reads as in use rather than as a finished one's.
+        for h in unwatched:
+            self._tidy_worktree(h)
         for h in handles:
             if h.proc is not None:
                 h.proc.poll()        # reap the child if it exited (no zombies)
-            if (h.last_state or {}).get("status") != "running":
+            if h.ended:
+                continue
+            cached = (h.last_state or {}).get("status", "running")
+            if cached != "running":
+                # Another reader refreshed the shared cache and saw the end
+                # before this tick did (see DetachedJob.ended).
+                self._handle_end(h, cached)
                 continue
             try:
                 st_m = (h.dir / "state.json").stat().st_mtime
@@ -1349,8 +1421,7 @@ class Sessions:
                 if jobfiles.runner_dead(st):
                     self._finalize_dead(h.dir, dict(st))
                     h.read_state()
-                    self._tidy_worktree(h)
-                    self._emit("status", h.id, status="orphaned")
+                    self._handle_end(h, "orphaned")
                 elif (h.proc is not None and h.proc.poll() is not None
                       and st_m < 0):
                     # Spawn failure: the runner exited before its first
@@ -1367,21 +1438,23 @@ class Sessions:
                     jobfiles.write_json_atomic(h.dir / "state.json", dead)
                     h.last_state = dead
                     joblog.record_finish(h.id, "error", dead["error"])
-                    self._tidy_worktree(h)
-                    self._emit("status", h.id, status="error")
+                    self._handle_end(h, "error")
                 continue
-            prev_status = (h.last_state or {}).get("status")
             h._state_mtime = st_m
             h._out_size = out_sz
             st = h.read_state() or {}
-            if st.get("status") != prev_status and st.get("status") != "running":
-                # The transition out of `running` is the one moment the
-                # supervisor sees a session end. Tidy BEFORE the emit so the
-                # client's refetch already carries the transcript's verdict.
-                self._tidy_worktree(h)
-                self._emit("status", h.id, status=st.get("status"))
+            if st.get("status", "running") != "running":
+                self._handle_end(h, st.get("status"))
             else:
                 self._emit("update", h.id)
+
+    def _handle_end(self, h, status):
+        """The one place the supervisor acts on a session leaving `running`,
+        once per session whichever path saw it go. Tidy BEFORE the emit so
+        the client's refetch already carries the transcript's verdict."""
+        h.ended = True
+        self._tidy_worktree(h)
+        self._emit("status", h.id, status=status)
 
     # ----- transcript (legacy fallback only) -----
 
