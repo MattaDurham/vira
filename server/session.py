@@ -392,8 +392,14 @@ def _tool_summary(block):
         return f"{name} {inp.get('pattern') or inp.get('query') or ''}".strip()
     if name == "TodoWrite":
         return "planning the steps…"
-    if name == "Task":
-        return "delegating a subtask…"
+    if name in ("Task", "Agent"):
+        # "Agent" is the tool's name on current CLIs, "Task" on older ones.
+        # The description is the agent's name in its lane and on its card
+        # (runner.AGENT_LANE), so the launch line uses the same words.
+        what = " ".join(str(inp.get("description") or "").split())[:80]
+        kind = inp.get("subagent_type") or ""
+        tail = f" ({kind})" if kind else ""
+        return f"Agent: {what}{tail}" if what else "Agent: delegating a subtask…"
     return name
 
 
@@ -960,6 +966,9 @@ class Sessions:
             # first live chat turn recorded 15 calls and showed none,
             # because this snapshot never carried the field
             "tools": st.get("tools") or [],
+            # the session's subagents (runner.AGENT_TOOLS): the terminal's
+            # agents strip and its status line read them
+            "agents": st.get("agents") or [],
             "pending": sorted(st.get("pending") or [],
                               key=lambda p: p.get("created", 0)),
             "finished_by_owner": bool(st.get("finished_by_owner")),

@@ -68,7 +68,8 @@ PREVIEW = 160            # per-line body/context preview
 # ---------- the session preamble ----------
 
 def preamble(native=True, worktree_path="", branch="", live_root="",
-             tool_prefix="mcp__vira__", vault_destination=None, vault_context=None):
+             tool_prefix="mcp__vira__", vault_destination=None, vault_context=None,
+             subagents=False):
     """Context every Vira-spawned session gets about its parent. native=False
     is the legacy --print fallback, where the mcp__vira__* tools don't exist
     (no SDK) and only the HTTP API applies.
@@ -77,6 +78,11 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
     in its own worktree; the prose then names the actual directory rather
     than describing a workflow in the abstract, which is the form the
     2026-07-25 session demonstrably did not follow.
+
+    subagents=True is the Claude Agent SDK path (runner.py), the only
+    engine whose sessions can launch Agent-tool subagents; Codex and the
+    function agents are native too, and must not be told about a tool
+    they do not have.
     """
     owner = settings.get("owner_name") or "the owner"
     tools_para = (
@@ -157,6 +163,27 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "the moment the choice is genuinely theirs, and if no answer comes, "
         "stop and report rather than guessing.\n\n"
         if native else "")
+    # Subagents are a Claude Code harness feature (see `subagents` above).
+    # The runner tracks each one (runner.AGENT_TOOLS): a lane in the feed,
+    # a card above the box, and the turn its report starts. What the agent
+    # needs to know is the contract that makes that work - and the
+    # 2026-10-08 map sessions show what it did without one: it ended its
+    # turn "waiting", then reached for a /loop wakeup as a heartbeat.
+    agents_para = (
+        f"SUBAGENTS. You may fan work out with the Agent tool. {owner} sees "
+        "each agent as its own lane in the terminal and its own card above "
+        "the reply box, named by the agent's `description`, so make that a "
+        "short plain name for its job ('Verify the mail sources'), not an "
+        "id. An agent running in the background reports back by itself: "
+        "when it finishes, Vira starts your next turn with its result. "
+        "Never poll, sleep or schedule a wakeup to wait for one (the "
+        "scheduling tools are switched off here). While any agent is still "
+        "running the session shows as working, so ending a turn with one "
+        "line on what you are waiting for is right. Act on the findings "
+        "(save, write, report) only once every agent you need has "
+        "reported, and give the conclusion described under HOW TO END A "
+        "TURN in that turn.\n\n"
+        if subagents else "")
     visual_para = (
         "VISUAL CONTEXT FOR DURABLE DECISIONS. When you create a proposal, "
         "review document, plan, or other artifact the owner will later open "
@@ -207,7 +234,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
     return (
         f"You are running inside Vira, {owner}'s personal AI chief-of-staff "
         f"web app, as an agent session on {owner}'s Mac.\n\n"
-        + branch_para + ask_para + tools_para + visual_para + vault_para +
+        + branch_para + ask_para + tools_para + agents_para + visual_para + vault_para +
         f"Vira's HTTP API on {instance.api_url()} serves the same data as "
         "JSON when you need it raw: GET /api/brief (calendar + who's "
         "waiting), /api/people?q=<name>, /api/person/<id>, "
@@ -232,7 +259,9 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "  - anything you flagged but deliberately did not do, said plainly, "
         "noting it is filed in the work queue as a proposal rather than "
         "left as a loose end.\n"
-        "If none of those is true you have not finished the turn.\n\n"
+        "If none of those is true you have not finished the turn"
+        + (" - unless background agents you launched are still running "
+           "(see SUBAGENTS).\n\n" if subagents else ".\n\n") +
         "CRITICAL: you run as a child process INSIDE the Vira server. Never "
         "restart, stop, or kill the Vira server or its launchd service (no "
         f"launchctl kickstart/bootout of {instance.service_label()}, no pkill of uvicorn "
