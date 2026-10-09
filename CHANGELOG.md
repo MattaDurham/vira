@@ -71,6 +71,14 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   A worktree with uncommitted changes or commits, or one another running
   session is in, is kept as before. The session preamble now tells a session
   that changes no file that there is nothing to land.
+- Attention and Work results no longer show a branch that was already merged
+  or deleted outside Vira as waiting for review. Both read an inventory that
+  only the daily sweep or an explicit refresh updated, so work landed from a
+  terminal session stayed listed for up to a day. Each sweep now records the
+  git refs it ran against. A read drops any row whose branch git no longer
+  has, and when refs have moved it starts one background re-sweep. That
+  re-sweep sends no phone ping and makes no model call, so pings and
+  assessments keep their usual cadence.
 
 ## 2026-08-27
 

@@ -105,7 +105,7 @@ def _require_primary(act):
 
 def _blank():
     return {"items": [], "reads": {}, "prs": {}, "prs_at": "",
-            "last_sweep": None}
+            "last_sweep": None, "refs": None}
 
 
 def _read():
@@ -208,28 +208,20 @@ def _local_branches():
     return [l.strip() for l in (out.stdout or "").splitlines() if l.strip()]
 
 
-def _ref_facts():
-    """{branch: (tip sha, commit epoch)} for every draft ref in ONE git
-    call. The first live sweep spent ~260 subprocess spawns - two of them
-    per branch just for the tip and its date - and a spawn out of the
+def _ref_facts(state=None):
+    """{branch: (tip sha, commit epoch)} for every draft ref, from the
+    sweep's ONE ref read (orphanwork.ref_state; read fresh when none is
+    passed). The first live sweep spent ~260 subprocess spawns - two of
+    them per branch just for the tip and its date - and a spawn out of the
     multi-gigabyte server process costs ~10x what it costs a bare python
     (measured 2026-09-03: 71s over HTTP against 8s in-process for the
     same sweep). Batch what git can batch."""
-    out = gitutil.git(ROOT, "for-each-ref", "refs/heads/claude/", "refs/heads/codex/",
-                      "--format=%(refname:short)%09%(objectname)%09%(committerdate:unix)",
-                      timeout=30)
-    facts = {}
-    if out.returncode != 0:
-        return facts
-    for line in (out.stdout or "").splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        try:
-            facts[parts[0]] = (parts[1], float(parts[2]))
-        except ValueError:
-            continue
-    return facts
+    if state is None:
+        state = orphanwork.ref_state(fresh=True)
+    pre = "refs/heads/"
+    return {ref[len(pre):]: fact for ref, fact in (state or {}).items()
+            if ref.startswith(pre)
+            and ref[len(pre):].startswith(DRAFT_PREFIXES)}
 
 
 def _merged_set():
@@ -544,35 +536,44 @@ def fallback_blurb(item):
 ORPHAN_FRESH_S = 300        # re-run the orphan sweeper only past this age
 
 
-def _orphan_fresh():
+def _orphan_fresh(state):
+    """The sweeper's store is young enough AND was swept against these
+    same refs. A store from before a merge carries the merged branch's
+    orphan key and verdict, and the cards join both."""
     try:
-        last = orphanwork.compose().get("last_sweep")
+        s = orphanwork._read()
+        last = s.get("last_sweep")
         dt = orphanwork._parse_iso(last) if last else None
     except Exception:  # noqa: BLE001
+        return False
+    if s.get("refs") != orphanwork.refs_fingerprint(state):
         return False
     return bool(dt) and (datetime.now(timezone.utc) - dt).total_seconds() < ORPHAN_FRESH_S
 
 
-def sweep():
+def sweep(state=None, quiet=False):
     """Every supported draft branch git knows, as card facts. Runs the orphan
-    sweeper first - when its store is older than ORPHAN_FRESH_S - so the
-    join carries fresh verdicts without paying its ~110 git spawns on
-    every open; read-only git the whole way, one branch degrading away
-    rather than the sweep dying."""
+    sweeper first - when its store is older than ORPHAN_FRESH_S or was
+    swept against other refs - so the join carries fresh verdicts without
+    paying its ~110 git spawns on every open; read-only git the whole way,
+    one branch degrading away rather than the sweep dying. One ref read
+    serves both sweeps; `quiet` passes through to the orphan sweeper."""
     global _wt_cache
-    if not _orphan_fresh():
+    if state is None:
+        state = orphanwork.ref_state(fresh=True)
+    if not _orphan_fresh(state):
         try:
-            orphanwork.refresh()
+            orphanwork.refresh(quiet=quiet, state=state)
         except Exception:  # noqa: BLE001 - the join degrades, the cards still render
             pass
     _wt_cache = orphanwork._porcelain_worktrees()
     try:
-        return _sweep_items()
+        return _sweep_items(state)
     finally:
         _wt_cache = None
 
 
-def _sweep_items():
+def _sweep_items(state):
     try:
         orphan_by_branch = {it.get("branch"): it
                             for it in orphanwork.compose().get("items", [])
@@ -587,7 +588,7 @@ def _sweep_items():
             rows_by_branch.setdefault(b, []).append(r)
     prs = _prs()
     # Three sweep-wide reads replace ~4 git spawns per branch.
-    batch = {"facts": _ref_facts(), "merged": _merged_set(),
+    batch = {"facts": _ref_facts(state), "merged": _merged_set(),
              "merges": _merge_index()}
     items, seen = [], set()
     entries = _worktrees()
@@ -631,16 +632,54 @@ def _sweep_items():
     return items
 
 
-def refresh():
-    items = sweep()
+_refresh_lock = threading.Lock()
+_resweep_lock = threading.Lock()
+_resweeping = False
 
-    def fn(s):
-        s["items"] = items
-        s["last_sweep"] = _now_iso()
-        return s
-    _mutate(fn)
-    _kick_describe()
+
+def refresh(quiet=False):
+    """Re-sweep the cards and record the refs they were swept against (see
+    orphanwork.ref_state). `quiet` is the re-sweep a read triggers when
+    refs moved: it brings the cards up to date without the model's
+    describe pass or a loud orphan sweep, and does nothing when another
+    sweep already caught up with these refs."""
+    with _refresh_lock:
+        state = orphanwork.ref_state(fresh=True)
+        refs = orphanwork.refs_fingerprint(state)
+        if quiet and refs is not None and _read().get("refs") == refs:
+            return _read().get("items") or []
+        items = sweep(state, quiet=quiet)
+
+        def fn(s):
+            s["items"] = items
+            s["last_sweep"] = _now_iso()
+            s["refs"] = refs
+            return s
+        _mutate(fn)
+    if not quiet:
+        _kick_describe()
     return items
+
+
+def _resweep():
+    """A quiet refresh on a daemon thread, one at a time (orphanwork's
+    rule: a poll joins the sweep in flight instead of queueing another)."""
+    global _resweeping
+    with _resweep_lock:
+        if _resweeping:
+            return
+        _resweeping = True
+
+    def run():
+        global _resweeping
+        try:
+            refresh(quiet=True)
+        except Exception:  # noqa: BLE001 - the next read tries again
+            pass
+        finally:
+            with _resweep_lock:
+                _resweeping = False
+    _spawn(run, "vira-showroom-resweep")
 
 
 # ---------------------------------------------------------------- serving
@@ -1029,15 +1068,25 @@ def _kick_describe():
 
 def compose():
     """The cards: the cached sweep plus the live joins (an in-flight serve,
-    an in-flight action, the cached blurb). Cheap by construction - no
-    git on this path, so the client can poll it while an instance boots."""
+    an in-flight action, the cached blurb). Cheap by construction - one
+    cached ref read at most (orphanwork.ref_state), so the client can poll
+    it while an instance boots. A card for a branch git no longer has is
+    not served, and refs that moved since the sweep start a quiet
+    re-sweep."""
     s = _read()
     reads = s.get("reads") or {}
     actions = _actions_by_branch()
     with _serves_lock:
         serves = {b: dict(v) for b, v in _serves.items()}
+    stored = s.get("items") or []
+    state = orphanwork.ref_state()
+    if state is not None:
+        heads = orphanwork.local_heads(state)
+        stored = [it for it in stored if orphanwork.row_still_there(it, heads)]
+        if orphanwork.refs_fingerprint(state) != s.get("refs"):
+            _resweep()
     items = []
-    for it in s.get("items") or []:
+    for it in stored:
         row = dict(it)
         r = reads.get(row.get("key") or "")
         row["blurb"] = (r or {}).get("blurb") or fallback_blurb(row)
