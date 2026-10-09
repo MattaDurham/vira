@@ -21,6 +21,8 @@ Every detached job owns a directory under data/jobs/<job-id>/ :
                   {"op":"interrupt"} · {"op":"close"}
   runner.log    — the runner process's own stdout/stderr (spawn errors,
                   tracebacks), for debugging only.
+  tidy.pending  — server-owned, empty: a session placed in a worktree whose
+                  end no supervisor has handled yet (session.TIDY_PENDING).
 
 Liveness = state.json heartbeat freshness, backstopped by pid aliveness.
 The server supervisor re-attaches to running job dirs at boot; a dead
