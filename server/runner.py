@@ -483,7 +483,9 @@ class Runner:
         make the admission ledger claim a control it does not have."""
         self._open_turn_record(uuid.uuid4().hex, "running", "model", origin="cli")
         self.state["turn"] = int(self.state.get("turn") or 0) + 1
-        who = self._reported or "background work"
+        # Named by whatever ended last, then cleared: a turn the CLI starts
+        # for some other reason must not reuse an earlier agent's name.
+        who, self._reported = self._reported or "background work", ""
         self.append(f"[vira] {who} reported back - the session continues\n")
         self.flush_state()
 
@@ -1503,6 +1505,10 @@ class Runner:
         a = self.agents.get(t.get("tool_use_id") or "")
         if a is not None and a.get("task_id") == task_id:
             self._agent_finished(a, status, summary, assumed=assumed)
+        elif was_running and t.get("background") and not t.get("owned"):
+            # the main agent's own background shell: its end starts a turn
+            # too, and the turn's marker should name it
+            self._reported = t.get("label") or ""
         if was_running and t.get("background") and not self.background_running():
             self._settled_t = time.monotonic()
 
@@ -1537,6 +1543,7 @@ class Runner:
             self.tasks[msg.task_id] = {
                 "status": "running", "background": bool(bg),
                 "type": msg.task_type or "", "tool_use_id": msg.tool_use_id or "",
+                "owned": bool(d.get("owned_by_subagent")),
                 "label": self._agent_label(msg.description)}
             if msg.task_type == "local_agent" and msg.tool_use_id:
                 a = self._agent_launched(msg.tool_use_id, {},
@@ -1544,6 +1551,14 @@ class Runner:
                                          kind=d.get("subagent_type"))
                 a["task_id"] = msg.task_id
                 a["background"] = a["background"] or bool(bg)
+                if a["status"] != "running":
+                    # RESUMED. Measured 2026-10-08: an agent that left its
+                    # own shell running in the background "finishes", then
+                    # the CLI restarts it - same task_id, a second
+                    # task_started - when the shell ends, and it finishes
+                    # again later. Its card reopens with it.
+                    a.update(status="running", finished_t=None)
+                    a.pop("assumed", None)
                 self._publish_agents()
         elif isinstance(msg, TaskProgressMessage):
             a = self.agents.get(msg.tool_use_id or "")

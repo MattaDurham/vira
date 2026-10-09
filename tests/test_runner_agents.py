@@ -331,6 +331,43 @@ class AgentsReportBack(AgentsCase):
         self.assertIn(f"{LANE} Scan · finished - 0 tool calls", out)
         self.assertIn(f"{LANE} Scan · failed - 0 tool calls", out)
 
+    def test_a_resumed_agent_reopens_and_finishes_again(self):
+        """Measured: an agent that left its own shell running finishes,
+        is restarted with the same task_id when the shell ends, then
+        finishes again. The card follows, and the next report-back turn is
+        named after it, not after whichever agent ended before."""
+        r = self.make_runner()
+        r.render_message(use("toolu_A", "Agent", {"description": "Mail"}))
+        r.render_message(use("toolu_B", "Agent", {"description": "Routing"}))
+        r.render_message(started("task_A", "toolu_A", "Mail"))
+        r.render_message(started("task_B", "toolu_B", "Routing"))
+        r.render_message(notified("task_B", "toolu_B"))
+        r._turn_open = False
+        r.ingest(init())
+        self.assertIn("[vira] Routing reported back", self.output(r))
+        r.render_message(result("ok"))
+        r.render_message(notified("task_A", "toolu_A"))
+        r.render_message(started("task_B", "toolu_B", "Routing"))   # resumed
+        self.assertEqual(r.agents["toolu_B"]["status"], "running")
+        self.assertTrue(r.background_running())
+        r.render_message(say("routing ok", parent="toolu_B"))
+        r.render_message(notified("task_B", "toolu_B"))
+        self.assertEqual(r.agents["toolu_B"]["status"], "completed")
+        r.ingest(init())
+        out = self.output(r)
+        self.assertEqual(out.count(f"{LANE} Routing \u00b7 done"), 2)
+        self.assertEqual(out.count("[vira] Routing reported back"), 2)
+
+    def test_a_turn_with_no_new_report_is_not_named_after_an_old_one(self):
+        r = self.make_runner()
+        r.render_message(use("toolu_A", "Agent", {"description": "Mail"}))
+        r.render_message(started("task_A", "toolu_A", "Mail"))
+        r.render_message(notified("task_A", "toolu_A"))
+        r.ingest(init())
+        r.render_message(result("ok"))
+        r.ingest(init())
+        self.assertIn("[vira] background work reported back", self.output(r))
+
     def test_a_subagents_own_shell_is_not_background_work(self):
         """Measured: an agent's Bash call is a task too, is_backgrounded
         false. Counting it would hold the session for nothing."""
