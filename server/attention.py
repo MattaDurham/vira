@@ -264,10 +264,13 @@ def _orphan_rows():
     for it in orphanwork.compose()["items"]:
         kind = it.get("kind") or "unmerged"
         read = it.get("read") or {}
+        # Someone is working on it outside Vira (orphanwork._in_motion): in
+        # motion, not waiting on the owner.
+        moving = bool(it.get("in_motion"))
         if kind == "unpushed":
             sub = f"{it.get('ahead', 0)} commits not pushed"
         else:
-            bits = []
+            bits = ["in progress outside Vira"] if moving else []
             if it.get("dirty"):
                 bits.append(f"{it['dirty']} dirty files")
             if it.get("ahead"):
@@ -276,8 +279,8 @@ def _orphan_rows():
                 bits.append("Vira: " + read["verdict"])
             sub = " — ".join(bits) or "unlanded"
         rows.append(_row(
-            f"orphan:{it['key']}", "orphan", "open", True,
-            it.get("branch") or it.get("key"), sub, verb="review",
+            f"orphan:{it['key']}", "orphan", "moving" if moving else "open",
+            not moving, it.get("branch") or it.get("key"), sub, verb="review",
             age_days=it.get("age_days"), orphan_key=it.get("key"),
             orphan_branch=it.get("branch"),
             orphan_kind=kind, dirty=int(it.get("dirty") or 0),
