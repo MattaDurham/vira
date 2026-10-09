@@ -64,6 +64,10 @@ class _RepoCase(unittest.TestCase):
         self.spawned = []
         pin(orphanwork, "_spawn", lambda fn, name: self.spawned.append(fn))
         pin(orphanwork, "_resweeping", False)
+        # Fixture work is seconds old with no Vira session behind it, which
+        # reads as work in motion outside Vira; these cases are about work
+        # nobody is touching (test_orphanwork.InMotion covers the window).
+        pin(orphanwork, "ACTIVE_GRACE_S", 0)
         pin(showroom, "_resweep", lambda: self.spawned.append("showroom"))
         # The sweeper asks the PR index to refresh (gh, on a thread) and
         # every row reads it: neither may reach gh or the checkout's own
@@ -450,6 +454,20 @@ class LandedElsewhere(_RepoCase):
         orphanwork.jsonstore.mutate(orphanwork.STORE,
                                     lambda s: {**s, "refs": None},
                                     orphanwork._blank())
+        orphanwork.compose()
+        self.assertEqual(len(self.spawned), 1)
+        self.run_spawned()
+        orphanwork.compose()
+        self.assertEqual(self.spawned, [])
+
+    def test_rows_swept_by_older_code_are_swept_again_once(self):
+        """A deploy that changes the rows' shape: the store's refs still match
+        git, but its rows lack the new fields."""
+        self.make_worktree("feat", commits=1)
+        with mock.patch.object(orphanwork, "SWEEP_SHAPE", orphanwork.SWEEP_SHAPE - 1):
+            orphanwork.refresh()
+            orphanwork.compose()
+            self.assertEqual(self.spawned, [])
         orphanwork.compose()
         self.assertEqual(len(self.spawned), 1)
         self.run_spawned()

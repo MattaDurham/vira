@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -92,8 +93,12 @@ class _RepoCase(unittest.TestCase):
         # thread that outlives this fixture would sweep whatever ROOT and
         # STORE are by then - the real ones - so it is recorded, not run.
         self.spawned = []
+        # A fixture's commits and edits are seconds old with no Vira session
+        # behind them, which reads as someone working outside Vira. These
+        # cases are about stalled work, so fixture work counts as quiet;
+        # InMotion turns the window back on.
         for target, value in (("_spawn", lambda fn, name: self.spawned.append(fn)),
-                              ("_resweeping", False)):
+                              ("_resweeping", False), ("ACTIVE_GRACE_S", 0)):
             sp = mock.patch.object(orphanwork, target, value)
             sp.start()
             self.addCleanup(sp.stop)
@@ -950,6 +955,104 @@ class Assessment(_RepoCase):
                 time.sleep(0.02)
         ran.assert_called_once()
         self.assertFalse(orphanwork._assess_running)
+
+
+class InMotion(_RepoCase):
+    """Work someone is doing outside Vira (a desktop or terminal session)
+    is in motion, not stalled. 2026-10-09: a live session's branch read
+    "waiting on you" in Attention, assessed "resume", with a Resume button
+    that would have put a second agent in a tree another agent was writing,
+    because a sweep caught it mid-edit and Vira cannot see sessions it did
+    not start."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(orphanwork, "ACTIVE_GRACE_S", 3600)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def ledger(self, rows):
+        p = mock.patch("server.joblog.list_records", return_value=rows)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def age(self, path, seconds):
+        t = time.time() - seconds
+        os.utime(path, (t, t))
+
+    def only_item(self):
+        orphanwork.refresh()
+        (it,) = orphanwork.compose()["items"]
+        return it
+
+    def test_fresh_work_with_no_vira_session_reads_as_in_motion(self):
+        self.make_worktree("desk", commits=1, dirty=True)
+        it = self.only_item()
+        self.assertTrue(it["in_motion"])
+        from server import attention, workresults
+        (row,) = attention._orphan_rows()
+        self.assertFalse(row["needs_you"])
+        self.assertIn("in progress outside Vira", row["sub"])
+        (res,) = workresults.build_inventory(orphans=[it])
+        self.assertEqual(res["status"], "running")
+
+    def test_a_second_agent_is_refused_off_the_tree_not_the_row(self):
+        """The refusal reads git and the disk at click time: this row was
+        swept while the work was quiet, and the work has moved since."""
+        wt = self.make_worktree("desk", dirty=True)
+        self.age(wt / "dirty.py", 2 * 3600)
+        it = self.only_item()
+        self.assertFalse(it["in_motion"])
+        (wt / "dirty.py").write_text("# someone carries on\n", encoding="utf-8")
+        with mock.patch("server.session.sessions.launch",
+                        side_effect=AssertionError("a second agent launched")):
+            with self.assertRaisesRegex(ValueError, "outside Vira"):
+                orphanwork.resume(it)
+            with self.assertRaisesRegex(ValueError, "outside Vira"):
+                orphanwork.land(it)
+
+    def test_land_all_leaves_it_alone(self):
+        self.make_worktree("desk", dirty=True)
+        self.only_item()
+        self.assertEqual(orphanwork.land_all(), 0)
+
+    def test_neither_pinged_nor_assessed_until_it_goes_quiet(self):
+        orphanwork.refresh()                          # the baseline sweep
+        wt = self.make_worktree("desk", dirty=True)
+        with mock.patch("server.suggest.complete", return_value="[]") as model:
+            orphanwork.refresh()
+            self.ping.assert_not_called()
+            orphanwork.assess_missing()
+            model.assert_not_called()
+            self.age(wt / "dirty.py", 2 * 3600)       # an hour and more of quiet
+            orphanwork.refresh()
+            self.ping.assert_called_once()
+            orphanwork.assess_missing()
+            model.assert_called_once()
+
+    def test_a_vira_sessions_leftover_is_stalled_and_a_later_edit_is_not(self):
+        """Back and forth: dirt a Vira session left is the owner's to land;
+        an edit made after that session ended is someone carrying on."""
+        wt = self.make_worktree("left", dirty=True)
+        self.age(wt / "dirty.py", 600)
+        ended = datetime.now(timezone.utc) - timedelta(minutes=5)
+        self.ledger([{"id": "j1", "branch": "claude/left", "status": "done",
+                      "finished": ended.isoformat(timespec="seconds"),
+                      "prompt": "Add the widget"}])
+        self.assertFalse(self.only_item()["in_motion"])
+        (wt / "dirty.py").write_text("# the owner carries on\n", encoding="utf-8")
+        self.assertTrue(self.only_item()["in_motion"])
+
+    def test_a_tip_main_also_has_says_nothing_about_the_work(self):
+        """A branch with no commits of its own has main's tip, whose date is
+        when main last moved. Only the old edit counts."""
+        wt = self.make_worktree("old", dirty=True)
+        self.age(wt / "dirty.py", 2 * 3600)
+        self.assertFalse(self.only_item()["in_motion"])
+
+    def test_an_unknown_change_time_never_reads_as_motion(self):
+        self.assertFalse(orphanwork._in_motion(None, 0.0))
+        self.assertFalse(orphanwork._in_motion(None, None))
 
 
 class FullContext(_RepoCase):

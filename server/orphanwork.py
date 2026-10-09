@@ -68,6 +68,12 @@ DIRTY_MTIME_CAP = 50         # dirty paths stat'd for the "when was this touched
 LAND_WAIT_S = 3 * 3600       # ceiling on waiting for a landing session to finish
 LAND_POLL_S = 20             # how often the landing watcher re-reads the ledger
 REFS_TTL_S = 5.0             # Attention polls every 5 s: at most one ref read per poll
+ACTIVE_GRACE_S = 3600        # an hour of quiet before work outside Vira reads as stalled
+# Bumped whenever a sweep's rows change shape. It rides in the recorded refs
+# fingerprint, so a store swept by older code reads as stale on its first
+# read after a deploy instead of serving rows that lack the new fields
+# until some ref happens to move (2: rows carry in_motion).
+SWEEP_SHAPE = 2
 
 _actions_lock = threading.Lock()
 _actions = {}                 # branch -> {name, status, output, started, finished}
@@ -144,10 +150,12 @@ def ref_state(fresh=False):
 
 
 def refs_fingerprint(state):
-    """A short stable digest of `state`, stored with each sweep."""
+    """A short stable digest of `state` and SWEEP_SHAPE, stored with each
+    sweep."""
     if state is None:
         return None
-    body = "\n".join(f"{ref} {sha}" for ref, (sha, _) in sorted(state.items()))
+    body = f"shape {SWEEP_SHAPE}\n" + "\n".join(
+        f"{ref} {sha}" for ref, (sha, _) in sorted(state.items()))
     return hashlib.sha1(body.encode("utf-8")).hexdigest()[:16]
 
 
@@ -275,6 +283,59 @@ def _job_for_branch(branch, ledger_by_branch, by_branch=None):
             "prompt_head": " ".join((row.get("prompt") or "").split())[:280]}
 
 
+def _epoch(value):
+    """A ledger time (ISO, or an epoch from older rows) as an epoch, or
+    None."""
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else None
+    dt = _parse_iso(value) if value else None
+    return dt.timestamp() if dt else None
+
+
+def _in_motion(job, ts, now=None):
+    """True when someone is working on the branch outside Vira: no Vira
+    session is running on it, and its tree changed within ACTIVE_GRACE_S
+    and after the last Vira session on it ended. Vira cannot see a desktop
+    or terminal session (owner, 2026-10-09: a live session's branch read
+    "waiting on you" with a Resume button), so a recent change stands in
+    for one. A change from before a Vira session ended is that session's
+    leftover work, which is exactly what this inventory is for."""
+    if not ts or (now or time.time()) - ts >= ACTIVE_GRACE_S:
+        return False
+    if not job:
+        return True
+    if job.get("status") == "running":
+        return False                  # a live Vira session is excluded anyway
+    ended = _epoch(job.get("finished"))
+    return ended is not None and ts > ended
+
+
+def _seen_change(branch, ahead, wt, dirty_lines):
+    """When the branch's own work last changed, from what was actually
+    observed: its newest commit when it carries commits of its own (a tip
+    that main also has only says when main moved), and its newest edited
+    file. 0.0 when neither is known - an unknown time never reads as just
+    now."""
+    seen = (_commit_time(branch) or 0.0) if ahead else 0.0
+    if wt and dirty_lines:
+        seen = max(seen, _dirty_mtime(wt, dirty_lines) or 0.0)
+    return seen
+
+
+def _moving_outside_vira(branch, row):
+    """Minutes since `branch` last changed when it is in motion outside
+    Vira (see _in_motion), read fresh off git and the disk; else None.
+    `row` is the branch's newest ledger row, or None."""
+    wt = next((e["path"] for e in _porcelain_worktrees()
+               if e["branch"] == branch), None)
+    ahead, _ = _ahead_behind(branch)
+    seen = _seen_change(branch, ahead, wt, _dirty_lines(wt) if wt else None)
+    job = _job_for_branch(branch, {branch: row}) if row else None
+    if not _in_motion(job, seen):
+        return None
+    return max(0, int((time.time() - seen) // 60))
+
+
 def _porcelain_path(line):
     """One porcelain line -> the changed path. The 3-char status prefix is
     fixed-width ("XY "); a rename reads "old -> new" and the NEW path is
@@ -346,10 +407,9 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch, by_branch=None):
         return None
     tip = _tip_sha(wt or ROOT, branch)
     ts = _commit_time(branch) or time.time()
-    if dirty and wt:
-        m = _dirty_mtime(wt, dirty_lines)
-        if m:
-            ts = max(ts, m)
+    seen = _seen_change(branch, ahead, wt, dirty_lines)
+    if seen:
+        ts = max(ts, seen)
     job = _job_for_branch(branch, ledger_by_branch, by_branch)
     if job and job.get("status") == "running":
         # A live session owns this tree: its dirt is work IN PROGRESS, not
@@ -366,6 +426,9 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch, by_branch=None):
         "branch": branch,
         "worktree": str(wt) if wt else "",
         "dirty": dirty, "ahead": ahead, "behind": behind,
+        # someone is working on it outside Vira: listed, but not stalled,
+        # not pinged, not assessed and not offered to a second agent
+        "in_motion": _in_motion(job, seen),
         "files": _dirty_files(dirty_lines),
         "commits": _branch_commits(branch, ahead),
         "kind": "dirty" if dirty else "unmerged",
@@ -492,6 +555,7 @@ def _refresh_locked(quiet, refs):
     items = sweep()
     now = _now_iso()
     keys = {it["key"] for it in items}
+    moving = {it["key"] for it in items if it.get("in_motion")}
     ping = {}
 
     def fn(s):
@@ -502,7 +566,10 @@ def _refresh_locked(quiet, refs):
             return s
         notified = dict(s.get("notified") or {})
         dismissed = dict(s.get("dismissed") or {})
-        new_keys = sorted(k for k in keys if k not in notified)
+        # Work in motion outside Vira is not news yet. Left unstamped, it
+        # pings on the first sweep after it goes quiet.
+        new_keys = sorted(k for k in keys if k not in notified
+                          and k not in moving)
         if not s.get("baseline_done"):
             for k in keys:
                 notified[k] = now
@@ -1149,6 +1216,13 @@ def _refuse_if_busy(branch):
             f"a session is already live on {branch} "
             f"(job {row.get('id')}) — steer, answer, or finish it "
             "instead of dispatching over it")
+    mins = _moving_outside_vira(branch, row)
+    if mins is not None:
+        raise ValueError(
+            f"{branch} changed {mins} min ago and no Vira session is on it, "
+            "so someone is working on it outside Vira (a desktop or terminal "
+            "session). Finish it there, or wait until it has been quiet for "
+            f"{ACTIVE_GRACE_S // 60} minutes.")
 
 
 # ---------------------------------------------------------------- landing
@@ -1545,7 +1619,7 @@ def land_all(mode="diagnose"):
     row's action field."""
     m = norm_land_mode(mode)
     todo = [it for it in compose()["items"]
-            if it.get("kind") != "unpushed"
+            if it.get("kind") != "unpushed" and not it.get("in_motion")
             and (it.get("branch") or "") not in ("", "main")]
     if not todo:
         return 0
@@ -1639,7 +1713,8 @@ def assess_missing():
     s = _read()
     reads = s.get("reads") or {}
     todo = [it for it in (s.get("items") or [])
-            if it.get("kind") != "unpushed" and it.get("key") not in reads]
+            if it.get("kind") != "unpushed" and not it.get("in_motion")
+            and it.get("key") not in reads]
     if not todo:
         return 0
     from . import suggest

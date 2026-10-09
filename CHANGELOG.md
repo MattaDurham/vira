@@ -79,6 +79,17 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   has, and when refs have moved it starts one background re-sweep. That
   re-sweep sends no phone ping and makes no model call, so pings and
   assessments keep their usual cadence.
+- Work someone is doing outside Vira, in a desktop or terminal session, no
+  longer reads as abandoned. Vira can only see its own sessions, so a sweep
+  that caught another session's branch mid-edit listed it as "waiting on
+  you", assessed it "resume", and offered to resume it, which would have
+  started a second agent in a tree another agent was writing. A branch with
+  no Vira session running on it and a change in the last hour, after any
+  Vira session on it ended, is now in motion. Attention shows it under "In
+  motion", and Work results labels it Working. It is not pinged or assessed
+  until it has been quiet for an hour. Resume and Land refuse it, checking
+  git and the disk at the moment of the click, and Land all skips it.
+  Uncommitted changes left by a Vira session still read as waiting on you.
 
 ## 2026-08-27
 

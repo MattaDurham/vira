@@ -123,7 +123,8 @@ def build_inventory(showroom_data=None, orphans=(), jobs=(), flows=(),
         # alone never resurrect a dismissed review key.
         row["orphan"] = orphan
         if orphan.get("kind") != "unpushed":
-            row["status"] = "unlanded"
+            # Work in motion outside Vira is not ready for review yet.
+            row["status"] = "running" if orphan.get("in_motion") else "unlanded"
         row["summary"] = row["summary"] or (orphan.get("read") or {}).get("why", "")
         _touch(row, orphan.get("last_activity") or orphan.get("last_activity_iso"))
         _append(row, "sources", "branch review")
