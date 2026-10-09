@@ -31235,7 +31235,7 @@ function initDesktop() {
   document.body.classList.add("desktop");
   window.ViraBackgrounds.init({ read: lsGet, write: (key, value) => uiPush(key, lsSet(key, value)),
     constellation: initConstellation,
-    canFeed: target => !editing && isDesktopOpenSpace(target) });
+    canInteract: target => !editing && isDesktopOpenSpace(target) });
   const stored = desktopStore();
   WINDOWS.forEach((spec, i) => {
     const st = stored[spec.id] || {};

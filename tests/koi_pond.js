@@ -70,41 +70,34 @@ assert.ok(ranges.every(r => r.bank > .1),"fish bank into organic turns");
 assert.ok(ranges.every(r => Math.max(...r.depth)-Math.min(...r.depth) > .2),"swimmers vary their depth");
 assert.ok(pond.drops.length > 0,"occasional droplets disturb the surface");
 assert.ok(curl>1 && tailMotion>.2,"turning produces substantial flowing bends, not tiny tail offsets");
-const invalid = pond.food.length;
-assert.equal(pond.feed(0,0),false); assert.equal(pond.feed(NaN,.5),false);
-assert.equal(pond.food.length,invalid,"feeding the bank must not create food");
-const center = { x:.5, y:.5 };
-const distance = () => pond.fish.reduce((sum,f) => sum+Math.hypot(f.x-center.x,f.y-center.y),0)/pond.fish.length;
-const initialDistance = distance();
-assert.equal(pond.feed(center.x,center.y),true); assert.equal(pond.food.length,8);
-let shallowest = Infinity;
-for (let i=0;i<320;i++) {
-  pond.step(.025);
-  shallowest = Math.min(shallowest,pond.fish.reduce((sum,f) => sum+f.depth,0)/pond.fish.length);
-}
-assert.ok(distance() < initialDistance*.70,"fish gather toward the actual feeding point");
-assert.ok(shallowest < .22,
-  "feeding fish rise toward the surface");
-assert.ok(pond.food.length < 8,"fish reach and eat pellets before they expire");
-for (let i=0;i<120;i++) pond.feed(.5,.5);
-assert.ok(pond.food.length <= 24 && pond.drops.length <= 12,"rapid clicks do not accumulate unlimited effects");
-const paused = JSON.stringify(pond.fish);
-pond.step(0); assert.equal(JSON.stringify(pond.fish),paused,"zero-time frames retain the pose");
-for (let i=0;i<800;i++) pond.step(.025);
-assert.equal(pond.food.length,0,"uneaten food expires and the pond returns to wandering");
+assert.equal(pond.flick(NaN,.5),false);
+assert.equal(pond.flick(.5,Infinity),false);
+assert.equal(pond.flick(1.4,-.3),true,"visible water extends beyond the fish roaming area");
+const attention=create(()=>.5),control=create(()=>.5);
+attention.follow(.7,.5);
+for(let i=0;i<1200;i++){attention.step(.025);control.step(.025);}
+const distance=p=>p.fish.reduce((sum,f)=>sum+Math.hypot(f.x-.7,(f.y-.5)/((16/9)*.76)),0)/p.fish.length;
+assert.ok(distance(attention)<distance(control)*.9,"cursor interest biases paths without trapping fish at a single point");
+assert.ok(Math.max(...attention.fish.flatMap(a=>attention.fish.map(b=>Math.hypot(a.x-b.x,a.y-b.y))))>.12,"curious swimmers remain loosely spread");
+attention.follow(null);
+const reacting=create(()=>.5);
+Object.assign(reacting.fish[0],{x:.5,y:.5,depth:.4,vx:0,vy:0,heading:0});
+Object.assign(reacting.fish[1],{x:.72,y:.5,depth:.7});
+reacting.flick(.49,.5);
+assert.equal(reacting.fish[0].reaction.kind,"flee","a nearby ripple startles shallow fish");
+assert.equal(reacting.fish[1].reaction.kind,"inspect","more distant fish investigate after a delay");
+const origin={x:reacting.fish[0].x,y:reacting.fish[0].y,depth:reacting.fish[0].depth};
+reacting.step(1/120);
+assert.ok(Math.abs(reacting.fish[0].x-origin.x)<.002 && Math.abs(reacting.fish[0].depth-origin.depth)<.004,"a startle supplies thrust, never teleports fish");
+for(let i=0;i<180;i++)reacting.step(1/120);
+assert.ok(reacting.fish[0].x>.55,"the close swimmer escapes from the disturbance");
+for (let i=0;i<120;i++) reacting.flick(.5,.5);
+assert.ok(reacting.drops.length<=12,"rapid clicks do not accumulate unlimited effects");
+const paused=JSON.stringify(reacting.fish);reacting.step(0);
+assert.equal(JSON.stringify(reacting.fish),paused,"zero-time frames retain the pose");
+for(let i=0;i<800;i++)reacting.step(.025);
+assert.ok(reacting.fish.every(f=>!f.reaction),"temporary disturbance responses return to wandering");
 assert.equal(inWater(.5,.5),true);
-for(const angle of [0,Math.PI/2,Math.PI,Math.PI*1.5]){
-  const bank=create(()=>.5);
-  bank.feed(.5+Math.cos(angle)*.46*.938,.5+Math.sin(angle)*.44*.938);
-  assert.ok(bank.food.every(p=>inWater(p.x,p.y)),"pellets scattered near a bank must land in water");
-}
-const diving=create(()=>.5);diving.fish.splice(1);
-Object.assign(diving.fish[0],{x:.5,y:.5,depth:1.5,depthVelocity:0,heading:0,vx:0,vy:0});
-diving.feed(.5,.5);
-for(let i=0;i<120;i++)diving.step(1/120);
-assert.equal(diving.food.length,8,"a deep swimmer cannot eat food at the surface before rising");
-for(let i=0;i<1320;i++)diving.step(1/120);
-assert.ok(diving.food.length<8,"a swimmer can rise, reach the surface food and feed");
 // Water resistance must preserve forward momentum and damp sideways drift.
 const coast=create(()=>.5); coast.fish.splice(1);
 const f=coast.fish[0];

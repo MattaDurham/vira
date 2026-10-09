@@ -68,12 +68,11 @@ class Element extends Target {
   querySelector(s) { return this.querySelectorAll(s)[0]; }
   set innerHTML(html) {
     // Only the fixed picker skeleton needs parsing in this harness.
-    for (const cls of ["background-options", "background-simple", "background-motion", "background-feed", "background-explore", "background-pond-setting", "background-look-setting", "background-status", "background-close"]) {
+    for (const cls of ["background-options", "background-simple", "background-motion", "background-explore", "background-look-setting", "background-status", "background-close"]) {
       const c = new Element(cls.includes("motion") || cls.includes("close") ? "button" : "div");
       c.className = cls; this.appendChild(c);
     }
     this.appendChild(new Element("input"));
-    const pond=new Element("select");pond.className="background-pond-select";this.appendChild(pond);
     const look=new Element("select");look.className="background-look-select";this.appendChild(look);
   }
   getContext(kind) { return kind === "2d" ? context : gpuEnabled ? gl : null; }
@@ -106,13 +105,13 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
 (async () => {
   sandbox.window.ViraBackgrounds.init({ read: () => ({ scene: "unknown", dim: 100 }),
     pond3D:()=>pondFactory(),
-    canFeed: target => target === document.body,
+    canInteract: target => target === document.body,
     write: (key, value) => { assert.equal(key, "vira-background"); stored = { ...value }; },
     constellation: () => { constellations++; return () => { stops++; }; } });
   assert.equal(constellations, 1); assert.equal(pendingImages.size, 0);
   scene("koi"); scene("redwoods");
   assert.equal(stops, 1);
-  resolve("pond-garden.jpg"); resolve("kohaku.webp"); resolve("ogon.webp");
+  resolve("open-water.svg"); resolve("kohaku.webp"); resolve("ogon.webp");
   resolve("showa.webp"); resolve("shusui.webp"); await flush();
   assert.equal(host().children.length, 0, "a stale load must not install its animation");
   resolve("redwoods.jpg"); await flush();
@@ -130,27 +129,25 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   motion.emit("click"); frame();
   assert.deepEqual(poses.at(-1), before, "resume must retain the paused simulation time");
   assert.equal(frames.size, 1);
-  const setting=panel().querySelector("select");
-  setting.value="courtyard";setting.emit("change");
-  assert.equal(stored.pond,"courtyard");assert.equal(frames.size,0,"changing ponds retires the previous fish loop");
-  resolve("pond-courtyard.jpg");await flush();
-  assert.equal(frames.size,1);assert.equal(document.listeners.get("click").size,1,"the new pond has one feeding handler");
-  assert.equal(panel().querySelector(".background-pond-setting").hidden,false);
+  assert.equal(document.listeners.get("click").size,1,"the pond installs one ripple handler");
+  assert.equal(document.listeners.get("pointermove").size,1,"cursor attention has a single listener");
+  document.emit("pointermove",{target:document.body,clientX:720,clientY:390});frame();
+  document.emit("pointerleave");
   let prevented = false;
   const click = { button: 0, clientX: 640, clientY: 360,
     preventDefault() { prevented = true; }, defaultPrevented: false };
   const prior = draws;
   document.emit("click", { ...click, target: trigger });
-  assert.equal(draws, prior, "window controls must not feed or repaint the pond");
+  assert.equal(draws, prior, "window controls must not disturb or repaint the pond");
   document.emit("click", { ...click, target: document.body });
-  assert.equal(prevented, true); assert.ok(draws > prior, "food and ripples paint immediately");
+  assert.equal(prevented, true); assert.ok(draws > prior, "ripples paint immediately");
   prevented = false;
   document.emit("dblclick", { ...click, target: document.body });
-  assert.equal(prevented, true, "rapid feeding must protect the desktop's double-click gesture");
+  assert.equal(prevented, true, "rapid water flicks must protect the desktop's double-click gesture");
   motion.emit("click");
   const pausedDraws = draws;
   document.emit("click", { ...click, target: document.body });
-  assert.equal(draws, pausedDraws, "feeding must respect paused motion");
+  assert.equal(draws, pausedDraws, "ripples must respect paused motion");
   motion.emit("click");
   document.hidden = true; document.emit("visibilitychange"); assert.equal(frames.size, 0);
   document.hidden = false; document.emit("visibilitychange"); assert.equal(frames.size, 1);
@@ -160,7 +157,7 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   const range = panel().querySelector("input"); range.value = "35"; range.emit("input");
   assert.equal(stored.dim, .35);
   scene("none"); assert.equal(host(), undefined); assert.equal(frames.size, 0);
-  assert.equal(panel().querySelector(".background-pond-setting").hidden,true);
+  assert.equal(document.listeners.get("pointermove").size,0,"leaving the pond retires cursor attraction");
   assert.equal(document.listeners.get("visibilitychange").size, 0);
   assert.equal(windowEvents.listeners.get("resize").size, 0);
   assert.equal(document.listeners.get("click").size, 0);
@@ -194,7 +191,7 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
     callbacks=options;allocations++;
     engine=()=>{retired++;};engine.styles=[];engine.moves=[];
     engine.look=value=>engine.styles.push(value);engine.motion=value=>engine.moves.push(value);
-    engine.explore=()=>{engine.explored=true;};engine.feed=()=>{};return engine;
+    engine.explore=()=>{engine.explored=true;};return engine;
   }});
   scene("koi");await flush();
   const look=panel().querySelector(".background-look-select");

@@ -3,12 +3,12 @@
   "use strict";
   const KEY = "vira-background";
   const PONDS = [
-    { id:"garden", name:"Garden pond", image:"pond-garden.jpg" },
-    { id:"courtyard", name:"Courtyard pond", image:"pond-courtyard.jpg" },
+    { id:"garden", name:"Open water", image:"open-water.svg" },
+    { id:"courtyard", name:"Open water", image:"open-water.svg" },
   ];
   const SCENES = [
-    { id: "koi", name: "Koi pond", image: "pond-garden.jpg",
-      detail: "Living koi below rippling water. Click to feed." },
+    { id: "koi", name: "Koi pond", image: "open-water-thumbnail.svg",
+      detail: "Koi in dark, open water. Move closer; click for ripples." },
     { id: "redwoods", name: "Redwood grove", image: "redwoods.jpg",
       detail: "A canopy breeze, sunbeams and drifting motes." },
     { id: "aurora", name: "Aurora fjord", image: "aurora.jpg",
@@ -23,6 +23,9 @@
   function load(name) {
     if (!images.has(name)) images.set(name, new Promise((resolve, reject) => {
       const image = new Image();
+      // Selected scene assets should not wait behind the desktop polling traffic.
+      image.fetchPriority = "high";
+      image.decoding = "async";
       image.onload = () => resolve(image);
       image.onerror = () => { images.delete(name); reject(new Error("Could not load " + name)); };
       image.src = asset(name);
@@ -57,22 +60,17 @@
     button.disabled = reduced.matches || prefs.scene === "none";
     button.setAttribute("aria-pressed", String(prefs.paused));
     panel.querySelector("input").disabled = !SCENES.some(s => s.id === prefs.scene);
-    const feed = panel.querySelector(".background-feed");
-    feed.hidden = prefs.scene !== "koi";
-    feed.disabled = !moving() || !stop.feed;
-    panel.querySelector(".background-pond-setting").hidden = prefs.scene !== "koi";
-    panel.querySelector(".background-pond-select").value = prefs.pond;
     panel.querySelector(".background-look-setting").hidden=prefs.scene!=="koi";
     panel.querySelector(".background-look-select").value=prefs.look;
     panel.querySelector(".background-look-select").disabled=prefs.scene==="koi" && !stop.look;
     const studioLook=document.getElementById("design-pond-look");if(studioLook){studioLook.value=prefs.look;studioLook.disabled=prefs.scene==="koi" && !stop.look;}
     const explore=panel.querySelector(".background-explore");explore.hidden=prefs.scene!=="koi";
     explore.disabled=!stop.explore;
-    panel.querySelector('[data-scene="koi"]').querySelector("img").src = asset(pondSetting().image);
+    panel.querySelector('[data-scene="koi"]').querySelector("img").src = asset("open-water-thumbnail.svg");
     panel.querySelector(".background-status").textContent = message ||
       (reduced.matches ? "Still scene: your system prefers reduced motion."
         : prefs.paused ? "Motion paused. Your choice is saved."
-        : prefs.scene === "koi" ? "Click open water to feed. Look around to explore the pond."
+        : prefs.scene === "koi" ? "Move over open water to draw koi closer. Click to make ripples."
         : "Your choice is saved. Motion rests when this tab is hidden.");
   }
   async function apply() {
@@ -111,14 +109,14 @@
         try{
           const factory=io.pond3D || (()=>import("./koi-pond-3d.js"));
           const module=await factory();if(token!==generation)return;
-          engine=module?.create({node,loaded,style:prefs.pond,canFeed:io.canFeed,
+          engine=module?.create({node,loaded,canInteract:io.canInteract,
             onMessage:value=>{if(token===generation){message=value;status();}},onLook:setLook,look:prefs.look,
             onPause:()=>{prefs.paused=!prefs.paused;save();motionChange();}});
         }catch(error){console.warn("3D pond unavailable:",error.message);}
         if(token!==generation){engine?.();return;}
         stop=engine || animate(node,scene.id,loaded);
         if(engine){stop.look(prefs.look);stop.motion(moving());}
-        else stop.message="3D pond unavailable: using the photographic approximation. "+(stop.message || "");
+        else stop.message="3D pond unavailable: using the flat water approximation. "+(stop.message || "");
       }else stop = animate(node, scene.id, loaded);
       message = stop.message || "";
       status();
@@ -167,9 +165,7 @@
       float rippleLight=0.;
       if(scene<.5) {
         float planeY=(uv.y-.51)/(photoRatio*pondCamera.x);
-        float worldY=planeY*pondCamera.y/(pondCamera.y*pondCamera.z+planeY*pondCamera.w);
-        float worldX=(uv.x-.5)*(pondCamera.y-worldY*pondCamera.w)/(pondCamera.x*pondCamera.y);
-        float edge=1.-smoothstep(.91,1.03,length(vec2(worldX/.46,worldY*waterMetric/.44)));
+        float edge=1.;
         offset=vec2(sin(uv.y*65.+time*.7)+sin(uv.x*37.-time*.4),
           cos(uv.x*54.+time*.6)+sin(uv.y*42.-time*.5))*.00065*edge;
         for(int i=0;i<12;i++) {
@@ -196,7 +192,7 @@
       vec3 color=texture2D(photo,clamp(uv+offset,.001,.999)).rgb;
       if(scene<.5) {
         // Fish are composited before surface light and share the water's
-        // refraction. Their photographic reflections remain ABOVE the fish.
+        // refraction. Surface reflections remain above the fish.
         vec2 fishUV=clamp(p+offset/scale,.001,.999);
         vec4 fish=texture2D(underwater,vec2(fishUV.x,1.-fishUV.y));
         vec3 submerged=fish.rgb/max(fish.a,.001);
@@ -206,7 +202,7 @@
         float cosine=pondCamera.y*pondCamera.z/length(vec3(worldX,
           pondCamera.y*pondCamera.w-worldY,pondCamera.y*pondCamera.z));
         float fresnel=.0204+.9796*pow(1.-cosine,5.);
-        // The plate already contains reflected garden radiance. Estimate its
+        // The dark plate supplies quiet reflected sky radiance. Estimate its
         // prominence from brightness, keeping it above even a shallow fish.
         float brightness=dot(original,vec3(.2126,.7152,.0722));
         float reflection=clamp(fresnel*(4.+brightness*24.),.07,.52);
@@ -535,21 +531,12 @@
         }
         ctx.restore();
       }
-      for (const pellet of pond.food) {
-        const p = position(pellet,v);
-        ctx.globalAlpha = Math.min(1,pellet.life);
-        ctx.fillStyle = "#b89962";
-        ctx.beginPath(); ctx.ellipse(p.x,p.y,1.8,1.3,0,0,Math.PI*2); ctx.fill();
-        ctx.globalAlpha = 1;
-      }
     }
     function paint() {
-      // Limit GPU pixels and frame rate: background detail need not compete with work.
-      const ratio = Math.min(devicePixelRatio || 1, 1.5, 1920 / innerWidth);
+      // Preserve native 4K detail; retain a bounded pixel budget on retina displays.
+      const ratio = Math.min(devicePixelRatio || 1,2,Math.sqrt(8388608/(innerWidth*innerHeight)),4096/Math.max(innerWidth,innerHeight));
       const gpuW = Math.round(innerWidth*ratio), gpuH = Math.round(innerHeight*ratio);
-      // The uploaded fish texture needs only desktop resolution, not retina
-      // resolution: water refraction and depth soften it again in the shader.
-      const layerRatio = pond ? Math.min(1,1280/innerWidth) : ratio;
+      const layerRatio = ratio;
       const w = Math.round(innerWidth*layerRatio), h = Math.round(innerHeight*layerRatio);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       impacts.fill(0);
@@ -591,40 +578,50 @@
       if (!closed && !document.hidden && moving()) raf = requestAnimationFrame(tick);
     }
     function resize() { paint(); }
-    function dropFood(x,y) {
+    function flickWater(x,y) {
       if (closed || !pond || !moving() || document.hidden) return false;
-      if (!pond.feed(x,y)) return false;
+      if (!pond.flick(x,y)) return false;
       paint();
       return true;
     }
     function clickPoint(e) {
       if (e.button !== 0 || e.defaultPrevented || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey
-          || !io.canFeed?.(e.target)
+          || !io.canInteract?.(e.target)
           || e.target.closest?.("button,a,input,textarea,select,[contenteditable],#background-picker,.ctx-menu,.ctx-pop,#reminder-stickies")) return null;
       const v = view(innerWidth,innerHeight);
       const p = window.ViraKoiPond.unproject((e.clientX-v.left)/v.pw,(e.clientY-v.top)/v.ph);
-      return window.ViraKoiPond.inWater(p.x,p.y) ? p : null;
+      return p;
     }
-    const feedClick = e => { const p = clickPoint(e); if (p && dropFood(p.x,p.y)) e.preventDefault(); };
-    // Rapid feeding must not invoke the desktop's double-click "close all".
-    const feedDouble = e => { if (moving() && clickPoint(e)) e.preventDefault(); };
+    const waterClick = e => { const p = clickPoint(e); if (p && flickWater(p.x,p.y)) e.preventDefault(); };
+    // Rapid water flicks must not invoke the desktop's double-click "close all".
+    const waterDouble = e => { if (moving() && clickPoint(e)) e.preventDefault(); };
+    const pointerMove=e=>{
+      if(!pond)return;
+      const v=view(innerWidth,innerHeight),p=io.canInteract?.(e.target)
+        ?window.ViraKoiPond.unproject((e.clientX-v.left)/v.pw,(e.clientY-v.top)/v.ph):null;
+      pond.follow(p?.x,p?.y);
+    };
+    const clearPointer=()=>pond?.follow(null);
     paint(); visibility();
     document.addEventListener("visibilitychange",visibility);
     addEventListener("resize",resize);
     if (pond) {
-      document.addEventListener("click",feedClick);
-      document.addEventListener("dblclick",feedDouble,true);
+      document.addEventListener("pointermove",pointerMove);document.addEventListener("pointerleave",clearPointer);
+      addEventListener("blur",clearPointer);
+      document.addEventListener("click",waterClick);
+      document.addEventListener("dblclick",waterDouble,true);
     }
     const dispose = () => {
       closed = true; cancelAnimationFrame(raf);
       document.removeEventListener("visibilitychange",visibility);
       removeEventListener("resize",resize);
-      document.removeEventListener("click",feedClick);
-      document.removeEventListener("dblclick",feedDouble,true);
+      document.removeEventListener("pointermove",pointerMove);document.removeEventListener("pointerleave",clearPointer);
+      removeEventListener("blur",clearPointer);
+      document.removeEventListener("click",waterClick);
+      document.removeEventListener("dblclick",waterDouble,true);
       plate?.close(); canvas.remove();
     };
     dispose.motion = visibility;
-    dispose.feed = pond ? () => dropFood(.5,.5) : null;
     dispose.message = plate ? "" : "Water and light effects unavailable: using the photograph.";
     return dispose;
   }
@@ -637,27 +634,15 @@
     panel.setAttribute("aria-labelledby", "background-title");
     panel.innerHTML = `<div class="background-head"><div>
       <h2 id="background-title">A different kind of desktop</h2>
-      <p>Three living landscapes. Choose one to see it on your desk.</p></div>
+      <p>Three living backgrounds. Choose one to see it on your desk.</p></div>
       <button class="background-close" aria-label="Close background picker">&times;</button></div>
       <div class="background-options"></div><div class="background-simple"></div>
       <div class="background-controls"><button class="background-motion">Pause motion</button>
-      <button class="background-feed" hidden>Feed koi</button>
       <button class="background-explore" hidden>Look around</button>
       <label>Dim <input aria-label="Background dimming" type="range" min="0" max="65" step="1"></label></div>
-      <label class="background-pond-setting" hidden>Pond setting <select class="background-pond-select" aria-label="Pond setting"></select></label>
       <label class="background-look-setting" hidden>Pond look <select class="background-look-select" aria-label="Pond look">
         <option value="natural">Natural 3D</option><option value="wireframe">Cyberpunk wireframe</option></select></label>
       <p class="background-status" role="status"></p>`;
-    const setting = panel.querySelector(".background-pond-select");
-    for (const p of PONDS) {
-      const option = document.createElement("option"); option.value=p.id; option.textContent=p.name;
-      setting.appendChild(option);
-    }
-    setting.addEventListener("change", () => {
-      if (!PONDS.some(p => p.id === setting.value)) return;
-      prefs.pond=setting.value; save();
-      if (prefs.scene === "koi") apply();
-    });
     for (const s of SCENES) {
       const b = document.createElement("button");
       b.className = "background-choice"; b.dataset.scene = s.id;
@@ -677,7 +662,6 @@
     panel.querySelector(".background-motion").addEventListener("click", () => {
       prefs.paused = !prefs.paused; save(); motionChange();
     });
-    panel.querySelector(".background-feed").addEventListener("click", () => stop.feed?.());
     panel.querySelector(".background-explore").addEventListener("click",()=>{panel.hidden=true;trigger.setAttribute("aria-expanded","false");stop.explore?.();});
     panel.querySelector(".background-look-select").addEventListener("change",e=>setLook(e.target.value));
     document.getElementById("design-pond-look")?.addEventListener("change",e=>setLook(e.target.value));
