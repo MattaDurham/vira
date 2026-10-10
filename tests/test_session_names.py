@@ -297,7 +297,7 @@ class LandDispatch(_Store):
         self.assertIn("Originally asked:", a)
         self.assertIn("Why it stopped: The harness refused", a)
 
-    def test_land_and_resume_pass_the_name_inputs(self):
+    def test_resume_passes_the_name_inputs(self):
         calls = []
 
         def launch(prompt, **kw):
@@ -305,18 +305,13 @@ class LandDispatch(_Store):
             return "jid"
         with mock.patch("server.session.sessions") as ss, \
                 mock.patch.object(orphanwork, "_refuse_if_busy"), \
-                mock.patch.object(orphanwork, "land_diagnose_prompt",
-                                  return_value="P"), \
                 mock.patch.object(orphanwork, "resume_prompt",
                                   return_value="P"):
             ss.launch.side_effect = launch
-            orphanwork._launch_land_session(self._item(), "diagnose")
             orphanwork.resume(self._item())
-        land, res = calls
-        self.assertEqual(land["subject"], "Vault commissioning")
-        self.assertEqual(land["pr"]["number"], 19)
-        self.assertIn("Diagnose why the earlier session stopped", land["about"])
+        res, = calls
         self.assertEqual(res["subject"], "Vault commissioning")
+        self.assertEqual(res["pr"]["number"], 19)
         self.assertIn("Resume the work on the branch", res["about"])
 
     def test_the_sweep_row_carries_the_pr(self):

@@ -644,7 +644,7 @@ class Actions(_RepoCase):
             with self.assertRaisesRegex(ValueError, "branch prefix"):
                 showroom.cleanup("codex/shared")
             with self.assertRaisesRegex(ValueError, "branch prefix"):
-                orphanwork.land({"branch": "codex/shared", "dirty": 0, "ahead": 1})
+                orphanwork.require_action_branch("codex/shared")
         discard.assert_not_called()
         merge.assert_not_called()
 
@@ -866,10 +866,10 @@ class Surface(unittest.TestCase):
     def test_verdicts_go_through_the_sweepers_routes(self):
         js = self._code((self.ROOT / "static" / "app.js").read_text(encoding="utf-8"))
         fn = js[js.index("function shrArm("):js.index("async function shrFillDetail")]
-        for route in ("/api/orphanwork/land", "/api/orphanwork/discard",
-                      "/api/showroom/cleanup"):
+        for route in ("/api/orphanwork/discard", "/api/showroom/cleanup"):
             self.assertIn(route, fn)
         self.assertNotIn("/api/showroom/land", fn)
+        self.assertNotIn("/api/orphanwork/land", fn)
         self.assertIn("orphanResume({ key: it.orphan_key", fn)
         resume = js[js.index("async function orphanResume("):
                     js.index("function armOrphanAction(")]

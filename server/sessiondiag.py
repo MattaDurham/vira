@@ -282,8 +282,8 @@ def evidence_block(branch, limit=3):
     if rep:
         lines += [
             f"!! {len(fails)} of these ended the SAME way ({rep}). Retrying "
-            "the same step unchanged is expected to fail again — that is "
-            "what this diagnosis is for.", ""]
+            "the same step unchanged is expected to fail again — find "
+            "out why before you retry it.", ""]
     for i, f in enumerate(fails, 1):
         d = f["diagnosis"]
         lines.append(f"--- failure {i}: job {f['id']} "

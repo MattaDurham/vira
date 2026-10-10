@@ -5175,7 +5175,6 @@ body.run-focus-active { overflow: hidden; }
 }
 .orphan-read-v { font-weight: 600; text-transform: uppercase;
   font-size: 10.5px; letter-spacing: 0.05em; margin-right: 2px; }
-.orphan-read.land .orphan-read-v { color: var(--green); }
 .orphan-read.resume .orphan-read-v { color: var(--accent); }
 .orphan-read.discard .orphan-read-v { color: var(--red); }
 /* WHY it stopped — deterministic, so it is on the row whenever the ledger
