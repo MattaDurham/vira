@@ -57,6 +57,17 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 - Branch instances run the full Vira application, including models, sessions,
   vault operations, and background workers. Explicit instance metadata keeps
   the UI, agent prompts, and lifecycle controls attached to the right server.
+- Unlanded work reaches main through Resume. The Land and Land all buttons
+  are gone: they merged a clean branch with a bare script, which cannot open
+  a missing PR, catch up with a main that moved, or resolve a conflict, and
+  failed while the card still read "Landing...". A Resume session finishes
+  the work and ends on the landing card (Merge / Keep testing / Discard);
+  its prompt now carries why earlier sessions on the branch stopped, and no
+  longer asks the session to write its own decision menu. Merge on that
+  card steers the session through the landing in `AGENTS.local.md` section 3
+  (commit, catch up with main, re-test) before Vira merges, even when the
+  tree is clean, since main may have moved while the card waited. Vira's
+  recommendation on a row is now resume or discard.
 
 ### Fixed
 

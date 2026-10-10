@@ -132,10 +132,13 @@ End every branch session with a short handoff, then one question:
 - **Private state touched** - the kind of data and where it lives, or "none".
 - **Then ask: keep testing, merge, or discard?**
 
-If Vira dispatched you, do not ask that question yourself and do not merge
-or push: when your turn ends Vira serves the test instance and raises the
-landing card with the same three choices, and its Merge does the whole
-landing.
+If Vira dispatched you, do not ask that question yourself: when your turn
+ends Vira serves the test instance, opens the PR and raises the landing
+card with the same three choices. When the owner picks Merge, Vira asks you
+to do steps 1 to 3 of the landing below, then end your turn. Never run
+`branch.sh merge` or push `main` yourself: Vira does the merge, push and
+teardown once your turn ends, because the merge deletes the worktree you
+are running in.
 
 In a session the owner runs directly, **"merge it" from the owner is the
 authorization for the whole landing**, run end to end:

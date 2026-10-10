@@ -190,9 +190,10 @@ LANDING_KIND = "landing"
 LANDING_VERDICTS = ("merge", "keep", "discard")
 LANDING_OPTIONS = [
     {"label": "Merge it",
-     "description": "Land this branch on main: branch.sh merge (preflight, "
-                    "the suite gate, the required PR), push, then tear the "
-                    "branch and its test instance down."},
+     "description": "Land this branch on main: the session commits, "
+                    "catches up with main and re-tests; then Vira merges "
+                    "(preflight, the suite gate, the required PR), pushes, "
+                    "and tears the branch and its test instance down."},
     {"label": "Keep playing",
      "description": "Leave the branch and its test instance up. Reply below "
                     "to keep working; the card comes back when the next turn "
@@ -202,18 +203,32 @@ LANDING_OPTIONS = [
                     "and its test instance. The PR, if one was opened, "
                     "closes unmerged with its diff kept on GitHub."},
 ]
-# What a session is steered with when the owner says Merge over an
-# uncommitted tree. The Implement prompt tells sessions NOT to commit, so an
-# uncommitted tree is the normal shape of delivered work - and branch.sh
-# merge refuses a dirty worktree, so the commit has to happen first. The
-# session that wrote the work writes the message; the harness never invents
-# one.
-COMMIT_STEER = (
-    "The owner chose MERGE IT. Commit every change on this branch now with a "
-    "real commit message that describes the work (git add -A && git commit "
-    "in your worktree; ASCII only, no emoji). Do NOT push, do NOT merge, do "
-    "NOT touch main or the live checkout. Then stop - the harness merges "
-    "the moment your turn ends.")
+# What a parked session is steered with when the owner says Merge. It
+# points at the landing every session already knows (AGENTS.local.md
+# section 3) rather than restating it, and carves out only the last hop.
+#
+# It used to say "commit, do NOT touch main, stop", and the harness merged
+# straight after. That skipped section 3's own step 2 - catch up with main
+# and re-test - so a branch whose main had moved while the card waited
+# (the owner answers late; other branches land meanwhile) reached
+# branch.sh merge stale and stopped at the first conflict, with no session
+# left to read the error (owner, 2026-10-09: "It always seems to know to
+# check" - it does, when nothing tells it not to).
+#
+# The merge itself stays the harness's: branch.sh merge tears down the
+# worktree this session runs in, so orphanwork.land_session runs it after
+# the turn ends. The session that wrote the work writes the commit
+# message; the harness never invents one.
+MERGE_STEER = (
+    "The owner chose MERGE IT. Do the landing in AGENTS.local.md section 3 "
+    "up to, but not including, `branch.sh merge`: commit everything with a "
+    "real message, catch this branch up with main if main moved (rebase in "
+    "this worktree, re-run the tests, push the branch), and make sure its PR "
+    "is open. Do NOT run branch.sh merge, do NOT push main, do NOT touch the "
+    "live checkout: Vira merges, pushes and tears the branch down the moment "
+    "your turn ends, because the merge deletes the worktree you are running "
+    "in. If something stops you, say what and end your turn; Vira's merge "
+    "refuses an uncommitted or conflicting branch on its own.")
 SERVE_TIMEOUT = 600          # clone + provision + boot can take a minute+
 PR_TIMEOUT = 120
 
@@ -1158,10 +1173,12 @@ class Runner:
         keep: the card comes down and the session stays parked. discard and
         merge: the session ends cleanly and finished_by_owner - the ACT is
         the server's (orphanwork.land_session waits for the ledger row to
-        leave `running`, then runs branch.sh). merge over a DIRTY tree first
-        steers the session to commit its own work; the verdict is held on
-        `self.landing` so the turn that follows finishes instead of raising
-        the card again."""
+        leave `running`, then runs branch.sh). merge first steers a parked
+        session through the landing it already knows (MERGE_STEER: commit,
+        catch up with main, re-test); the verdict is held on `self.landing`
+        so the turn that follows finishes instead of raising the card
+        again. It steers even over a clean tree, because a clean tree is
+        no sign main stood still while the card waited."""
         verdict = str(cmd.get("verdict") or "").strip().lower()
         if verdict not in LANDING_VERDICTS:
             self.append(f"[vira] landing: unknown verdict {verdict!r} "
@@ -1181,13 +1198,12 @@ class Runner:
             self.flush_state()
             self.inbox.put_nowait(_END)
             return
-        dirty, _ahead = await asyncio.to_thread(self._branch_work)
         self.landing = {"verdict": "merge"}
-        if dirty and self.awaiting_reply:
-            self.append(f"[vira] merge - {dirty} uncommitted path(s): asking "
-                        "the session to commit its work first\n")
+        if self.awaiting_reply:
+            self.append("[vira] merge - asking the session to commit and "
+                        "catch up with main first\n")
             self.flush_state()
-            self.inbox.put_nowait(COMMIT_STEER)
+            self.inbox.put_nowait(MERGE_STEER)
             return
         self.finished_by_owner = True
         self.append("[vira] merge - closing the session; Vira merges the "
