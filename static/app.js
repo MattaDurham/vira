@@ -13228,6 +13228,12 @@ function renderBrief(b) {
     }),
   });
 
+  // Event prep climbs the brief as its date nears: within two days it sits
+  // above Today, within a week below Tomorrow, otherwise at the end.
+  const prep = (b.events && b.events.events) || [];
+  const prepAt = (u) => prep.filter((e) => e.urgency === u);
+  renderEventPrep(body, prepAt("now"));
+
   const today = briefSection(body, "Today");
   (cal.today || []).forEach((e) => evRow(today, e));
   if (!(cal.today || []).length) briefEmpty(today, "Clear calendar.");
@@ -13237,6 +13243,8 @@ function renderBrief(b) {
   const tom = briefSection(body, "Tomorrow");
   (cal.tomorrow || []).forEach((e) => evRow(tom, e));
   if (!(cal.tomorrow || []).length) briefEmpty(tom, "Nothing scheduled.");
+
+  renderEventPrep(body, prepAt("soon"));
 
   if ((cal.birthdays || []).length) {
     const bd = briefSection(body, "Birthdays this week");
@@ -13300,6 +13308,132 @@ function renderBrief(b) {
     }));
   }
 
+  renderEventPrep(body, prepAt("ahead"),
+    b.events && b.events.hidden ? b.events.hidden : 0);
+}
+
+// ---------- event prep: one countdown checklist per upcoming occasion ----
+// server/eventprep.py clusters every open loop tied to a dated event; the
+// owner ticks items and adds their own here. A tick is checklist state only
+// and never closes the source loop.
+const prepCountdown = (e) => e.started ? "underway" : e.in_progress ? "today"
+  : (e.days === 1 ? "tomorrow" : "in " + e.days + "d");
+
+const PREP_HEADS = { now: "Coming up now", soon: "This week", ahead: "Further out" };
+
+function renderEventPrep(host, events, hidden) {
+  if (!(events || []).length) return null;
+  const sec = briefSection(host, PREP_HEADS[events[0].urgency] || "Coming up",
+    "event prep from messages and calendar" + (hidden ? ` · ${hidden} more later` : ""));
+  events.forEach((e) => sec.appendChild(eventPrepCard(e)));
+  return sec;
+}
+
+async function eventPrepAct(e, body) {
+  return post("/api/brief/events", { event_key: e.key, end: e.end, ...body });
+}
+
+function eventPrepCard(e) {
+  const card = el("div", "prep-card prep-" + e.urgency);
+  const head = el("div", "prep-head");
+  head.appendChild(el("span", "prep-count", prepCountdown(e)));
+  head.appendChild(el("span", "prep-title", e.title));
+  const when = new Date(e.start + "T12:00").toLocaleDateString([],
+    { weekday: "short", month: "short", day: "numeric" });
+  head.appendChild(el("span", "prep-when",
+    [when, e.time, e.source === "messages" ? "from messages" : ""]
+      .filter(Boolean).join(" · ")));
+  const progress = el("span", "prep-progress");
+  const paint = () => {
+    const done = e.total - e.open;
+    progress.textContent = e.total ? `${done} of ${e.total} ready` : "nothing to prep yet";
+    card.classList.toggle("prep-ready", e.total > 0 && e.open === 0);
+  };
+  paint();
+  head.appendChild(progress);
+  const x = el("button", "brief-act x", "×");
+  x.title = "Hide this event from the brief";
+  x.addEventListener("click", async () => {
+    card.classList.add("gone");
+    try {
+      await eventPrepAct(e, { action: "dismiss" });
+      setTimeout(() => card.remove(), 250);
+      toast("Event hidden from the brief", [["Undo", async () => {
+        try { await eventPrepAct(e, { action: "restore" }); loadBrief(); }
+        catch (err) { toast("Undo failed: " + errText(err)); }
+      }]]);
+    } catch (err) {
+      card.classList.remove("gone");
+      toast("Hide failed: " + errText(err));
+    }
+  });
+  head.appendChild(x);
+  card.appendChild(head);
+
+  const list = el("div", "prep-items");
+  const itemRow = (it) => {
+    const row = el("label", "prep-item" + (it.done ? " done" : ""));
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = !!it.done;
+    box.addEventListener("change", async () => {
+      const want = box.checked;
+      box.disabled = true;
+      try {
+        await eventPrepAct(e, { action: want ? "check" : "uncheck", item_id: it.id });
+        it.done = want;
+        e.open += want ? -1 : 1;
+        row.classList.toggle("done", want);
+        paint();
+      } catch (err) {
+        box.checked = !want;
+        toast("Could not update the checklist: " + errText(err));
+      } finally { box.disabled = false; }
+    });
+    row.appendChild(box);
+    row.appendChild(el("span", "prep-text", it.text));
+    if (it.person_name && it.source === "loop")
+      row.appendChild(el("span", "prep-who", it.person_name));
+    row.appendChild(el("span", "brief-tag prep-kind " + it.kind,
+      it.kind === "todo" ? "to-do" : it.kind));
+    if (it.source === "owner") {
+      const rm = el("button", "brief-act x", "×");
+      rm.title = "Remove this item";
+      rm.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        try {
+          await eventPrepAct(e, { action: "remove", item_id: it.id });
+          e.total -= 1;
+          if (!it.done) e.open -= 1;
+          row.remove();
+          paint();
+        } catch (err) { toast("Remove failed: " + errText(err)); }
+      });
+      row.appendChild(rm);
+    }
+    list.appendChild(row);
+  };
+  (e.items || []).forEach(itemRow);
+  if (e.truncated) list.appendChild(el("div", "brief-empty", `${e.truncated} more items not shown`));
+  card.appendChild(list);
+
+  const add = el("input", "prep-add");
+  add.placeholder = "Add an item: pack, book, buy...";
+  add.maxLength = 200;
+  add.addEventListener("keydown", async (ev) => {
+    if (ev.key !== "Enter" || !add.value.trim()) return;
+    add.disabled = true;
+    try {
+      const r = await eventPrepAct(e, { action: "add", text: add.value });
+      e.total += 1; e.open += 1;
+      itemRow({ ...r.item, source: "owner", done: false });
+      add.value = "";
+      paint();
+    } catch (err) { toast("Add failed: " + errText(err)); }
+    finally { add.disabled = false; add.focus(); }
+  });
+  card.appendChild(add);
+  return card;
 }
 
 async function loadBrief() {

@@ -40,6 +40,7 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # entry (verified against the writer 2026-08-10).
          "atlas-groups.json", "jobs-log.json", "applications.json",
          "atlas-circles.json",   # circle names, stories, history, renames
+         "event-prep.json",      # owner ticks and added items per event
          "world-subsets.json",   # the owner's saved World subsets (recipes)
          # Assistant ledgers contain owner decisions and pending work.
          # Losing the calendar/delivery claims risks replaying side effects;
