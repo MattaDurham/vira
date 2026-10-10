@@ -2145,6 +2145,44 @@ def api_brief_dismiss(req: BriefDismissReq):
     return {"ok": True}
 
 
+class EventPrepReq(BaseModel):
+    event_key: str
+    end: str               # the event's last day, so state prunes after it
+    action: str            # "check" | "uncheck" | "add" | "remove" | "dismiss" | "restore"
+    item_id: str | None = None
+    text: str | None = None
+
+
+@app.get("/api/brief/events")
+def api_brief_events():
+    """The brief's event prep section on its own, for a refresh after a tick."""
+    return brief._event_prep(fixture=settings.fixture_mode())
+
+
+@app.post("/api/brief/events")
+def api_brief_events_act(req: EventPrepReq):
+    """Owner checklist state for one event. Ticking a loop item records it on
+    the checklist only; the source loop stays owned by the CRM."""
+    from . import eventprep
+    try:
+        if req.action in ("check", "uncheck"):
+            return {"event": eventprep.set_checked(
+                req.event_key, req.end, req.item_id or "", req.action == "check")}
+        if req.action == "add":
+            return {"item": eventprep.add_item(req.event_key, req.end, req.text)}
+        if req.action == "remove":
+            return {"event": eventprep.remove_item(
+                req.event_key, req.end, req.item_id or "")}
+        if req.action in ("dismiss", "restore"):
+            return {"event": eventprep.dismiss(
+                req.event_key, req.end, restore=req.action == "restore")}
+    except KeyError:
+        raise HTTPException(404, "unknown checklist item")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    raise HTTPException(422, "unknown action")
+
+
 class ReadingDoneReq(BaseModel):
     id: str | None = None
     done: bool = True
