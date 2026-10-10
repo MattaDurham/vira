@@ -572,6 +572,18 @@ def _radar_top():
         return []
 
 
+def _event_prep(fixture=False):
+    """Upcoming dated events with their prep checklists (server/eventprep.py).
+    A fixture preview reads only the synthetic CRM, never the host calendar
+    or the private commitment store."""
+    try:
+        from . import eventprep
+        return eventprep.build(include_calendar=not fixture,
+                               include_commitments=not fixture)
+    except Exception as e:  # noqa: BLE001 — the brief never fails on a section
+        return {"events": [], "hidden": 0, "error": str(e)[:160]}
+
+
 def compose(feed_items=None):
     now = dt.datetime.now()
     if settings.fixture_mode():
@@ -588,6 +600,7 @@ def compose(feed_items=None):
             "quiet": [], "radar": [], "drafts": {"items": [], "status": None},
             "subs": None, "triage": {"count": 0, "contact_worthy": 0, "top": []},
             "journal": [], "narrative": None,
+            "events": _event_prep(fixture=True),
         }
     return {
         "generated_at": now.isoformat(),
@@ -604,6 +617,7 @@ def compose(feed_items=None):
         "subs": _subs_section(),
         "triage": _triage_summary(),
         "journal": _journal_recent(),
+        "events": _event_prep(),
         "narrative": cached_narrative(),
     }
 
@@ -637,13 +651,16 @@ Below is today's brief data as JSON: calendar (their day and the family's),
 iMessages waiting on a reply from them, recent inbound work/personal email,
 open relationship loops (owed_by "me" = {owner} owes it; a row with
 "items" bundles several loops owed to one person), contacts going
-quiet, unknown-sender triage counts, and journal — notes {owner} recently
+quiet, unknown-sender triage counts, events (upcoming dated occasions with
+"days" to go and the prep checklist gathered for each; "open" counts what is
+still unticked), and journal — notes {owner} recently
 typed into the brief themselves (their own knowledge; treat these as true
 and current, they may supersede older data above).
 
 Write 2-4 plain sentences, addressed to {owner}, telling them what actually
 matters today: the shape of their day, who is waiting on them, and the one
-or two relationship moves worth making. Use only facts present in the data
+or two relationship moves worth making. Mention an event's open prep only
+when it is a few days away. Use only facts present in the data
 — never invent names, times, or events. No markdown, no lists, no emojis.
 
 {data}

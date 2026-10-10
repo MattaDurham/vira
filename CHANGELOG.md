@@ -8,6 +8,18 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Event prep in the daily brief. When a dated occasion is coming up (a
+  trip, a birthday, a dinner, a festival), the brief gathers every open
+  loop tied to it into one countdown checklist: logistics, gifts, packing
+  and other to-dos, from CRM loops and the assistant's commitments. Events
+  anchor on the local calendar (all-day, multi-day, birthday-calendar and
+  occasion-titled entries; routine meetings never anchor) or on dated
+  loops that name an occasion. The card sits above Today within two days,
+  below Tomorrow within a week, at the end of the brief further out, and
+  clears the day after the event. The owner can tick items, add their own
+  (a packing list rarely exists in any message) and hide an event; ticks
+  are checklist state only and never close the source loop.
+
 - World subsets. The galaxy can lay out any slice of the World on its own:
   narrow it with a search, kinds, an isolated band, starred items or a
   selection, then "Lay out these on their own" (or "Lay out around this" on

@@ -3979,6 +3979,45 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 .brief-empty { padding: 4px 10px; color: var(--text-faint); font-size: 12.5px; }
 .brief-row.brief-subrow { padding-left: 28px; opacity: 0.82; }
 
+/* ---------- event prep: countdown checklists (server/eventprep.py) ---------- */
+.prep-card {
+  border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 2px; padding: 8px 10px 10px; margin-bottom: 8px; min-width: 0;
+}
+.prep-card.prep-now { border-left-color: var(--accent); background: var(--accent-soft); }
+.prep-card.prep-soon { border-left-color: var(--steel); }
+.prep-card.prep-ready { border-left-color: var(--green); }
+.prep-card.gone { opacity: 0; transition: opacity 0.25s; }
+.prep-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.prep-count {
+  flex: none; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.prep-soon .prep-count, .prep-ahead .prep-count { color: var(--text-dim); }
+.prep-title { font-size: 14px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.prep-when { font-size: 12px; color: var(--text-faint); }
+.prep-progress { margin-left: auto; font-size: 11.5px; color: var(--text-dim); }
+.prep-ready .prep-progress { color: var(--green); }
+.prep-items { margin-top: 6px; }
+.prep-item {
+  display: flex; gap: 8px; align-items: baseline; padding: 3px 0 3px 2px;
+  font-size: 13px; cursor: pointer; min-width: 0;
+}
+.prep-item input { flex: none; margin: 0; align-self: center; }
+.prep-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prep-item.done .prep-text { text-decoration: line-through; color: var(--text-faint); }
+.prep-who { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
+.prep-kind.gift { color: var(--accent); border-color: var(--accent-line); }
+.prep-kind.logistics { color: var(--steel); border-color: var(--steel-line); }
+.prep-kind.packing { color: var(--green); border-color: var(--green-line); }
+.prep-add {
+  width: 100%; margin-top: 6px; font: inherit; font-size: 16px; color: var(--text);
+  background: none; border: none; border-bottom: 1px dashed var(--line);
+  padding: 3px 2px; outline: none; box-sizing: border-box;
+}
+@media (min-width: 1100px) { .prep-add { font-size: 12.5px; } }
+.prep-add:focus { border-bottom-color: var(--accent); }
+
 /* ---------- interactive brief: row actions, dismissals, Tell Vira ---------- */
 .brief-acts { margin-left: auto; display: flex; gap: 4px; flex: none; align-self: center; }
 .brief-row .brief-acts { opacity: 0; transition: opacity 0.12s; }
