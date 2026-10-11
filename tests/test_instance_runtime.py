@@ -201,10 +201,16 @@ class OwnershipTests(unittest.TestCase):
                   mock.patch.object(main.atlas, "GRAPH"),
                   # in a plain clone with no AGENTS.local.md, startup seeds
                   # one into the checkout root and its baseline into data/
-                  mock.patch.object(main.agentslocal, "seed")]
+                  mock.patch.object(main.agentslocal, "seed"),
+                  # reads data/active-skin.json and may restore the tracked
+                  # stylesheets; here it fails, which must not stop the boot
+                  mock.patch.object(main.skins, "migrate_legacy",
+                                    side_effect=OSError("disk full"))]
         mocks = [p.start() for p in patchers + others]
         try:
-            asyncio.run(main._startup())
+            with self.assertLogs("server.skins", level="ERROR"):
+                asyncio.run(main._startup())
+            main.skins.migrate_legacy.assert_called_once_with()
             for worker in mocks[:len(names)]:
                 worker.start.assert_called_once()
             session.sessions.start_supervisor.assert_called_once()

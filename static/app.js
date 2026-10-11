@@ -17155,8 +17155,9 @@ function armSkinApply(foot, s) {
   foot.appendChild(no);
 }
 
-// A skin is a local look: apply just rewrites this machine's stylesheet, then
-// the app reloads wearing it. Nothing is committed or pushed anywhere.
+// A skin is a local look: apply records it in this install's data/, and the
+// server serves style.css and skin-active.css wearing it. The app reloads to
+// pick them up. No tracked file changes, and nothing is committed or pushed.
 async function doApplySkin(s) {
   try {
     toast("Applying " + s.name + "…");
@@ -17166,7 +17167,7 @@ async function doApplySkin(s) {
       // Save before reloading: the usual UI debounce outlives this reload.
       await post("/api/ui-state", { keys: { "vira-background": raw } });
     }
-    // reload to pick up the rewritten style.css + skin-active.css
+    // reload to pick up the re-served style.css + skin-active.css
     setTimeout(() => location.reload(), 450);
   } catch (e) {
     toast("Couldn't apply the skin: " + ((e && e.message) || e));

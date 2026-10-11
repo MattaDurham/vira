@@ -3,53 +3,69 @@
 A skin is a complete ``:root`` token set (the colour soul — editable
 afterward by the Design Studio's token editor, which reads that same block)
 plus an optional glass layer (geometry, type, the tube — things tokens
-cannot carry). Applying a skin is a LOCAL, no-git action: it rewrites
-``static/style.css``'s ``:root`` in place (values only, comments preserved —
-the same conservative line rewrite the studio uses), swaps
-``static/skin-active.css`` for the skin's extras, records the choice, and the
+cannot carry). Applying a skin is a LOCAL, no-git action: it records the
+skin's tokens and glass in this install's ``data/active-skin.json`` and the
 app reloads wearing it. Nothing is committed or pushed — a skin is a personal
 look on this machine, not a change to the shared repo. (This is why it works
 the same on every download: a downloaded copy points at a public repo it
 can't push to.) If the owner wants a skin to become the shipped default, that
 is a deliberate git commit, not a side effect of a click.
 
-Because a skin leaves the tracked stylesheet modified, the in-app updater
-will decline to fast-forward until the skin is reset — applying the Dark Mode
-base restores the pristine files (see update.py, which names this).
+The tracked ``static/style.css`` and ``static/skin-active.css`` are never
+written by an apply. The server answers ``/style.css`` with the tracked sheet
+whose ``:root`` values are rewritten in memory (values only, comments
+preserved — the same conservative line rewrite the studio uses) and
+``/skin-active.css`` with the skin's glass, so the browser receives exactly
+the bytes the old in-place rewrite left on disk. Until 2026-10-11 the apply
+wrote both tracked files, which left the live checkout dirty: every
+``branch.sh merge`` refused, and the in-app updater would not fast-forward,
+for as long as a skin was applied. ``migrate_legacy`` moves a skin applied
+that way into the store on the first boot and restores the tracked files.
 
 Skins ship as tracked data under ``static/skins/<id>.json`` (+ optional
 ``<id>.css``), so a new skin is added by dropping files in. Dark Mode is
-the BASE: every apply merges the target skin's overrides over it, so
-applying is idempotent and applying it resets Vira to stock. A partial skin
-(Light Mode carries 64 of the 69 tokens) inherits the rest from here, which
-is what stops a previously applied skin bleeding through. It is the one skin
-that cannot be removed - ``apply_skin`` loads it unconditionally. (This was
-called the FLOOR until 2026-08-28; the word read as a minimum value, which
-it never was, and cost a real misdiagnosis.)
+the BASE: the shipped ``:root`` carries exactly its values, so applying it
+clears the stored look and Vira serves the tracked files as committed. A
+partial skin (Light Mode carries 64 of the 69 tokens) inherits the rest from
+the shipped sheet, and every apply starts from that sheet, so a previously
+applied skin can never bleed through. It is the one skin that cannot be
+removed - ``apply_skin`` loads it unconditionally. (This was called the FLOOR
+until 2026-08-28; the word read as a minimum value, which it never was, and
+cost a real misdiagnosis.)
 
 The picker lives at the top of the Design Studio module: pick a skin up top,
 tweak it in the studio below.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import math
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from . import designstudio, jsonstore
 
 router = APIRouter(prefix="/api/skins")
+# /style.css and /skin-active.css, served with the applied skin laid over the
+# tracked files. Included ahead of the static mount, which would otherwise
+# answer both from disk.
+assets = APIRouter()
+log = logging.getLogger(__name__)
 
 _SWATCH_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$|^(?:rgb|rgba|hsl|hsla)\([0-9 ,.%/]+\)$")
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 SKINS_DIR = APP_ROOT / "static" / "skins"
-STYLE_CSS = APP_ROOT / "static" / "style.css"
-SKIN_ACTIVE = APP_ROOT / "static" / "skin-active.css"
-STATE = APP_ROOT / "data" / "active-skin.json"   # per-instance (data/ is ignored)
+STYLE_CSS = APP_ROOT / "static" / "style.css"           # tracked; read, never applied to
+SKIN_ACTIVE = APP_ROOT / "static" / "skin-active.css"   # tracked; read, never applied to
+# The applied skin: {"id", "tokens", "glass"}. Per-instance (data/ is ignored).
+# A record with an id but no "tokens" was written before 2026-10-11, when the
+# look itself lived in the tracked files; migrate_legacy upgrades it.
+STATE = APP_ROOT / "data" / "active-skin.json"
 
 BASE_ID = "darkmode"                             # the base every apply resets to
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -57,15 +73,17 @@ EXTRAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\.css$")
 MAX_MANIFEST_BYTES = 128 * 1024
 MAX_EXTRAS_BYTES = designstudio.MAX_FILE_BYTES   # 512 KB, same ceiling as a saved stylesheet
 
-# The default (glass-free) content of skin-active.css. Applying the Dark
-# Mode base writes exactly this, so a reset-to-stock leaves no git diff. Kept in
-# sync with the shipped static/skin-active.css. Comments only, no rules.
+# The shipped (glass-free) content of skin-active.css. migrate_legacy writes
+# exactly this back over a glass layer the old apply left in the tracked file,
+# so the restore leaves no git diff. Kept in sync with the shipped
+# static/skin-active.css (ShippedStateInvariant). Comments only, no rules.
 _ACTIVE_HEADER = (
     "/* skin-active.css — the glass layer of the currently applied skin.\n"
-    "   Linked after style.css; the Design Studio's skins picker overwrites\n"
-    "   this file when a skin is applied. The default skin (Dark Mode)\n"
-    "   carries no glass, so until a skin is applied this file has comments\n"
-    "   only, no rules. */\n"
+    "   Linked after style.css. This tracked file is the default, and\n"
+    "   applying a skin never rewrites it: the server answers\n"
+    "   /skin-active.css with that skin's glass from this install's data/\n"
+    "   instead. The default skin (Dark Mode) carries no glass, so this file\n"
+    "   has comments only, no rules. */\n"
 )
 
 
@@ -157,17 +175,52 @@ def _meta(m: dict) -> dict:
     }
 
 
+def _state() -> dict:
+    s = jsonstore.read(STATE, {})
+    return s if isinstance(s, dict) else {}
+
+
+def _live_id(s: dict) -> str:
+    got = s.get("id")
+    if isinstance(got, str) and ID_RE.match(got) and _manifest_path(got).is_file():
+        return got
+    return BASE_ID
+
+
 def active_id() -> str:
     """The applied skin, or the base. A stored id whose manifest is gone
     reads as the base: skins are renamed and retired (this store carried
     "taurid" before Dark Mode took its own name), and an id that survives
     its manifest would mark no card active and 404 every caller that loads
     it. A missing manifest is the honest signal that skin no longer exists."""
-    s = jsonstore.read(STATE, {"id": BASE_ID})
-    got = s.get("id") if isinstance(s, dict) else None
-    if isinstance(got, str) and ID_RE.match(got) and _manifest_path(got).is_file():
-        return got
-    return BASE_ID
+    return _live_id(_state())
+
+
+def overlay() -> tuple[dict, str | None]:
+    """(tokens, glass) the served stylesheets lay over the tracked files.
+
+    Empty for the base, and for a stored id whose manifest is gone, so the
+    look always agrees with the card the picker marks active. The store is a
+    hand-editable file under data/ whose values reach CSS the browser runs,
+    so each token is held to the same brake a manifest is; one that fails is
+    skipped and named in the log, never served."""
+    s = _state()
+    if _live_id(s) == BASE_ID:
+        return {}, None
+    tokens = {}
+    raw = s.get("tokens")
+    for k, v in (raw.items() if isinstance(raw, dict) else ()):
+        try:
+            _check_token(k, v)
+        except ValueError as e:
+            log.warning("skins: not serving stored token %s: %s", k, e)
+            continue
+        tokens[k] = v
+    glass = s.get("glass")
+    if isinstance(glass, str) and len(glass.encode("utf-8")) > MAX_EXTRAS_BYTES:
+        log.warning("skins: not serving stored glass over %d bytes", MAX_EXTRAS_BYTES)
+        glass = None
+    return tokens, (glass if isinstance(glass, str) else None)
 
 
 def list_skins() -> dict:
@@ -258,10 +311,11 @@ def sync_base_from_style(style_text: str) -> bool:
     return True
 
 
-def _extras_css(m: dict) -> str:
+def _glass(m: dict) -> str | None:
+    """The skin's glass layer (its extras CSS), or None when it carries none."""
     name = m.get("extras")
     if not name:
-        return _ACTIVE_HEADER
+        return None
     p = (SKINS_DIR / name).resolve()
     if SKINS_DIR.resolve() not in p.parents or not p.is_file():
         raise HTTPException(500, f"skin extras missing: {name}")
@@ -270,49 +324,141 @@ def _extras_css(m: dict) -> str:
     return p.read_text(encoding="utf-8")
 
 
-def _write_text_atomic(path: Path, text: str) -> None:
+def _write_text_atomic(path: Path, text: str, newline: str | None = None) -> None:
     """tmp + rename so a hard kill mid-write can never leave a truncated
-    tracked stylesheet (which the next successful apply would commit)."""
+    stylesheet or manifest behind. newline="" writes text read by _read_raw
+    back byte for byte."""
     tmp = path.with_name("." + path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8", newline=newline)
     tmp.replace(path)
 
 
+def _read_raw(path: Path) -> str:
+    """The file's text with its line endings as on disk. A Windows checkout
+    of this repo (text=auto) has CRLF stylesheets; reading them this way
+    serves them as StaticFiles did and restores them without a newline diff."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
 def apply_skin(skin_id: str) -> dict:
-    """Rewrite :root to this skin (base + overrides), swap the glass layer,
-    record the choice. A LOCAL action — no git; the app reloads wearing it.
-    Writes are atomic so a hard kill can never leave a truncated stylesheet."""
+    """Record this skin's tokens and glass as this install's look. A LOCAL
+    action — no git, and no tracked file is written; the app reloads wearing
+    it. Applying the base clears the look, so Vira serves the shipped files.
+    ``changed`` names the served stylesheets whose content this moved."""
+    migrate_legacy()                              # a pre-store look moves first
     skin = load_manifest(skin_id)
-    base = load_manifest(BASE_ID)
-    merged = dict(base["tokens"])
-    merged.update(skin.get("tokens") or {})
-    for k, v in merged.items():                   # revalidate the merged surface
+    load_manifest(BASE_ID)                        # the base must exist to reset to
+    if skin_id == BASE_ID:
+        tokens, glass = {}, None
+    else:
+        tokens = dict(skin.get("tokens") or {})
+        glass = _glass(skin)
+    for k, v in tokens.items():                   # revalidate what will be served
         try:
             _check_token(k, v)
         except ValueError as e:
             raise HTTPException(500, str(e))
 
-    if not STYLE_CSS.is_file():
-        raise HTTPException(500, "style.css not found")
-    text = STYLE_CSS.read_text(encoding="utf-8")
-    new_css = _rewrite_root(text, merged)
-    extras = _extras_css(skin)
-
-    changed: list[str] = []
-    if new_css != text:
-        _write_text_atomic(STYLE_CSS, new_css)
-        changed.append("static/style.css")
-    if not SKIN_ACTIVE.is_file() or SKIN_ACTIVE.read_text(encoding="utf-8") != extras:
-        _write_text_atomic(SKIN_ACTIVE, extras)
-        changed.append("static/skin-active.css")
-
-    jsonstore.write_atomic(STATE, {"id": skin_id})
+    was_tokens, was_glass = overlay()
+    jsonstore.write_atomic(STATE, {"id": skin_id, "tokens": tokens, "glass": glass})
+    changed = [name for name, moved in (("style.css", was_tokens != tokens),
+                                        ("skin-active.css", was_glass != glass))
+               if moved]
 
     # No git: a skin is a personal, local look. It takes effect on the reload
     # the client triggers next. Persisting a skin as the shipped default is a
     # deliberate commit the owner makes, never a side effect of applying one.
     return {"ok": True, "active": skin_id, "changed": changed,
             "background": skin.get("background")}
+
+
+def _has_rules(css: str) -> bool:
+    return "{" in re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
+def migrate_legacy() -> dict | None:
+    """Move a skin applied before the store held the look into the store, and
+    put the tracked files back as shipped. Returns what it did, or None.
+
+    Runs at startup and before every apply. It acts only on a record the old
+    apply left: a non-base id with no "tokens". The look comes from the
+    tracked files when they carry one (any :root value off the base, or
+    glass with rules in skin-active.css), so values tuned after the apply
+    survive the move; the files are then restored, :root to the base values
+    and skin-active.css to its shipped header, exactly what applying the base
+    used to do. When the files are already stock (set aside for a merge),
+    the look is rebuilt from the recorded skin's manifest instead. The store
+    is written before any tracked file, so an interrupted move leaves the
+    look in both places rather than in neither."""
+    s = _state()
+    sid = s.get("id")
+    if "tokens" in s or not isinstance(sid, str) or not ID_RE.match(sid) or sid == BASE_ID:
+        return None
+    base = load_manifest(BASE_ID)["tokens"]
+    text = _read_raw(STYLE_CSS) if STYLE_CSS.is_file() else ""
+    off_base = {k: v for k, v in read_root_tokens(text).items()
+                if k in base and base[k] != v}
+    shipped = _read_raw(SKIN_ACTIVE) if SKIN_ACTIVE.is_file() else ""
+    glass = shipped if _has_rules(shipped) else None
+    tokens = dict(off_base)
+    if off_base or glass is not None:
+        source = "tracked files"
+    elif _manifest_path(sid).is_file():
+        skin = load_manifest(sid)
+        tokens, glass, source = dict(skin["tokens"]), _glass(skin), "manifest"
+    else:
+        return None                               # a retired skin, nothing on disk
+    for k, v in list(tokens.items()):
+        try:
+            _check_token(k, v)
+        except ValueError as e:
+            log.warning("skins: dropped unservable token %s=%r: %s", k, v, e)
+            del tokens[k]
+
+    jsonstore.write_atomic(STATE, {"id": sid, "tokens": tokens, "glass": glass})
+    restored = []
+    if source == "tracked files":
+        if off_base:                              # values only; line endings kept
+            _write_text_atomic(STYLE_CSS, _rewrite_root(text, base), newline="")
+            restored.append("static/style.css")
+        if glass is not None:                     # platform newlines, as checked out
+            _write_text_atomic(SKIN_ACTIVE, _ACTIVE_HEADER)
+            restored.append("static/skin-active.css")
+    out = {"id": sid, "source": source, "tokens": len(tokens),
+           "glass": glass is not None, "restored": restored}
+    log.warning("skins: moved the applied skin into %s: %s", STATE, out)
+    return out
+
+
+def served_style() -> str:
+    """The tracked style.css with the applied skin's :root values in place."""
+    text = _read_raw(STYLE_CSS)
+    tokens, _ = overlay()
+    if not tokens:
+        return text
+    try:
+        return _rewrite_root(text, tokens)
+    except ValueError:                            # no :root block: nothing to lay over
+        return text
+
+
+def served_glass() -> str:
+    """The applied skin's glass, or the tracked default."""
+    _, glass = overlay()
+    return glass if glass is not None else _read_raw(SKIN_ACTIVE)
+
+
+def _css(request: Request, text: str) -> Response:
+    # These replace StaticFiles for two paths, so they keep its revalidation:
+    # a content ETag answers an unchanged sheet with a 304. no-cache comes
+    # from main's static middleware, which matches on the .css suffix.
+    body = text.encode("utf-8")
+    etag = '"' + hashlib.sha1(body).hexdigest()[:20] + '"'
+    if etag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(body, media_type="text/css; charset=utf-8",
+                    headers={"ETag": etag})
 
 
 # ---------------------------------------------------------------- routes
@@ -333,3 +479,13 @@ def get_one(skin_id: str):
 @router.post("/{skin_id}/apply")
 def post_apply(skin_id: str):
     return apply_skin(skin_id)
+
+
+@assets.api_route("/style.css", methods=["GET", "HEAD"])
+def get_style(request: Request):
+    return _css(request, served_style())
+
+
+@assets.api_route("/skin-active.css", methods=["GET", "HEAD"])
+def get_glass(request: Request):
+    return _css(request, served_glass())

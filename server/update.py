@@ -105,17 +105,6 @@ def supervisor():
     return "launchd", str(cfg.get("launchd_label") or "").strip()
 
 
-def _base_skin_name() -> str:
-    """The display name of the reset-to-stock skin, read from its manifest.
-    Imported lazily and never allowed to raise: this only decorates a hint,
-    and a hint must not be able to break the update check."""
-    try:
-        from . import skins
-        return skins.load_manifest(skins.BASE_ID)["name"]
-    except Exception:
-        return "default"
-
-
 def pull():
     """Fast-forward to the upstream and sync dependencies. No restart.
 
@@ -131,17 +120,10 @@ def pull():
     dirty = [l for l in _git("status", "--porcelain").stdout.splitlines()
              if l and not l.startswith("??")]
     if dirty:
-        # an applied skin modifies exactly these two tracked files; name the
-        # one-click fix (reset to the base skin) instead of a generic stash nudge.
-        # The skin is NAMED from the manifest, not spelled here: this string
-        # is an instruction the owner follows in the picker, and a picker
-        # showing a different name than the hint is a dead end.
-        skin_files = {"static/style.css", "static/skin-active.css"}
-        only_skin = all(l[3:].strip() in skin_files for l in dirty)
-        hint = (f" — a Design Studio skin is applied; apply the {_base_skin_name()} "
-                "skin to restore the stock files, then update"
-                if only_skin else " — commit or stash them, then update")
-        raise ValueError(f"{len(dirty)} tracked files modified locally{hint}")
+        # An applied skin lives in data/active-skin.json, not in tracked
+        # files (see skins.py), so a dirty tracked file is a real local edit.
+        raise ValueError(f"{len(dirty)} tracked files modified locally"
+                         " — commit or stash them, then update")
     pull = _git("pull", "--ff-only", timeout=90)
     if pull.returncode != 0:
         raise ValueError("git pull failed: "
