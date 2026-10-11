@@ -185,6 +185,16 @@ class WrittenBranch(unittest.TestCase):
             ("Edit", "/repo/.claude/worktrees/app-one/README.md"))
         self.assertEqual(workresults.written_branch({"transcript": path}, live), "claude/voice")
 
+    def test_windows_paths_match_either_separator(self):
+        live = {"C:/work/vira/.claude/worktrees/app-one": "claude/app-one"}
+        path = self.transcript(
+            ("Edit", "C:\\work\\vira\\.claude\\worktrees\\app-one\\a.py"),
+            ("Edit", "C:\\work\\vira\\.claude\\worktrees\\app-one\\b.py"),
+            ("Edit", "C:\\work\\vira\\.worktrees\\gone\\c.py"))
+        self.assertEqual(workresults.written_branch({"transcript": path}, live), "claude/app-one")
+        gone = self.transcript(("Write", "C:\\work\\vira\\.worktrees\\gone\\c.py"))
+        self.assertEqual(workresults.written_branch({"transcript": gone}, {}), "claude/gone")
+
     def test_main_and_unknown_folders_never_name_a_branch(self):
         path = self.transcript(("Edit", "/home/someone/notes.md"))
         self.assertEqual(workresults.written_branch({"transcript": path}, {"/repo": "main"}), "")

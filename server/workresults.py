@@ -109,14 +109,17 @@ def _is_code(job):
 def _branch_of_path(path, worktrees):
     """The branch a file path belongs to: a live worktree's branch, else the
     branch.sh layout for a torn-down one. "" when neither says."""
-    path = str(path)
-    best = ""
+    # Windows paths arrive with backslashes from a transcript and forward
+    # slashes from git; compare both in one form.
+    path = str(path).replace("\\", "/")
+    best, best_branch = "", ""
     for wt, branch in worktrees.items():
-        if branch and (path == wt or path.startswith(wt.rstrip("/") + "/")) \
+        wt = str(wt).replace("\\", "/").rstrip("/")
+        if branch and (path == wt or path.startswith(wt + "/")) \
                 and len(wt) > len(best):
-            best = wt
+            best, best_branch = wt, branch
     if best:
-        return worktrees[best]
+        return best_branch
     m = _WT_SLUG.search(path)
     return "claude/" + m.group(1) if m else ""
 
