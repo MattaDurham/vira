@@ -151,8 +151,12 @@ class _TreeCase(unittest.TestCase):
         self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
         self.tree = _Tree(self.tmp)
         self.enterContext(self.tree.patches())
+        # bytes, and their text with line endings as on disk: a Windows run
+        # writes the fixture with CRLF, and the served sheets keep it
         self.stock_style = skins.STYLE_CSS.read_bytes()
         self.stock_glass = skins.SKIN_ACTIVE.read_bytes()
+        self.stock_text = self.stock_style.decode("utf-8")
+        self.stock_glass_text = self.stock_glass.decode("utf-8")
 
     def _style(self):
         """What the browser receives for /style.css."""
@@ -214,10 +218,10 @@ class ApplyTests(_TreeCase):
         skins.apply_skin("phosphor-console")
         out = skins.apply_skin("darkmode")
         self.assertEqual(out["active"], "darkmode")
-        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+        self.assertEqual(self._style(), self.stock_text)
         self.assertIn("--bg: #0d0d0d;", self._style())   # base value served
         self.assertIn("--radius: 13px;", self._style())
-        self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+        self.assertEqual(skins.served_glass(), self.stock_glass_text)
         self.assertEqual(skins.overlay(), ({}, None))
         self.assertEqual(skins.active_id(), "darkmode")
 
@@ -241,8 +245,7 @@ class ApplyTests(_TreeCase):
         for skin_id in ("light", "phosphor-console", "neon-pond"):
             merged = {**base, **skins.load_manifest(skin_id)["tokens"]}
             skins.apply_skin(skin_id)
-            self.assertEqual(self._style(), skins._rewrite_root(
-                self.stock_style.decode("utf-8"), merged))
+            self.assertEqual(self._style(), skins._rewrite_root(self.stock_text, merged))
 
     def test_applying_never_writes_a_tracked_file(self):
         for skin_id in ("light", "phosphor-console", "living-garden", "darkmode"):
@@ -254,7 +257,7 @@ class ApplyTests(_TreeCase):
         skins.apply_skin("phosphor-console")
         out = skins.apply_skin("living-garden")
         self.assertIn("skin-active.css", out["changed"])
-        self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+        self.assertEqual(skins.served_glass(), self.stock_glass_text)
         self.assertNotIn("#030100", self._style())
 
     def test_apply_is_idempotent(self):
@@ -289,7 +292,7 @@ class ApplyTests(_TreeCase):
                                              "tokens": {"--bg": "#010203"},
                                              "glass": "body { color: red; }"})
         self.assertEqual(skins.overlay(), ({}, None))
-        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+        self.assertEqual(self._style(), self.stock_text)
 
     def test_a_stored_id_whose_manifest_exists_is_kept(self):
         # the guard above must not swallow a real applied skin
@@ -315,7 +318,7 @@ class ApplyTests(_TreeCase):
             "id": "light", "tokens": {},
             "glass": "a" * (skins.MAX_EXTRAS_BYTES + 1)})
         with self.assertLogs("server.skins", level="WARNING"):
-            self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+            self.assertEqual(skins.served_glass(), self.stock_glass_text)
 
 
 class LegacyMoveTests(_TreeCase):
@@ -324,16 +327,18 @@ class LegacyMoveTests(_TreeCase):
     the store and restores the files, without changing what is served."""
 
     def _apply_the_old_way(self, skin_id, tweak=None):
+        """What the pre-store apply did: a universal-newline read, a
+        text-mode write (CRLF on Windows). Returns the files as on disk."""
         base = skins.load_manifest("darkmode")["tokens"]
         skin = skins.load_manifest(skin_id)
         merged = {**base, **skin["tokens"], **(tweak or {})}
-        stock = self.stock_style.decode("utf-8")
+        stock = skins.STYLE_CSS.read_text(encoding="utf-8")
         skins.STYLE_CSS.write_text(skins._rewrite_root(stock, merged), encoding="utf-8")
         skins.SKIN_ACTIVE.write_text(skins._glass(skin) or skins._ACTIVE_HEADER,
                                      encoding="utf-8")
         jsonstore.write_atomic(skins.STATE, {"id": skin_id})
-        return (skins.STYLE_CSS.read_text(encoding="utf-8"),
-                skins.SKIN_ACTIVE.read_text(encoding="utf-8"))
+        return (skins.STYLE_CSS.read_bytes().decode("utf-8"),
+                skins.SKIN_ACTIVE.read_bytes().decode("utf-8"))
 
     def _quiet(self):
         return self.assertLogs("server.skins", level="WARNING")
@@ -389,7 +394,7 @@ class LegacyMoveTests(_TreeCase):
 
     def test_a_dirty_sheet_without_an_old_apply_record_is_left_alone(self):
         # an uncommitted :root edit on a branch is someone's work, not a skin
-        edited = self.stock_style.decode("utf-8").replace(
+        edited = skins.STYLE_CSS.read_text(encoding="utf-8").replace(
             "--radius: 13px;", "--radius: 21px;")
         skins.STYLE_CSS.write_text(edited, encoding="utf-8")
         for state in (None, {"id": "darkmode"},
@@ -420,7 +425,7 @@ class LegacyMoveTests(_TreeCase):
         self.assertEqual(kept["tokens"]["--bg"], "#030100")
         self.assertIn("pc-flicker", kept["glass"])
         self.assertEqual(skins.active_id(), skins.BASE_ID)
-        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+        self.assertEqual(self._style(), self.stock_text)
 
     def test_applying_the_base_on_an_unmoved_install_still_resets_to_stock(self):
         # the reset the updater hint used to send people to must keep working
@@ -428,8 +433,8 @@ class LegacyMoveTests(_TreeCase):
         with self._quiet():
             skins.apply_skin("darkmode")
         self.assertTrackedUntouched()
-        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
-        self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+        self.assertEqual(self._style(), self.stock_text)
+        self.assertEqual(skins.served_glass(), self.stock_glass_text)
 
     def test_an_interrupted_move_still_serves_the_look(self):
         # the store is written first: if restoring the files fails, the look
@@ -438,11 +443,11 @@ class LegacyMoveTests(_TreeCase):
         real = skins._write_text_atomic
         calls = []
 
-        def second_write_fails(path, text):
+        def second_write_fails(path, text, **kw):
             calls.append(path)
             if len(calls) > 1:
                 raise OSError("read-only")
-            real(path, text)
+            real(path, text, **kw)
 
         with mock.patch.object(skins, "_write_text_atomic", second_write_fails):
             with self.assertRaises(OSError):

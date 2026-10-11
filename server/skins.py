@@ -324,12 +324,21 @@ def _glass(m: dict) -> str | None:
     return p.read_text(encoding="utf-8")
 
 
-def _write_text_atomic(path: Path, text: str) -> None:
+def _write_text_atomic(path: Path, text: str, newline: str | None = None) -> None:
     """tmp + rename so a hard kill mid-write can never leave a truncated
-    stylesheet or manifest behind."""
+    stylesheet or manifest behind. newline="" writes text read by _read_raw
+    back byte for byte."""
     tmp = path.with_name("." + path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8", newline=newline)
     tmp.replace(path)
+
+
+def _read_raw(path: Path) -> str:
+    """The file's text with its line endings as on disk. A Windows checkout
+    of this repo (text=auto) has CRLF stylesheets; reading them this way
+    serves them as StaticFiles did and restores them without a newline diff."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
 
 
 def apply_skin(skin_id: str) -> dict:
@@ -387,10 +396,10 @@ def migrate_legacy() -> dict | None:
     if "tokens" in s or not isinstance(sid, str) or not ID_RE.match(sid) or sid == BASE_ID:
         return None
     base = load_manifest(BASE_ID)["tokens"]
-    text = STYLE_CSS.read_text(encoding="utf-8") if STYLE_CSS.is_file() else ""
+    text = _read_raw(STYLE_CSS) if STYLE_CSS.is_file() else ""
     off_base = {k: v for k, v in read_root_tokens(text).items()
                 if k in base and base[k] != v}
-    shipped = SKIN_ACTIVE.read_text(encoding="utf-8") if SKIN_ACTIVE.is_file() else ""
+    shipped = _read_raw(SKIN_ACTIVE) if SKIN_ACTIVE.is_file() else ""
     glass = shipped if _has_rules(shipped) else None
     tokens = dict(off_base)
     if off_base or glass is not None:
@@ -410,10 +419,10 @@ def migrate_legacy() -> dict | None:
     jsonstore.write_atomic(STATE, {"id": sid, "tokens": tokens, "glass": glass})
     restored = []
     if source == "tracked files":
-        if off_base:
-            _write_text_atomic(STYLE_CSS, _rewrite_root(text, base))
+        if off_base:                              # values only; line endings kept
+            _write_text_atomic(STYLE_CSS, _rewrite_root(text, base), newline="")
             restored.append("static/style.css")
-        if glass is not None:
+        if glass is not None:                     # platform newlines, as checked out
             _write_text_atomic(SKIN_ACTIVE, _ACTIVE_HEADER)
             restored.append("static/skin-active.css")
     out = {"id": sid, "source": source, "tokens": len(tokens),
@@ -424,7 +433,7 @@ def migrate_legacy() -> dict | None:
 
 def served_style() -> str:
     """The tracked style.css with the applied skin's :root values in place."""
-    text = STYLE_CSS.read_text(encoding="utf-8")
+    text = _read_raw(STYLE_CSS)
     tokens, _ = overlay()
     if not tokens:
         return text
@@ -437,7 +446,7 @@ def served_style() -> str:
 def served_glass() -> str:
     """The applied skin's glass, or the tracked default."""
     _, glass = overlay()
-    return glass if glass is not None else SKIN_ACTIVE.read_text(encoding="utf-8")
+    return glass if glass is not None else _read_raw(SKIN_ACTIVE)
 
 
 def _css(request: Request, text: str) -> Response:
