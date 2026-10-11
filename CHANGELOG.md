@@ -71,6 +71,18 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Fixed
 
+- Applying a skin no longer leaves the checkout with modified tracked files.
+  The Design Studio's skins picker used to rewrite the `:root` values in
+  `static/style.css` and the whole of `static/skin-active.css`, so while a
+  skin was applied `branch.sh merge` refused to land anything and the
+  in-app updater would not update. The applied skin's tokens and glass now
+  live in this install's `data/active-skin.json`, and the server serves
+  `/style.css` and `/skin-active.css` with them laid over the tracked
+  files, which stay as committed. The browser receives the same bytes as
+  before. On the first start a skin applied the old way is moved into the
+  store, including any values changed after it was applied, and the
+  tracked files are restored. If the files were already reset, the skin is
+  rebuilt from its manifest. The store is backed up.
 - A session that ends with nothing on its branch no longer leaves the branch
   and its worktree behind. Map builds and refreshes, the System map refresh
   and other jobs whose only writes go through Vira's own tools are placed in

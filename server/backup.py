@@ -71,6 +71,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          "library-subsets.json", # Library subsets the owner named and saved
          "orphan-work.json",     # orphaned-work ledger
          "doc-index.json",       # doc registry: curation + read state
+         # The applied skin's look. Usually a manifest's values, but a skin
+         # moved out of the tracked stylesheets keeps any later tuning only here.
+         "active-skin.json",
          "pii-patterns.txt")     # anonymization scanner's learned patterns
 # Sole-copy DIRECTORIES: one dated tree copy per day, same 14-day window.
 DIRS = (

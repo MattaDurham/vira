@@ -1,7 +1,9 @@
 """Skins: the :root rewrite (value-only, comment-preserving), manifest
 validation, the apply/reset/idempotency semantics against a throwaway tree,
-path safety, the HTTP routes, and the shipped-state invariant that guards
-against ever committing a skinned style.css.
+path safety, the HTTP routes, the served stylesheets that wear the applied
+skin while the tracked files stay as committed, the move of a skin applied
+the old way (into the tracked files) into the store, and the shipped-state
+invariant that guards against ever committing a skinned style.css.
 
 Run: .venv/bin/python -m unittest tests.test_skins
 """
@@ -144,15 +146,24 @@ class _Tree:
         )
 
 
-class ApplyTests(unittest.TestCase):
+class _TreeCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
         self.tree = _Tree(self.tmp)
         self.enterContext(self.tree.patches())
+        self.stock_style = skins.STYLE_CSS.read_bytes()
+        self.stock_glass = skins.SKIN_ACTIVE.read_bytes()
 
     def _style(self):
-        return skins.STYLE_CSS.read_text(encoding="utf-8")
+        """What the browser receives for /style.css."""
+        return skins.served_style()
 
+    def assertTrackedUntouched(self):
+        self.assertEqual(skins.STYLE_CSS.read_bytes(), self.stock_style)
+        self.assertEqual(skins.SKIN_ACTIVE.read_bytes(), self.stock_glass)
+
+
+class ApplyTests(_TreeCase):
     def test_living_skin_returns_preset_with_the_applied_tokens(self):
         for skin_id, look in (("living-garden", "natural"), ("neon-pond", "wireframe")):
             out = skins.apply_skin(skin_id)
@@ -176,6 +187,7 @@ class ApplyTests(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 skins.apply_skin("neon-pond")
             self.assertEqual(self._style(), before)
+            self.assertFalse(skins.STATE.exists())
 
     def test_background_preset_can_select_each_desktop_scene(self):
         path = skins.SKINS_DIR / "living-garden.json"
@@ -185,16 +197,15 @@ class ApplyTests(unittest.TestCase):
             path.write_text(json.dumps(manifest), encoding="utf-8")
             self.assertEqual(skins.apply_skin("living-garden")["background"]["scene"], scene)
 
-    def test_apply_phosphor_rewrites_root_swaps_glass_records_active(self):
+    def test_apply_phosphor_serves_root_and_glass_records_active(self):
         out = skins.apply_skin("phosphor-console")
         self.assertTrue(out["ok"])
         self.assertEqual(out["active"], "phosphor-console")
         self.assertNotIn("committed", out)              # apply is local, no git
-        self.assertIn("static/style.css", out["changed"])
-        self.assertIn("static/skin-active.css", out["changed"])
+        self.assertEqual(out["changed"], ["style.css", "skin-active.css"])
         self.assertIn("--bg: #030100;", self._style())
         self.assertIn("--radius: 0;", self._style())
-        glass = skins.SKIN_ACTIVE.read_text(encoding="utf-8")
+        glass = skins.served_glass()
         self.assertIn("body::after", glass)              # the tube overlay
         self.assertIn("pc-flicker", glass)               # the glass animation
         self.assertEqual(skins.active_id(), "phosphor-console")
@@ -203,27 +214,53 @@ class ApplyTests(unittest.TestCase):
         skins.apply_skin("phosphor-console")
         out = skins.apply_skin("darkmode")
         self.assertEqual(out["active"], "darkmode")
-        self.assertIn("--bg: #0d0d0d;", self._style())   # base value restored
+        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+        self.assertIn("--bg: #0d0d0d;", self._style())   # base value served
         self.assertIn("--radius: 13px;", self._style())
-        self.assertEqual(skins.SKIN_ACTIVE.read_text(encoding="utf-8"), skins._ACTIVE_HEADER)
+        self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+        self.assertEqual(skins.overlay(), ({}, None))
         self.assertEqual(skins.active_id(), "darkmode")
 
-    def test_apply_light_rewrites_paper_tokens_and_structure_layer(self):
+    def test_apply_light_serves_paper_tokens_and_structure_layer(self):
         out = skins.apply_skin("light")
         self.assertEqual(out["active"], "light")
         self.assertIn("--bg: #f2eee3;", self._style())
         self.assertIn("--accent: #a53b36;", self._style())
         self.assertIn("--radius: 14px;", self._style())
-        structure = skins.SKIN_ACTIVE.read_text(encoding="utf-8")
+        structure = skins.served_glass()
         self.assertIn("counter-reset: light-window", structure)
         self.assertIn(".fwin-title::before", structure)
         self.assertIn("backdrop-filter: blur(18px)", structure)
         self.assertEqual(skins.active_id(), "light")
 
+    def test_the_served_sheet_is_what_the_old_in_place_rewrite_wrote(self):
+        # the move must not change one byte the browser receives: the old
+        # apply wrote base-plus-skin into :root, the new one serves the skin
+        # over the shipped (base) sheet
+        base = skins.load_manifest("darkmode")["tokens"]
+        for skin_id in ("light", "phosphor-console", "neon-pond"):
+            merged = {**base, **skins.load_manifest(skin_id)["tokens"]}
+            skins.apply_skin(skin_id)
+            self.assertEqual(self._style(), skins._rewrite_root(
+                self.stock_style.decode("utf-8"), merged))
+
+    def test_applying_never_writes_a_tracked_file(self):
+        for skin_id in ("light", "phosphor-console", "living-garden", "darkmode"):
+            skins.apply_skin(skin_id)
+            self.assertTrackedUntouched()
+
+    def test_switching_skins_leaves_no_trace_of_the_last(self):
+        # phosphor has glass, living-garden has none: its glass must go
+        skins.apply_skin("phosphor-console")
+        out = skins.apply_skin("living-garden")
+        self.assertIn("skin-active.css", out["changed"])
+        self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+        self.assertNotIn("#030100", self._style())
+
     def test_apply_is_idempotent(self):
         skins.apply_skin("phosphor-console")
         again = skins.apply_skin("phosphor-console")
-        self.assertEqual(again["changed"], [])           # nothing left to write
+        self.assertEqual(again["changed"], [])           # nothing left to change
         self.assertEqual(skins.active_id(), "phosphor-console")
 
     def test_list_reflects_active(self):
@@ -246,11 +283,173 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(listing["active"], skins.BASE_ID)
         self.assertIn(listing["active"], [sk["id"] for sk in listing["skins"]])
 
+    def test_a_retired_skin_stops_being_served(self):
+        # the look agrees with the card the picker marks active
+        jsonstore.write_atomic(skins.STATE, {"id": "taurid",
+                                             "tokens": {"--bg": "#010203"},
+                                             "glass": "body { color: red; }"})
+        self.assertEqual(skins.overlay(), ({}, None))
+        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+
     def test_a_stored_id_whose_manifest_exists_is_kept(self):
         # the guard above must not swallow a real applied skin
         jsonstore.write_atomic(skins.STATE, {"id": "phosphor-console"})
         self.assertEqual(skins.active_id(), "phosphor-console")
 
+    def test_a_hand_edited_token_that_could_break_out_is_not_served(self):
+        # the store is a plain file under data/; its values reach the CSS
+        jsonstore.write_atomic(skins.STATE, {
+            "id": "light", "glass": None,
+            "tokens": {"--bg": "#fff; } body { display: none",
+                       "--text": "#123456"}})
+        with self.assertLogs("server.skins", level="WARNING") as logs:
+            tokens, _ = skins.overlay()
+            served = self._style()
+        self.assertEqual(tokens, {"--text": "#123456"})
+        self.assertNotIn("display: none", served)
+        self.assertIn("--text: #123456;", served)
+        self.assertIn("--bg", logs.output[0])              # named, not dropped silently
+
+    def test_an_oversized_stored_glass_is_not_served(self):
+        jsonstore.write_atomic(skins.STATE, {
+            "id": "light", "tokens": {},
+            "glass": "a" * (skins.MAX_EXTRAS_BYTES + 1)})
+        with self.assertLogs("server.skins", level="WARNING"):
+            self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+
+
+class LegacyMoveTests(_TreeCase):
+    """Before 2026-10-11 an apply wrote the look into the tracked files and
+    recorded only the id. The first boot of the new code moves that look into
+    the store and restores the files, without changing what is served."""
+
+    def _apply_the_old_way(self, skin_id, tweak=None):
+        base = skins.load_manifest("darkmode")["tokens"]
+        skin = skins.load_manifest(skin_id)
+        merged = {**base, **skin["tokens"], **(tweak or {})}
+        stock = self.stock_style.decode("utf-8")
+        skins.STYLE_CSS.write_text(skins._rewrite_root(stock, merged), encoding="utf-8")
+        skins.SKIN_ACTIVE.write_text(skins._glass(skin) or skins._ACTIVE_HEADER,
+                                     encoding="utf-8")
+        jsonstore.write_atomic(skins.STATE, {"id": skin_id})
+        return (skins.STYLE_CSS.read_text(encoding="utf-8"),
+                skins.SKIN_ACTIVE.read_text(encoding="utf-8"))
+
+    def _quiet(self):
+        return self.assertLogs("server.skins", level="WARNING")
+
+    def test_the_look_moves_and_the_tracked_files_come_back_clean(self):
+        old_style, old_glass = self._apply_the_old_way("light")
+        with self._quiet():
+            out = skins.migrate_legacy()
+        self.assertEqual(out["source"], "tracked files")
+        self.assertEqual(sorted(out["restored"]),
+                         ["static/skin-active.css", "static/style.css"])
+        self.assertTrackedUntouched()                    # back to the shipped bytes
+        self.assertEqual(self._style(), old_style)       # and the look is unchanged
+        self.assertEqual(skins.served_glass(), old_glass)
+        self.assertEqual(skins.active_id(), "light")
+
+    def test_values_tuned_after_the_apply_survive_the_move(self):
+        old_style, _ = self._apply_the_old_way("light", tweak={"--accent": "#00ff88"})
+        with self._quiet():
+            skins.migrate_legacy()
+        self.assertIn("--accent: #00ff88;", self._style())
+        self.assertEqual(self._style(), old_style)
+        self.assertTrackedUntouched()
+
+    def test_a_skin_without_glass_moves_only_its_tokens(self):
+        old_style, _ = self._apply_the_old_way("living-garden")
+        with self._quiet():
+            out = skins.migrate_legacy()
+        self.assertEqual(out["restored"], ["static/style.css"])
+        self.assertFalse(out["glass"])
+        self.assertEqual(self._style(), old_style)
+        self.assertTrackedUntouched()
+
+    def test_files_set_aside_for_a_merge_rebuild_from_the_manifest(self):
+        # the owner's landing: the dirty files were reset so the merge could
+        # run, leaving only the recorded id
+        jsonstore.write_atomic(skins.STATE, {"id": "light"})
+        with self._quiet():
+            out = skins.migrate_legacy()
+        self.assertEqual(out["source"], "manifest")
+        self.assertEqual(out["restored"], [])
+        self.assertEqual(skins.served_glass(), skins._glass(skins.load_manifest("light")))
+        self.assertIn("--bg: #f2eee3;", self._style())
+        self.assertTrackedUntouched()
+
+    def test_it_runs_once(self):
+        self._apply_the_old_way("phosphor-console")
+        with self._quiet():
+            skins.migrate_legacy()
+        state = skins.STATE.read_bytes()
+        self.assertIsNone(skins.migrate_legacy())
+        self.assertEqual(skins.STATE.read_bytes(), state)
+
+    def test_a_dirty_sheet_without_an_old_apply_record_is_left_alone(self):
+        # an uncommitted :root edit on a branch is someone's work, not a skin
+        edited = self.stock_style.decode("utf-8").replace(
+            "--radius: 13px;", "--radius: 21px;")
+        skins.STYLE_CSS.write_text(edited, encoding="utf-8")
+        for state in (None, {"id": "darkmode"},
+                      {"id": "light", "tokens": {}, "glass": None}):
+            with self.subTest(state=state):
+                skins.STATE.unlink(missing_ok=True)
+                if state is not None:
+                    jsonstore.write_atomic(skins.STATE, state)
+                self.assertIsNone(skins.migrate_legacy())
+                self.assertEqual(skins.STYLE_CSS.read_text(encoding="utf-8"), edited)
+                self.assertEqual(skins.SKIN_ACTIVE.read_bytes(), self.stock_glass)
+
+    def test_a_retired_skin_with_stock_files_has_nothing_to_move(self):
+        jsonstore.write_atomic(skins.STATE, {"id": "taurid"})
+        self.assertIsNone(skins.migrate_legacy())
+        self.assertEqual(skins.STATE.read_text(encoding="utf-8"), '{"id": "taurid"}')
+
+    def test_a_retired_skin_left_in_the_files_is_kept_but_not_worn(self):
+        # its values move into the store (nothing discarded) and the files
+        # come back clean; like every retired id it then reads as the base
+        old_style, _ = self._apply_the_old_way("phosphor-console")
+        jsonstore.write_atomic(skins.STATE, {"id": "taurid"})
+        with self._quiet():
+            out = skins.migrate_legacy()
+        self.assertEqual(out["source"], "tracked files")
+        self.assertTrackedUntouched()
+        kept = json.loads(skins.STATE.read_text(encoding="utf-8"))
+        self.assertEqual(kept["tokens"]["--bg"], "#030100")
+        self.assertIn("pc-flicker", kept["glass"])
+        self.assertEqual(skins.active_id(), skins.BASE_ID)
+        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+
+    def test_applying_the_base_on_an_unmoved_install_still_resets_to_stock(self):
+        # the reset the updater hint used to send people to must keep working
+        self._apply_the_old_way("phosphor-console")
+        with self._quiet():
+            skins.apply_skin("darkmode")
+        self.assertTrackedUntouched()
+        self.assertEqual(self._style(), self.stock_style.decode("utf-8"))
+        self.assertEqual(skins.served_glass(), skins._ACTIVE_HEADER)
+
+    def test_an_interrupted_move_still_serves_the_look(self):
+        # the store is written first: if restoring the files fails, the look
+        # is in both places, never in neither
+        old_style, old_glass = self._apply_the_old_way("light")
+        real = skins._write_text_atomic
+        calls = []
+
+        def second_write_fails(path, text):
+            calls.append(path)
+            if len(calls) > 1:
+                raise OSError("read-only")
+            real(path, text)
+
+        with mock.patch.object(skins, "_write_text_atomic", second_write_fails):
+            with self.assertRaises(OSError):
+                skins.migrate_legacy()
+        self.assertEqual(len(calls), 2)                  # one file restored, one not
+        self.assertEqual(self._style(), old_style)
+        self.assertEqual(skins.served_glass(), old_glass)
 
 
 class SyncBaseTests(unittest.TestCase):
@@ -318,14 +517,10 @@ class SyncBaseTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)   # nothing half-written
 
 
-class NoGitTests(unittest.TestCase):
+class NoGitTests(_TreeCase):
     """Applying a skin is local only — it must never invoke git, so a
     downloaded copy (whose origin is a repo it can't push to) is never asked
     to commit or push."""
-    def setUp(self):
-        self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
-        self.tree = _Tree(self.tmp)
-        self.enterContext(self.tree.patches())
 
     def test_apply_never_touches_git(self):
         with mock.patch.object(skins.designstudio, "commit_and_push") as spy:
@@ -333,17 +528,16 @@ class NoGitTests(unittest.TestCase):
         spy.assert_not_called()
         self.assertNotIn("committed", out)
         self.assertNotIn("pushed", out)
-        self.assertIn("static/style.css", out["changed"])  # local write happened
-        self.assertIn("--bg: #030100;", skins.STYLE_CSS.read_text(encoding="utf-8"))
+        self.assertIn("style.css", out["changed"])       # the local change happened
+        self.assertIn("--bg: #030100;", self._style())
 
 
-class RouteTests(unittest.TestCase):
+class RouteTests(_TreeCase):
     def setUp(self):
-        self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
-        self.tree = _Tree(self.tmp)
-        self.enterContext(self.tree.patches())
+        super().setUp()
         app = FastAPI()
         app.include_router(skins.router)
+        app.include_router(skins.assets)
         self.client = TestClient(app)
 
     def test_get_lists(self):
@@ -357,6 +551,50 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["active"], "phosphor-console")
         self.assertEqual(self.client.post("/api/skins/nope/apply").status_code, 404)
+
+    def test_the_stylesheets_are_served_wearing_the_skin(self):
+        self.client.post("/api/skins/phosphor-console/apply")
+        r = self.client.get("/style.css")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.headers["content-type"].startswith("text/css"))
+        self.assertIn("--bg: #030100;", r.text)
+        self.assertIn("body::after", self.client.get("/skin-active.css").text)
+        self.assertTrackedUntouched()
+
+    def test_with_no_skin_the_tracked_files_are_served(self):
+        self.assertEqual(self.client.get("/style.css").content, self.stock_style)
+        self.assertEqual(self.client.get("/skin-active.css").content, self.stock_glass)
+
+    def test_an_unchanged_sheet_revalidates_to_a_304(self):
+        first = self.client.get("/style.css")
+        etag = first.headers["etag"]
+        again = self.client.get("/style.css", headers={"If-None-Match": etag})
+        self.assertEqual(again.status_code, 304)
+        self.client.post("/api/skins/light/apply")       # a new look is a new tag
+        after = self.client.get("/style.css", headers={"If-None-Match": etag})
+        self.assertEqual(after.status_code, 200)
+        self.assertNotEqual(after.headers["etag"], etag)
+
+    def test_head_is_answered(self):
+        r = self.client.head("/skin-active.css")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("etag", r.headers)
+
+
+class MainAppRoutingTests(_TreeCase):
+    """The join: in the real app the skin routes must win over the static
+    mount, which would otherwise answer both paths from disk."""
+
+    def test_main_serves_the_skinned_stylesheets(self):
+        from server import main
+        client = TestClient(main.app)
+        skins.apply_skin("light")
+        r = client.get("/style.css")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("--bg: #f2eee3;", r.text)
+        self.assertEqual(r.headers.get("cache-control"), "no-cache")
+        self.assertIn("counter-reset: light-window",
+                      client.get("/skin-active.css").text)
 
 
 class ShippedStateInvariant(unittest.TestCase):

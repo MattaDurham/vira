@@ -189,6 +189,14 @@ async def _startup():
         agentslocal.seed()
     except OSError:
         pass
+    # A skin applied before the look moved into data/ still sits in the
+    # tracked stylesheets; move it into the store and restore the files, so
+    # the live tree is clean for merges and updates. A failure leaves the
+    # look where it was (still served) and must never keep the app down.
+    try:
+        skins.migrate_legacy()
+    except Exception:  # noqa: BLE001
+        skins.log.exception("skins: could not move the applied skin into data/")
     # Every instance runs the complete application lifecycle.
     loopwatch.watcher.start()
     instance.start_automation()
@@ -5428,10 +5436,13 @@ if _design_root.is_dir():
               name="design")
 
 # ---------- Skins (genre-compiled jumping-off points the studio can wear) --
-# GET /api/skins lists them; POST /api/skins/{id}/apply rewrites style.css
-# :root + skin-active.css, then commits (when requested). The picker sits at
-# the top of the Design Studio module.
+# GET /api/skins lists them; POST /api/skins/{id}/apply records the look in
+# data/active-skin.json. skins.assets serves /style.css and /skin-active.css
+# with that look laid over the tracked files, which stay as committed; it
+# must be included before the static mount below. The picker sits at the top
+# of the Design Studio module.
 app.include_router(skins.router)
+app.include_router(skins.assets)
 
 # ---------- Genre Studio (build a skin from reference images) --------------
 # The instrument behind the picker: references -> aspects -> gain -> knobs ->
