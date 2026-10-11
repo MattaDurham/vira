@@ -283,7 +283,9 @@ class LaunchTests(unittest.TestCase):
 
         kwargs.setdefault("provider", "anthropic")
         with mock.patch.object(session.Sessions, "_run_subprocess", fake_run):
-            jid = reg.launch("do the thing", cwd="/tmp", **kwargs)
+            # A folder that exists on every OS: a missing one is refused
+            # (Windows has no /tmp).
+            jid = reg.launch("do the thing", cwd=tempfile.gettempdir(), **kwargs)
         return jid
 
     def test_mode_derivation_from_legacy_permission_mode(self):
