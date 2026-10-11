@@ -34,7 +34,8 @@ from pathlib import Path
 
 from .filelock import locked
 
-STORE = Path(__file__).resolve().parent.parent / "data" / "ideas.json"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+STORE = REPO_ROOT / "data" / "ideas.json"
 # "proposed" = staged by Vira (the muse routine / propose_idea tool),
 # awaiting the owner's Approve (-> open, optionally auto-built), Defer
 # (-> deferred) or Decline (-> dropped). Nothing proposed ever runs
@@ -138,7 +139,14 @@ def add_project(name):
 # migration for no gain. A name with no entry is simply unconnected.
 
 def project_paths():
-    return dict(_load().get("project_paths") or {})
+    """Each connected project's folder. Vira's own project is this checkout
+    unless the owner connected it elsewhere: the run sheet used to fall back
+    to a hardcoded ~/workspace/vira, which stopped existing when the
+    checkout moved, and four Implement sessions (2026-10-10) then ran in the
+    home folder with no branch of their own."""
+    paths = dict(_load().get("project_paths") or {})
+    paths.setdefault(DEFAULT_PROJECT, str(REPO_ROOT))
+    return paths
 
 
 def project_path(name):

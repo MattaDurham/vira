@@ -1,6 +1,11 @@
 /* Work results: one inventory, two views and one stable detail inspector.
  * Source modules own action permissions. Polls update cards by identity while
- * leaving the search field, scroll position and open inspector untouched. */
+ * leaving the search field, scroll position and open inspector untouched.
+ *
+ * The list shows FINISHED work only: a log of where each piece of work ended
+ * up. Anything waiting on the owner lives in Attention, and the status line
+ * counts it there instead of listing it twice. The inspector still opens any
+ * row by reference, because Attention opens its branches here. */
 (function () {
   "use strict";
   let current = null;
@@ -39,10 +44,15 @@
     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Request failed (" + res.status + ")");
     return data;
   };
-  const label = (status) => ({ saved: "Saved", processed: "Saved and indexed", processing: "Indexing", session: "Session live", unlanded: "Ready for review",
-    landed: "Merged; cleanup available", running: "Working", waiting: "Needs your input",
-    done: "Complete", error: "Failed", orphaned: "Interrupted", ship: "Shipped",
-    dropped: "Dropped", unknown: "Status not recorded" }[status] || status || "Recorded");
+  // A finished status names where the work ended up, never only that a
+  // session stopped (server/workresults.py _settle).
+  const label = (status) => ({ saved: "Saved", processed: "Saved and indexed", processing: "Indexing", session: "In progress", unlanded: "Waiting on you",
+    landed: "Shipped", shipped: "Shipped", discarded: "Discarded", running: "In progress", waiting: "Needs your input",
+    done: "Finished", finished: "Finished", answered: "Answered", ran: "Ran",
+    ended: "Ended, no merge on record", error: "Failed", orphaned: "Interrupted", ship: "Shipped",
+    dropped: "Dropped", canceled: "Canceled", unknown: "Status not recorded" }[status] || status || "Recorded");
+  // Rows from a server older than the phase field read as finished.
+  const finished = (item) => (item.phase || "finished") === "finished";
   const dateLabel = (value) => value ? new Date(value).toLocaleString([], {
     year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
   }) : "Date not recorded";
@@ -81,7 +91,7 @@
     const toolbar = e("div", "wr-toolbar");
     const search = e("input", "wr-search");
     search.type = "search";
-    search.placeholder = "Find work, a branch, or a result";
+    search.placeholder = "Find finished work";
     search.setAttribute("aria-label", "Search work results");
     search.addEventListener("input", () => { state.query = search.value; state.shown = PAGE; render(); });
     const views = e("div", "wr-views");
@@ -98,11 +108,17 @@
     toolbar.append(search, views, modules, refreshButton);
     const status = e("div", "wr-status", "Loading work results...");
     status.setAttribute("role", "status");
+    // Unfinished work is counted, not listed: it lives in Attention.
+    const pending = e("div", "wr-pending");
+    pending.hidden = true;
+    const pendingText = e("span", "wr-pending-text");
+    const pendingOpen = button("Open Attention", () => options.onOpenAttention?.(), "wr-pending-open");
+    pending.append(pendingText, pendingOpen);
     const errors = e("div", "wr-errors");
     const list = e("div", "wr-list");
     const more = button("Show more", () => { state.shown += PAGE; render(); }, "wr-more");
     more.hidden = true;
-    shell.append(toolbar, status, errors, list, more);
+    shell.append(toolbar, pending, status, errors, list, more);
     container.replaceChildren(shell);
 
     function setView(view) {
@@ -150,7 +166,8 @@
         item.flow_ids?.length ? item.flow_ids.length + " flow" + (item.flow_ids.length === 1 ? "" : "s") : ""].filter(Boolean);
       if (provenance.length) content.append(e("div", "wr-provenance", provenance.join(" · ")));
       const actions = e("div", "wr-card-actions");
-      if (item.can_preview) actions.append(previewAction(item));
+      // A finished branch is on main or gone; previewing it shows nothing new.
+      if (item.can_preview && !finished(item)) actions.append(previewAction(item));
       actions.append(button("Inspect", () => open(item.id)));
       content.append(actions);
       node.append(content);
@@ -163,9 +180,18 @@
       timeline.setAttribute("aria-pressed", String(state.view === "timeline"));
       gallery.setAttribute("aria-pressed", String(state.view === "gallery"));
       const query = state.query.trim().toLocaleLowerCase();
-      const filtered = state.items.filter((item) => (state.module === "all" || item.module === state.module)
-        && (!query || [item.title, item.summary, item.branch, item.module, item.status]
+      const done = state.items.filter(finished);
+      const filtered = done.filter((item) => (state.module === "all" || item.module === state.module)
+        && (!query || [item.title, item.summary, item.branch, item.module, label(item.status)]
           .join(" ").toLocaleLowerCase().includes(query)));
+      const waiting = state.items.filter((item) => item.phase === "attention").length;
+      const working = state.items.filter((item) => item.phase === "active").length;
+      pendingText.textContent = [
+        waiting ? waiting + " waiting on you in Attention" : "",
+        working ? working + " in progress" : ""].filter(Boolean).join(" · ")
+        + ". They show here once they are finished.";
+      pending.hidden = !(waiting || working) || !!state.data.fixture;
+      pendingOpen.hidden = !waiting || !options.onOpenAttention;
       const visible = filtered.slice(0, state.shown);
       const ids = new Set(visible.map((item) => item.id));
       // Search is outside this reconciled list. Unchanged cards keep their DOM
@@ -187,11 +213,11 @@
         if (node !== position) list.insertBefore(node, position);
         position = node.nextElementSibling;
       }
-      if (!visible.length) list.append(e("p", "wr-empty", state.items.length
-        ? "No work matches these filters." : "No work has been recorded yet."));
+      if (!visible.length) list.append(e("p", "wr-empty", done.length
+        ? "No finished work matches these filters." : "No finished work yet."));
       status.textContent = (state.data.fixture ? "Example data · " : "")
-        + filtered.length + " result" + (filtered.length === 1 ? "" : "s")
-        + (filtered.length !== state.items.length ? " of " + state.items.length : "")
+        + filtered.length + " finished"
+        + (filtered.length !== done.length ? " of " + done.length : "")
         + (state.data.last_sweep ? " · Branch inventory checked " + dateLabel(state.data.last_sweep) : "");
       more.hidden = visible.length >= filtered.length;
       more.textContent = "Show more (" + (filtered.length - visible.length) + " remaining)";
@@ -212,7 +238,7 @@
         if (state.disposed) return;
         state.data = data;
         state.items = data.items || [];
-        const tags = [...new Set(state.items.map((item) => item.module || "other"))].sort();
+        const tags = [...new Set(state.items.filter(finished).map((item) => item.module || "other"))].sort();
         const tagSignature = tags.join("\n");
         if (modules.dataset.signature !== tagSignature) {
           modules.replaceChildren(new Option("All subjects", "all"), ...tags.map((tag) => new Option(tag, tag)));

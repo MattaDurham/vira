@@ -57,6 +57,21 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Changed
 
+- Work > Results is a log of finished work only. Anything that still needs a
+  decision lives in Attention, and Results counts it in one line ("5 waiting
+  on you in Attention") with a button there instead of listing it as well, so
+  a piece of work is never in both places. A finished entry says where the
+  work ended up: Shipped (merged), Discarded (PR closed), Answered (chat), Ran
+  (routine), Failed, or "Ended, no merge on record" when a code branch is
+  gone with no merged PR. A coding session whose code sat uncommitted on a
+  branch used to read "Complete" while Attention called the same branch
+  unmerged. Each row of `/api/work/results` carries a `phase` (`attention`,
+  `active`, `finished`) and the payload a `phases` count.
+- One Results entry per piece of work. A coding session that was not placed
+  on a branch at launch now joins the branch it actually wrote on, read from
+  the file paths its own Edit and Write calls recorded (reads never count).
+  Before, such a session and its branch showed as two unrelated results.
+
 - Agent instructions are a density ladder. `AGENTS.md` is a short router that
   every agent loads: it carries only the rules that cannot wait and sends each
   task to its file. Installing goes to `AGENTS.install.md`; adding content and
@@ -82,6 +97,13 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   recommendation on a row is now resume or discard.
 
 ### Fixed
+
+- Implement and Plan no longer fall back to `~/workspace/vira`, a folder that
+  stops existing when the checkout moves. Vira's own project defaults to the
+  running checkout, and a launch into a folder that does not exist is refused
+  with the folder named, instead of quietly running in the home folder with
+  no branch of its own (four Implement sessions did that on 2026-10-10, so
+  none of them raised a landing card).
 
 - Applying a skin no longer leaves the checkout with modified tracked files.
   The Design Studio's skins picker used to rewrite the `:root` values in

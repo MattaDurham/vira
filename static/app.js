@@ -6994,7 +6994,7 @@ async function ideaToFlow(it) {
 
 // Row-level "Export prompt" — hand the idea to a session Vira does not run.
 function copyIdeaPrompt(it) {
-  const cwd = localStorage.getItem("vira-idea-cwd") || "~/workspace/vira";
+  const cwd = ideaRunCwd(it) || "the project's folder";
   copyText(ideaExportPrompt(it, cwd, "", null))
     .then(() => toast("Prompt copied — paste it into a coding session"))
     .catch((e) => toast("Copy failed: " + e.message));
@@ -7084,7 +7084,18 @@ $("#idea-run-analyze").addEventListener("click", async (e) => {
 // for it on every dispatch. One ladder for the sheet and for Approve & build.
 function ideaRunCwd(it) {
   return projectPathsCache[it.project]
-    || localStorage.getItem("vira-idea-cwd") || "~/workspace/vira";
+    || localStorage.getItem("vira-idea-cwd") || "";
+}
+
+// The Vira checkout, as the server names it (Vira's own project in
+// ideas.project_paths). Never a hardcoded path: the checkout moves, and a
+// launch into a folder that does not exist is refused.
+async function viraCheckout() {
+  if (!projectPathsCache.Vira) {
+    try { projectPathsCache = (await api("/api/ideas")).project_paths || {}; }
+    catch (_) { /* no folder: the session runs without one */ }
+  }
+  return projectPathsCache.Vira || null;
 }
 
 async function loadIdeaRunDestinations(ctx) {
@@ -7177,7 +7188,7 @@ $("#idea-run-model").addEventListener("change", () => {
 $("#idea-run-go").addEventListener("click", async () => {
   if (!ideaRunCtx) return;
   const { it, mode } = ideaRunCtx;
-  const cwd = $("#idea-run-cwd").value.trim() || "~/workspace/vira";
+  const cwd = $("#idea-run-cwd").value.trim() || ideaRunCwd(it);
   const model = $("#idea-run-model").value;
   const provider = $("#idea-run-model").selectedOptions[0]?.dataset.provider
     || null;
@@ -16862,6 +16873,7 @@ function ensureWorkResults() {
       onOpenNote: (path, title) => openNote(path, title),
       onOpenSession: (id) => openSession(id),
       onOpenFlow: (id) => traceFlowRun(id),
+      onOpenAttention: () => { setAttentionTab("now", { defer: true }); openApp("attention"); },
       onReviewBranch: (item) => item?.key ? openOrphanFocus(item)
         : revealOrphan(item?.orphan_key || "", item?.branch || ""),
     });
@@ -19037,7 +19049,7 @@ function circuitCard(c, models) {
   inp.placeholder = "What should this circuit work on?";
   const cwd = el("input", "cir-cwd");
   cwd.type = "text";
-  cwd.placeholder = "working directory (optional, e.g. ~/workspace/vira)";
+  cwd.placeholder = "working directory (optional)";
   const go = el("button", "btn primary", "Run circuit");
   go.addEventListener("click", async () => {
     const input = inp.value.trim();
@@ -23116,7 +23128,7 @@ function ctxAskVira(x, y, ctx) {
         `on ${location.origin} where they help. Prefer read-only research. Never`,
         "restart the Vira server. Finish with a concise report of what you",
         "found or changed.");
-      await launchJob(lines.join("\n"), "~/workspace/vira", {});
+      await launchJob(lines.join("\n"), await viraCheckout(), {});
       toast("Vira is on it — session opened");
     },
   });

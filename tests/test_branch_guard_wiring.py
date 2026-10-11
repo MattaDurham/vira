@@ -151,6 +151,18 @@ class SpecReachesDisk(unittest.TestCase):
         self.assertFalse(worktree.violates(
             str(wt / "server" / "main.py"), self.root, wt))
 
+    def test_a_missing_folder_is_refused_not_run_in_home(self):
+        # 2026-10-10: the run sheet's default folder no longer existed, the
+        # launch quietly dropped it, and four Implement sessions ran in $HOME
+        # with no branch Vira knew about.
+        reg = session.Sessions()
+        with mock.patch.object(reg, "_spawn_runner") as spawn:
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                reg.launch("change the widget", cwd=str(self.root / "moved"))
+        spawn.assert_not_called()
+        self.assertEqual(self.rows, [])
+        self.assertEqual(list(self.jobs.iterdir()), [])
+
     def test_failed_worktree_creation_refuses_before_spawn(self):
         reg = session.Sessions()
         with mock.patch.object(session.worktree, "ensure",
