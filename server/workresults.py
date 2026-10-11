@@ -6,25 +6,51 @@ Source stores still own every action; this module neither dispatches nor writes.
 An absent/invalid date remains unknown, and a broken source is reported alongside
 the sources which could be read. Correspondence receipts can join via the small
 provider seam without becoming another queue or a copy of the canonical vault.
+
+Every row also carries a PHASE (owner, 2026-10-11): "attention" when it waits
+on the owner, "active" while someone is working on it, "finished" once it has
+reached an end state. Results lists finished work only; Attention is where
+anything that needs a decision lives, so a piece of work is never in both.
+A finished row's status names where the work ended up (shipped, discarded,
+answered), never just that a session stopped: an Implement session that left
+its code uncommitted on a branch once read "Complete" beside an Attention row
+saying the same branch was unmerged.
 """
 from __future__ import annotations
 
 from . import instance
 
 import hashlib
+import json
 import logging
 import math
+import os
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 
-from . import changelog, circuits, joblog, orphanwork, settings, showroom
+from . import changelog, circuits, joblog, orphanwork, prindex, settings, showroom
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 receipt_provider: Callable[[], list[dict]] = lambda: []
+
+# Job kinds (joblog.kind_label) whose output is code on a branch. Their end
+# state is the branch's - merged or not - never the session's own "done".
+CODE_KINDS = frozenset(("Implement", "Plan", "Resume", "Land", "Diagnose and land"))
+# What a finished non-code session produced, by kind; anything unnamed here
+# reads "finished".
+_DONE_BY_KIND = {"Chat": "answered", "Ask": "answered", "Routine": "ran"}
+# Tools whose file_path says which worktree a session actually wrote in.
+_WRITE_TOOLS = frozenset(("Edit", "Write", "MultiEdit", "NotebookEdit"))
+# A server-made worktree's home (scripts/branch.sh WT_HOME): the branch is
+# claude/<slug> even after the worktree itself has been torn down.
+_WT_SLUG = re.compile(r"/\.worktrees/([A-Za-z0-9._-]+)(?:/|$)")
+_written_cache: dict = {}
 
 
 def timestamp(value):
@@ -69,15 +95,161 @@ def _job_title(job):
     return job.get("title") or job.get("command") or (job.get("prompt") or "")[:140] or "Session"
 
 
+def _kind(job):
+    try:
+        return joblog.kind_label(job)
+    except Exception:  # noqa: BLE001 - a label must never hide a row
+        return "Session"
+
+
+def _is_code(job):
+    return _kind(job) in CODE_KINDS and not job.get("read_only")
+
+
+def _branch_of_path(path, worktrees):
+    """The branch a file path belongs to: a live worktree's branch, else the
+    branch.sh layout for a torn-down one. "" when neither says."""
+    path = str(path)
+    best = ""
+    for wt, branch in worktrees.items():
+        if branch and (path == wt or path.startswith(wt.rstrip("/") + "/")) \
+                and len(wt) > len(best):
+            best = wt
+    if best:
+        return worktrees[best]
+    m = _WT_SLUG.search(path)
+    return "claude/" + m.group(1) if m else ""
+
+
+def _transcript_writes(path):
+    """Every file path a Claude transcript's write tools touched, in order.
+    Cached by size and mtime: a finished session's transcript never changes,
+    and Results re-reads its inventory every few seconds."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    hit = _written_cache.get(str(path))
+    if hit and hit[0] == key:
+        return hit[1]
+    paths = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"tool_use"' not in line:
+                    continue
+                try:
+                    content = (json.loads(line).get("message") or {}).get("content")
+                except ValueError:
+                    continue
+                for block in content if isinstance(content, list) else ():
+                    if (isinstance(block, dict) and block.get("type") == "tool_use"
+                            and block.get("name") in _WRITE_TOOLS):
+                        fp = (block.get("input") or {}).get("file_path")
+                        if fp:
+                            paths.append(fp)
+    except OSError:
+        return []
+    _written_cache[str(path)] = (key, paths)
+    return paths
+
+
+def written_branch(job, worktrees):
+    """The branch an UNPLACED coding session wrote its code on, from the
+    file paths its own write tools recorded - the branch with the most
+    writes. Sessions Vira placed carry `branch` and never need this; it
+    exists for the ones that launched outside a repo (a stale default
+    folder, 2026-10-10) and made their own worktree, which left Results
+    showing the session and its branch as two unrelated pieces of work.
+    Reading a neighbour's worktree is not writing to it, so it never
+    counts."""
+    counts = {}
+    for fp in _transcript_writes(job.get("transcript") or ""):
+        branch = _branch_of_path(fp, worktrees)
+        if branch and branch != "main":
+            counts[branch] = counts.get(branch, 0) + 1
+    return max(counts, key=counts.get) if counts else ""
+
+
+def _written_branches(jobs):
+    """{job id: branch} for finished, unplaced coding sessions."""
+    todo = [j for j in jobs if j.get("id") and not j.get("branch")
+            and j.get("status") != "running" and j.get("transcript") and _is_code(j)]
+    if not todo:
+        return {}
+    worktrees = {str(e["path"]): e["branch"] for e in orphanwork._porcelain_worktrees()}
+    out = {}
+    for job in todo:
+        branch = written_branch(job, worktrees)
+        if branch:
+            out[job["id"]] = branch
+    return out
+
+
+def _settle(row, jobs_by_id, prs):
+    """Set the row's phase, and for finished work the status that names its
+    end state. Order matters: live work first, then the sweeper's verdict,
+    then what the branch inventory, PR index and ledger recorded."""
+    jobs = [jobs_by_id[j] for j in row["job_ids"] if j in jobs_by_id]
+    live = [j for j in jobs if j.get("status") == "running"]
+    if live:
+        row["phase"] = "attention" if any(j.get("awaiting") for j in live) else "active"
+        return
+    orphan = row.get("orphan")
+    if orphan:
+        row["phase"] = "active" if orphan.get("in_motion") else "attention"
+        return
+    band = (row.get("branch_info") or {}).get("band")
+    if band == "session":
+        row["phase"], row["status"] = "active", "running"
+        return
+    if band == "unlanded":
+        row["phase"], row["status"] = "attention", "unlanded"
+        return
+    if row["kind"] == "flow":
+        status = row["status"]
+        row["phase"] = ("active" if status in ("running", "pending") else
+                        "attention" if status == "waiting" else "finished")
+        return
+    if row["kind"] == "receipt":
+        row["phase"] = "active" if row["status"] == "processing" else "finished"
+        return
+    row["phase"] = "finished"
+    if band == "landed":
+        row["status"] = "shipped"
+        return
+    if row["kind"] == "branch":
+        pr = prs.get(row["branch"]) or {}
+        if pr.get("state") == "MERGED":
+            row["status"] = "shipped"
+            return
+        if pr.get("state") == "CLOSED":
+            row["status"] = "discarded"
+            return
+    if not jobs or row["status"] not in ("done", "unknown"):
+        return                        # error, orphaned, a record's own kind
+    newest = max(jobs, key=lambda j: timestamp(j.get("finished") or j.get("started")))
+    if any(_is_code(j) for j in jobs):
+        # Code whose branch is gone with no merged PR on record: what became
+        # of it is not known, so say only that it ended.
+        row["status"] = "ended"
+    else:
+        row["status"] = _DONE_BY_KIND.get(_kind(newest), "finished")
+
+
 def build_inventory(showroom_data=None, orphans=(), jobs=(), flows=(),
-                    groups=(), live=(), receipts=()):
+                    groups=(), live=(), receipts=(), prs=None, written=None):
     """Pure identity join, shared by HTTP and isolated synthetic tests.
 
     A branch is the stable artifact identity even as its orphan re-arm key or
     latest job changes. An unbranched flow owns its stage jobs. A multi-branch
     flow stays its own result and links its distinct branch artifacts.
+    `written` maps an unplaced coding session to the branch it wrote on
+    (written_branch); `prs` is the PR index by branch.
     """
     rows, by_job, by_flow = {}, {}, {}
+    prs, written = prs or {}, written or {}
     jobs_by_id = {r["id"]: dict(r) for r in jobs if r.get("id")}
     for j in live:
         if j.get("id"):
@@ -139,8 +311,9 @@ def build_inventory(showroom_data=None, orphans=(), jobs=(), flows=(),
     # Bind all recorded branch jobs before flow ownership is decided. Stage
     # jobs need not be the latest job on a branch to join the right artifact.
     for jid, job in jobs_by_id.items():
-        if job.get("branch"):
-            by_job[jid] = branch_row(job["branch"], _job_title(job))
+        branch = job.get("branch") or written.get(jid)
+        if branch:
+            by_job[jid] = branch_row(branch, _job_title(job))
 
     for flow in flows:
         fid = flow.get("id")
@@ -232,6 +405,7 @@ def build_inventory(showroom_data=None, orphans=(), jobs=(), flows=(),
         rows[identity] = row
 
     for row in rows.values():
+        _settle(row, jobs_by_id, prs)
         if row["branch"] and row["branch"] != "main" and not row["branch"].startswith("claude/"):
             row["action_limit"] = ("Merge, land, discard and cleanup are unavailable for this branch prefix. "
                                    "The branch tooling currently targets claude/* only. Read context or resume instead.")
@@ -259,7 +433,8 @@ def _fixture():
     for item in items:
         item["fixture"] = True
         item["sources"] = ["example"]
-    return {"items": items, "counts": {"job": 2, "receipt": 1}, "total": len(items),
+    return {"items": items, "counts": {"job": 2, "receipt": 1},
+            "phases": {"attention": 0, "active": 0, "finished": len(items)}, "total": len(items),
             "errors": {}, "fixture": True, "instance": instance.metadata(),
             "last_sweep": None, "flow_limit": None}
 
@@ -284,12 +459,16 @@ def compose():
     groups = read("record", changelog.groups, [])
     live = read("live sessions", _live_jobs, [])
     receipts = read("correspondence", receipt_provider, [])
+    prs = read("pull requests", prindex._read, {})
+    written = read("session branches", lambda: _written_branches(jobs), {})
     items = build_inventory(gallery, orphan_data.get("items", []), jobs, flows,
-                            groups, live, receipts)
-    counts = {}
+                            groups, live, receipts, prs=prs, written=written)
+    counts, phases = {}, {"attention": 0, "active": 0, "finished": 0}
     for item in items:
         counts[item["kind"]] = counts.get(item["kind"], 0) + 1
-    return {"items": items, "counts": counts, "total": len(items), "errors": errors,
+        phases[item["phase"]] = phases.get(item["phase"], 0) + 1
+    return {"items": items, "counts": counts, "phases": phases,
+            "total": len(items), "errors": errors,
             "instance": instance.metadata(),
             "last_sweep": gallery.get("last_sweep"),
             "flow_limit": 200 if len(flows) == 200 else None}

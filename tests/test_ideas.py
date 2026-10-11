@@ -59,6 +59,16 @@ class ProjectPaths(unittest.TestCase):
         ideas.add_project("Nameonly")
         self.assertEqual(ideas.project_path("Nameonly"), "")
 
+    def test_vira_builds_in_this_checkout_unless_connected_elsewhere(self):
+        # The run sheet's old fallback was a hardcoded folder that stopped
+        # existing when the checkout moved.
+        self.assertEqual(ideas.project_path(ideas.DEFAULT_PROJECT),
+                         str(ideas.REPO_ROOT))
+        self.assertTrue(Path(ideas.project_path(ideas.DEFAULT_PROJECT)).is_dir())
+        ideas.set_project_path(ideas.DEFAULT_PROJECT, self.tmp.name)
+        self.assertEqual(ideas.project_path(ideas.DEFAULT_PROJECT),
+                         str(Path(self.tmp.name).resolve()))
+
 
 class PickFolderGuards(unittest.TestCase):
     """The picker opens a window on the owner's REAL desktop, so every

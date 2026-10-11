@@ -1,4 +1,7 @@
 """Work inventory: source identity, real dates, isolated reads and detail joins."""
+import json
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -85,9 +88,122 @@ class Inventory(unittest.TestCase):
         self.assertEqual(rows[0]["receipt"]["path"], receipt["path"])
 
 
+class Phases(unittest.TestCase):
+    """Results lists finished work; anything waiting on the owner is in
+    Attention. A finished status names where the work ended up."""
+
+    def by_id(self, **kw):
+        return {row["id"]: row for row in workresults.build_inventory(**kw)}
+
+    def test_an_unlanded_branch_waits_in_attention_with_its_session(self):
+        # The 2026-10-10 case: an Implement session left code uncommitted on
+        # its branch. It read "Complete" beside an Attention row saying the
+        # branch was unmerged - two cards, two answers.
+        job = {"id": "impl", "title": "Learn the voice · Implement", "status": "done",
+               "idea_id": "idea_1", "result": "Drafts now sound like the owner."}
+        rows = self.by_id(orphans=[{"branch": "claude/voice", "kind": "dirty", "dirty": 3}],
+                          jobs=[job], written={"impl": "claude/voice"})
+        self.assertEqual(list(rows), ["branch:claude/voice"])
+        row = rows["branch:claude/voice"]
+        self.assertEqual(row["phase"], "attention")
+        self.assertEqual(row["status"], "unlanded")
+        self.assertEqual(row["job_ids"], ["impl"])
+
+    def test_without_the_written_branch_the_session_is_a_second_result(self):
+        job = {"id": "impl", "status": "done", "idea_id": "idea_1"}
+        rows = self.by_id(orphans=[{"branch": "claude/voice", "kind": "dirty"}], jobs=[job])
+        self.assertEqual(len(rows), 2)
+
+    def test_work_in_motion_is_in_progress_not_waiting(self):
+        rows = self.by_id(orphans=[{"branch": "claude/x", "kind": "dirty", "in_motion": True}])
+        self.assertEqual(rows["branch:claude/x"]["phase"], "active")
+
+    def test_merged_branch_is_shipped(self):
+        rows = self.by_id(showroom_data={"items": [{"branch": "claude/a", "band": "landed"}]})
+        self.assertEqual((rows["branch:claude/a"]["phase"], rows["branch:claude/a"]["status"]),
+                         ("finished", "shipped"))
+
+    def test_a_torn_down_branch_reads_its_pull_request(self):
+        jobs = [{"id": "m", "branch": "claude/m", "status": "done", "idea_id": "i"},
+                {"id": "c", "branch": "claude/c", "status": "done", "idea_id": "i"},
+                {"id": "n", "branch": "claude/n", "status": "done", "idea_id": "i"}]
+        rows = self.by_id(jobs=jobs, prs={"claude/m": {"state": "MERGED"},
+                                          "claude/c": {"state": "CLOSED"}})
+        self.assertEqual(rows["branch:claude/m"]["status"], "shipped")
+        self.assertEqual(rows["branch:claude/c"]["status"], "discarded")
+        # No PR on record and the branch is gone: say only that it ended.
+        self.assertEqual(rows["branch:claude/n"]["status"], "ended")
+        self.assertTrue(all(row["phase"] == "finished" for row in rows.values()))
+
+    def test_a_finished_session_names_what_it_produced(self):
+        rows = self.by_id(jobs=[
+            {"id": "chat", "status": "done", "meta": {"kind": "chat"}},
+            {"id": "muse", "status": "done", "meta": {"routine_id": "muse"}},
+            {"id": "map", "status": "done", "branch": "claude/cartographer-1",
+             "meta": {"kind": "map-build"}},
+            {"id": "bad", "status": "error"}])
+        self.assertEqual(rows["job:chat"]["status"], "answered")
+        self.assertEqual(rows["job:muse"]["status"], "ran")
+        # A tool-only job's throwaway branch is not code that went unmerged.
+        self.assertEqual(rows["branch:claude/cartographer-1"]["status"], "finished")
+        self.assertEqual(rows["job:bad"]["status"], "error")
+        self.assertTrue(all(row["phase"] == "finished" for row in rows.values()))
+
+    def test_live_sessions_are_active_or_waiting(self):
+        rows = self.by_id(jobs=[{"id": "a", "status": "done"}, {"id": "b", "status": "done"}],
+                          live=[{"id": "a", "status": "running"},
+                                {"id": "b", "status": "running", "awaiting": "permission"}])
+        self.assertEqual(rows["job:a"]["phase"], "active")
+        self.assertEqual(rows["job:b"]["phase"], "attention")
+
+    def test_a_flow_waiting_on_review_is_in_attention(self):
+        rows = self.by_id(flows=[{"id": "f", "status": "waiting"}, {"id": "g", "status": "done"}])
+        self.assertEqual(rows["flow:f"]["phase"], "attention")
+        self.assertEqual(rows["flow:g"]["phase"], "finished")
+
+
+class WrittenBranch(unittest.TestCase):
+    """An unplaced session's branch, from where its own write tools wrote."""
+
+    def transcript(self, *blocks):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
+        self.addCleanup(os.unlink, tmp.name)
+        with tmp:
+            for name, path in blocks:
+                tmp.write(json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": name, "input": {"file_path": path}}]}}) + "\n")
+        return tmp.name
+
+    def test_the_branch_with_the_most_writes_wins_and_reads_never_count(self):
+        live = {"/repo/.claude/worktrees/app-one": "claude/app-one"}
+        path = self.transcript(
+            ("Edit", "/repo/.worktrees/voice/server/voice.py"),
+            ("Write", "/repo/.worktrees/voice/tests/test_voice.py"),
+            ("Read", "/repo/.worktrees/other/server/radar.py"),
+            ("Read", "/repo/.worktrees/other/server/brief.py"),
+            ("Read", "/repo/.worktrees/other/server/main.py"),
+            ("Edit", "/repo/.claude/worktrees/app-one/README.md"))
+        self.assertEqual(workresults.written_branch({"transcript": path}, live), "claude/voice")
+
+    def test_main_and_unknown_folders_never_name_a_branch(self):
+        path = self.transcript(("Edit", "/home/someone/notes.md"))
+        self.assertEqual(workresults.written_branch({"transcript": path}, {"/repo": "main"}), "")
+        self.assertEqual(workresults.written_branch({"transcript": "/missing.jsonl"}, {}), "")
+
+    def test_only_finished_unplaced_coding_sessions_are_read(self):
+        path = self.transcript(("Edit", "/repo/.worktrees/voice/a.py"))
+        jobs = [{"id": "impl", "idea_id": "i", "status": "done", "transcript": path},
+                {"id": "placed", "idea_id": "i", "status": "done", "transcript": path,
+                 "branch": "claude/own"},
+                {"id": "chat", "meta": {"kind": "chat"}, "status": "done", "transcript": path},
+                {"id": "live", "idea_id": "i", "status": "running", "transcript": path}]
+        with mock.patch.object(workresults.orphanwork, "_porcelain_worktrees", return_value=[]):
+            self.assertEqual(workresults._written_branches(jobs), {"impl": "claude/voice"})
+
+
 class ReadSurface(unittest.TestCase):
     def setUp(self):
-        # All six external stores, plus live process state and the extension
+        # All eight external stores, plus live process state and the extension
         # provider, are isolated. An empty fixture must never read owner data.
         self.patches = [
             mock.patch.object(workresults.showroom, "compose", return_value={"items": []}),
@@ -97,6 +213,8 @@ class ReadSurface(unittest.TestCase):
             mock.patch.object(workresults.changelog, "groups", return_value=[]),
             mock.patch.object(workresults, "_live_jobs", return_value=[]),
             mock.patch.object(workresults, "receipt_provider", return_value=[]),
+            mock.patch.object(workresults.prindex, "_read", return_value={}),
+            mock.patch.object(workresults.orphanwork, "_porcelain_worktrees", return_value=[]),
         ]
         self.mocks = [patch.start() for patch in self.patches]
         self.addCleanup(lambda: [patch.stop() for patch in reversed(self.patches)])

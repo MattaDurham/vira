@@ -10,6 +10,8 @@
 .wr-button:disabled { opacity: .55; cursor: progress; }
 .wr-status, .wr-errors { font-size: 11px; color: var(--wr-muted); padding: 4px 0 10px; overflow-wrap: anywhere; }
 .wr-errors:empty { display: none; }
+.wr-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 2px 0 8px; padding: 9px 11px; border: 1px solid var(--wr-line); border-radius: 6px; font-size: 12px; color: var(--wr-muted); }
+.wr-pending-text { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 .wr-error { color: #ddaa8a; padding: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
 .wr-list { display: grid; gap: 10px; padding-bottom: 8px; }
 .wr-gallery { grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); align-items: start; }

@@ -694,7 +694,13 @@ class Sessions:
         if cwd:
             cwd = str(Path(cwd).expanduser())
             if not Path(cwd).is_dir():
-                cwd = None
+                # Refuse, never quietly run somewhere else: a missing folder
+                # used to become "no folder", so a coding session meant for
+                # a repo ran in $HOME with no branch-first placement, made
+                # its own worktree, and Vira never learned its branch.
+                raise ValueError(
+                    f"the folder {cwd} does not exist - pick an existing "
+                    "folder, or connect the project's folder in Ideas")
         # Module defaults fill an unpinned dispatch. A run sheet, saved flow
         # stage, or resumed session already names its own engine and wins.
         if not model and not provider and not resume_session:
