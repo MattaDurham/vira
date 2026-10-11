@@ -1,18 +1,21 @@
-"""Why a session stopped, and Land's diagnose-first gesture.
+"""Why a session stopped, and the Resume prompt that carries it.
 
 The incident these pin (2026-08-28): three sessions on one branch died at
 the identical instant — each ran Edit on static/app.js, which is 1,062,221
 bytes against the SDK's 1,048,576-byte NDJSON line ceiling — and the only
-record anywhere was a truncated error string per row. Land's prompt said
+record anywhere was a truncated error string per row. The prompt said
 "carry the work to done" and named none of it, so a fourth session would
 have walked into the same wall.
+
+That evidence first rode Land's diagnose-first run. Land was retired on
+2026-10-09, and Resume is now the only way back into a stalled worktree,
+so the evidence rides the Resume prompt.
 
 Two things are therefore tested, and the SECOND is the one that matters:
 
   1. the halves — the buffer floor, the classifier, the repeat detector;
   2. the JOIN — that the prompt which actually reaches
-     session.sessions.launch carries the failure evidence and the
-     stop-and-ask instruction.
+     session.sessions.launch carries the failure evidence.
 
 That split is this repo's own hard lesson: the branch-first write guard
 was fully tested on both halves and silently disarmed for four days
@@ -254,27 +257,22 @@ class BranchFailures(_LedgerCase):
                         "whether retrying can work")
 
 
-class LandModes(unittest.TestCase):
-    def test_unknown_mode_falls_back_to_diagnose(self):
-        for bad in ("", None, "junk", "FINISHED", 7):
-            self.assertEqual(orphanwork.norm_land_mode(bad), "diagnose")
+class LandIsRetired(unittest.TestCase):
+    def test_no_land_entry_points_remain(self):
+        """Land merged a clean branch with a bare script that could not
+        open a PR, catch up with main, or resolve a conflict. A row
+        reaches main through Resume and the landing card now."""
+        for name in ("land", "land_all", "land_prompt",
+                     "land_diagnose_prompt", "norm_land_mode"):
+            self.assertFalse(hasattr(orphanwork, name), name)
 
-    def test_finish_is_honoured(self):
-        self.assertEqual(orphanwork.norm_land_mode("finish"), "finish")
-        self.assertEqual(orphanwork.norm_land_mode("  Finish "), "finish")
-
-    def test_land_defaults_to_diagnose(self):
-        import inspect
-        self.assertEqual(
-            inspect.signature(orphanwork.land).parameters["mode"].default,
-            "diagnose")
-        self.assertEqual(
-            inspect.signature(orphanwork.land_all).parameters["mode"].default,
-            "diagnose")
+    def test_the_recommendation_no_longer_offers_land(self):
+        self.assertEqual(orphanwork.VERDICTS, ("resume", "discard"))
+        self.assertNotIn('"land"', orphanwork.ASSESS_PROMPT)
 
 
-class DiagnosePromptContract(_LedgerCase):
-    """What the diagnosing session is actually told."""
+class ResumePromptContract(_LedgerCase):
+    """What the resuming session is actually told."""
 
     def _item(self):
         return {"branch": "claude/x", "worktree": "/tmp/wt-x", "dirty": 5}
@@ -291,40 +289,27 @@ class DiagnosePromptContract(_LedgerCase):
     def test_it_carries_the_prior_failures(self):
         for jid in ("aaa", "bbb", "ccc"):
             self.add(jid, "claude/x")
-        p = orphanwork.land_diagnose_prompt(self._item())
+        p = orphanwork.resume_prompt(self._item())
         self.assertIn("PRIOR FAILURES ON THIS BRANCH", p)
         self.assertIn("ended the SAME way", p)
+        self.assertLess(p.index("PRIOR FAILURES"), p.index("Finish the work"),
+                        "the evidence must come before the instruction it "
+                        "should change")
 
-    def test_it_says_so_when_there_are_none(self):
-        p = orphanwork.land_diagnose_prompt(self._item())
-        self.assertIn("No failed session is recorded", p)
+    def test_no_failures_adds_no_section(self):
+        p = orphanwork.resume_prompt(self._item())
         self.assertNotIn("PRIOR FAILURES", p)
+        self.assertNotIn("No failed session", p)
 
-    def test_it_orders_diagnose_then_stop_then_ask(self):
-        p = orphanwork.land_diagnose_prompt(self._item())
-        self.assertIn("ask_owner", p)
-        self.assertIn("Do NOT start fixing", p)
-        self.assertLess(p.index("DIAGNOSE"), p.index("STOP AND ASK"))
-
-    def test_it_forbids_merging_and_pushing(self):
-        p = orphanwork.land_diagnose_prompt(self._item())
-        self.assertIn("do NOT merge or push yourself", p)
-
-    def test_a_refusal_is_expressed_as_not_committing(self):
-        """The deterministic half of the contract: Vira merges only a
-        clean, committed tree, so 'do not commit' IS the refusal and the
-        prompt must say that rather than relying on a second mechanism."""
-        p = orphanwork.land_diagnose_prompt(self._item())
-        self.assertIn("do NOT commit", p)
-        self.assertIn("never merged", p)
-
-    def test_the_finish_prompt_is_still_available(self):
-        p = orphanwork.land_prompt(self._item())
-        self.assertIn("carry the work to", p)
-        self.assertNotIn("PRIOR FAILURES", p)
+    def test_it_leaves_the_decision_to_the_landing_card(self):
+        """Vira raises Merge / Keep testing / Discard when the turn ends;
+        a session that also asks puts two menus in front of the owner."""
+        p = orphanwork.resume_prompt(self._item())
+        self.assertIn("do not ask that yourself", p)
+        self.assertNotIn("decision menu", p)
 
 
-class LandDispatchJoin(_LedgerCase):
+class ResumeDispatchJoin(_LedgerCase):
     """THE JOIN. What reaches session.sessions.launch — not what a prompt
     function returns when called directly."""
 
@@ -348,56 +333,24 @@ class LandDispatchJoin(_LedgerCase):
             "log": "(none)"})
         f.start()
         self.addCleanup(f.stop)
+        b = mock.patch.object(orphanwork, "_refuse_if_busy")
+        b.start()
+        self.addCleanup(b.stop)
 
     def _item(self):
         return {"branch": "claude/x", "worktree": "/tmp/wt-x", "dirty": 5,
                 "kind": "dirty"}
 
-    def test_diagnose_dispatch_carries_the_evidence(self):
+    def test_resume_dispatch_carries_the_evidence(self):
         for jid in ("aaa", "bbb", "ccc"):
             self.add(jid, "claude/x")
-        orphanwork._launch_land_session(self._item(), "diagnose")
+        orphanwork.resume(self._item())
         self.assertEqual(len(self.launched), 1)
         sent = self.launched[0]
         self.assertIn("PRIOR FAILURES ON THIS BRANCH", sent["prompt"])
         self.assertIn("ended the SAME way", sent["prompt"])
-        self.assertIn("ask_owner", sent["prompt"])
-        self.assertEqual(sent["meta"].get("land_mode"), "diagnose")
-        self.assertTrue(sent["meta"].get("machine"),
-                        "a machine dispatch must not park in the reply "
-                        "window")
-
-    def test_finish_dispatch_is_the_old_prompt(self):
-        orphanwork._launch_land_session(self._item(), "finish")
-        self.assertNotIn("PRIOR FAILURES", self.launched[0]["prompt"])
-        self.assertEqual(self.launched[0]["meta"].get("land_mode"), "finish")
-
-    def test_an_unknown_mode_dispatches_the_diagnosis(self):
-        """The safe direction, at the dispatch seam rather than only in
-        the normaliser — this is where being wrong costs a re-run of the
-        step that just failed."""
-        orphanwork._launch_land_session(self._item(), "banana")
-        self.assertIn("STOP AND ASK", self.launched[0]["prompt"])
-
-    def test_land_without_a_mode_diagnoses(self):
-        for jid in ("aaa", "bbb"):
-            self.add(jid, "claude/x")
-        with mock.patch.object(orphanwork, "_refuse_if_busy"), \
-             mock.patch.object(orphanwork, "_set_action"), \
-             mock.patch.object(orphanwork.threading, "Thread"):
-            orphanwork.land(self._item())
-        self.assertIn("STOP AND ASK", self.launched[0]["prompt"])
-
-    def test_a_clean_row_launches_nothing(self):
-        clean = {"branch": "claude/x", "worktree": "/tmp/wt-x", "dirty": 0,
-                 "kind": "unmerged"}
-        with mock.patch.object(orphanwork, "_refuse_if_busy"), \
-             mock.patch.object(orphanwork, "_set_action"), \
-             mock.patch.object(orphanwork.threading, "Thread"):
-            jid = orphanwork.land(clean)
-        self.assertIsNone(jid)
-        self.assertEqual(self.launched, [],
-                         "a committed clean branch has nothing to diagnose")
+        self.assertEqual(sent["cwd"], "/tmp/wt-x")
+        self.assertEqual(sent["meta"].get("kind"), "orphan-resume")
 
 
 if __name__ == "__main__":

@@ -23,12 +23,19 @@ Two rungs, the house shape:
               ever sweep never pings, only what appears afterwards does).
 
 Everything here is READ-ONLY except the explicit actions (resume, merge,
-discard, and land — the finish-and-merge chain), and none of those ever
-reimplement branch.sh — they shell out to it and pass its stderr through
-verbatim. The sweeper inventories and pings; nothing merges, discards,
-resumes, or lands without an owner click ("Land" / "Land all" IS that
-click: the owner deciding a row should reach main, with the finishing
-session and the merge chained behind the one decision).
+discard, and land_session — the landing card's verdict), and none of
+those ever reimplement branch.sh — they shell out to it and pass its
+stderr through verbatim. The sweeper inventories and pings; nothing
+merges, discards or resumes without an owner click.
+
+There is no Land button any more (owner, 2026-10-09). It merged a clean
+branch with a bare script, and a script cannot open a missing PR, catch
+up with a main that moved, or resolve a conflict: a 14-day-old branch
+failed on all three while the card sat on "Landing...". A row reaches
+main through Resume instead: a session finishes the work, the landing
+card asks Merge / Keep / Discard, and Merge steers that session through
+the landing every session already knows (runner.MERGE_STEER) before
+land_session runs the merge itself.
 
 Store data/orphan-work.json is derived-plus-dismissals, like brief-state
 and reconnect.json — NOT in the backup rotation (a lost dismissal is a
@@ -66,7 +73,6 @@ STALE_AFTER_S = 6 * 3600     # a sweep older than this is served stale=true
 ACTION_TIMEOUT = 600         # branch.sh merge/discard, same ceiling worktree.py uses
 DIRTY_MTIME_CAP = 50         # dirty paths stat'd for the "when was this touched" signal
 LAND_WAIT_S = 3 * 3600       # ceiling on waiting for a landing session to finish
-LAND_POLL_S = 20             # how often the landing watcher re-reads the ledger
 REFS_TTL_S = 5.0             # Attention polls every 5 s: at most one ref read per poll
 ACTIVE_GRACE_S = 3600        # an hour of quiet before work outside Vira reads as stalled
 # Bumped whenever a sweep's rows change shape. It rides in the recorded refs
@@ -272,8 +278,8 @@ def _job_for_branch(branch, ledger_by_branch, by_branch=None):
             # what the work is ABOUT, as the dispatch that started it said
             # (or as the ledger derives it) - the subject a landing
             # session inherits, so it is named for the work and not for
-            # the fact of landing. The newest row on a branch is usually
-            # a Land session; joblog reaches the ORIGINATING job through
+            # the fact of landing. The newest row on a branch may be a
+            # Resume session; joblog reaches the ORIGINATING job through
             # by_branch so this reads the work, not the act.
             "subject": joblog.subject(row, None, by_branch),
             "about": joblog.about(row, by_branch),
@@ -390,7 +396,7 @@ def _failure_summary(branch):
         "why": top.get("why"),
         "fix": top.get("fix"),
         # The repeat is the actionable part: it says retrying unchanged is
-        # expected to fail, which is precisely what Land used to do.
+        # expected to fail, which is what a blind retry would do.
         "repeated": sessiondiag.repeated_kind(fails),
     }
 
@@ -453,7 +459,7 @@ def _make_item(branch, wt, dirty_lines, ledger_by_branch, by_branch=None):
     # back to a slug (owner, 2026-09-03: a card reading
     # `you-are-vira-s-coding-agent-work-a80ec5` says nothing).
     item["subject"] = branch_subject(item)
-    item["about"] = branch_about(item, "Land or resume")
+    item["about"] = branch_about(item, "Resume or discard")
     return item
 
 
@@ -656,7 +662,8 @@ def compose():
             # the stale read simply stops matching (the dismissal rule).
             r = reads.get(it.get("key") or "")
             if r:
-                it["read"] = {"verdict": r.get("verdict"),
+                v = r.get("verdict")
+                it["read"] = {"verdict": "resume" if v == "land" else v,
                               "why": r.get("why")}
             a = _actions.get(it.get("branch") or "")
             if a:
@@ -798,7 +805,7 @@ def require_action_branch(branch):
     slug to legacy merge/discard could target a different Claude branch.
     """
     if not (branch or "").startswith("claude/"):
-        raise ValueError("Merge, land and discard are unavailable for this branch prefix; "
+        raise ValueError("Merge and discard are unavailable for this branch prefix; "
                          "the branch tooling currently targets claude/* only. "
                          "Read its context or resume it instead.")
 
@@ -823,7 +830,7 @@ Live checkout (read-only for you — do not edit it): {live_root}
 An earlier session started this work and never finished it — it sat \
 uncommitted, unmerged, or the session that started it stalled. Below is \
 the worktree's current state.
-{job_block}
+{job_block}{failure_block}
 Uncommitted changes (git status --porcelain):
 {status}
 
@@ -831,23 +838,24 @@ Commits on this branch not yet on main (git log --oneline main..branch):
 {log}
 
 Finish the work: read what is already there, understand what was being \
-built, and carry it through to completion. Run the test suite. Do NOT \
-merge and do NOT push — the owner decides that. When you are done (or if \
-you get stuck and need the owner's judgment), end with the usual decision \
-menu: merge it, spin up a test instance, or discard it.
+built, and carry it through to completion. Run the test suite. When you \
+are done, or stuck and in need of the owner's judgment, end your turn \
+with a compact review brief: lead with the outcome, name the workflow or \
+before/after relationship, list verification, and state what remains. \
+Vira then serves the test instance, opens the PR and asks the owner \
+Merge / Keep testing / Discard, so do not ask that yourself, and do \
+NOT merge or push.
 
-Make that final handoff a compact review brief: lead with the outcome, name \
-the workflow or before/after relationship, list verification, and state what \
-remains. If this changes a visible surface, capture a representative public-\
-safe screenshot or rendering through the repo's test-instance process and \
-keep it in the branch with useful alt text. Never capture personal data and \
+If this changes a visible surface, capture a representative public-safe \
+screenshot or rendering through the repo's test-instance process and keep \
+it in the branch with useful alt text. Never capture personal data and \
 never add a decorative image merely to fill space.
 """
 
 
 def _prompt_fields(item):
-    """The shared evidence block both session prompts embed: worktree
-    status, unmerged commits, and the originating-job line."""
+    """The evidence block the resume prompt embeds: worktree status,
+    unmerged commits, and the originating-job line."""
     wt = item.get("worktree") or ""
     branch = item.get("branch") or ""
     status_out, log_out = "(worktree not available)", "(worktree not available)"
@@ -865,10 +873,29 @@ def _prompt_fields(item):
             "log": log_out[:3000]}
 
 
+def _failure_block(item):
+    """Why earlier sessions on this branch stopped, as a prompt section.
+    Empty when nothing is recorded: a branch that merely went unfinished
+    has no failure to read, and a section that says "none" trains the
+    reader to skip the section that matters.
+
+    This is the evidence the retired Land "diagnose" run carried (three
+    sessions died at the identical step on one branch on 2026-08-28, each
+    told only to carry the work to done). Resume is now the only way back
+    into a stalled worktree, so the evidence rides here."""
+    try:
+        block = sessiondiag.evidence_block(item.get("branch") or "")
+    except Exception:  # noqa: BLE001 — evidence must never block a launch
+        block = ""
+    return "\n" + block + "\n" if block else ""
+
+
 def resume_prompt(item):
     """The composed resume prompt — also servable read-only for a branch
     instance to copy into another session (the apply-prompt pattern)."""
-    return RESUME_PROMPT.format(**_prompt_fields(item))
+    f = _prompt_fields(item)
+    f["failure_block"] = _failure_block(item)
+    return RESUME_PROMPT.format(**f)
 
 
 # Row caps exist so the sweep payload stays small — every item is fetched
@@ -1195,7 +1222,7 @@ def resume(item, *, prompt=None, model=None, provider=None, mode=None,
 
 
 def _refuse_if_busy(branch):
-    """The dispatch refusals resume() has always had, shared with land():
+    """The dispatch refusals resume() has always had:
     checked FRESH at click time, never off the possibly day-old item row
     (the judge's high finding: sweep-time state must not authorize a
     second agent into a tree a session is writing)."""
@@ -1226,135 +1253,6 @@ def _refuse_if_busy(branch):
 
 
 # ---------------------------------------------------------------- landing
-
-LAND_PROMPT = """You are finishing stalled work in a branch-first repository so it can LAND.
-
-Worktree: {worktree}
-Branch: {branch}
-Live checkout (read-only for you — do not edit it): {live_root}
-
-An earlier session started this work and never finished it. The owner has \
-decided this branch should land on main. Your job is to carry the work to \
-done and leave the branch READY TO MERGE — Vira merges and pushes it the \
-moment you finish, so do NOT run the merge or push yourself.
-{job_block}
-Uncommitted changes (git status --porcelain):
-{status}
-
-Commits on this branch not yet on main (git log --oneline main..branch):
-{log}
-
-Do this, in order:
-1. Read what is already there and understand what was being built.
-2. Finish it — or, if it is already complete, verify it.
-3. Run the test suite and fix what it catches.
-4. COMMIT everything on this branch with a clear message. A clean, \
-committed tree is the signal Vira merges on.
-5. End with a compact review brief: lead with the outcome, name the workflow \
-or before/after relationship, list verification, and state what remains. If \
-this changes a visible surface, capture a representative public-safe screenshot \
-or rendering through the repo's test-instance process and keep it in the branch \
-with useful alt text. Never capture personal data and never add decorative filler.
-
-If you conclude the work is WRONG — superseded, duplicated, or not worth \
-landing — do NOT commit: say so plainly and stop. An uncommitted tree is \
-never merged, so your refusal holds.
-"""
-
-
-LAND_DIAGNOSE_PROMPT = """You are diagnosing stalled work in a branch-first \
-repository BEFORE any attempt to finish it.
-
-Worktree: {worktree}
-Branch: {branch}
-Live checkout (read-only for you — do not edit it): {live_root}
-
-The owner wants this branch to land, but an earlier session (or several) \
-stopped without finishing. Your FIRST job is not to write code. It is to \
-find out WHY it stopped, and to say so before anything else happens.
-{job_block}{failure_block}
-Uncommitted changes (git status --porcelain):
-{status}
-
-Commits on this branch not yet on main (git log --oneline main..branch):
-{log}
-
-DO THIS, IN ORDER:
-
-1. DIAGNOSE. Read the failure evidence above, then confirm it against the \
-worktree itself — the actual diff, the actual files. Where Vira has already \
-named a cause, VERIFY it rather than assuming it; where it has not, work it \
-out. Establish three things:
-   - what the work was trying to do,
-   - how far it actually got,
-   - why it stopped, specifically enough that you could predict whether \
-running the same step again would fail the same way.
-
-2. STOP AND ASK. Do NOT start fixing. Call mcp__vira__ask_owner with your \
-diagnosis as the question and concrete options. This is the whole point of \
-this run: the owner decides what happens next, having read what you found. \
-Your question must state, in plain language:
-   - what stopped it and whether that cause is still present,
-   - what is already done and what is left,
-   - whether retrying unchanged would fail again.
-
-   Offer options that fit what you actually found. Include, where each \
-genuinely applies:
-   - fix the cause and finish the work, then land it;
-   - finish the work without touching the cause (only when the cause is \
-already gone or cannot recur here — say which);
-   - land what is already committed and drop the rest;
-   - stop here and leave it for the owner.
-   Mark the one you recommend and say why in its description.
-
-3. ACT ON THE ANSWER, and only on the answer.
-   - Told to fix and/or finish: do it, run the test suite, and COMMIT \
-everything on this branch. A clean committed tree is the signal Vira \
-merges on — do NOT merge or push yourself.
-   - Told to stop, or to discard: do NOT commit. Leave the tree exactly as \
-it is and end with your diagnosis. An uncommitted tree is never merged, so \
-your refusal holds.
-   - No answer arrives: stop and report. Do not guess.
-
-Never re-run a step you have just established will fail the same way. If \
-the cause is something you cannot fix from inside this worktree (a harness \
-limit, a missing credential, a change needed in the live checkout), say so \
-plainly in the question — that is a real finding, not a failure to deliver.
-
-Keep the final diagnosis short and scannable for the foreground Forge card: \
-outcome, workflow state, evidence, recommendation. Include real public-safe \
-visual evidence when it already exists; never manufacture or capture personal data.
-"""
-
-
-def _failure_block(item):
-    """The prior-failure read, as a prompt section. Empty when there is
-    nothing recorded: a branch that merely went unfinished has no failure
-    to diagnose, and a section that says "none" trains the reader to skip
-    the section that matters."""
-    try:
-        block = sessiondiag.evidence_block(item.get("branch") or "")
-    except Exception:  # noqa: BLE001 — evidence must never block a launch
-        block = ""
-    if not block:
-        return ("\nNo failed session is recorded against this branch — it "
-                "was left unfinished rather than broken. Diagnose why it "
-                "stalled from the worktree itself.\n")
-    return "\n" + block + "\n"
-
-
-def land_prompt(item):
-    return LAND_PROMPT.format(**_prompt_fields(item))
-
-
-def land_diagnose_prompt(item):
-    """The diagnose-first landing prompt — also servable read-only, so a
-    branch instance can hand it to another session (the apply-prompt
-    pattern)."""
-    f = _prompt_fields(item)
-    f["failure_block"] = _failure_block(item)
-    return LAND_DIAGNOSE_PROMPT.format(**f)
-
 
 def _job_row(jid):
     for r in joblog.list_records():
@@ -1394,7 +1292,6 @@ def _merge_sync(slug):
     return True, text
 
 
-LAND_MODES = ("diagnose", "finish")
 SESSION_END_POLL_S = 3       # how often land_session re-reads the ledger for the session's end
 
 
@@ -1404,8 +1301,8 @@ def land_session(jid, branch, verdict):
     the runner is still alive in that worktree when the verdict lands (it
     ends itself on the control line), and branch.sh merge/discard both tear
     the worktree down. Bookkeeping rides `_actions` so the Runs list shows
-    "land: merging..." the same way a Land click does. Returns True when a
-    thread started; raises ValueError on the refusals a click would hit."""
+    "land: merging..." while it works. Returns True when a thread started;
+    raises ValueError on the refusals a click would hit."""
     branch = branch or ""
     if not branch.startswith("claude/"):
         raise ValueError(f"not a session branch ({branch or 'unset'})")
@@ -1438,9 +1335,9 @@ def land_session(jid, branch, verdict):
 
 
 def _session_end_then(jid, slug, branch, verdict):
-    """The blocking tail of land_session. Merge re-checks the tree the way
-    _land_tail does - a session asked to commit may have refused, and a
-    dirty tree must read as "nothing merged", never as a silent skip."""
+    """The blocking tail of land_session. Merge re-checks the tree - a
+    session steered to land may have refused or stopped at a conflict, and
+    a dirty tree must read as "nothing merged", never as a silent skip."""
     deadline = time.time() + LAND_WAIT_S
     row = _job_row(jid)
     while time.time() < deadline:
@@ -1467,185 +1364,11 @@ def _session_end_then(jid, slug, branch, verdict):
     if dirty:
         return False, ("the session ended with uncommitted changes - nothing "
                        "was merged; it may have refused to commit (read its "
-                       "last words), or commit by hand and Land it from Runs")
+                       "last words), or Resume it from Review")
     ahead, _behind = _ahead_behind(branch)
     if not ahead:
         return False, "no commits ahead of main - nothing to merge"
     return _merge_sync(slug)
-
-
-def norm_land_mode(mode):
-    """A stored or posted mode, normalised. Anything unrecognised reads as
-    DIAGNOSE — the safe direction: the worst a needless diagnosis costs is
-    one decision card, while a wrong "finish" re-runs the step that just
-    failed."""
-    m = (mode if isinstance(mode, str) else "").strip().lower()
-    return m if m in LAND_MODES else "diagnose"
-
-
-@modulemodels.scoped("work")
-def _launch_land_session(item, mode="diagnose"):
-    wt = item.get("worktree")
-    if not wt:
-        raise ValueError(
-            f"no worktree for {item.get('branch')} — recreate it with "
-            "scripts/branch.sh before landing")
-    mode = norm_land_mode(mode)
-    prompt = (land_diagnose_prompt(item) if mode == "diagnose"
-              else land_prompt(item))
-    from . import session
-    act = ("Diagnose why the earlier session stopped, then finish and land"
-           if mode == "diagnose" else "Finish and land")
-    return session.sessions.launch(
-        prompt, cwd=wt,
-        meta={"kind": "orphan-land", "machine": True,
-              "land_mode": mode, "branch": item.get("branch")},
-        subject=branch_subject(item),
-        about=branch_about(item, act),
-        pr=item.get("pr") or None)
-
-
-def _land_tail(item, slug, branch, jid):
-    """The blocking tail of a landing: wait out the finishing session
-    (when there is one), re-check the tree, then merge + push. `jid` is
-    None on the direct-merge path. Returns (ok, text)."""
-    if jid:
-        deadline = time.time() + LAND_WAIT_S
-        row = _job_row(jid)
-        while time.time() < deadline:
-            row = _job_row(jid)
-            if row and row.get("status") != "running":
-                break
-            time.sleep(LAND_POLL_S)
-        else:
-            return False, (f"landing session {jid} still running after "
-                           f"{LAND_WAIT_S // 3600}h — Land again once it "
-                           "finishes")
-        if not row or row.get("status") != "done":
-            st = (row or {}).get("status") or "gone"
-            return False, (f"landing session {jid} ended '{st}' — nothing "
-                           "was merged; open its terminal to see why")
-        wt = item.get("worktree")
-        dirty = _dirty_lines(Path(wt)) if wt else None
-        if dirty:
-            return False, ("landing session finished but left uncommitted "
-                           "changes — it likely judged the work not worth "
-                           "landing; read its summary before merging by hand")
-        ahead, _behind = _ahead_behind(branch)
-        if not ahead:
-            return False, ("landing session finished with no commits ahead "
-                           "of main — nothing to merge")
-    return _merge_sync(slug)
-
-
-def _land_finish(item, slug, branch, jid):
-    """Run the landing tail, re-sweep BEFORE the action status flips off
-    "running" (the _run_action ordering rule), then record the outcome."""
-    try:
-        ok, text = _land_tail(item, slug, branch, jid)
-    except Exception as e:  # noqa: BLE001 — the outcome must always land
-        ok, text = False, f"landing failed: {e}"
-    try:
-        refresh()
-    except Exception:  # noqa: BLE001 — a re-sweep must never eat the outcome
-        pass
-    _set_action(branch, "land", "ok" if ok else "failed", (text or "")[-4000:])
-
-
-def land(item, mode="diagnose"):
-    """From a row to landed-on-main.
-
-    A clean, committed branch merges + pushes directly — there is nothing
-    to diagnose and nothing to finish.
-
-    A dirty worktree gets a session dispatched into it first, and `mode`
-    decides what that session is told to do:
-
-      diagnose (DEFAULT) — establish why the earlier session stopped,
-        then STOP and raise a decision card with options; it only writes
-        code if the owner picks an option that says to. See
-        LAND_DIAGNOSE_PROMPT.
-      finish — the original behaviour: carry the work to done and commit.
-        See LAND_PROMPT.
-
-    Diagnose is the default because the alternative was measured and it
-    failed: three sessions on one branch died at the identical step on
-    2026-08-28, each having re-read the same code and re-started the same
-    edit, and a fourth dispatched by Land would have been told only to
-    "carry the work to done" — with nothing in its prompt saying three
-    attempts had already died there.
-
-    Either way the merge decision is unchanged and stays deterministic:
-    this thread merges only a tree that ends CLEAN and AHEAD. A session
-    that stops at the diagnosis leaves the tree dirty, so nothing merges
-    — the refusal holds without needing a second mechanism.
-
-    The wait state is in-process: a server restart mid-wait loses only
-    the auto-merge hop — the session itself is detached and survives.
-
-    Returns the session's job id (None on the direct-merge path).
-    Raises ValueError on the same refusals resume() has."""
-    branch = item.get("branch") or ""
-    if item.get("kind") == "unpushed" or branch == "main":
-        raise ValueError("main needs a push, not a landing")
-    require_action_branch(branch)
-    mode = norm_land_mode(mode)
-    slug = branch.split("/", 1)[-1]
-    _refuse_if_busy(branch)
-    jid = _launch_land_session(item, mode) if item.get("dirty") else None
-    _set_action(branch, "land", "running",
-                ((f"diagnosing session {jid} is running — it will ask you "
-                  "before changing anything" if mode == "diagnose" else
-                  f"finishing session {jid} is running — merges on "
-                  "completion") if jid else "merging…"))
-    threading.Thread(target=_land_finish, args=(item, slug, branch, jid),
-                     daemon=True, name=f"vira-orphan-land-{slug}"[:60]).start()
-    return jid
-
-
-def land_all(mode="diagnose"):
-    """Land every non-dismissed row, SERIALLY — the merge protocol lands
-    one branch at a time, and each dirty row's session runs to completion
-    before the next row starts.
-
-    `mode` is passed straight through to each row and defaults the same
-    way land() does: diagnose. A sweep is exactly where the old
-    behaviour was worst — it would re-dispatch into every unseen failure
-    in turn — so the default here is the cautious one, and each row that
-    needs a decision raises its own card rather than guessing. Pass
-    "finish" to take the old straight-to-work pass.
-
-    Returns how many rows the pass will attempt; progress rides each
-    row's action field."""
-    m = norm_land_mode(mode)
-    todo = [it for it in compose()["items"]
-            if it.get("kind") != "unpushed" and not it.get("in_motion")
-            and (it.get("branch") or "") not in ("", "main")]
-    if not todo:
-        return 0
-
-    def run():
-        for it in todo:
-            branch = it.get("branch") or ""
-            slug = branch.split("/", 1)[-1]
-            try:
-                _refuse_if_busy(branch)
-                jid = (_launch_land_session(it, m) if it.get("dirty")
-                       else None)
-            except ValueError as e:
-                _set_action(branch, "land", "failed", str(e))
-                continue
-            _set_action(branch, "land", "running",
-                        ((f"diagnosing session {jid} is running — it will "
-                          "ask you before changing anything"
-                          if m == "diagnose" else
-                          f"finishing session {jid} is running — merges on "
-                          "completion") if jid else "merging…"))
-            _land_finish(it, slug, branch, jid)
-
-    threading.Thread(target=run, daemon=True,
-                     name="vira-orphan-land-all").start()
-    return len(todo)
 
 
 # ---------------------------------------------------------------- assessment
@@ -1656,23 +1379,27 @@ def land_all(mode="diagnose"):
 # carry its evidence — so every item now ships what was asked (the ledger
 # prompt head), what changed (files, commit subjects), and ONE model-pass
 # recommendation with the reason on the row. The recommendation is a READ,
-# never an action: nothing lands or discards on its say-so.
+# never an action: nothing resumes or discards on its say-so.
+#
+# Two verdicts, matching the two buttons. "land" was retired with the Land
+# button (2026-10-09); a cached "land" read is shown as "resume" (see
+# compose), since finished work reaches main through a Resume session.
 
 READS_MAX = 200
-VERDICTS = ("land", "resume", "discard")
+VERDICTS = ("resume", "discard")
 
 ASSESS_PROMPT = """You are Vira's release reviewer. Below is every piece of UNLANDED work \
 in the owner's repo: agent worktrees holding uncommitted edits, and branches \
 with commits never merged into main. For each item recommend exactly one of:
-- "land"    — finished, coherent work worth merging into main
-- "resume"  — real work, but unfinished or unclear; a session should finish or inspect it
+- "resume"  — real work worth keeping, finished or not; a session picks it up, \
+finishes it, and brings it back to the owner to merge, keep testing, or discard
 - "discard" — stale, duplicated, superseded, or a runaway experiment
 
 Judge only from the evidence given: what the originating job asked (when \
 known), the files changed, the commit subjects, and the age. Be decisive and \
 skeptical — several parallel experiments editing the same file are usually \
 duplicates; a diff far wider than its stated task is usually a runaway. When \
-genuinely unsure prefer "resume" over "land": merging junk is worse than a look.
+genuinely unsure prefer "resume": a look costs one session, a discard loses the work.
 
 Reply with STRICT JSON only — a list of objects \
 {{"key": "...", "verdict": "...", "why": "..."}} covering every item. "why" \

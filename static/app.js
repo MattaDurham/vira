@@ -7845,14 +7845,6 @@ function renderRuns() {
   const shown = runsFiltered(all);
   const unlanded = all.filter((i) => i.kind === "unlanded").length;
 
-  // Land all is the gesture the owner wants constantly reachable, so it
-  // sits in the bar with a live count rather than inside a section that
-  // has to be scrolled to.
-  const landAll = $("#runs-landall");
-  if (landAll) {
-    landAll.hidden = !unlanded;
-    landAll.textContent = `Land all (${unlanded})`;
-  }
   $("#runs-filter")?.querySelectorAll(".seg-btn").forEach((b) =>
     b.classList.toggle("on", b.dataset.run === (runsFilter || "all")));
 
@@ -7873,7 +7865,7 @@ function renderRuns() {
   }
 
   // Rules / Filed swap the pane's list for their own — the bar above
-  // (unlanded count, Land all, seg state) is still kept honest, and the
+  // (unlanded count, seg state) is still kept honest, and the
   // chronology simply is not the list on screen.
   if (RUN_VIEWS.includes(runsFilter)) return;
 
@@ -7993,7 +7985,7 @@ function beginOrphanTrace(sourceNode, branch = "", summary = {}) {
     ["02", "Build", buildDetail, "is-done"],
     ["03", "Review", "Gathering evidence", "is-active"],
     ["04", "Decide", verdict
-      ? `Vira recommends ${verdict}` : "Land, resume, or discard", ""],
+      ? `Vira recommends ${verdict}` : "Resume or discard", ""],
   ].forEach(([number, label, note, state]) => {
     const step = el("div", `run-trace-step ${state}`.trim());
     step.append(el("span", "run-trace-step-number", number),
@@ -8614,7 +8606,7 @@ function orphanVisualBrief(c) {
       : "Inferred from branch evidence"],
     ["02", dirty ? "Finish" : "Built", dirty ? "live" : "done", buildState],
     ["03", "Review", "live", `${files} changed file${files === 1 ? "" : "s"}`],
-    ["04", "Decide", "next", "Land, resume, or discard"],
+    ["04", "Decide", "next", "Resume or discard"],
   ];
   stages.forEach(([num, label, state, note]) => {
     const step = el("div", "run-brief-step " + state);
@@ -8850,28 +8842,24 @@ function orphanBody(card, it, opts = {}) {
       foot.appendChild(el("span", "hint",
         it.action.name + "… " + (it.action.output || "").slice(0, 120)));
     } else {
-      // Land replaced Merge as the primary action (owner, 2026-08-05:
-      // "why doesn't it just land?"): for a committed clean branch it IS
-      // merge+push; for a dirty worktree it finishes the work first.
+      // Resume is the way to main (owner, 2026-10-09): Land merged a clean
+      // branch with a bare script that could not open a PR, catch up with
+      // main or resolve a conflict, and it failed silently. A Resume session
+      // finishes the work and ends on the landing card - Merge / Keep
+      // testing / Discard - so the merge decision stays the owner's.
       const rec = it.read && it.read.verdict;
-      const land = el("button", "fchip sm" + (rec === "land" ? " rec" : ""), "Land");
-      land.title = it.dirty
-        ? "Dispatch a session that first works out why this stopped, then asks "
-          + "you before changing anything"
-        : "Merge this branch into live main and push";
-      land.addEventListener("click", () => armOrphanAction(foot, it, "land"));
       const resume = el("button", "fchip sm" + (rec === "resume" ? " rec" : ""), "Resume");
       resume.title = "Review settings and instructions before starting in this worktree — "
-        + "it starts editing immediately and stops short of merge";
+        + "it finishes the work, then asks you to merge, keep testing, or discard";
       resume.addEventListener("click", () => armOrphanAction(foot, it, "resume"));
       const disc = el("button", "fchip sm" + (rec === "discard" ? " rec" : ""), "Discard");
       disc.addEventListener("click", () => armOrphanAction(foot, it, "discard"));
       if (!String(it.branch || "").startsWith("claude/")) {
-        land.disabled = disc.disabled = true;
-        land.title = disc.title = "This branch needs manual Git review; automatic branch actions do not support this prefix yet.";
+        disc.disabled = true;
+        disc.title = "This branch needs manual Git review; automatic branch actions do not support this prefix yet.";
         foot.appendChild(el("span", "hint", "Manual Git review required for this branch. Resume is available."));
       }
-      foot.append(land, resume, disc);
+      foot.append(resume, disc);
     }
     card.appendChild(foot);
     if (it.action && it.action.status && it.action.status !== "running") {
@@ -9019,20 +9007,7 @@ async function orphanResume(it) {
 function armOrphanAction(foot, it, name) {
   if (name === "resume") { orphanResume(it); return; }
   foot.innerHTML = "";
-  const label = name === "land"
-    ? (it.dirty
-      // A dirty row offers TWO ways to land, because they are genuinely
-      // different acts and the old single Confirm silently picked the
-      // dangerous one: it dispatched straight into work with no idea why
-      // the last attempt stopped. The failure line above the buttons is
-      // what makes this choice informed rather than a guess.
-      ? (it.failure && it.failure.repeated
-        ? `Land ${it.branch}? ${it.failure.count} earlier sessions died the same `
-          + `way (${it.failure.repeated}) — diagnosing first is the only one of `
-          + `these that can tell you whether that is still true.`
-        : `Land ${it.branch}? It has uncommitted work, so a session runs in it.`)
-      : `Land ${it.branch}? Merges into live main and pushes.`)
-    : name === "merge"
+  const label = name === "merge"
     ? `Merge ${it.branch} into live main?`
     : it.dirty
       ? `Discard ${it.dirty} uncommitted change${it.dirty === 1 ? "" : "s"}? This destroys them.`
@@ -9040,33 +9015,12 @@ function armOrphanAction(foot, it, name) {
   foot.appendChild(el("span", "orphan-confirm-q", label));
   const no = el("button", "fchip sm", "Cancel");
   no.addEventListener("click", () => { runsHold = false; loadOrphans(); });
-
-  if (name === "land" && it.dirty) {
-    // Diagnose leads and is the primary: it changes nothing until you
-    // answer its card, so it is the choice that cannot make things worse.
-    const diag = el("button", "fchip sm rec", "Diagnose first");
-    diag.title = "Read why the earlier session stopped, then stop and ask you "
-      + "what to do — nothing is edited until you answer";
-    diag.addEventListener("click", () => {
-      runsHold = false;
-      runOrphanAction(foot, it, "land", "diagnose");
-    });
-    const fin = el("button", "fchip sm warn", "Finish it now");
-    fin.title = "Skip the diagnosis: carry the work to done, commit, and merge. "
-      + "Use this when you already know what stopped it";
-    fin.addEventListener("click", () => {
-      runsHold = false;
-      runOrphanAction(foot, it, "land", "finish");
-    });
-    foot.append(diag, fin, no);
-  } else {
-    const yes = el("button", "fchip sm warn", "Confirm");
-    yes.addEventListener("click", () => {
-      runsHold = false;
-      runOrphanAction(foot, it, name);
-    });
-    foot.append(yes, no);
-  }
+  const yes = el("button", "fchip sm warn", "Confirm");
+  yes.addEventListener("click", () => {
+    runsHold = false;
+    runOrphanAction(foot, it, name);
+  });
+  foot.append(yes, no);
   // The confirm lives only in the DOM, so a background repaint would
   // disarm it under the cursor. Held until it is answered or cancelled —
   // and the signature is INVALIDATED in the same breath, because the DOM
@@ -9077,27 +9031,12 @@ function armOrphanAction(foot, it, name) {
   runsSig = "";
 }
 
-async function runOrphanAction(foot, it, name, mode) {
+async function runOrphanAction(foot, it, name) {
   runsHold = false;
-  foot.textContent = name === "land"
-    ? (mode === "diagnose" ? "Diagnosing…" : "Landing…")
-    : name === "merge" ? "Merging…" : "Discarding…";
+  foot.textContent = name === "merge" ? "Merging…" : "Discarding…";
   try {
-    const body = name === "discard" ? { key: it.key, force: true }
-      : name === "land" && mode ? { key: it.key, mode }
-      : { key: it.key };
-    const r = await post(`/api/orphanwork/${name}`, body);
-    // A dirty row's landing runs through a finishing session — open its
-    // terminal so the landing is watchable, and let the row's action
-    // field carry the state (it can run for a while; no bounded poll).
-    if (name === "land" && r.job_id) {
-      openSession(r.job_id);
-      toast(mode === "diagnose"
-        ? "Diagnosing — it will ask you before it changes anything"
-        : "Landing — a session is finishing the work; Vira merges when it's done");
-      loadOrphans();
-      return;
-    }
+    const body = name === "discard" ? { key: it.key, force: true } : { key: it.key };
+    await post(`/api/orphanwork/${name}`, body);
     startPoll(async (h) => {
       const s = await api("/api/orphanwork");
       const still = (s.items || []).find((x) => x.key === it.key);
@@ -9113,8 +9052,7 @@ async function runOrphanAction(foot, it, name, mode) {
       }
     }, 1500, 60000);
   } catch (e) {
-    toast((name === "land" ? "Land" : name === "merge" ? "Merge" : "Discard")
-      + " failed: " + errText(e));
+    toast((name === "merge" ? "Merge" : "Discard") + " failed: " + errText(e));
     loadOrphans();
   }
 }
@@ -9194,26 +9132,6 @@ $("#runs-q-clear")?.addEventListener("click", () => {
   runsShown = RUNS_PAGE;
   renderRuns();
   box?.focus();
-});
-
-$("#runs-landall")?.addEventListener("click", async () => {
-  const rows = runsState.orphan.length;
-  if (!rows) { toast("Nothing unlanded"); return; }
-  // A sweep is where landing-without-looking was worst — it would
-  // re-dispatch into every unseen failure in turn. Each dirty row now
-  // diagnoses and raises its own card instead of guessing.
-  if (!confirm(`Land all ${rows} branch${rows === 1 ? "" : "es"}? Vira works through `
-    + "them one at a time. A branch with uncommitted work gets a session that "
-    + "first works out why it stopped and asks you before changing anything; "
-    + "a clean branch merges into live main and pushes.")) return;
-  try {
-    const r = await post("/api/orphanwork/land-all", { mode: "diagnose" });
-    toast(r.started ? `Landing ${r.count} — one at a time; watch the rows`
-                    : "Nothing to land");
-    loadOrphans();
-  } catch (e) {
-    toast("Land all failed: " + errText(e));
-  }
 });
 
 async function loadNotify() {
@@ -12998,11 +12916,9 @@ function shrFoot(foot, it, d) {
   }
   if (it.band === "unlanded" && it.orphan_key) {
     const rec = it.orphan_read && it.orphan_read.verdict;
-    btn("Land", () => shrArm(foot, it, "land"), rec === "land" ? "rec" : "",
-      it.dirty ? "Dispatch a session that works out why this stopped, then asks you"
-        : "Merge this branch into live main and push");
     btn("Resume", () => shrArm(foot, it, "resume"), rec === "resume" ? "rec" : "",
-      "Dispatch an agent into this worktree - it starts editing immediately");
+      "Dispatch an agent into this worktree - it finishes the work, then asks "
+        + "you to merge, keep testing, or discard");
     btn("Discard", () => shrArm(foot, it, "discard"), rec === "discard" ? "rec" : "");
   } else if (it.band === "landed" && d.instance?.kind !== "branch") {
     btn("Clean up", () => shrArm(foot, it, "cleanup"), "",
@@ -13050,44 +12966,30 @@ function shrArm(foot, it, name) {
   }
   foot.innerHTML = "";
   const slug = it.branch.replace(/^claude\//, "");
-  const q = name === "land"
-    ? (it.dirty ? `Land ${slug}? It has uncommitted work, so a session runs in it first.`
-      : `Land ${slug}? Merges into live main and pushes.`)
-    : name === "cleanup"
+  const q = name === "cleanup"
     ? `Clean up ${slug}? Removes its worktree and branch; the merge on main is untouched.`
     : (it.dirty ? `Discard ${it.dirty} uncommitted change${it.dirty === 1 ? "" : "s"}? This destroys them.`
       : `Discard ${slug}? This deletes the branch (its PR keeps the diff).`);
   foot.appendChild(el("span", "orphan-confirm-q", q));
   const no = el("button", "fchip sm", "Cancel");
   no.addEventListener("click", () => { shrHold = false; renderShowroomGrid(); });
-  const go = async (mode) => {
+  const go = async () => {
     shrHold = false;
-    foot.textContent = name === "cleanup" ? "Cleaning up…" : name + "…";
+    foot.textContent = name === "cleanup" ? "Cleaning up…" : "Discarding…";
     try {
       if (name === "cleanup") {
         await post("/api/showroom/cleanup", { branch: it.branch });
-      } else if (name === "discard") {
-        await post("/api/orphanwork/discard", { key: it.orphan_key, force: true });
       } else {
-        const r = await post("/api/orphanwork/land", { key: it.orphan_key, mode: mode || "diagnose" });
-        if (r.job_id) openSession(r.job_id);
+        await post("/api/orphanwork/discard", { key: it.orphan_key, force: true });
       }
     } catch (e) {
       toast(errText(e));
     }
     loadShowroomQuiet();
   };
-  if (name === "land" && it.dirty) {
-    const diag = el("button", "fchip sm rec", "Diagnose first");
-    diag.addEventListener("click", () => go("diagnose"));
-    const fin = el("button", "fchip sm warn", "Finish it now");
-    fin.addEventListener("click", () => go("finish"));
-    foot.append(diag, fin, no);
-  } else {
-    const yes = el("button", "fchip sm warn", "Confirm");
-    yes.addEventListener("click", () => go());
-    foot.append(yes, no);
-  }
+  const yes = el("button", "fchip sm warn", "Confirm");
+  yes.addEventListener("click", () => go());
+  foot.append(yes, no);
   shrHold = true;
 }
 

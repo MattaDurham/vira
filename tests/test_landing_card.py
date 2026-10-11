@@ -240,22 +240,43 @@ class TheVerdict(_Placed):
         self.assertEqual(self.state(r)["landing"], "discard")
         self.assertIsNone(self.card(r))
 
-    def test_merge_over_a_clean_tree_ends_the_session(self):
+    def test_merge_over_a_clean_tree_still_steers(self):
+        """A clean tree is no sign main stood still while the card waited
+        (2026-10-09: a committed branch went 78 commits stale and its
+        merge stopped at a conflict nobody read). The session catches up
+        first, whatever the tree looks like."""
         r = self.raised(self.placed(), work=(0, 1))
         self.landing(r, "merge", work=(0, 1))
         self.assertEqual(r.landing, {"verdict": "merge"})
+        self.assertFalse(r.finished_by_owner)   # not yet - the turn runs
+        self.assertEqual(r.inbox.get_nowait(), runner_mod.MERGE_STEER)
+
+    def test_merge_off_the_parked_loop_ends_the_session(self):
+        """No turn to steer: the verdict ends the session and Vira merges."""
+        r = self.raised(self.placed(), work=(0, 1))
+        r.awaiting_reply = False
+        self.landing(r, "merge", work=(0, 1))
         self.assertTrue(r.finished_by_owner)
         self.assertIs(r.inbox.get_nowait(), runner_mod._END)
 
-    def test_merge_over_a_dirty_tree_steers_a_commit_then_finishes(self):
+    def test_the_merge_steer_is_the_known_landing_minus_the_merge(self):
+        """It points at the landing every session already has, asks for the
+        catch-up with main, and keeps the merge itself with the harness."""
+        s = runner_mod.MERGE_STEER
+        self.assertIn("AGENTS.local.md section 3", s)
+        self.assertIn("catch this branch up with main", s)
+        self.assertIn("Do NOT run branch.sh merge", s)
+        self.assertIn("do NOT push main", s)
+
+    def test_merge_over_a_dirty_tree_steers_then_finishes(self):
         """The Implement prompt says never commit, so delivered work is
         usually uncommitted - and branch.sh merge refuses a dirty tree. The
         session that wrote it commits it; the harness never invents the
-        message. The verdict is HELD so the commit turn finishes instead of
-        raising the card again."""
+        message. The verdict is HELD so the steered turn finishes instead
+        of raising the card again."""
         r = self.raised(self.placed(), work=(2, 0))
         self.landing(r, "merge", work=(2, 0))
-        self.assertEqual(r.inbox.get_nowait(), runner_mod.COMMIT_STEER)
+        self.assertEqual(r.inbox.get_nowait(), runner_mod.MERGE_STEER)
         self.assertEqual(r.landing, {"verdict": "merge"})
         self.assertFalse(r.finished_by_owner)   # not yet - the turn runs
         # ...the commit turn ends and parks again:
@@ -418,6 +439,47 @@ class LandSession(_BranchShCase):
         self.assertEqual(a["status"], "failed")
         self.assertIn("uncommitted", a["output"])
         self.assertEqual(merged, [])
+
+    def test_merge_runs_the_merge_push_and_teardown(self):
+        """The whole landing after the session ends: merge, push, and the
+        teardown that leaves nothing for someone to discard."""
+        wt = self.make_worktree("clean1", commits=1)
+        job_row = lambda jid: {"id": jid, "status": "done",  # noqa: E731
+                               "branch": "claude/clean1", "worktree": str(wt)}
+        with mock.patch.object(orphanwork, "_job_row", job_row):
+            orphanwork.land_session("j" * 12, "claude/clean1", "merge")
+            a = self._wait("claude/clean1")
+        self.assertEqual(a["status"], "ok")
+        self.assertIn("branch.sh merge clean1", a["output"])
+        self.assertIn("push:", a["output"])
+        self.assertIn("branch.sh discard clean1", a["output"])
+
+    def test_nothing_ahead_merges_nothing(self):
+        wt = self.make_worktree("d4", commits=0)
+        job_row = lambda jid: {"id": jid, "status": "done",  # noqa: E731
+                               "branch": "claude/d4", "worktree": str(wt)}
+        merged = mock.MagicMock(return_value=(True, "x"))
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_merge_sync", merged), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session("j" * 12, "claude/d4", "merge")
+            a = self._wait("claude/d4")
+        self.assertEqual(a["status"], "failed")
+        self.assertIn("no commits ahead", a["output"])
+        merged.assert_not_called()
+
+    def test_the_wait_times_out_honestly(self):
+        job_row, _ = self._rows(10 ** 6, self.root)
+        merged = mock.MagicMock(return_value=(True, "x"))
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_merge_sync", merged), \
+             mock.patch.object(orphanwork, "LAND_WAIT_S", 0), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session("j" * 12, "claude/t", "merge")
+            a = self._wait("claude/t")
+        self.assertEqual(a["status"], "failed")
+        self.assertIn("still running", a["output"])
+        merged.assert_not_called()
 
     def test_discard_runs_branch_sh_discard_after_the_end(self):
         job_row, _ = self._rows(2, self.root)
