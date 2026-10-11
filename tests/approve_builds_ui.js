@@ -137,6 +137,10 @@ const settings = (perm) => ({ cwd: '~/workspace/vira', model: '', provider: null
   // One cwd ladder: the connected project wins over the last-used folder.
   c.projectPathsCache['Other'] = '/repos/other';
   assert.equal(c.ideaRunCwd({ project: 'Other' }), '/repos/other');
-  assert.equal(c.ideaRunCwd({ project: 'Vira' }), '~/workspace/vira');
+  // No hardcoded folder: one that no longer exists sent four sessions to
+  // $HOME on 2026-10-10. The server names Vira's own folder.
+  assert.equal(c.ideaRunCwd({ project: 'Vira' }), '');
+  c.projectPathsCache['Vira'] = '/repos/vira';
+  assert.equal(c.ideaRunCwd({ project: 'Vira' }), '/repos/vira');
   console.log('Approve & build UI behavior passed');
 })().catch((e) => { console.error(e); process.exitCode = 1; });
