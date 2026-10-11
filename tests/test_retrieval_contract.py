@@ -74,18 +74,32 @@ class RequestTests(unittest.TestCase):
 
     def test_embedding_single_flight_bounded_and_failures_not_cached(self):
         localmodels.clear_query_cache()
-        entered, gate = threading.Event(), threading.Event()
+        entered, gate, joined = threading.Event(), threading.Event(), threading.Event()
+        class Flights(dict):
+            def get(self, key, default=None):
+                found = super().get(key, default)
+                if found is not None:
+                    joined.set()
+                return found
         def embed(texts, timeout=None):
             self.assertLessEqual(timeout, 1.5)
             entered.set()
-            gate.wait(.2)
+            gate.wait(5)
             return [[1.0, 0.0]]
-        with mock.patch.object(localmodels, 'ollama_embed', side_effect=embed) as call:
+        # Waits are generous ceilings (a slow Windows runner missed 0.2 s); the
+        # events end them early. The gate opens only once the second caller has
+        # found the running flight: released sooner, the cache would answer it
+        # and the test would pass without single-flight.
+        with mock.patch.object(localmodels, '_QUERY_FLIGHTS', Flights()), \
+                mock.patch.object(localmodels, 'ollama_embed', side_effect=embed) as call:
             with concurrent.futures.ThreadPoolExecutor(2) as pool:
-                one = pool.submit(localmodels.query_embedding, 'fixture-shared')
-                self.assertTrue(entered.wait(.2))
-                two = pool.submit(localmodels.query_embedding, 'fixture-shared')
-                gate.set()
+                try:
+                    one = pool.submit(localmodels.query_embedding, 'fixture-shared')
+                    self.assertTrue(entered.wait(5))
+                    two = pool.submit(localmodels.query_embedding, 'fixture-shared')
+                    self.assertTrue(joined.wait(5))
+                finally:
+                    gate.set()
                 self.assertEqual(one.result(), [1.0, 0.0])
                 self.assertEqual(two.result(), [1.0, 0.0])
             self.assertEqual(call.call_count, 1)
