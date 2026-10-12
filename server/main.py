@@ -26,7 +26,7 @@ from . import (
                applicationmap, applications,
                atlas, attention, circles,
                backup, brainchat, brief, virachat,
-               briefstate, changelog,
+               admininbox, briefstate, changelog,
                circuits,
                companion,
                contactcard,
@@ -2189,6 +2189,39 @@ def api_brief_events_act(req: EventPrepReq):
     except ValueError as e:
         raise HTTPException(422, str(e))
     raise HTTPException(422, "unknown action")
+
+
+# ---------- admin inbox (server/admininbox.py: chores from businesses and
+# automated senders, kept out of the people lists) ----------
+
+@app.get("/api/brief/admin")
+def api_brief_admin(hidden: bool = False):
+    try:
+        return admininbox.collect(watcher.snapshot(200), include_hidden=hidden)
+    except Exception as e:  # noqa: BLE001 — surface the failure to the UI
+        raise HTTPException(502, str(e)[:400])
+
+
+@app.post("/api/brief/admin/extract")
+def api_brief_admin_extract():
+    try:
+        return admininbox.extract(watcher.snapshot(200))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, str(e)[:400])
+
+
+class AdminMarkReq(BaseModel):
+    key: str
+    restore: bool = False
+
+
+@app.post("/api/brief/admin/mark")
+def api_brief_admin_mark(req: AdminMarkReq):
+    try:
+        admininbox.mark(req.key, restore=req.restore)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"ok": True}
 
 
 class ReadingDoneReq(BaseModel):

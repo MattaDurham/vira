@@ -164,6 +164,9 @@ const MODULE_WAIT = {
   "attention:day": ["#brief-body",
     ["Reading today's calendar", "Finding who is waiting on a reply",
      "Gathering open loops and renewals"]],
+  admin: ["#admin-list",
+    ["Reading texts from short codes and portals", "Checking system mail",
+     "Pulling out the chore and its due date"]],
   "attention:decide": ["#review-body",
     ["Gathering what needs a decision", "Sorting oldest and heaviest first"]],
   applications: ["#app-list",
@@ -13093,6 +13096,110 @@ async function shrFillDetail(det, it) {
 
 $("#shr-refresh")?.addEventListener("click", () => loadShowroom().catch(() => {}));
 
+// ---------- Admin inbox: chores from businesses and automated senders
+// (server/admininbox.py). They never appear as a person waiting on a
+// reply; each row is the thing to do, with a due date when the message
+// states one. Done/hide is a self-re-arming dismiss key, so a new message
+// from the same sender comes back.
+let adminShowHidden = false;
+let adminExtractInFlight = false;
+
+// the due date in the time column; the stage (overdue/today) is the tag
+function adminDueLabel(it) {
+  if (!it.due) return "";
+  return new Date(it.due + "T12:00").toLocaleDateString([], {
+    month: "short", day: "numeric" });
+}
+
+function adminRow(sec, it, onChange) {
+  const due = adminDueLabel(it);
+  const row = briefRow(sec, {
+    time: due || fmtTime(it.when),
+    title: it.chore,
+    sub: [it.sender, it.channel === "email" ? "mail" : "text",
+          due ? "received " + fmtTime(it.when) : null].filter(Boolean).join(" · "),
+    tag: it.stage === "notice" ? it.kind : (it.stage === "open" ? null : it.stage),
+    tagCls: it.stage === "overdue" || it.stage === "today" ? "conflict"
+      : (it.stage === "upcoming" ? "owe" : ""),
+    actions: [
+      { label: "context", title: "Read the original message",
+        run: () => openDayContext({
+          source: it.channel === "email" ? "Mail" : "Text message",
+          title: it.sender, ref: [it.handle, it.account].filter(Boolean).join(" · "),
+          text: [it.subject, it.text, it.due_quote ? "Deadline: \u201c" + it.due_quote + "\u201d" : ""]
+            .filter(Boolean).join("\n\n") }) },
+      { label: adminShowHidden ? "restore" : "done",
+        title: adminShowHidden ? "Bring this back" : "Mark done (a new message from this sender comes back)",
+        run: async (_b, r) => {
+          r.classList.add("gone");
+          try {
+            const keys = [it.key, ...(it.also || [])];
+            for (const key of keys)
+              await post("/api/brief/admin/mark", { key, restore: adminShowHidden });
+            setTimeout(() => r.remove(), 250);
+            if (!adminShowHidden) toast("Marked done", [["Undo", async () => {
+              for (const key of keys)
+                await post("/api/brief/admin/mark", { key, restore: true });
+              onChange?.();
+            }]]);
+          } catch (e) {
+            r.classList.remove("gone");
+            toast("Could not update: " + errText(e));
+          }
+        } },
+    ],
+  });
+  row.classList.add("admin-row", "admin-" + it.stage);
+  row.title = it.signals?.length ? "Institutional sender: " + it.signals.join(", ") : "";
+  return row;
+}
+
+function renderAdmin(host, got) {
+  host.innerHTML = "";
+  const items = got.items || [];
+  const chores = items.filter((it) => it.stage !== "notice");
+  const notices = items.filter((it) => it.stage === "notice");
+  const reload = () => loadAdmin().catch(() => {});
+  const due = briefSection(host, "To do", chores.length ? chores.length + " open" : "");
+  chores.forEach((it) => adminRow(due, it, reload));
+  if (!chores.length) briefEmpty(due, adminShowHidden
+    ? "Nothing marked done in the last two weeks." : "No errands from businesses right now.");
+  if (notices.length) {
+    const ns = briefSection(host, "Notices", "codes, status updates and promotions; nothing to do");
+    notices.forEach((it) => adminRow(ns, it, reload));
+  }
+  const st = got.status || {};
+  const bad = ["imessage", "mail"].filter((k) => st[k] && st[k] !== "ok")
+    .map((k) => (k === "imessage" ? "Messages: " : "Mail: ") + st[k]);
+  if (st.extract && !/^rewrote|^nothing/.test(st.extract)) bad.push("Rewrite: " + st.extract);
+  const status = $("#admin-status");
+  if (status) status.textContent = bad.length ? bad.join(" · ")
+    : (got.hidden ? got.hidden + " done or hidden" : "not people waiting on a reply");
+}
+
+async function loadAdmin() {
+  const host = $("#admin-list");
+  if (!host) return;
+  try {
+    const got = await api("/api/brief/admin" + (adminShowHidden ? "?hidden=true" : ""));
+    renderAdmin(host, got);
+    if (got.pending && !adminShowHidden && !adminExtractInFlight) {
+      // the rule pass paints first; the model's rewrite fills in after
+      adminExtractInFlight = true;
+      const status = $("#admin-status");
+      if (status) status.textContent = "Rewriting " + got.pending + " into plain chores...";
+      post("/api/brief/admin/extract", {}).then((fresh) => {
+        if (!adminShowHidden) renderAdmin(host, fresh);
+      }).catch((e) => {
+        if (status) status.textContent = "Rewrite failed: " + errText(e);
+      }).finally(() => { adminExtractInFlight = false; });
+    }
+  } catch (e) {
+    host.innerHTML = "";
+    briefEmpty(host, "Admin inbox failed: " + errText(e));
+  }
+}
+
 function renderBrief(b) {
   const body = $("#brief-body");
   body.innerHTML = "";
@@ -13158,6 +13265,25 @@ function renderBrief(b) {
   if (!(cal.tomorrow || []).length) briefEmpty(tom, "Nothing scheduled.");
 
   renderEventPrep(body, prepAt("soon"));
+  if (b.admin && b.admin.count) {
+    const adm = briefSection(body, "Admin", "errands from businesses, not replies owed");
+    (b.admin.top || []).forEach((it) => {
+      const row = briefRow(adm, {
+        time: adminDueLabel(it) || fmtTime(it.when),
+        title: it.chore,
+        sub: it.sender,
+        tag: it.stage === "open" ? null : it.stage,
+        tagCls: it.stage === "upcoming" ? "owe" : "conflict",
+      });
+      row.classList.add("click");
+      row.addEventListener("click", () => openApp("admin"));
+    });
+    if (b.admin.count > (b.admin.top || []).length) {
+      const more = briefRow(adm, { time: "", title: "All " + b.admin.count + " in the admin inbox" });
+      more.classList.add("click");
+      more.addEventListener("click", () => openApp("admin"));
+    }
+  }
 
   if ((cal.birthdays || []).length) {
     const bd = briefSection(body, "Birthdays this week");
@@ -13386,6 +13512,12 @@ async function loadBrief() {
 
 $("#brief-refresh")?.addEventListener("click", () => loadBrief());
 $("#journal-refresh")?.addEventListener("click", () => loadJournal().catch(() => {}));
+$("#admin-refresh")?.addEventListener("click", () => loadAdmin().catch(() => {}));
+$("#admin-hidden")?.addEventListener("click", (e) => {
+  adminShowHidden = !adminShowHidden;
+  e.currentTarget.textContent = adminShowHidden ? "Hide done" : "Show done";
+  loadAdmin().catch(() => {});
+});
 
 // The bulk "Export N as prompt" button is GONE from both the Journal
 // header and the Queue lane (2026-08-04). An instruction is dispatched or
@@ -16919,6 +17051,7 @@ function viewLoad(id) {
   if (id === "applications") loadApplications().catch(() => {});
   if (id === "research") window.loadResearch?.().catch(() => {});
   if (id === "journal") loadJournal().catch(() => {});
+  if (id === "admin") loadAdmin().catch(() => {});
   if (id === "showroom") loadShowroom().catch(() => {});
   if (id === "attention") attentionTabLoad(attentionTab);
   if (id === "subs") loadSubs().catch(() => {});
@@ -22633,6 +22766,8 @@ const WINDOWS = [
     icon: "M5 5h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 7.5h2.5c1 0 1.5-.5 1.5-1M10 7.5h1.5c2.5 0 2.5 10 2.5 10" },
   { id: "attention", title: "Attention", w: 720,
     icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
+  { id: "admin", title: "Admin inbox", w: 600,
+    icon: "M4 6h16v12H4zM4 7l8 6 8-6M15 17l1.5 1.5L20 15" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
   { id: "applications", title: "Applications", w: 780,

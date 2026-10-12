@@ -19,6 +19,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from . import admininbox
 from . import briefstate
 from . import channels
 from . import data as crm
@@ -412,8 +413,12 @@ def _unreplied_imessages():
         person = crm._load()["by_id"].get(pid)
         if _is_company(person):
             continue
-        when = imessage.apple_dt(date_ns)
         preview = imessage.msg_text(text, blob) or ""
+        # A pharmacy, portal or short code is a chore, not a reply owed:
+        # server/admininbox.py lists it with the thing to do.
+        if admininbox.is_institutional(handle, person, [preview]):
+            continue
+        when = imessage.apple_dt(date_ns)
         hours = (time.time() - when.timestamp()) / 3600 if when else None
         when_iso = when.isoformat() if when else None
         out.append({
@@ -447,7 +452,11 @@ def _recent_mail(feed_items):
             continue
         if (it.get("when") or "") < cutoff:
             continue
-        if _is_company(crm._load()["by_id"].get(it["person_id"])):
+        person = crm._load()["by_id"].get(it["person_id"])
+        if _is_company(person):
+            continue
+        if admininbox.is_institutional(it.get("handle"), person,
+                                       [it.get("text") or ""]):
             continue
         out.append({
             "person_id": it["person_id"],
@@ -601,6 +610,7 @@ def compose(feed_items=None):
             "subs": None, "triage": {"count": 0, "contact_worthy": 0, "top": []},
             "journal": [], "narrative": None,
             "events": _event_prep(fixture=True),
+            "admin": {"count": 0, "top": [], "status": {}},
         }
     return {
         "generated_at": now.isoformat(),
@@ -618,6 +628,7 @@ def compose(feed_items=None):
         "triage": _triage_summary(),
         "journal": _journal_recent(),
         "events": _event_prep(),
+        "admin": admininbox.summary(feed_items),
         "narrative": cached_narrative(),
     }
 
@@ -649,6 +660,8 @@ NARRATIVE_PROMPT = """You are writing the TL;DR for {owner}'s daily brief.
 
 Below is today's brief data as JSON: calendar (their day and the family's),
 iMessages waiting on a reply from them, recent inbound work/personal email,
+admin chores (things businesses and automated systems asked them to do,
+with due dates; these are errands, never people waiting on a reply),
 open relationship loops (owed_by "me" = {owner} owes it; a row with
 "items" bundles several loops owed to one person), contacts going
 quiet, unknown-sender triage counts, events (upcoming dated occasions with
