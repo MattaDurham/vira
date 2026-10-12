@@ -121,3 +121,19 @@ class LaunchUiTests(unittest.TestCase):
         result = subprocess.run([node, "tests/session_launch_ui.js"], cwd=root,
                                 capture_output=True, text=True, encoding="utf-8", timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_preparation_sheet_stacks_above_the_focus_view(self):
+        # Resume is clicked inside the decision focus view. A sheet stacked
+        # below its scrim opened invisibly and needed a stray tap to appear.
+        import re
+        from pathlib import Path
+        css = (Path(__file__).resolve().parents[1] / "static" / "style.css").read_text(encoding="utf-8")
+
+        def z(selector):
+            m = re.search(re.escape(selector) + r"\s*\{[^}]*?z-index:\s*(\d+)", css)
+            self.assertIsNotNone(m, selector + " sets no z-index")
+            return int(m.group(1))
+
+        sheet = z("#launch-review-sheet")
+        self.assertGreater(sheet, z(".run-focus-scrim"))
+        self.assertGreater(sheet, z(".run-trace-layer"))
