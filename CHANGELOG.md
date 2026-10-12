@@ -19,7 +19,25 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   clears the day after the event. The owner can tick items, add their own
   (a packing list rarely exists in any message) and hide an event; ticks
   are checklist state only and never close the source loop.
-
+- Writing voice. Drafts now sound like the owner because the voice is
+  measured instead of guessed: `server/voice.py` reads the owner's own
+  sent messages from the text index (1:1 texts, group chats and, when
+  `mail_body_index` is on, sent mail) and computes greetings, sign-offs
+  and the name signed with, message and sentence length, mechanics
+  (lowercase starts, final punctuation, exclamations, emoji, shorthand)
+  and a formality register, per channel, per CRM relationship class and
+  per person with enough history. Every draft prompt carries the most
+  specific voice that has enough samples, with a few real messages for
+  rhythm: suggested replies and hook openers (an email draft is voiced
+  from sent email, not the iMessage thread), group-chat suggestions,
+  and the Radar and Reconnect openers. No model call; the store
+  (`data/voice.json`, derived, not backed up) rebuilds itself when older
+  than three days (hourly while email is still empty and the mail sweep
+  is on). `GET /api/voice` shows what was learned,
+  `POST /api/voice/rebuild` re-learns now,
+  `POST /api/voice/mail-index {"on": true}` switches the mail-body sweep
+  on through `onboard.config_set`, and
+  `python -m server.voice build|show|block` does the same from a shell.
 - World subsets. The galaxy can lay out any slice of the World on its own:
   narrow it with a search, kinds, an isolated band, starred items or a
   selection, then "Lay out these on their own" (or "Lay out around this" on

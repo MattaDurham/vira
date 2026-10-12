@@ -86,13 +86,15 @@ class PromptContractTests(unittest.TestCase):
     def test_reply_prompt_accepts_the_facts_key(self):
         out = suggest.PROMPT.format(owner="o", channel="imessage",
                                     profile="{}", thread="t", extra="",
-                                    facts="F")
+                                    facts="F", voice="V")
         self.assertIn("F", out)
+        self.assertIn("V", out)
 
     def test_hook_prompt_accepts_the_facts_key(self):
         out = suggest.HOOK_PROMPT.format(owner="o", profile="{}", thread="t",
-                                         extra="hook", facts="F")
+                                         extra="hook", facts="F", voice="V")
         self.assertIn("F", out)
+        self.assertIn("V", out)
 
 
 if __name__ == "__main__":

@@ -409,6 +409,11 @@ def refresh():
             top_titles=(", ".join(picture.get("top_titles") or [])
                         or "(none)"),
             candidates="\n".join(blocks)[:total_cap])
+        # the opener is a message the owner sends: voice it as they write
+        from . import voice
+        voice_txt = voice.block(None, "imessage", owner=owner)
+        if voice_txt:
+            prompt += "\nWrite every opener in this voice.\n" + voice_txt + "\n"
 
         targets, curated = [], True
         try:

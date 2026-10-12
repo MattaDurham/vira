@@ -92,14 +92,17 @@ Recent conversation (chronological; "me" = {owner}):
 
 {facts}
 
+{voice}
+
 {extra}
 
 Write 3 candidate replies {owner} could send next on this channel. Prefer
 replies that close the pending asks named in the facts; never re-answer an
 ask marked released. Make the "forward" reply the single message that
 closes the most open asks at once. Match
-{owner}'s own voice as evidenced in the thread (their texts are the "me"
-lines) — length, warmth, punctuation habits. Vary the three: one direct/minimal, one warmer,
+{owner}'s own voice: the measured voice section above when there is one,
+and the "me" lines of the thread — length, greeting, sign-off, warmth,
+punctuation habits. All three must sound like {owner}. Vary the three: one direct/minimal, one warmer,
 one that moves the relationship or open loop forward. Never invent facts not
 in the dossier or thread.
 
@@ -117,6 +120,8 @@ Recent conversation (chronological; "me" = {owner}):
 
 {facts}
 
+{voice}
+
 The opener should act on this conversation hook:
 {extra}
 
@@ -124,8 +129,8 @@ If the facts show {owner} rarely starts conversations, this opener is the
 point: it should read as {owner} reaching out unprompted, not as a reply.
 
 Write ONE message {owner} could send to open this thread of conversation. Match
-{owner}'s own voice as evidenced in the thread (their texts are the "me" lines) —
-length, warmth, punctuation habits. Natural, not salesy. Never invent facts
+{owner}'s own voice: the measured voice section above when there is one, and
+the "me" lines of the thread — length, greeting, warmth, punctuation habits. Natural, not salesy. Never invent facts
 not in the dossier or thread.
 
 Return ONLY a JSON object:
@@ -536,21 +541,29 @@ def suggest(person_id, channel="imessage", extra="", mode="replies"):
     owner = config().get("owner_name") or "the user"
     # the arithmetic first: computed cadence and the open-ask ledger, so the
     # drafts close loops instead of adding tone variations to guess between
-    from . import threadread
+    from . import threadread, voice as voicemod
     facts = threadread.facts_block(person_id)
+    # how the owner actually writes on this channel to this person (or their
+    # relationship class), measured from sent messages, so an email draft is
+    # not voiced from the iMessage thread and a thin thread is not filled
+    # with the model's own defaults
+    name = (prof or {}).get("name") or detail["person"].get("name")
+    voice_txt = voicemod.block(person_id, "imessage" if mode == "hook"
+                               else channel, owner=owner, name=name)
     if mode == "hook":
         prompt = HOOK_PROMPT.format(owner=owner, profile=profile_txt,
                                     thread=thread_txt[:12000], extra=extra,
-                                    facts=facts)
+                                    facts=facts, voice=voice_txt)
     else:
         prompt = PROMPT.format(owner=owner, channel=channel, profile=profile_txt,
                                thread=thread_txt[:12000],
                                extra=f"Guidance from {owner}: {extra}" if extra else "",
-                               facts=facts)
+                               facts=facts, voice=voice_txt)
 
     text, backend = _run(prompt, cfg)
 
     result = _extract_json(text)
     result["backend"] = backend
     result["thread_len"] = len(msgs)
+    result["voice"] = bool(voice_txt)
     return result

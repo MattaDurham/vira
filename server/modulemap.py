@@ -236,12 +236,15 @@ DEFAULT_MODULES = [
     {"id": "suggest", "name": "Reply drafting", "layer": "engine",
      "group": "communicate", "kind": "headless model calls",
      "what": "Voice-matched suggested replies and hook openers, drafted "
-             "from the profile plus the live thread. The one place message "
-             "content meets the model; Max-plan CLI by default, API "
+             "from the profile plus the live thread. The voice is measured, "
+             "not guessed: greetings, sign-offs, length and register per "
+             "channel, relationship and person, learned from the owner's "
+             "own sent texts and mail. Max-plan CLI by default, API "
              "optional.",
      "links": [{"to": "crm-data", "how": "reads profiles from"},
                {"to": "chat-db", "how": "reads threads from"}],
-     "endpoints": ["/api/suggest"],
+     "endpoints": ["/api/suggest", "/api/voice", "/api/voice/rebuild",
+                   "/api/voice/mail-index"],
      "keywords": ["suggest", "reply", "draft", "voice"],
      "updated": TODAY},
     {"id": "brief-engine", "name": "Brief engine", "layer": "engine",

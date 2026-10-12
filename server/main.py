@@ -3071,6 +3071,37 @@ def api_suggest(req: SuggestReq):
         raise HTTPException(502, str(e)[:500])
 
 
+@app.get("/api/voice")
+def api_voice():
+    """The owner's writing voice as learned from sent mail and iMessage:
+    per channel, overall and per relationship class (no message examples)."""
+    from . import voice
+    return voice.overview()
+
+
+class VoiceMailReq(BaseModel):
+    on: bool
+
+
+@app.post("/api/voice/mail-index")
+def api_voice_mail_index(req: VoiceMailReq):
+    """Switch the mail-body sweep (mail_body_index) on or off. Email voice
+    learns from sent mail in the text index, and with the sweep off there is
+    none; the background tick then indexes a bounded batch per pass."""
+    from . import voice
+    onboard.config_set(mail_body_index=bool(req.on))
+    return {"mail_body_index": bool(req.on), "voice": voice.overview()}
+
+
+@app.post("/api/voice/rebuild")
+def api_voice_rebuild():
+    """Re-learn the voice now instead of waiting for the store to age out."""
+    from . import voice
+    with admission.cpu("voice.build"):
+        voice.build()
+    return voice.overview()
+
+
 # ---------- send ----------
 
 class SendReq(BaseModel):

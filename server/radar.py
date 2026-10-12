@@ -852,6 +852,11 @@ def refresh_groupings():
             block_text = (block_text[:prompt_chars]
                           + "\n[candidate list truncated to fit the model]")
         prompt = CURATE_PROMPT.format(owner=owner, candidates=block_text)
+        # the opener is a message the owner sends: voice it as they write
+        from . import voice
+        voice_txt = voice.block(None, "imessage", owner=owner)
+        if voice_txt:
+            prompt += "\nWrite every opener in this voice.\n" + voice_txt + "\n"
         by_members = {frozenset(cd["members"]): cd for cd in cands}
         groupings, curated = [], True
         try:

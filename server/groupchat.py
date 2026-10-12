@@ -502,6 +502,12 @@ def _brief_prompt(prof, messages, msg_chars=MSG_CHARS):
         who = "me" if msg["from_me"] else (msg.get("sender") or "?")
         lines.append(f"[{who}] {msg['text'][:msg_chars]}")
     lines.append("")
+    # the owner's measured group-chat voice, so suggestions read as the
+    # owner's own banter rather than an assistant's
+    from . import voice
+    voice_txt = voice.block(None, "group", owner=owner)
+    if voice_txt:
+        lines += [voice_txt, ""]
     lines.append(
         "Return STRICT JSON only, no prose around it:\n"
         "{\n"
@@ -514,8 +520,8 @@ def _brief_prompt(prof, messages, msg_chars=MSG_CHARS):
         '"you|them|group"}],\n'
         '  "watch": "one thing to watch for, or \\"\\""\n'
         "}\n"
-        "Rules: 2-3 suggestions, matched to the owner's voice as evidenced "
-        "in the thread; ground EVERYTHING in the messages and dossiers "
+        "Rules: 2-3 suggestions, matched to the owner's voice (the measured "
+        "voice section above when present, and their 'me' lines); ground EVERYTHING in the messages and dossiers "
         "above — never invent facts, names, plans, or dates that are not "
         "there. Suggestions must answer the actual live thread (the most "
         "recent messages), not old topics. No emojis.")
