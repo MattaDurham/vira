@@ -16879,9 +16879,10 @@ function ensureWorkResults() {
     });
   return workResultsController;
 }
+// The inspector is a page-level overlay, so it opens over the window that
+// asked. Attention opens its branches and sessions here without raising
+// Work: work that waits on the owner lives in Attention only.
 function openWorkResult(ref) {
-  setWorkTab("live", { defer: true });
-  openApp("work");
   ensureWorkResults()?.open(ref);
 }
 $("#work-advanced")?.addEventListener("toggle", () => {

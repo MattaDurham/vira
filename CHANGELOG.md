@@ -66,7 +66,9 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   gone with no merged PR. A coding session whose code sat uncommitted on a
   branch used to read "Complete" while Attention called the same branch
   unmerged. Each row of `/api/work/results` carries a `phase` (`attention`,
-  `active`, `finished`) and the payload a `phases` count.
+  `active`, `finished`) and the payload a `phases` count. Opening an
+  Attention item shows its details over Attention; the Work window no longer
+  opens behind them.
 - One Results entry per piece of work. A coding session that was not placed
   on a branch at launch now joins the branch it actually wrote on, read from
   the file paths its own Edit and Write calls recorded (reads never count).
