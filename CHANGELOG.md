@@ -45,6 +45,13 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Changed
 
+- The brief's "waiting on your reply" list reads whether the other person
+  closed the thread. A tapback, an emoji, "thanks, big relief" or "have a
+  great Friday" ends it: the row leaves the list (counted under
+  `waiting.ended`, with the reason) and Radar stops scoring it as owed. A
+  shared link or a plain statement stays as an optional reply, sorted after
+  real asks and scored lightly. Any unanswered question earlier in the tail
+  keeps the row owed, and a thread that cannot be read stays owed.
 - Agent instructions are a density ladder. `AGENTS.md` is a short router that
   every agent loads: it carries only the rules that cannot wait and sends each
   task to its file. Installing goes to `AGENTS.install.md`; adding content and

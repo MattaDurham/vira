@@ -242,6 +242,136 @@ def open_asks(msgs, window_days=DEFAULT_WINDOW_D):
     return {"pending": pending, "released": released, "stale": stale}
 
 
+# ---------- did the last inbound message close the conversation ----------
+# The waiting list used to treat "their message was last" as "the owner owes
+# a reply". A tapback, "thank you, big relief", "have a great Friday" or a
+# bare shared link is the other person ending the exchange, and listing it as
+# owed is the nagging this module exists to remove. reply_state() reads the
+# unanswered tail and says which of three it is:
+#   owed      - something in the tail asks or invites a response
+#   optional  - nothing asks, but nothing closes it either (a link, news)
+#   ended     - the tail closes the thread (reaction, thanks, sign-off)
+# Conservative by construction: any unanswered ask in the tail keeps the row
+# owed even when a "thanks!" follows it, because a thanked-in-advance request
+# is still a request.
+
+# Phrases that close an exchange. A short message carrying one of these, and
+# no ask, is a sign-off rather than an opening.
+CLOSER = re.compile(
+    r"\b(thanks|thank you|thank u|thx|tysm|ty|appreciate (?:it|you|that)|"
+    r"much appreciated|big relief|what a relief|so relieved|"
+    r"have (?:a |an )?(?:great|good|nice|lovely|fun|wonderful|safe|happy|"
+    r"amazing|fantastic|relaxing|restful)\b[^.!?]{0,24}|"
+    r"enjoy(?: it| the| your)?|take care|you too|same to you|"
+    r"sounds good|sounds great|sounds perfect|got it|will do|perfect|"
+    r"no worries|no problem|np|all good|all set|"
+    r"talk soon|ttyl|see you(?: soon| then| there| tomorrow)?|see ya|"
+    r"good ?night|night night|sleep well|love you|love ya|"
+    r"congrats|congratulations|cheers|bye)\b", re.I)
+
+# Short acknowledgements that are the whole message ("ok", "haha", "nice").
+_ACK_WORD = (r"(?:ok|okay|k|kk|cool|great|awesome|nice|amazing|yes|yep|yup|"
+             r"yeah|ya|sure|done|deal|for sure|of course|sweet|love it|haha+|"
+             r"ha+|lol+|lmao|omg|wow|aw+|yay+|gotcha|word|bet|right|true|"
+             r"indeed|exactly|agreed|night|nite|gn)")
+ACK = re.compile(rf"^{_ACK_WORD}(?:[\s,.!]+{_ACK_WORD})*[\s.!]*$", re.I)
+
+# Wording that hands the turn back without a question mark.
+INVITE = re.compile(
+    r"\b(guess what|big news|check (?:this|it) out|what about you|how about you|"
+    r"hbu|wbu|wyd|you around|are you (?:free|around|up)|call me|text me|"
+    r"hit me up|get back to me|let'?s (?:talk|chat|catch up|grab|get)|"
+    r"we should)\b", re.I)
+
+# A bare greeting opens a conversation; it is the other person's turn-taking.
+GREETING = re.compile(r"^(hey|hi|hello|yo|hiya|howdy)\b[\s,!.]*\w*[\s!.]*$", re.I)
+
+# Android/SMS tapbacks arrive as text, not as associated messages.
+TEXT_TAPBACK = re.compile(
+    r"^(liked|loved|laughed at|emphasized|disliked|reacted \S+ to)\s+[\"“]",
+    re.I)
+
+URL = re.compile(r"https?://\S+|\bwww\.\S+", re.I)
+
+# A closer has to BE the message, not appear in it: "that's the perfect
+# place" is a statement, "perfect, thanks!" is a sign-off. After the closing
+# phrases and filler are removed, a message that OPENS with a closer may keep
+# a short tail ("thanks! I'll send it tomorrow" keeps four words); one where
+# the closer sits mid-sentence may keep almost nothing.
+CLOSER_LEFTOVER_WORDS = 4
+CLOSER_LEFTOVER_MIDDLE = 1
+FILLER = {"so", "much", "very", "really", "again", "a", "lot", "and", "all",
+          "guys", "man", "dude", "oh", "ok", "okay", "haha", "lol", "just",
+          "too", "as", "always", "for", "everything", "it", "that", "this",
+          "the", "both", "of", "you", "yall", "y'all"}
+
+
+def _tail(msgs):
+    """Inbound messages since the owner last did anything in the thread."""
+    out = []
+    for m in reversed(msgs):
+        if m["from_me"]:
+            break
+        out.append(m)
+    out.reverse()
+    return out
+
+
+def _closes(text):
+    t = text.strip()
+    if not re.search(r"[A-Za-z0-9]", t):
+        return "replied with an emoji"
+    if ACK.match(t):
+        return "acknowledged"
+    if CLOSER.search(t):
+        rest = [w for w in re.findall(r"[a-z0-9']+", CLOSER.sub(" ", t.lower()))
+                if w not in FILLER]
+        head = t.lstrip(" \t\"'(")
+        opens = bool(CLOSER.match(head) or ACK.match(re.split(r"[,.!\s]", head)[0]))
+        if len(rest) <= (CLOSER_LEFTOVER_WORDS if opens else CLOSER_LEFTOVER_MIDDLE):
+            return "signed off"
+    return None
+
+
+def reply_state(msgs):
+    """owed / optional / ended for the unanswered tail of a 1:1 thread.
+
+    Returns {"state", "why"}; `why` is a short plain phrase the waiting row
+    shows, so a muted or dropped row always says what it was read as.
+    """
+    tail = _tail(msgs)
+    if not tail:
+        return {"state": "ended", "why": "you spoke last"}
+    for m in tail:
+        text = m["text"] or ""
+        if m["reaction"] or TEXT_TAPBACK.match(text):
+            continue
+        kind = _classify(text) if text else None
+        if kind in ("question", "request") or INVITE.search(text):
+            return {"state": "owed", "why": "asks something"}
+        if GREETING.match(text.strip()):
+            return {"state": "owed", "why": "opened a conversation"}
+    last = tail[-1]
+    text = (last["text"] or "").strip()
+    if last["reaction"] or TEXT_TAPBACK.match(text):
+        if text.lower().startswith("questioned"):
+            return {"state": "optional", "why": "questioned a message"}
+        return {"state": "ended", "why": "ended with a reaction"}
+    if not text:
+        if last["attachments"]:
+            return {"state": "optional", "why": "sent an attachment"}
+        return {"state": "ended", "why": "nothing to answer"}
+    if RELEASE.search(text):
+        return {"state": "optional", "why": "said no reply needed"}
+    bare = URL.sub("", text).strip()
+    if URL.search(text) and len(bare.split()) <= 3:
+        return {"state": "optional", "why": "shared a link"}
+    why = _closes(text)
+    if why:
+        return {"state": "ended", "why": why}
+    return {"state": "optional", "why": "no question asked"}
+
+
 def analyze(pid, window_days=DEFAULT_WINDOW_D):
     """The computed picture. No model involved, so nothing here can be
     hallucinated - every number is arithmetic over chat.db."""
@@ -433,10 +563,12 @@ def enrich_person(pid):
     return out
 
 
-def brief_asks(pid):
+def brief_asks(pid, hist=None):
     """The waiting row's honest count: N messages is not N obligations.
-    14-day window only — the brief must stay fast across a dozen rows."""
-    hist = messages(pid, days=DEFAULT_WINDOW_D)
+    14-day window only — the brief must stay fast across a dozen rows.
+    `hist` lets a caller that already read the thread pass it in."""
+    if hist is None:
+        hist = messages(pid, days=DEFAULT_WINDOW_D)
     if not hist:
         return None
     ak = open_asks(hist, DEFAULT_WINDOW_D)

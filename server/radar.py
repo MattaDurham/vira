@@ -72,6 +72,9 @@ MIN_SHARED = 2            # shared rare tokens to qualify as common ground
 MAX_MEMBERS = 5           # an audience past this is a mailing list, not a room
 TOPIC_DF_MAX = 12         # a token carried by more people than this is generic
 PEOPLE_LIMIT = 12
+# A thread whose last message asks nothing (a shared link, news) still nudges
+# the person up a little, well under an owed reply's 35-50.
+OPTIONAL_REPLY_PTS = 8
 EVENT_DAYS = 21           # how far back the shared-link scan reaches
 EVENT_LINKS = 300         # newest links considered per refresh
 MAX_MARKERS = 12          # a marker is a row on a list, not a feed
@@ -139,6 +142,13 @@ def priority_people(limit=PEOPLE_LIMIT):
 
     for w in brief._unreplied_imessages():
         hrs = w.get("hours") or 0
+        state = w.get("reply") or "owed"
+        if state == "ended":     # they closed the thread: nothing is owed
+            continue
+        if state == "optional":
+            bump(w["person_id"], OPTIONAL_REPLY_PTS,
+                 f"optional reply: {w.get('reply_why') or 'no question asked'}")
+            continue
         pts = 50 if hrs < 72 else 35
         bump(w["person_id"], pts,
              f"waiting on your reply ({int(hrs)}h)" if hrs else

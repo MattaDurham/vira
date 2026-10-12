@@ -81,6 +81,54 @@ class AskTests(unittest.TestCase):
         self.assertGreater(ak["stale"][0]["sat_hours"], 12)
 
 
+class ReplyStateTests(unittest.TestCase):
+    """Did their last message close the conversation, or is a reply owed."""
+
+    def state(self, *tail, before=True):
+        msgs = [m(0, True, "here is the plan")] if before else []
+        msgs += [m(i + 1, False, **t) if isinstance(t, dict)
+                 else m(i + 1, False, t) for i, t in enumerate(tail)]
+        return threadread.reply_state(msgs)["state"]
+
+    def test_tapback_ends_the_thread(self):
+        self.assertEqual(self.state({"reaction": True}), "ended")
+        self.assertEqual(self.state('Loved “here is the plan”'), "ended")
+
+    def test_sign_offs_end_the_thread(self):
+        for text in ("Thank you, big relief", "Have a great Friday!",
+                     "thanks!! talk soon", "ok", "haha", "Perfect, thanks",
+                     "Thanks! I'll send it tomorrow", "\U0001F44D",
+                     "Night!", "Cool cool"):
+            with self.subTest(text=text):
+                self.assertEqual(self.state(text), "ended")
+
+    def test_questions_and_invitations_are_owed(self):
+        for text in ("Are you coming Saturday?", "Can you send the deck",
+                     "Let me know when you land", "Guess what happened today",
+                     "Thanks! Can you send it over?", "hey"):
+            with self.subTest(text=text):
+                self.assertEqual(self.state(text), "owed")
+
+    def test_an_ask_earlier_in_the_tail_survives_a_trailing_thanks(self):
+        self.assertEqual(self.state("Can you review the doc?", "thanks!"),
+                         "owed")
+
+    def test_link_and_plain_statements_are_optional(self):
+        self.assertEqual(self.state("https://example.com/article"), "optional")
+        self.assertEqual(self.state("That's the perfect place for the party"),
+                         "optional")
+        self.assertEqual(self.state({"attachments": 1}), "optional")
+        self.assertEqual(self.state("Here are the notes, no rush"), "optional")
+
+    def test_owner_speaking_last_owes_nothing(self):
+        msgs = [m(0, False, "can you call?"), m(1, True, "calling now")]
+        self.assertEqual(threadread.reply_state(msgs)["state"], "ended")
+
+    def test_every_state_names_why(self):
+        r = threadread.reply_state([m(0, False, "Have a lovely weekend")])
+        self.assertEqual(r, {"state": "ended", "why": "signed off"})
+
+
 class PromptContractTests(unittest.TestCase):
     """A missing format key crashes suggest() at runtime; pin the contract."""
     def test_reply_prompt_accepts_the_facts_key(self):

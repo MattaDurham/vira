@@ -732,6 +732,19 @@ class RadarTests(unittest.TestCase):
                             for x in by_id["p_c"]["reasons"]))
         self.assertTrue(any("hook" in x for x in by_id["p_a"]["reasons"]))
 
+    def test_ended_thread_owes_nothing_and_optional_is_muted(self):
+        rows = [{"person_id": "p_a", "hours": 20, "reply": "ended",
+                 "reply_why": "ended with a reaction"},
+                {"person_id": "p_d", "hours": 5, "reply": "optional",
+                 "reply_why": "shared a link"}]
+        with mock.patch("server.radar.brief._unreplied_imessages",
+                        return_value=rows):
+            by_id = {r["person_id"]: r for r in radar.priority_people()}
+        reasons = [x for r in by_id.values() for x in r["reasons"]]
+        self.assertFalse(any("waiting on your reply" in x for x in reasons))
+        self.assertIn("optional reply: shared a link", by_id["p_d"]["reasons"])
+        self.assertLess(by_id["p_d"]["score"], 35)
+
     def test_overlap_groupings_cluster_not_just_pairs(self):
         """Three people on one rare topic is ONE room, not three pairs."""
         with mock.patch.object(radar, "recent_links", return_value=[]):

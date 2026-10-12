@@ -427,13 +427,32 @@ def _unreplied_imessages():
             "dismiss_key": f'wait-im:{pid}:{(when_iso or "")[:16]}',
         })
         # N messages waiting is not N obligations: split the asks so the row
-        # says "1 real ask · 2 self-released" instead of a bare count.
+        # says "1 real ask · 2 self-released" instead of a bare count, and
+        # read whether the last inbound message closed the thread (a
+        # tapback, "thanks, big relief") so only real asks show as owed.
         try:
-            out[-1]["asks"] = threadread.brief_asks(pid)
+            hist = threadread.messages(pid, days=threadread.DEFAULT_WINDOW_D)
+            out[-1]["asks"] = threadread.brief_asks(pid, hist=hist)
+            rs = threadread.reply_state(hist) if hist else None
         except Exception:  # noqa: BLE001 — enrichment, never a gate
-            out[-1]["asks"] = None
+            out[-1]["asks"], rs = None, None
+        # An unreadable thread stays owed: failing to classify must never
+        # quietly drop someone off the list.
+        out[-1]["reply"] = (rs or {}).get("state") or "owed"
+        out[-1]["reply_why"] = (rs or {}).get("why") or ""
     out.sort(key=lambda x: x["when"] or "", reverse=True)
     return out[:12]
+
+
+def _split_waiting(rows):
+    """Owed rows first, then muted optional ones; ended threads leave the
+    waiting list but stay countable under `ended`, never silently dropped."""
+    keep = [r for r in rows if r.get("reply") != "ended"]
+    keep.sort(key=lambda r: r.get("reply") == "optional")
+    ended = [{k: r.get(k) for k in ("person_id", "person_name", "preview",
+                                    "when", "reply_why")}
+             for r in rows if r.get("reply") == "ended"]
+    return keep, ended
 
 
 def _recent_mail(feed_items):
@@ -583,19 +602,21 @@ def compose(feed_items=None):
             "date_label": settings.strf(now, "%A, %B %-d, %Y"),
             "calendar": {"today": [], "tomorrow": [], "birthdays": [],
                          "available": False, "error": "Fixture preview", "m365": ""},
-            "waiting": {"imessage": [], "email": []},
+            "waiting": {"imessage": [], "email": [], "ended": []},
             "loops": _consolidate_loops(_open_loops(limit=None))[:LOOPS_CAP],
             "quiet": [], "radar": [], "drafts": {"items": [], "status": None},
             "subs": None, "triage": {"count": 0, "contact_worthy": 0, "top": []},
             "journal": [], "narrative": None,
         }
+    waiting_im, ended_im = _split_waiting(_not_dismissed(_unreplied_imessages()))
     return {
         "generated_at": now.isoformat(),
         "date_label": settings.strf(now, "%A, %B %-d, %Y"),
         "calendar": _calendar(),
         "waiting": {
-            "imessage": _not_dismissed(_unreplied_imessages()),
+            "imessage": waiting_im,
             "email": _not_dismissed(_recent_mail(feed_items)),
+            "ended": ended_im,
         },
         "loops": _consolidate_loops(_open_loops(limit=None))[:LOOPS_CAP],
         "quiet": _not_dismissed(_going_quiet()),
@@ -634,7 +655,10 @@ NARRATIVE_CLASS = "standard"
 NARRATIVE_PROMPT = """You are writing the TL;DR for {owner}'s daily brief.
 
 Below is today's brief data as JSON: calendar (their day and the family's),
-iMessages waiting on a reply from them, recent inbound work/personal email,
+iMessages waiting on a reply from them (reply "owed" = they asked or invited
+a response; reply "optional" = nothing was asked, mention only if notable;
+"ended" lists threads the other person closed, which are owed nothing),
+recent inbound work/personal email,
 open relationship loops (owed_by "me" = {owner} owes it; a row with
 "items" bundles several loops owed to one person), contacts going
 quiet, unknown-sender triage counts, and journal — notes {owner} recently
