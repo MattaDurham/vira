@@ -6,6 +6,8 @@ must land on an explicit lane, and source/context gestures must target exact
 objects rather than generic module landing pages.
 """
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -179,6 +181,20 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('run: () => revealBoardsHealth()', self.app)
         self.assertNotIn(
             'run: () => { openApp("work"); setWorkTab("live"); }', self.app)
+
+    def test_attention_opens_its_work_in_place(self):
+        # Work waiting on the owner lives in Attention only: opening one of
+        # its branches or sessions shows the inspector over Attention and
+        # never raises the Work window (tests/attention_inspect_ui.js runs
+        # the real attnVerb and openWorkResult under node).
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is not installed")
+        result = subprocess.run([node, "tests/attention_inspect_ui.js"],
+                                cwd=ROOT, capture_output=True, text=True,
+                                encoding="utf-8", timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("passed", result.stdout)
 
     def test_live_attention_always_surfaces_the_now_lane(self):
         self.assertIn('if (fresh.length && open) setAttentionTab("now")',
