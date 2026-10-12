@@ -395,7 +395,9 @@ function dragBySheetHead(card) {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || !openSheets.length) return;
   e.preventDefault();
-  e.stopPropagation();
+  // Immediate: the focus view's handler sits on this same capture phase,
+  // and plain stopPropagation lets it close the view behind the sheet too.
+  e.stopImmediatePropagation();
   openSheets[openSheets.length - 1].close();
 }, true);
 
@@ -9009,6 +9011,9 @@ async function orphanResume(it) {
     const r = await post("/api/orphanwork/resume", { key: it.key,
       prompt: draft.prompt, model: draft.model, provider: draft.provider,
       mode: draft.mode, read_only: draft.read_only });
+    // The focus view Resume is clicked from stacks above every window; left
+    // up, it would hide the session that just started behind its scrim.
+    runFocusClose?.();
     openSession(r.job_id);
     loadOrphans();
   } catch (e) {

@@ -8962,6 +8962,11 @@ mark.doc-term {
   .is-busy.rich::after { box-shadow: none; }
 }
 
+/* Preparation opens from inside the foreground layers (the decision focus
+   view at 4400, its route trace at 4410), so it stacks above them. At the
+   shared .sheet 1000 it opened hidden behind the focus scrim, and only a
+   tap that closed the focus view revealed it. */
+#launch-review-sheet { z-index: 4500; }
 /* Preparation remains scrollable on short desktops and phone screens. */
 #launch-review-sheet .sheet-card { max-height: 92dvh; overflow-y: auto; }
 #launch-review-sheet textarea { min-height: 72px; resize: vertical; }

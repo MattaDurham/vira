@@ -31,7 +31,7 @@ const catalog = { active: 'openai', roster: [], providers: [
   { id: 'anthropic', label: 'Claude', connected: true, sessions: true, config_keys: { cli: 'cli_model' },
     cli: [{ id: 'fable', label: 'Fable alias' }], cli_detail: 'CLI aliases' }
 ] };
-let requests = [], posts = [], opened = [];
+let requests = [], posts = [], opened = [], focusClosed = 0;
 let jobSnapshot = { provider: 'openai', model: 'opus', status: 'running', live: true };
 const context = vm.createContext({ $, el, console, setTimeout, clearTimeout,
   Event: class { constructor(type) { this.type = type; } },
@@ -50,6 +50,7 @@ const context = vm.createContext({ $, el, console, setTimeout, clearTimeout,
   prompt: () => null,
   document: { createTextNode: (text) => new Element('text', text) },
   instanceConfig: async () => ({}), renderAlerts() {}, loadOrphans() {}, toast() {},
+  runFocusClose: () => { focusClosed += 1; },
   renderCCBanner: (host, job) => { host.textContent = context.sessionModelLabel(job); },
 });
 function section(start, end) { return app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start))); }
@@ -102,6 +103,12 @@ const tick = () => new Promise((r) => setImmediate(r));
   assert.equal(await refresh, null);
   assert.equal(posts.length, 1);
 
+  const kept = context.orphanResume({key:'example',branch:'claude/example'});
+  await tick();
+  $('#launch-review-cancel').onclick();
+  await kept;
+  assert.equal(focusClosed, 0, 'cancelling Resume leaves the focus view open');
+
   const orphan = context.orphanResume({key:'example',branch:'claude/example'});
   await tick();
   assert.equal(posts.length, 1, 'Resume prepares without posting a launch');
@@ -113,6 +120,7 @@ const tick = () => new Promise((r) => setImmediate(r));
   assert.equal(posts[1].url, '/api/orphanwork/resume');
   assert.equal(posts[1].payload.key, 'example');
   assert.match(posts[1].payload.prompt, /Review the open changes/);
+  assert.equal(focusClosed, 1, 'a started Resume closes the focus view over its session');
 
   assert.equal(context.sessionModelLabel({ provider: 'openai', model: 'opus' }),
     'Awaiting model confirmation');
