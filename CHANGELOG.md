@@ -98,6 +98,12 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Fixed
 
+- Resume on an unlanded branch's details opens its preparation sheet on the
+  first tap. The sheet used to open behind the details view, so nothing
+  seemed to happen until a tap outside closed that view. A started Resume
+  now closes the details view so the new session is visible, and Escape on
+  the sheet closes only the sheet.
+
 - Implement and Plan no longer fall back to `~/workspace/vira`, a folder that
   stops existing when the checkout moves. Vira's own project defaults to the
   running checkout, and a launch into a folder that does not exist is refused
