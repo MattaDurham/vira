@@ -307,8 +307,13 @@ class UpdaterGuardTests(unittest.TestCase):
     def test_apply_refuses_without_supervisor(self):
         # Pinned to the Mac path; the Windows twin (windows_task_name)
         # lives in test_update.SupervisorSeamTests.
+        # The runtime label outranks config and is exported into every
+        # session Vira dispatches, so it is pinned empty here too (see
+        # test_update.NoSandboxLoop).
         with mock.patch("server.update.settings.IS_WIN", False), \
-             mock.patch("server.update.settings.raw", return_value={}):
+             mock.patch("server.update.settings.raw", return_value={}), \
+             mock.patch("server.update.instance.service_label", return_value=""), \
+             mock.patch("server.update.instance.is_branch", return_value=False):
             with self.assertRaises(ValueError) as ctx:
                 update.apply()
         self.assertIn("launchd_label", str(ctx.exception))

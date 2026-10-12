@@ -20,12 +20,23 @@ class NoSandboxLoop(unittest.TestCase):
     """supervisor() asks the ENVIRONMENT whether a sandbox relaunch loop is
     watching, and that branch outranks the config ones. A suite run from
     inside a sandbox would otherwise answer differently from one run outside
-    it — the precondition is pinned rather than inherited from the machine."""
+    it — the precondition is pinned rather than inherited from the machine.
+
+    The runtime identity is pinned the same way. Vira exports its own
+    service label (VIRA_SERVICE_LABEL) into every session it dispatches,
+    and supervisor() reads that before config, so inside a dispatched
+    session these tests saw the live label instead of the one they
+    configured: six failures in every Resume session on 2026-10-12, each
+    of which re-ran the suite to find out why. An unsupervised, primary
+    machine is the baseline; a test that wants a label says so itself."""
 
     def setUp(self):
-        p = mock.patch.object(update.settings, "sandbox_loop", return_value="")
-        p.start()
-        self.addCleanup(p.stop)
+        for target, name, value in ((update.settings, "sandbox_loop", ""),
+                                    (update.instance, "service_label", ""),
+                                    (update.instance, "is_branch", False)):
+            p = mock.patch.object(target, name, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
 
 
 class ReqNameTests(unittest.TestCase):
