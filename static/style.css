@@ -3977,6 +3977,10 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 .brief-tag.owe { color: var(--accent); border-color: var(--accent-line); }
 .brief-tag.work { color: var(--green); border-color: var(--green-line); }
 .brief-empty { padding: 4px 10px; color: var(--text-faint); font-size: 12.5px; }
+/* Admin inbox: the chore is the row, so it takes the width and wraps. */
+#admin-list .brief-title { flex: 1 1 auto; max-width: none; white-space: normal; min-width: 0; }
+#admin-list .brief-sub { flex: 0 1 28%; }
+#admin-list .admin-notice { opacity: 0.7; }
 .brief-row.brief-subrow { padding-left: 28px; opacity: 0.82; }
 
 /* ---------- event prep: countdown checklists (server/eventprep.py) ---------- */

@@ -20,6 +20,23 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   (a packing list rarely exists in any message) and hide an event; ticks
   are checklist state only and never close the source loop.
 
+- Admin inbox, a window for errands that businesses and automated systems
+  send: patient portals, pharmacies, carriers, appointment reminders, SMS
+  short codes and system mailboxes (no-reply@, notifications@). These
+  senders are no longer listed as an "(unidentified)" person waiting on a
+  reply in the brief, its narrative, or People > Networking; each message
+  becomes a chore with a due date instead. A rule pass paints first
+  (sender shape, contact class, organization names, automated wording;
+  dates from explicit, weekday, "this weekend" and 11/02-style phrasing),
+  then one model call rewrites the rows in plain words. A model due date
+  is kept only when its quote is an exact span of the message. Verification
+  codes, status updates and promotions sit under Notices; a passed
+  appointment is spent, not overdue. Done reuses the brief's self-re-arming
+  dismiss keys, so a new message from the sender comes back. The Day pane
+  shows the top open chores. Routes: `GET /api/brief/admin`,
+  `POST /api/brief/admin/extract`, `POST /api/brief/admin/mark`. Cache:
+  `data/admin-inbox.json` (rebuildable, not backed up).
+  ![The Admin inbox window with synthetic rows: under To do, an overdue power bill, a pharmacy refill due today, an upcoming patient-portal registration and an undated delivery to reschedule; under Notices, a portal message and a verification code](fixtures/screens/admin-inbox.png)
 - World subsets. The galaxy can lay out any slice of the World on its own:
   narrow it with a search, kinds, an isolated band, starred items or a
   selection, then "Lay out these on their own" (or "Lay out around this" on
