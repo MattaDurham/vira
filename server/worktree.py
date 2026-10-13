@@ -71,7 +71,9 @@ _CMD_KEYS = ("command", "cmd", "script")
 # noise, and treating it as a mutation denied an agent an ordinary `ls`
 # within minutes of the guard going live (2026-07-29). Over-blocking reads
 # is the failure mode that gets a guard switched off.
-_REDIR_RE = re.compile(r"\d?>>?\s*(?!&)([^\s'\"`;|&()<>]+)")
+# Same line only ([ \t], not \s): a `>` at the end of one line is not a
+# redirect into the first word of the next.
+_REDIR_RE = re.compile(r"\d?>>?[ \t]*(?!&)([^\s'\"`;|&()<>]+)")
 _DEV_NULL = ("/dev/null",)
 
 # Utilities that write. Split by WHICH argument they write, because a
@@ -91,8 +93,79 @@ _ALL_ARGS_RE = re.compile(_HEAD + r"(?:" + _ALL_ARGS + r")\b")
 # real path, stopping at whitespace, quotes and shell metacharacters.
 _CMD_PATH_RE = re.compile(r"(?:~|\.{0,2}/)[^\s'\"`;|&()<>]*")
 
+# Text the shell never hands to a command as a path: the inside of a quoted
+# string and the body of a heredoc. Every denial on 2026-10-12 was of this
+# shape - a commit message saying "People > Networking" fed through
+# `git commit -F - <<'EOF'`, a Python script with `i>=0` piped the same way,
+# a sed replacement holding `() => {` - each read as a redirect whose
+# "destination" was the next word. Quoted text keeps its paths (an agent can
+# still `rm "<live>/x"`) and loses only its shell metacharacters, so a `>`
+# inside quotes is a character, not an operator. A heredoc body is dropped
+# whole: it is data, and all a redirect regex finds in it is noise.
+_HEREDOC_OP_RE = re.compile(r"<<-?[ \t]*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z_][\w-]*))")
+_META_TRANS = str.maketrans({c: " " for c in "<>|;&"})
 
-def bash_targets(tool_input):
+# A `cd` at the head of a segment moves the segments after it: with it
+# tracked, `cd <live> && rm x` still names the live tree, and a relative
+# target anywhere else resolves against the session's own directory.
+_CD_RE = re.compile(r"^\s*\(?\s*cd\s+(?:--\s+)?([^\s'\"`;|&()<>]+)")
+
+
+def _shell_text(text):
+    """`text` with quoted strings' metacharacters blanked and heredoc bodies
+    removed, so the regexes below see only what the shell would parse as
+    operators and arguments. A small scanner, not a shell: it tracks the
+    three constructs that produced false denials (single quotes, double
+    quotes, heredocs) and leaves everything else as it is."""
+    out = []
+    pending = []            # heredoc tags whose bodies start at the next newline
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+        elif c == "'":
+            j = text.find("'", i + 1)
+            j = n if j < 0 else j
+            out.append("'" + text[i + 1:j].translate(_META_TRANS) + "'")
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append('"' + text[i + 1:j].translate(_META_TRANS) + '"')
+            i = j + 1
+        elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i) \
+                and (m := _HEREDOC_OP_RE.match(text, i)):
+            pending.append(m.group(1) or m.group(2) or m.group(3))
+            out.append(m.group(0))
+            i = m.end()
+        elif c == "\n" and pending:
+            out.append("\n")
+            j = i + 1
+            for tag in pending:
+                while j < n:
+                    k = text.find("\n", j)
+                    line, j = (text[j:], n) if k < 0 else (text[j:k], k + 1)
+                    if line.strip() == tag:
+                        break
+            pending = []
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _at(base, path):
+    """`path` as the shell would resolve it from `base`: itself when
+    absolute (after ~), otherwise joined. Strings in, strings out."""
+    p = Path(path).expanduser()
+    return str(p if p.is_absolute() or not base else Path(base) / p)
+
+
+def bash_targets(tool_input, cwd=None):
     """Paths a Bash call would WRITE — never the ones it merely reads.
 
     See the heuristic note above. The rule is per-segment (split on pipes
@@ -103,6 +176,13 @@ def bash_targets(tool_input):
       cat a > <live>/b              -> [<live>/b]      (the destination)
       cp <live>/a.py ./b.py         -> [./b.py]        (dest is last)
       rm -rf <live>/data            -> [<live>/data]   (all args)
+
+    `cwd` is the directory the session runs in. Given, relative targets
+    come back resolved against it (following any `cd` earlier in the
+    line); without it they come back as written. The gate always passes
+    it: a bare `out.txt` judged against the SERVER's cwd - the live
+    checkout - is what denied `git log > out.txt` to sessions that were
+    standing in their own worktree (2026-10-12).
     """
     if not isinstance(tool_input, dict):
         return []
@@ -111,18 +191,21 @@ def bash_targets(tool_input):
         v = tool_input.get(k)
         if not (isinstance(v, str) and v.strip()):
             continue
-        for seg in (s.strip() for s in re.split(r"[|;]|&&|\|\|", v)):
+        here = cwd
+        for seg in (s.strip() for s in re.split(r"[|;]|&&|\|\|", _shell_text(v))):
+            if here and (m := _CD_RE.match(seg)):
+                here = _at(here, m.group(1))
+            found = []
             for m in _REDIR_RE.finditer(seg):
                 dest = m.group(1)
                 if dest not in _DEV_NULL:
-                    out.append(dest)
+                    found.append(dest)
             paths = [m.group(0) for m in _CMD_PATH_RE.finditer(seg)]
-            if not paths:
-                continue
-            if _ALL_ARGS_RE.search(seg):
-                out.extend(paths)
-            elif _DEST_LAST_RE.search(seg):
-                out.append(paths[-1])
+            if paths and _ALL_ARGS_RE.search(seg):
+                found.extend(paths)
+            elif paths and _DEST_LAST_RE.search(seg):
+                found.append(paths[-1])
+            out.extend(_at(here, p) if here else p for p in found)
     return [p for p in out if p not in _DEV_NULL]
 
 
@@ -349,13 +432,14 @@ def tidy(live_root, wt, branch):
 
 # ---------- the backstop ----------
 
-def target_paths(tool_input):
+def target_paths(tool_input, cwd=None):
     """Every filesystem path a tool call names. Only the write tools are
     ever passed here, so the structured half stays a small, explicit key
     list rather than a scan for anything path-shaped.
 
     Bash is handled separately by bash_targets(), because a shell command
-    that merely READS the live tree must stay allowed.
+    that merely READS the live tree must stay allowed. `cwd` means the
+    same as there: given, a relative path resolves against it.
     """
     out = []
     if isinstance(tool_input, dict):
@@ -370,7 +454,7 @@ def target_paths(tool_input):
                     v = e.get("file_path")
                     if isinstance(v, str) and v.strip():
                         out.append(v.strip())
-    return out
+    return [_at(cwd, p) for p in out] if cwd else out
 
 
 def _inside(path, root):
@@ -393,6 +477,13 @@ def violates(path, live_root, worktree):
     """
     if not live_root or not worktree:
         return False
+    # A relative path is relative to where the session stands, which is
+    # the worktree it was placed in. Resolving it against the PROCESS cwd
+    # instead - the server's, the live checkout - is how "EOF" and
+    # "out.txt" read as writes to the live tree (2026-10-12). The gate
+    # resolves before asking; this is the backstop for a caller that did
+    # not.
+    path = _at(worktree, path)
     if _inside(path, worktree):
         return False
     return _inside(path, live_root)

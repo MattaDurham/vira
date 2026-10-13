@@ -1329,8 +1329,13 @@ class Runner:
         # because a rule that any allow-list can override is not a rule.
         wt, live_root = self.spec.get("worktree"), self.spec.get("live_root")
         if wt and live_root and tool_name in worktree.WRITE_TOOLS:
-            targets = (worktree.bash_targets(tool_input) if tool_name == "Bash"
-                       else worktree.target_paths(tool_input))
+            # Judged from the session's own directory: a relative target is
+            # relative to where the session stands, never to the server's
+            # cwd, which is the live checkout (2026-10-12).
+            cwd = self.spec.get("cwd") or wt
+            targets = (worktree.bash_targets(tool_input, cwd=cwd)
+                       if tool_name == "Bash"
+                       else worktree.target_paths(tool_input, cwd=cwd))
             for p in targets:
                 if worktree.violates(p, live_root, wt):
                     self.append(f"[vira] denied (branch-first) — {tool_name} "

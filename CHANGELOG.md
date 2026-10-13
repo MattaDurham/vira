@@ -117,6 +117,27 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Fixed
 
+- The branch-first gate no longer denies a session's own commands. It
+  read any `>` in a command's text as a redirect, including inside a
+  heredoc body or a quoted string, and judged the word after it as a
+  path relative to the server's cwd, the live checkout. So `git commit -F -
+  <<'EOF'` with "People > Networking" in the message, a Python script
+  piped the same way, a sed replacement holding `() => {`, and a plain
+  `git log > out.txt` were all refused as writes to the live tree, with a
+  message telling the session to move to the worktree it was already in.
+  Quoted text and heredoc bodies are now scanned as the shell reads them,
+  and relative targets resolve against the session's own directory,
+  following a `cd` earlier on the line, so `cd <live> && rm x` is still
+  caught.
+
+- The test suite passes inside a dispatched session. Vira exports its
+  service label into every session it starts, and six updater tests read
+  it through `update.supervisor()` instead of the label they configured,
+  so every Resume session on 2026-10-12 ran the full suite, saw the same
+  six failures, and spent a turn working out that its environment was the
+  cause. Those tests now pin the runtime identity as they already pinned
+  the sandbox loop.
+
 - Resume on an unlanded branch's details opens its preparation sheet on the
   first tap. The sheet used to open behind the details view, so nothing
   seemed to happen until a tap outside closed that view. A started Resume

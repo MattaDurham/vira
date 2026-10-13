@@ -463,3 +463,114 @@ class TidyAgainstARealRepo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShellTextIsNotAllArguments(unittest.TestCase):
+    """The 2026-10-12 denials. Every one came from a `>` that the shell
+    would never have treated as a redirect: inside a heredoc body, or
+    inside a quoted string. Each cost the session a turn, and the deny
+    message sent it to the worktree it was already standing in."""
+
+    def test_a_heredoc_body_is_data(self):
+        cmd = ("git commit -q -F - <<'EOF'\n"
+               "Move People > Networking rows out of the waiting list\n"
+               "EOF")
+        self.assertEqual(worktree.bash_targets({"command": cmd}), [])
+
+    def test_a_script_piped_through_a_heredoc_is_data(self):
+        cmd = (".venv/bin/python - <<'EOF'\n"
+               "if i>=0:\n"
+               "    print(i)\n"
+               "EOF")
+        self.assertEqual(worktree.bash_targets({"command": cmd}), [])
+
+    def test_a_redirect_on_the_heredoc_line_still_counts(self):
+        cmd = "cat <<'EOF' > ./out.txt\nbody with a > in it\nEOF"
+        self.assertEqual(worktree.bash_targets({"command": cmd}),
+                         ["./out.txt"])
+
+    def test_a_redirect_after_the_heredoc_still_counts(self):
+        cmd = ("cat <<'EOF'\nowner's note\nEOF\n"
+               "echo done > ./after.txt")
+        self.assertEqual(worktree.bash_targets({"command": cmd}),
+                         ["./after.txt"])
+
+    def test_metacharacters_inside_quotes_are_characters(self):
+        for cmd in ("sed -i '' 's|x|() => { y }|' ./capture.py",
+                    'python3 -c "re.sub(r\'>[^\\n]*\\n\', \'\', s)"',
+                    "git commit -m 'a -> b'"):
+            got = worktree.bash_targets({"command": cmd})
+            self.assertNotIn("{", got, cmd)
+            self.assertNotIn("b'", got, cmd)
+            self.assertTrue(all(p.startswith(("./", "/", "~")) for p in got),
+                            f"{cmd!r} produced {got}")
+
+    def test_a_quoted_path_is_still_a_path(self):
+        got = worktree.bash_targets(
+            {"command": 'rm -rf "~/workspace/vira/data"'})
+        self.assertIn("~/workspace/vira/data", got)
+
+    def test_a_trailing_angle_does_not_reach_the_next_line(self):
+        cmd = "echo 'a' >\nEOF"
+        self.assertNotIn("EOF", worktree.bash_targets({"command": cmd}))
+
+
+class RelativePathsAreTheSessions(unittest.TestCase):
+    """A bare `out.txt` means the directory the session stands in - its
+    worktree - never the server's own cwd. The server runs from the live
+    checkout, so until 2026-10-12 `git log > out.txt` from a placed session
+    resolved to <live>/out.txt and was refused."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.live = Path(self.tmp.name) / "repo"
+        (self.live / "server").mkdir(parents=True)
+        self.wt = Path(self.tmp.name) / "repo-feature"
+        (self.wt / "server").mkdir(parents=True)
+        # Stand where the server stands, so an unfixed resolve goes wrong.
+        # Registered after the cleanup above so it runs first (cleanups are
+        # LIFO): Windows cannot delete a folder that is still the cwd.
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.live)
+
+    def test_a_relative_redirect_resolves_against_the_session_cwd(self):
+        got = worktree.bash_targets({"command": "git log > out.txt"},
+                                    cwd=str(self.wt))
+        self.assertEqual(got, [str(self.wt / "out.txt")])
+        self.assertFalse(worktree.violates(got[0], self.live, self.wt))
+
+    def test_violates_reads_a_relative_path_from_the_worktree(self):
+        self.assertFalse(worktree.violates("EOF", self.live, self.wt))
+        self.assertFalse(worktree.violates("out.txt", self.live, self.wt))
+
+    def test_cd_into_the_live_tree_is_followed(self):
+        got = worktree.bash_targets(
+            {"command": f"cd {self.live} && echo x > out.txt"},
+            cwd=str(self.wt))
+        self.assertEqual(got, [str(self.live / "out.txt")])
+        self.assertTrue(worktree.violates(got[0], self.live, self.wt))
+
+    def test_cd_into_a_subfolder_is_followed(self):
+        got = worktree.bash_targets(
+            {"command": "cd server && echo x > out.txt"}, cwd=str(self.wt))
+        self.assertEqual(got, [str(self.wt / "server" / "out.txt")])
+
+    def test_an_absolute_live_path_is_still_caught(self):
+        got = worktree.bash_targets(
+            {"command": f"cat a > {self.live}/server/x.py"}, cwd=str(self.wt))
+        self.assertTrue(worktree.violates(got[0], self.live, self.wt))
+
+    def test_without_a_cwd_targets_come_back_as_written(self):
+        self.assertEqual(
+            worktree.bash_targets({"command": "git log > out.txt"}),
+            ["out.txt"])
+
+    def test_structured_write_tools_get_the_same_treatment(self):
+        got = worktree.target_paths({"file_path": "notes.md"}, cwd=str(self.wt))
+        self.assertEqual(got, [str(self.wt / "notes.md")])
+        # An absolute path is left alone. Spelled from the temp root so it
+        # is absolute on Windows too, where "/a/b.py" has no drive and is not.
+        elsewhere = str(Path(self.tmp.name) / "elsewhere" / "b.py")
+        self.assertEqual(worktree.target_paths({"file_path": elsewhere},
+                                               cwd=str(self.wt)), [elsewhere])
