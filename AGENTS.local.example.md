@@ -2,20 +2,29 @@
 
 This is the owner's private operating file. It started as a copy of the
 public template `AGENTS.local.example.md` and belongs to this install from
-then on: edit it freely. Git ignores it, so nothing here is ever published.
-AGENTS.md sends every agent that adds content or changes code here.
+then on. Git ignores it, so nothing here is ever published. AGENTS.md sends
+every agent that adds content or changes code here.
 
-Keeping it in step with the public template is always a deliberate act,
-never automatic:
+**Any agent edits this file, in the session that makes the edit necessary.**
+When your work changes how this install is operated (a rule, a command, a
+step, a default, a path), change the sentence here that describes it before
+you finish, then show the owner a diff of this file so they can revert any
+line. Never leave a sentence here that your own change made false. Nothing
+about this file is reserved to the owner's keyboard; what is reserved is
+that nothing rewrites it unseen. It is git-ignored owner state, written in
+place like `data/`; from a branch worktree it is a link to the live copy,
+which is how a session reaches it.
 
-- **Template updates.** `python -m server.agentslocal diff` shows what the
-  public template changed since this copy was made. Take what you want by
-  hand, then `python -m server.agentslocal adopt` records the template you
-  are now in step with.
-- **Promoting a rule.** `python -m server.agentslocal promote` lists the
-  lines this copy carries that the template does not. Any that have proven
-  general are candidates for the public template, changed on a branch like
-  any other code.
+The public template never overwrites this file, in either direction:
+
+- **The template changed elsewhere** (an update pulled in, another
+  branch). `python -m server.agentslocal diff` shows what moved; edit the
+  matching lines here if they apply, then `python -m server.agentslocal
+  adopt` records the template version this copy is in step with.
+- **This file changed in a way that is general** (a rule any install
+  should follow). Make the same change to the public template on your
+  branch, in the same session. `python -m server.agentslocal promote` lists
+  the lines this copy carries that the template does not.
 - **Owner-specific notes** (machine paths, service names, personal release
   duties) go in the last section, "This install". They never belong in the
   public template.
@@ -63,9 +72,11 @@ merely to make that document appear locally.
 - **Branch-first.** The live checkout (the primary working tree, serving
   port 8377) only ever changes at a merge. Work on your own branch in its
   own worktree: `scripts/branch.sh start <slug>`. If Vira dispatched you,
-  you are already placed in one; stay there. Never create or change a file
-  in the live checkout. Merging and pushing happen only on the owner's word
-  (section 3).
+  you are already placed in one; stay there. Never create or change a
+  tracked file in the live checkout: the product tree changes only at a
+  merge. Git-ignored owner files (`AGENTS.local.md`, `data/`) are written in
+  place; that is what they are for. Merging and pushing happen only on the
+  owner's word (section 3).
 - **Anchor every shell command in your worktree** with an absolute path.
   The tell that one slipped is `git status` in the live checkout showing
   modified tracked files; check that before trusting a test result or
