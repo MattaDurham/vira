@@ -523,16 +523,16 @@ class RelativePathsAreTheSessions(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.live = Path(self.tmp.name) / "repo"
         (self.live / "server").mkdir(parents=True)
         self.wt = Path(self.tmp.name) / "repo-feature"
         (self.wt / "server").mkdir(parents=True)
         # Stand where the server stands, so an unfixed resolve goes wrong.
+        # Registered after the cleanup above so it runs first (cleanups are
+        # LIFO): Windows cannot delete a folder that is still the cwd.
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.live)
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def test_a_relative_redirect_resolves_against_the_session_cwd(self):
         got = worktree.bash_targets({"command": "git log > out.txt"},
