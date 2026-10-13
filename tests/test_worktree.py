@@ -569,5 +569,8 @@ class RelativePathsAreTheSessions(unittest.TestCase):
     def test_structured_write_tools_get_the_same_treatment(self):
         got = worktree.target_paths({"file_path": "notes.md"}, cwd=str(self.wt))
         self.assertEqual(got, [str(self.wt / "notes.md")])
-        self.assertEqual(worktree.target_paths({"file_path": "/a/b.py"},
-                                               cwd=str(self.wt)), ["/a/b.py"])
+        # An absolute path is left alone. Spelled from the temp root so it
+        # is absolute on Windows too, where "/a/b.py" has no drive and is not.
+        elsewhere = str(Path(self.tmp.name) / "elsewhere" / "b.py")
+        self.assertEqual(worktree.target_paths({"file_path": elsewhere},
+                                               cwd=str(self.wt)), [elsewhere])
