@@ -343,8 +343,10 @@ export function create({node,loaded,canInteract,onMessage,onLook,onPause,look:in
     else if(!canInteract?.(e.target) || e.target.closest?.("button,a,input,textarea,select,[contenteditable],#background-picker,.ctx-menu,.ctx-pop,#reminder-stickies"))return;
     if(pointAt(e.clientX,e.clientY) && running){flickAt(e.clientX,e.clientY);e.preventDefault();}
   }
+  // On the desktop a double-click reaches the desktop's own gesture (Close all
+  // modules), as with any other background; only the explorer dialog keeps it.
   function doubleClick(e){
-    if(running && (exploring?e.target===canvas:canInteract?.(e.target)) && pointAt(e.clientX,e.clientY))e.preventDefault();
+    if(running && exploring && e.target===canvas && pointAt(e.clientX,e.clientY))e.preventDefault();
   }
   function pointerDown(e){
     if(!exploring || e.button!==0 || e.target!==canvas)return;
