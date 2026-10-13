@@ -62,5 +62,7 @@ retros/
 # a rule a person has to remember is a rule that fails under parallelism,
 # so it is encoded here instead.
 /.playwright-mcp/
+# Blender authoring cache and uncompressed reference renders.
+/.aquarium-build/
 # Root-level only — static/*.png are real tracked assets and stay tracked.
 /*.png

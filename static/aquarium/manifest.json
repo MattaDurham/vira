@@ -1,0 +1,18 @@
+{
+  "generator": "Blender 5.2.2 LTS",
+  "asset": "koi.glb",
+  "units": "metres",
+  "fish_length": 1.5,
+  "rig_joints": 11,
+  "scale_count": 1330,
+  "source": "scripts/aquarium/build.py",
+  "license": "Original Vira benchmark asset; repository license applies",
+  "reference": {
+    "engine": "Cycles",
+    "samples": 64,
+    "resolution": [
+      3840,
+      2160
+    ]
+  }
+}
