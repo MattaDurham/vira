@@ -60,6 +60,7 @@ from . import (
                lessonwatch,
                loopwatch,
                mail,
+               mailarchive,
                mailread,
                media,
                mediaarchive,
@@ -178,6 +179,7 @@ circle_watcher = circles.Watcher(                 # names + stories for the
     settings.get("circle_refresh_min") or 60)     # network's social circles
 media_archiver = mediaarchive.Archiver()          # Vira's own copy of every
                                                   # attachment macOS may evict
+mail_archiver = mailarchive.Archiver()            # and of every email, raw
 
 
 @app.on_event("startup")
@@ -221,6 +223,9 @@ async def _startup():
     # keeps the chat.db row, so the media history decays into a list of
     # filenames. This keeps Vira's own copy (server/mediaarchive.py).
     media_archiver.start()
+    # Mail lives only on the provider; this keeps the raw message of every
+    # email, attachments inside (server/mailarchive.py).
+    mail_archiver.start()
     backup.start()
     vault_indexer.start()
     circuits.driver.start()
