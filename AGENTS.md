@@ -13,7 +13,9 @@ This repository is public. Personal data never enters git.
 | Changing the code: a feature, a fix, a review, a dispatched task | [AGENTS.local.md](AGENTS.local.md) |
 
 `AGENTS.local.md` is the owner's private operating file, and git ignores
-it. If it does not exist yet, create it from the public template first:
+it. Any agent edits it, in the session whose work makes a sentence there
+false, and shows the owner the diff. If it does not exist yet, create it
+from the public template first:
 
     .venv/bin/python -m server.agentslocal seed
 
@@ -35,8 +37,10 @@ These hold even before you open `AGENTS.local.md`:
 - Work on your own branch in its own worktree:
   `scripts/branch.sh start <slug>`. If Vira dispatched you, you are already
   in one; stay there.
-- Never create or change a file in the live checkout (the primary working
-  tree, serving port 8377).
+- Never create or change a tracked file in the live checkout (the primary
+  working tree, serving port 8377): the product tree changes only at a
+  merge. Git-ignored owner files (`AGENTS.local.md`, `data/`) are written
+  in place; that is what they are for.
 - Never restart, stop, or kill the Vira server.
 - Merge and push only when the owner says so. "Merge it" from the owner
   covers the whole landing; the steps are in `AGENTS.local.md`, section 3.
