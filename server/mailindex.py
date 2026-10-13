@@ -246,80 +246,81 @@ def _run_graph(email_addr, mode, since, limit, log):
     if not msgraph.connected(email_addr):
         log(f"  graph {email_addr}: not connected, skipping")
         return 0
-    con = mediaindex._db()
-    key = f"mail_wm:{email_addr}"
-    wm = mediaindex.get_state(con, key)
-    since_iso = None
-    if mode == "incremental":
-        if wm is None:                     # baseline: don't walk all history
-            mediaindex.set_state(
-                con, key,
-                channels.graph_newest_received(email_addr, "/me/messages/"))
-            con.close()
-            return 0
-        since_iso = wm
-    elif since:
-        since_iso = since + "T00:00:00Z"
+    con = mediaindex._db()      # closed on every path out (see _run_imap)
+    try:
+        key = f"mail_wm:{email_addr}"
+        wm = mediaindex.get_state(con, key)
+        since_iso = None
+        if mode == "incremental":
+            if wm is None:                     # baseline: don't walk all history
+                mediaindex.set_state(
+                    con, key,
+                    channels.graph_newest_received(email_addr, "/me/messages/"))
+                return 0
+            since_iso = wm
+        elif since:
+            since_iso = since + "T00:00:00Z"
 
-    my = _my_addresses()
-    n = 0
-    newest = wm or ""
-    for m in _graph_messages(email_addr, since_iso, log=log):
-        received = m.get("receivedDateTime") or ""
-        if received > newest:
-            newest = received
-        frm = ((m.get("from") or {}).get("emailAddress") or {})
-        from_addr = (frm.get("address") or "").lower()
-        to_addrs = [((r.get("emailAddress") or {}).get("address") or "").lower()
-                    for r in m.get("toRecipients", [])]
-        from_me = from_addr in my
-        sender_pid = "me" if from_me else crm.resolve_handle(from_addr)
-        chat_pid = _counterpart(from_me, from_addr, to_addrs)
-        try:
-            dt = datetime.fromisoformat(received.replace("Z", "+00:00"))
-        except ValueError:
-            dt = datetime.now(timezone.utc)
-        subject = m.get("subject") or ""
-        preview = re.sub(r"\s+", " ", m.get("bodyPreview") or "").strip()
-        atts, complete = _graph_attachments(email_addr, m["id"], log)
-        attachment_ids = []
-        for att in atts:
-            if att.get("@odata.type") != "#microsoft.graph.fileAttachment":
-                complete = False
-                continue
-            name = att.get("name") or ""
-            mime = att.get("contentType") or ""
-            size = att.get("size") or 0
-            if _skip(_classify(mime, name), name, size, att.get("isInline")):
-                complete = False
-                continue
-            synth = _synth_id(email_addr, m.get("internetMessageId") or m["id"],
-                              att.get("id") or name)
-            if synth not in attachment_ids:
-                attachment_ids.append(synth)
-            if con.execute("SELECT 1 FROM items WHERE id=?",
-                           (synth,)).fetchone():
-                continue
+        my = _my_addresses()
+        n = 0
+        newest = wm or ""
+        for m in _graph_messages(email_addr, since_iso, log=log):
+            received = m.get("receivedDateTime") or ""
+            if received > newest:
+                newest = received
+            frm = ((m.get("from") or {}).get("emailAddress") or {})
+            from_addr = (frm.get("address") or "").lower()
+            to_addrs = [((r.get("emailAddress") or {}).get("address") or "").lower()
+                        for r in m.get("toRecipients", [])]
+            from_me = from_addr in my
+            sender_pid = "me" if from_me else crm.resolve_handle(from_addr)
+            chat_pid = _counterpart(from_me, from_addr, to_addrs)
             try:
-                data = _graph_attachment_bytes(email_addr, m["id"], att)
-            except Exception as e:  # noqa: BLE001 — one bad attachment
-                log(f"  graph att fetch failed ({name}): {e}")
-                complete = False
-                continue
-            n += _store_and_insert(
-                con, account=email_addr, mime=mime, name=name, data=data,
-                synth_id=synth, date_dt=dt, from_me=from_me,
-                sender_pid=sender_pid, sender_handle=from_addr,
-                chat_pid=chat_pid, subject=subject, preview=preview)
-        _record_sources(con, "mail:" + (m.get("internetMessageId") or m["id"]),
-                        email_addr, attachment_ids, complete)
+                dt = datetime.fromisoformat(received.replace("Z", "+00:00"))
+            except ValueError:
+                dt = datetime.now(timezone.utc)
+            subject = m.get("subject") or ""
+            preview = re.sub(r"\s+", " ", m.get("bodyPreview") or "").strip()
+            atts, complete = _graph_attachments(email_addr, m["id"], log)
+            attachment_ids = []
+            for att in atts:
+                if att.get("@odata.type") != "#microsoft.graph.fileAttachment":
+                    complete = False
+                    continue
+                name = att.get("name") or ""
+                mime = att.get("contentType") or ""
+                size = att.get("size") or 0
+                if _skip(_classify(mime, name), name, size, att.get("isInline")):
+                    complete = False
+                    continue
+                synth = _synth_id(email_addr, m.get("internetMessageId") or m["id"],
+                                  att.get("id") or name)
+                if synth not in attachment_ids:
+                    attachment_ids.append(synth)
+                if con.execute("SELECT 1 FROM items WHERE id=?",
+                               (synth,)).fetchone():
+                    continue
+                try:
+                    data = _graph_attachment_bytes(email_addr, m["id"], att)
+                except Exception as e:  # noqa: BLE001 — one bad attachment
+                    log(f"  graph att fetch failed ({name}): {e}")
+                    complete = False
+                    continue
+                n += _store_and_insert(
+                    con, account=email_addr, mime=mime, name=name, data=data,
+                    synth_id=synth, date_dt=dt, from_me=from_me,
+                    sender_pid=sender_pid, sender_handle=from_addr,
+                    chat_pid=chat_pid, subject=subject, preview=preview)
+            _record_sources(con, "mail:" + (m.get("internetMessageId") or m["id"]),
+                            email_addr, attachment_ids, complete)
+            con.commit()
+            if limit and n >= limit:
+                break
+        if newest:
+            mediaindex.set_state(con, key, newest)
         con.commit()
-        if limit and n >= limit:
-            break
-    if newest:
-        mediaindex.set_state(con, key, newest)
-    con.commit()
-    con.close()
+    finally:
+        con.close()
     log(f"  graph {email_addr}: +{n} attachments")
     return n
 
@@ -390,46 +391,50 @@ def _run_imap(acct, mode, since, limit, log):
         log(f"  imap {addr}: no keychain password, skipping")
         return 0
     gmail = "gmail" in host.lower() or "google" in host.lower()
+    # The index is closed on every path out. Opened before the IMAP
+    # connect and left open when the connect raised, it leaked; Windows
+    # then could not remove the suite's tmp dir (found by CI, 2026-10-13).
     idx = mediaindex._db()
     key = f"mail_wm:{addr}"
-    wm = mediaindex.get_state(idx, key)
-    since_uid = int(wm) if (mode == "incremental" and wm) else None
-
-    con = imaplib.IMAP4_SSL(host, timeout=60)
     n = 0
-    max_uid = int(wm) if wm else 0
     try:
-        con.login(addr, pw)
-        box = _all_mail_folder(con)
-        con.select(f'"{box}"', readonly=True)
-        if mode == "incremental" and wm is None:      # baseline, no history
-            mediaindex.set_state(
-                idx, key, channels.imap_newest_uid(con, f'"{box}"'))
-            idx.close()
-            return 0
-        uids = _imap_search(con, gmail, since_uid, since if mode != "incremental"
-                            else None)
-        my = _my_addresses()
-        for uid in uids:
-            if uid > max_uid:
-                max_uid = uid
-            _, md = con.uid("fetch", str(uid), "(RFC822)")
-            if not md or md[0] is None:
-                continue
-            n += _index_message(idx, addr, email.message_from_bytes(md[0][1]),
-                                my=my, synth_fallback=f"uid{uid}",
-                                label_fallback=f"{addr}:{uid}")
-            if limit and n >= limit:
-                break
-    finally:
+        wm = mediaindex.get_state(idx, key)
+        since_uid = int(wm) if (mode == "incremental" and wm) else None
+        max_uid = int(wm) if wm else 0
+        con = imaplib.IMAP4_SSL(host, timeout=60)
         try:
-            con.logout()
-        except Exception:  # noqa: BLE001
-            pass
-    if max_uid:
-        mediaindex.set_state(idx, key, max_uid)
-    idx.commit()
-    idx.close()
+            con.login(addr, pw)
+            box = _all_mail_folder(con)
+            con.select(f'"{box}"', readonly=True)
+            if mode == "incremental" and wm is None:      # baseline, no history
+                mediaindex.set_state(
+                    idx, key, channels.imap_newest_uid(con, f'"{box}"'))
+                idx.commit()
+                return 0
+            uids = _imap_search(con, gmail, since_uid, since if mode != "incremental"
+                                else None)
+            my = _my_addresses()
+            for uid in uids:
+                if uid > max_uid:
+                    max_uid = uid
+                _, md = con.uid("fetch", str(uid), "(RFC822)")
+                if not md or md[0] is None:
+                    continue
+                n += _index_message(idx, addr, email.message_from_bytes(md[0][1]),
+                                    my=my, synth_fallback=f"uid{uid}",
+                                    label_fallback=f"{addr}:{uid}")
+                if limit and n >= limit:
+                    break
+        finally:
+            try:
+                con.logout()
+            except Exception:  # noqa: BLE001
+                pass
+        if max_uid:
+            mediaindex.set_state(idx, key, max_uid)
+        idx.commit()
+    finally:
+        idx.close()
     log(f"  imap {addr}: +{n} attachments")
     return n
 
