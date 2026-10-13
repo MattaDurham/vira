@@ -133,8 +133,9 @@ End every branch session with a short handoff, then one question:
 - **Then ask: keep testing, merge, or discard?**
 
 If Vira dispatched you, do not ask that question yourself: when your turn
-ends Vira serves the test instance, opens the PR and raises the landing
-card with the same three choices. When the owner picks Merge, Vira asks you
+ends Vira opens the PR and raises the landing card: Merge it / Try it
+first / Keep testing / Discard. It serves a fresh test instance only when
+the owner picks Try it first. When the owner picks Merge, Vira asks you
 to do steps 1 to 3 of the landing below, then end your turn. Never run
 `branch.sh merge` or push `main` yourself: Vira does the merge, push and
 teardown once your turn ends, because the merge deletes the worktree you

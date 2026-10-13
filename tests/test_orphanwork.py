@@ -419,7 +419,8 @@ class ResumePromptContent(_RepoCase):
         self.assertIn("dirty.py", text)          # from git status --porcelain
         self.assertIn("do NOT merge or push", text)
         # the decision is the landing card's, not a menu the session writes
-        self.assertIn("Merge / Keep testing / Discard", text)
+        self.assertIn("Merge / Try it first / Keep testing / Discard", text)
+        self.assertIn("served only if they pick Try it first", text)
         self.assertIn("do not ask that yourself", text)
 
     def test_names_the_originating_job_when_known(self):

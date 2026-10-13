@@ -107,13 +107,13 @@ SESSION_DEFAULTS = {
     # in this repo by ~60x while staying a real limit.
     "session_max_buffer_mb": 64,
     # When an owner-dispatched writer session parks with work on its branch,
-    # the HARNESS raises the merge / keep playing / discard card (never the
-    # model - a question that lives only in a transcript is how a branch
-    # drifts into the orphan sweeper) and serves a local-only branch
-    # instance of the branch first, so the card carries a URL to look at
-    # rather than an offer to make one. See runner.offer_landing.
+    # the HARNESS raises the merge / try it first / keep playing / discard
+    # card (never the model - a question that lives only in a transcript is
+    # how a branch drifts into the orphan sweeper). A local-only test
+    # instance is served only when the owner picks Try it first; the
+    # session_auto_serve switch that served one before every card was
+    # retired 2026-10-12. See runner.offer_landing.
     "session_landing_card": True,
-    "session_auto_serve": True,
 }
 
 # The permission ladder, safest first. A session's mode is ONE of these —
@@ -248,17 +248,21 @@ LANDING_KIND = "landing"
 
 
 def landing_verdict(text):
-    """Read merge / keep / discard off what the card's answer route carries.
-    The card posts an option LABEL ("Merge it", "Keep playing", "Discard")
-    or a number typed on a phone; anything unrecognised reads as KEEP - the
-    verdict that changes nothing, because a mis-parsed answer must never
-    merge or delete a branch."""
+    """Read merge / test / keep / discard off what the card's answer route
+    carries. The card posts an option LABEL ("Merge it", "Try it first",
+    "Keep playing", "Discard") or a number typed on a phone, in the card's
+    order; anything unrecognised reads as KEEP - the verdict that changes
+    nothing, because a mis-parsed answer must never merge or delete a
+    branch, nor start a minute-long serve."""
     t = str(text or "").strip().lower()
     if not t:
         return "keep"
     if t in ("1", "merge", "merge it", "land", "land it") or t.startswith("merge"):
         return "merge"
-    if t in ("3", "discard", "drop", "drop it") or t.startswith("discard"):
+    if (t in ("2", "test", "test it", "try", "try it", "try it first", "serve")
+            or t.startswith("try it") or t.startswith("test it")):
+        return "test"
+    if t in ("4", "discard", "drop", "drop it") or t.startswith("discard"):
         return "discard"
     return "keep"
 
@@ -845,9 +849,8 @@ class Sessions:
                 "kind_label": (kind_label or "").strip(),
                 "pr": pr if isinstance(pr, dict) else None,
                 "ask_timeout": float(_scfg("session_ask_timeout")),
-                # the landing card and its test instance (runner.offer_landing)
-                "landing_card": bool(_scfg("session_landing_card")),
-                "auto_serve": bool(_scfg("session_auto_serve"))}
+                # the landing card (runner.offer_landing)
+                "landing_card": bool(_scfg("session_landing_card"))}
         with self.lock:
             self._prune_registry()
         if live:

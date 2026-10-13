@@ -842,9 +842,9 @@ built, and carry it through to completion. Run the test suite. When you \
 are done, or stuck and in need of the owner's judgment, end your turn \
 with a compact review brief: lead with the outcome, name the workflow or \
 before/after relationship, list verification, and state what remains. \
-Vira then serves the test instance, opens the PR and asks the owner \
-Merge / Keep testing / Discard, so do not ask that yourself, and do \
-NOT merge or push.
+Vira then opens the PR and asks the owner Merge / Try it first / Keep \
+testing / Discard (a fresh test instance is served only if they pick Try \
+it first), so do not ask that yourself, and do NOT merge or push.
 
 If this changes a visible surface, capture a representative public-safe \
 screenshot or rendering through the repo's test-instance process and keep \

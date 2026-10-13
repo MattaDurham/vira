@@ -74,6 +74,15 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Changed
 
+- A landing serves a test instance only on request. The card a finished
+  coding session raises now reads Merge it / Try it first / Keep playing /
+  Discard; Try it first serves a fresh, local-only instance of the branch
+  and brings the card back with its link. Before, every landing served an
+  instance before the card went up, a minute paid whether or not the owner
+  meant to look, and a plain `serve` reused an instance that was already
+  running, however old (one handed over on 2026-10-12 was two days behind
+  its branch). The `session_auto_serve` switch is retired.
+
 - Work > Results is a log of finished work only. Anything that still needs a
   decision lives in Attention, and Results counts it in one line ("5 waiting
   on you in Attention") with a button there instead of listing it as well, so

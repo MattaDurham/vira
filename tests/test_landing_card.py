@@ -1,12 +1,18 @@
-"""The landing card: the HARNESS asks merge / keep playing / discard.
+"""The landing card: the HARNESS asks merge / try it first / keep playing /
+discard.
 
 Owner, 2026-09-02: a coding session that ends on the prose question "merge
 it, spin up a test instance, or discard?" is exactly how a branch drifts
-into the orphan sweeper, and a test instance is not an ANSWER - it is
-served before the question. So runner.offer_landing serves the branch
-(branch.sh serve --local), opens the required draft PR when the session
-did not, and raises a decision card; session.answer routes the verdict; and
-orphanwork.land_session acts on it after the session ends.
+into the orphan sweeper. So runner.offer_landing opens the required draft
+PR when the session did not and raises a decision card; session.answer
+routes the verdict; and orphanwork.land_session acts on it after the
+session ends.
+
+Owner, 2026-10-12: the test instance is served only when asked for. It
+used to be served before every card, a minute paid whether or not the
+owner meant to look, and a plain `serve` reused an instance however old.
+Try it first serves a FRESH local instance and brings the card back with
+its link.
 
 Run: .venv/bin/python -m unittest tests.test_landing_card
 """
@@ -83,6 +89,13 @@ class _Placed(RunnerCase):
         cards = [p for p in r.state["pending"] if p.get("kind") == "landing"]
         return cards[0] if cards else None
 
+    def try_it(self, r):
+        """Try it first, and wait for the serve task it starts."""
+        async def go():
+            await r.handle_landing({"op": "landing", "verdict": "test"})
+            await r._serving
+        asyncio.run(go())
+
 
 class Eligibility(_Placed):
     def test_a_placed_owner_session_is_eligible(self):
@@ -124,23 +137,25 @@ class TheCard(_Placed):
                          "Windows CreateProcess cannot run (WinError 193), and "
                          "branch.sh is Mac-side tooling a Windows install never "
                          "runs; the card's own logic is covered by the other cases")
-    def test_the_card_carries_the_served_instance_and_the_pr(self):
+    def test_the_card_carries_the_pr_and_offers_the_instance(self):
         r = self.placed()
         self.assertTrue(self.offer(r, work=(2, 1)))
         c = self.card(r)
         self.assertIsNotNone(c)
-        self.assertEqual(c["test_url"], "http://localhost:8391")
         self.assertEqual(c["pr_url"], "https://github.com/example/vira/pull/77")
         self.assertEqual(c["branch"], "claude/t")
         self.assertEqual((c["dirty"], c["ahead"]), (2, 1))
         self.assertEqual([o["label"] for o in c["options"]],
-                         ["Merge it", "Keep playing", "Discard"])
+                         ["Merge it", "Try it first", "Keep playing", "Discard"])
         self.assertFalse(c["allow_text"])
-        # the serve is LOCAL ONLY - a personal snapshot is never auto-bridged
-        self.assertIn("serve t --local", self.calls())
+        # Nothing is served at park (owner, 2026-10-12): a merge the owner
+        # is sure of must not wait a minute for a clone nobody looks at.
+        self.assertEqual(c["test_url"], "")
+        self.assertEqual(c["serve_note"], "")
+        self.assertFalse([x for x in self.calls() if x.startswith("serve")])
         self.assertIn("pr t", self.calls())
         out = self.output(r)
-        self.assertIn("http://localhost:8391", out)
+        self.assertNotIn("http://localhost:8391", out)
         self.assertIn("pull/77", out)
         # and the state the surfaces poll carries it
         self.assertEqual(self.state(r)["pending"][0]["kind"], "landing")
@@ -152,13 +167,29 @@ class TheCard(_Placed):
         self.assertEqual(self.card(r)["pr_url"],
                          "https://github.com/example/vira/pull/5")
 
-    def test_auto_serve_off_still_raises_the_card(self):
-        r = self.placed(auto_serve=False)
-        self.offer(r)
-        self.assertNotIn("serve t --local", self.calls())
+    def test_an_instance_already_up_rides_the_card_as_a_link(self):
+        """Served by an earlier Try it first, or by the session itself: the
+        link is carried, and still nothing is served."""
+        (self.wt / ".test-instance.json").write_text(
+            json.dumps({"pid": 0, "port": 8395, "label": "x"}), encoding="utf-8")
+        r = self.placed()
+        with mock.patch.object(runner_mod.worktree, "_instance_alive",
+                               return_value=True):
+            self.offer(r)
         c = self.card(r)
-        self.assertIsNotNone(c)
-        self.assertEqual(c["test_url"], "")
+        self.assertEqual(c["test_url"], "http://localhost:8395")
+        self.assertFalse([x for x in self.calls() if x.startswith("serve")])
+        self.assertIn("already up: http://localhost:8395", self.output(r))
+
+    def test_a_dead_instance_file_is_no_link(self):
+        (self.wt / ".test-instance.json").write_text(
+            json.dumps({"pid": 0, "port": 8395, "label": "x"}), encoding="utf-8")
+        with mock.patch.object(runner_mod.worktree, "_instance_alive",
+                               return_value=False):
+            r = self.placed()
+            self.offer(r)
+            self.assertEqual(self.card(r)["test_url"], "")
+            self.assertIsNone(runner_mod.worktree.instance_port(str(self.wt)))
 
     @unittest.skipUnless(os.name == "posix",
                          "drives a stand-in scripts/branch.sh - a shell script "
@@ -174,8 +205,16 @@ class TheCard(_Placed):
         c = self.card(r)
         self.assertIsNotNone(c)
         self.assertEqual(c["test_url"], "")
-        self.assertIn("no free port", c["serve_note"])
+        self.assertEqual(c["serve_note"], "")
         self.assertIn("no PR", c["pr_note"])
+        # ...and when Try it first cannot serve, the card comes back saying so
+        r.awaiting_reply = True
+        self.try_it(r)
+        c = self.card(r)
+        self.assertIsNotNone(c)
+        self.assertEqual(c["test_url"], "")
+        self.assertIn("no free port", c["serve_note"])
+        self.assertIn("could not start", self.output(r))
 
     def test_an_interrupted_turn_gets_no_card(self):
         # a Stop-paused turn is not delivered work
@@ -224,6 +263,42 @@ class TheVerdict(_Placed):
         self.assertTrue(r.inbox.empty())
         self.assertIsNone(r.landing)
         self.assertIn("keeping the branch", self.output(r))
+
+    @unittest.skipUnless(os.name == "posix",
+                         "drives a stand-in scripts/branch.sh - a shell script "
+                         "Windows CreateProcess cannot run (WinError 193)")
+    def test_try_it_first_serves_fresh_and_brings_the_card_back(self):
+        """The one verdict that serves: a FRESH instance (--fresh stops a
+        stale one and re-clones), still local only, then the same card
+        again with the link - the session stays parked, no verdict is on
+        file, and nothing ends."""
+        r = self.raised(self.placed())
+        self.try_it(r)
+        self.assertIn("serve t --local --fresh", self.calls())
+        c = self.card(r)
+        self.assertIsNotNone(c)
+        self.assertEqual(c["test_url"], "http://localhost:8391")
+        self.assertEqual(c["pr_url"], "https://github.com/example/vira/pull/77")
+        self.assertEqual((c["dirty"], c["ahead"]), (2, 1))
+        self.assertIsNone(r.landing)
+        self.assertTrue(r.inbox.empty())
+        self.assertFalse(r.finished_by_owner)
+        out = self.output(r)
+        self.assertIn("serving a fresh test instance", out)
+        self.assertIn("test instance: http://localhost:8391", out)
+
+    @unittest.skipUnless(os.name == "posix",
+                         "drives a stand-in scripts/branch.sh - a shell script "
+                         "Windows CreateProcess cannot run (WinError 193)")
+    def test_try_it_first_after_the_park_ended_only_posts_the_link(self):
+        """A reply typed while the clone ran means the session is working
+        again; a card raised over a running turn would be the wrong card.
+        The link still lands in the feed."""
+        r = self.raised(self.placed())
+        r.awaiting_reply = False
+        self.try_it(r)
+        self.assertIsNone(self.card(r))
+        self.assertIn("test instance: http://localhost:8391", self.output(r))
 
     def test_a_reply_under_the_card_is_keep(self):
         r = self.raised(self.placed())
@@ -371,10 +446,31 @@ class TheAnswerRoute(unittest.TestCase):
             self.assertEqual(reg.answer(h.id, "L1", "1"), "merge")
         self.assertEqual([a[2] for a in self.acted], ["discard", "merge"])
 
+    def test_try_it_first_writes_the_verdict_and_acts_on_nothing(self):
+        """Serving is the RUNNER's act (it owns the card); the server
+        neither lands nor touches the branch."""
+        reg, h = self._reg()
+        with mock.patch.object(orphanwork, "land_session",
+                               lambda *a: self.acted.append(a)):
+            self.assertEqual(reg.answer(h.id, "L1", "Try it first"), "test")
+            self.assertEqual(reg.answer(h.id, "L1", "2"), "test")
+        _, cmds = jobfiles.read_control(h.dir, 0)
+        self.assertEqual(cmds[-1], {"op": "landing", "req_id": "L1",
+                                    "verdict": "test"})
+        self.assertEqual(self.acted, [])
+
+    def test_typed_numbers_follow_the_cards_order(self):
+        labels = [o["label"] for o in runner_mod.LANDING_OPTIONS]
+        self.assertEqual(labels, ["Merge it", "Try it first", "Keep playing",
+                                  "Discard"])
+        for n, label in enumerate(labels, 1):
+            self.assertEqual(session.landing_verdict(str(n)),
+                             session.landing_verdict(label), label)
+
     def test_anything_unrecognised_reads_as_keep(self):
         # a mis-parsed answer must never merge or delete a branch
         for t in ("maybe later", "The owner skipped this question. Do NOT guess",
-                  "", "2"):
+                  "", "3", "5"):
             self.assertEqual(session.landing_verdict(t), "keep", t)
 
     def test_an_ask_card_still_answers_the_model(self):
@@ -509,6 +605,7 @@ class ThePreamble(unittest.TestCase):
             p = viratools.preamble(native, **kw)
             self.assertIn("VIRA HANDLES THE LANDING", p)
             self.assertIn("Do NOT ask whether to merge, test or discard", p)
+            self.assertIn("served only when the owner picks Try it first", p)
         self.assertNotIn("VIRA HANDLES THE LANDING", viratools.preamble(True))
 
     def test_a_session_that_changes_no_file_is_not_promised_a_landing(self):
@@ -551,12 +648,15 @@ class TheSurfaces(unittest.TestCase):
         src = (ROOT / "server" / "attention.py").read_text(encoding="utf-8")
         self.assertIn('"ready to land: "', src)
 
-    def test_config_carries_both_switches(self):
+    def test_config_carries_the_card_switch_and_not_the_retired_serve_one(self):
         cfg = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
         self.assertTrue(cfg["session_landing_card"])
-        self.assertTrue(cfg["session_auto_serve"])
         self.assertTrue(session.SESSION_DEFAULTS["session_landing_card"])
-        self.assertTrue(session.SESSION_DEFAULTS["session_auto_serve"])
+        # session_auto_serve served an instance before every card; retired
+        # 2026-10-12 in favour of Try it first on the card itself.
+        self.assertNotIn("session_auto_serve", cfg)
+        self.assertNotIn("session_auto_serve", session.SESSION_DEFAULTS)
+        self.assertIn("Try it first", cfg["_session_landing_card"])
 
 
 if __name__ == "__main__":
