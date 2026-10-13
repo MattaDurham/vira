@@ -373,6 +373,28 @@ class PoisonResilienceTests(unittest.TestCase):
         # rest of the mailbox
         self.assertEqual(self._wm(), 4)
 
+    def test_a_busy_index_ends_the_pass_without_skipping(self):
+        # A lock on the INDEX is not a poison message. Treated as one, it
+        # skipped four real messages on 2026-10-13 while the Indexer's own
+        # sweep and the backlog CLI wrote at once.
+        mailbox = {u: _rfc822(f"m{u}") for u in range(1, 6)}
+        real = textindex._insert
+
+        def insert(con, **kw):
+            if kw["source_meta"]["imap_uid"] == 3:
+                raise sqlite3.OperationalError("database is locked")
+            return real(con, **kw)
+        said = []
+        with mock.patch.object(textindex.imaplib, "IMAP4_SSL",
+                               return_value=FakeIMAP(mailbox)), \
+             mock.patch.object(textindex.mailmod, "_body_preview",
+                               return_value="a real body long enough to index"), \
+             mock.patch.object(textindex, "_insert", side_effect=insert):
+            n = textindex.backfill_imap(self.acct, log=said.append)
+        self.assertEqual(n, 2)
+        self.assertEqual(self._wm(), 2)          # uid 3 is fetched again next pass
+        self.assertTrue(any("index busy" in m for m in said), said)
+
     def test_an_unknown_header_charset_no_longer_raises(self):
         from server import mail as mailmod
         raw = "=?unknown-8bit?B?aGVsbG8gd29ybGQ=?="

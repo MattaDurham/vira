@@ -54,7 +54,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "text-index.sqlite"
 
 BATCH = 2000          # rows per commit on the iMessage backfill
-IMAP_COMMIT_EVERY = 100   # fetches per commit on the IMAP walk (see backfill_imap)
+IMAP_COMMIT_EVERY = 25    # fetches per commit on the IMAP walk (see backfill_imap):
+                          # a writer holds the index for ten seconds or so,
+                          # well inside another writer's 60 s wait
 MIN_CHARS = 2
 # Mail bodies are stored whole. A 20,000-character cap (MAIL_BODY_MAX)
 # used to cut long mail and mark it body_complete=False; the owner removed
@@ -387,6 +389,16 @@ def backfill_imap(acct, limit=400, log=print):
                                      "links": extract_links(plain, html=html_body)})
                     fails = 0
                     wm = max(wm, uid)
+                except sqlite3.OperationalError as e:
+                    # The INDEX is busy (another writer holds it past the
+                    # 60 s wait), not the message. Counting it as poison
+                    # skipped four real messages on 2026-10-13, when the
+                    # Indexer's own sweep and the backlog CLI wrote at
+                    # once. End the pass with the watermark below this
+                    # uid; the next pass fetches it again.
+                    log(f"  mail {addr}: pass ended, index busy at uid "
+                        f"{uid}: {e}")
+                    break
                 except Exception as e:  # noqa: BLE001
                     fails += 1
                     if fails > 3:
