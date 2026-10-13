@@ -45,7 +45,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import channels
+from . import channels, mailarchive
 from . import data as crm
 from . import mail as mailmod
 from . import mediaindex
@@ -416,42 +416,9 @@ def _run_imap(acct, mode, since, limit, log):
             _, md = con.uid("fetch", str(uid), "(RFC822)")
             if not md or md[0] is None:
                 continue
-            msg = email.message_from_bytes(md[0][1])
-            msg_id = (msg.get("Message-ID") or f"uid{uid}").strip()
-            from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
-            from_addr = (from_addr or "").lower()
-            to_addrs = [a.lower() for _, a in
-                        email.utils.getaddresses(msg.get_all("To", []))]
-            from_me = from_addr in my
-            sender_pid = "me" if from_me else crm.resolve_handle(from_addr)
-            chat_pid = _counterpart(from_me, from_addr, to_addrs)
-            try:
-                dt = email.utils.parsedate_to_datetime(msg.get("Date", ""))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-            except (TypeError, ValueError):
-                dt = datetime.now(timezone.utc)
-            subject = mailmod._decode_header(msg.get("Subject", ""))
-            preview = mailmod._body_preview(msg)
-            attachment_ids, coverage = [], {"complete": True}
-            for idxn, (name, mime, data, inline) in enumerate(
-                    _msg_attachments(msg, coverage)):
-                if _skip(_classify(mime, name), name, len(data), inline):
-                    coverage["complete"] = False
-                    continue
-                synth = _synth_id(addr, msg_id, f"{idxn}:{name}")
-                attachment_ids.append(synth)
-                if idx.execute("SELECT 1 FROM items WHERE id=?",
-                               (synth,)).fetchone():
-                    continue
-                n += _store_and_insert(
-                    idx, account=addr, mime=mime, name=name, data=data,
-                    synth_id=synth, date_dt=dt, from_me=from_me,
-                    sender_pid=sender_pid, sender_handle=from_addr,
-                    chat_pid=chat_pid, subject=subject, preview=preview)
-            _record_sources(idx, "mail:" + ((msg.get("Message-ID") or f"{addr}:{uid}").strip()),
-                            addr, attachment_ids, coverage["complete"])
-            idx.commit()
+            n += _index_message(idx, addr, email.message_from_bytes(md[0][1]),
+                                my=my, synth_fallback=f"uid{uid}",
+                                label_fallback=f"{addr}:{uid}")
             if limit and n >= limit:
                 break
     finally:
@@ -467,11 +434,105 @@ def _run_imap(acct, mode, since, limit, log):
     return n
 
 
+def _index_message(idx, addr, msg, *, my, synth_fallback, label_fallback):
+    """Index every kept attachment of one parsed message and record the
+    manifest row (what was kept, whether coverage is complete). The same
+    whether the message was fetched from the provider or read from the
+    mail archive. The two fallbacks for a message without a Message-ID
+    are the ones the walk has always used, so ids stay stable."""
+    msg_id = (msg.get("Message-ID") or synth_fallback).strip()
+    from_name, from_addr = email.utils.parseaddr(msg.get("From", ""))
+    from_addr = (from_addr or "").lower()
+    to_addrs = [a.lower() for _, a in
+                email.utils.getaddresses(msg.get_all("To", []))]
+    from_me = from_addr in my
+    sender_pid = "me" if from_me else crm.resolve_handle(from_addr)
+    chat_pid = _counterpart(from_me, from_addr, to_addrs)
+    try:
+        dt = email.utils.parsedate_to_datetime(msg.get("Date", ""))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        dt = datetime.now(timezone.utc)
+    subject = mailmod._decode_header(msg.get("Subject", ""))
+    preview = mailmod._body_preview(msg)
+    n = 0
+    attachment_ids, coverage = [], {"complete": True}
+    for idxn, (name, mime, data, inline) in enumerate(
+            _msg_attachments(msg, coverage)):
+        if _skip(_classify(mime, name), name, len(data), inline):
+            coverage["complete"] = False
+            continue
+        synth = _synth_id(addr, msg_id, f"{idxn}:{name}")
+        attachment_ids.append(synth)
+        if idx.execute("SELECT 1 FROM items WHERE id=?",
+                       (synth,)).fetchone():
+            continue
+        n += _store_and_insert(
+            idx, account=addr, mime=mime, name=name, data=data,
+            synth_id=synth, date_dt=dt, from_me=from_me,
+            sender_pid=sender_pid, sender_handle=from_addr,
+            chat_pid=chat_pid, subject=subject, preview=preview)
+    _record_sources(idx, "mail:" + ((msg.get("Message-ID") or label_fallback).strip()),
+                    addr, attachment_ids, coverage["complete"])
+    idx.commit()
+    return n
+
+
+def _archive_uid_tail(key):
+    """The IMAP uid an archive key carries for a message without a
+    Message-ID (account|uid:<validity>:<uid>), else None."""
+    _, _, rest = key.partition("|")
+    return rest.rsplit(":", 1)[-1] if rest.startswith("uid:") else None
+
+
+def _run_from_archive(addr, since, limit, log):
+    """Attachments from the mail archive's files: the archive downloaded
+    the message once; this reads it from disk. A cursor per account
+    (archive_seq:<addr>, in the media index's state) follows the archive's
+    arrival order."""
+    idx = mediaindex._db()
+    key = f"archive_seq:{addr}"
+    cursor = int(mediaindex.get_state(idx, key) or 0)
+    my = _my_addresses()
+    n = 0
+    try:
+        for row in mailarchive.iter_archived(account=addr, after_seq=cursor):
+            if since and (row.get("date") or "") < since:
+                cursor = row["seq"]
+                continue
+            raw = mailarchive.message_bytes(row)
+            if raw is None:
+                log(f"  archive {addr}: seq {row['seq']} has no file, skipped")
+            else:
+                tail = _archive_uid_tail(row["key"])
+                n += _index_message(
+                    idx, addr, email.message_from_bytes(raw), my=my,
+                    synth_fallback=f"uid{tail}" if tail else row["key"],
+                    label_fallback=f"{addr}:{tail}" if tail else row["key"])
+            cursor = row["seq"]
+            mediaindex.set_state(idx, key, cursor)
+            idx.commit()
+            if limit and n >= limit:
+                break
+    finally:
+        mediaindex.set_state(idx, key, cursor)
+        idx.commit()
+        idx.close()
+    log(f"  archive {addr}: +{n} attachments (cursor {cursor})")
+    return n
+
+
 # ---------- entry points ----------
 
 def _run_account(acct, mode, since, limit, log):
     if acct.get("type") == "graph":
         return _run_graph(acct["email"], mode, since, limit, log)
+    if mailarchive.covers(acct["email"]):
+        # One download per message: the archive fetched it; read it from
+        # disk (the owner's call, 2026-10-13). Graph stays on its own
+        # walk, whose attachment ids come from Graph, not from MIME.
+        return _run_from_archive(acct["email"], since, limit, log)
     return _run_imap(acct, mode, since, limit, log)
 
 
