@@ -44,7 +44,7 @@ from . import runtimework
 # backlog run, 2026-07-28.
 imaplib._MAXLINE = max(imaplib._MAXLINE, 50_000_000)
 
-from . import channels, crmindex
+from . import channels, crmindex, mailarchive
 from . import data as crm
 from . import mail as mailmod
 from . import mediaindex, retrieval, settings
@@ -54,6 +54,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "text-index.sqlite"
 
 BATCH = 2000          # rows per commit on the iMessage backfill
+ARCHIVE_TICK = 500        # archived messages the background tick indexes per pass
 IMAP_COMMIT_EVERY = 25    # fetches per commit on the IMAP walk (see backfill_imap):
                           # a writer holds the index for ten seconds or so,
                           # well inside another writer's 60 s wait
@@ -295,13 +296,53 @@ def _counterpart(from_me, from_addr, m):
     return None
 
 
-def backfill_imap(acct, limit=400, log=print):
-    """IMAP bodies, newest first, windowed by a per-account UID
-    watermark. mail._body_preview already knows how to pull plain text
-    out of a MIME tree (and to strip HTML when that is all there is), so
-    it does the extraction here too, just with a bigger ceiling."""
+def _mail_row(msg, addr, my, *, fallback_uid, locator):
+    """The index row for one parsed message, or None when the body is too
+    short to index. The same row whether the message came from the
+    provider or from the mail archive; `locator` is what the source can
+    say about where the original lives (imap_uid and mailbox, or the
+    archive key and content hash). mail._body_preview already knows how
+    to pull plain text out of a MIME tree (and to strip HTML when that is
+    all there is), so it does the extraction here too, uncapped."""
     from .commitmentresources import extract_links
     from .mailread import message_bodies
+    body = mailmod._body_preview(msg, limit=None)
+    if len(body) < MIN_CHARS:
+        return None
+    _, from_addr = email.utils.parseaddr(msg.get("From", ""))
+    from_addr = (from_addr or "").lower()
+    from_me = from_addr in my
+    to_pid = None
+    for _, a in email.utils.getaddresses([msg.get("To", "") or ""]):
+        to_pid = crm.resolve_handle((a or "").lower())
+        if to_pid:
+            break
+    dt = email.utils.parsedate_to_datetime(msg.get("Date")) \
+        if msg.get("Date") else datetime.now(timezone.utc)
+    plain, html_body = message_bodies(msg)
+    message_id = (msg.get("Message-ID") or "").strip()
+    return dict(
+        uid="mail:" + (message_id or fallback_uid),
+        source="email", account=addr, text=body,
+        subject=mailmod._decode_header(msg.get("Subject") or ""),
+        date_ns=apple_ns(dt), from_me=int(from_me),
+        sender_pid="me" if from_me else crm.resolve_handle(from_addr),
+        chat_pid=to_pid if from_me else crm.resolve_handle(from_addr),
+        sender_handle=from_addr,
+        source_meta={"message_id": message_id, **locator,
+                     "body_complete": True,
+                     "has_attachments": any(
+                         part.get_filename() or "attachment" in
+                         str(part.get("Content-Disposition") or "").lower()
+                         for part in msg.walk()),
+                     "links": extract_links(plain, html=html_body)})
+
+
+def backfill_imap(acct, limit=400, log=print):
+    """IMAP bodies, oldest first, windowed by a per-account UID watermark.
+    For an account the mail archive covers this walk is skipped by
+    backfill_mail: the archive fetched the message once, and
+    backfill_mail_from_archive reads it from disk."""
     addr, host = acct["email"], acct.get("host", "")
     pw = mailmod.keychain_password(addr)
     if not pw:
@@ -348,45 +389,12 @@ def backfill_imap(acct, limit=400, log=print):
                         wm = max(wm, uid)
                         continue
                     msg = email.message_from_bytes(md[0][1])
-                    body = mailmod._body_preview(msg, limit=None)
-                    if len(body) < MIN_CHARS:
-                        fails = 0
-                        wm = max(wm, uid)
-                        continue
-                    _, from_addr = email.utils.parseaddr(
-                        msg.get("From", ""))
-                    from_addr = (from_addr or "").lower()
-                    from_me = from_addr in my
-                    to_pid = None
-                    for _, a in email.utils.getaddresses(
-                            [msg.get("To", "") or ""]):
-                        to_pid = crm.resolve_handle((a or "").lower())
-                        if to_pid:
-                            break
-                    dt = email.utils.parsedate_to_datetime(msg.get("Date")) \
-                        if msg.get("Date") else datetime.now(timezone.utc)
-                    plain, html_body = message_bodies(msg)
-                    n += _insert(
-                        con, uid="mail:" + (msg.get("Message-ID")
-                                            or f"{addr}:{uid}").strip(),
-                        source="email", account=addr, text=body,
-                        subject=mailmod._decode_header(
-                            msg.get("Subject") or ""),
-                        date_ns=apple_ns(dt), from_me=int(from_me),
-                        sender_pid="me" if from_me
-                        else crm.resolve_handle(from_addr),
-                        chat_pid=to_pid if from_me
-                        else crm.resolve_handle(from_addr),
-                        sender_handle=from_addr,
-                        source_meta={"message_id": (msg.get("Message-ID") or "").strip(),
-                                     # These UIDs belong to the selected All
-                                     # Mail folder, not mailread's INBOX rowid.
-                                     "imap_uid": uid, "mailbox": box,
-                                     "body_complete": True,
-                                     "has_attachments": any(part.get_filename() or
-                                         "attachment" in str(part.get("Content-Disposition") or "").lower()
-                                         for part in msg.walk()),
-                                     "links": extract_links(plain, html=html_body)})
+                    # These UIDs belong to the selected All Mail folder,
+                    # not mailread's INBOX rowid.
+                    row = _mail_row(msg, addr, my, fallback_uid=f"{addr}:{uid}",
+                                    locator={"imap_uid": uid, "mailbox": box})
+                    if row is not None:
+                        n += _insert(con, **row)
                     fails = 0
                     wm = max(wm, uid)
                 except sqlite3.OperationalError as e:
@@ -420,8 +428,78 @@ def backfill_imap(acct, limit=400, log=print):
     return n
 
 
-def backfill_mail(limit=400, log=print):
-    n = 0
+def _uid_from_archive_key(key):
+    """The index uid the provider walk would have given a message without
+    a Message-ID, so a message met on both paths is one row."""
+    acct, _, rest = key.partition("|")
+    if rest.startswith("uid:"):              # account|uid:<validity>:<uid>
+        return f"{acct}:{rest.rsplit(':', 1)[-1]}"
+    if rest.startswith("graph:"):
+        return rest[len("graph:"):]
+    return rest
+
+
+def backfill_mail_from_archive(limit=None, log=print, account=None):
+    """Bodies from the mail archive's files, for the IMAP accounts it
+    covers: the archive downloaded each message once, and the index is
+    built from disk (the owner's call, 2026-10-13, against a 319,576-
+    message Gmail history under a daily download cap). A cursor per
+    account (archive_seq:<addr>) follows the archive's arrival order, so
+    a resume starts where it stopped. Graph accounts keep their own walk:
+    it is a watermark query, and its attachment ids differ."""
+    con = _db()
+    total = 0
+    try:
+        my = _my_addresses()
+        for acct in channels.mail_accounts():
+            addr = acct.get("email") or ""
+            if not addr or (account and addr != account):
+                continue
+            if acct.get("type") == "graph" or not mailarchive.covers(addr):
+                continue
+            key = f"archive_seq:{addr}"
+            cursor = int(get_state(con, key, 0) or 0)
+            n = done = 0
+            try:
+                for row in mailarchive.iter_archived(account=addr, after_seq=cursor):
+                    if limit and done >= limit:
+                        break
+                    done += 1
+                    raw = mailarchive.message_bytes(row)
+                    if raw is None:
+                        log(f"  archive {addr}: seq {row['seq']} has no file, skipped")
+                    else:
+                        try:
+                            parsed = _mail_row(
+                                email.message_from_bytes(raw), addr, my,
+                                fallback_uid=_uid_from_archive_key(row["key"]),
+                                locator={"archive_key": row["key"],
+                                         "archive_sha": row["sha"]})
+                            if parsed is not None:
+                                n += _insert(con, **parsed)
+                        except sqlite3.OperationalError:
+                            raise
+                        except Exception as e:  # noqa: BLE001 - one bad
+                            log(f"  archive {addr}: seq {row['seq']} skipped: {e}")
+                    cursor = row["seq"]              # message, stepped past
+                    if done % 50 == 0:
+                        set_state(con, key, cursor)
+                        con.commit()
+            except sqlite3.OperationalError as e:
+                log(f"  archive {addr}: pass ended, index busy: {e}")
+            set_state(con, key, cursor)
+            con.commit()
+            log(f"  archive {addr}: {n} indexed (cursor {cursor})")
+            total += n
+        return total
+    finally:
+        con.close()
+
+
+def backfill_mail(limit=400, log=print, archive_limit=None):
+    """Every account's bodies: from the archive's files where it covers
+    the account (one download per message), else from the provider."""
+    n = backfill_mail_from_archive(limit=archive_limit, log=log)
     for acct in channels.mail_accounts():
         try:
             # accounts carry "type": "graph" (channels.graph_accounts,
@@ -431,6 +509,8 @@ def backfill_mail(limit=400, log=print):
             # host and indexed nothing. Found on the 2026-07-28 backlog.
             if acct.get("type") == "graph":
                 n += backfill_graph(acct["email"], limit=limit, log=log)
+            elif mailarchive.covers(acct.get("email") or ""):
+                continue                 # read from the archive above
             else:
                 n += backfill_imap(acct, limit=limit, log=log)
         except Exception as e:      # noqa: BLE001 — one bad mailbox never
@@ -439,11 +519,13 @@ def backfill_mail(limit=400, log=print):
 
 
 def _mail_watermarks():
-    """Every mail watermark row — the full-backlog loop's done signal."""
+    """Every mail watermark and archive cursor row — the full-backlog
+    loop's done signal."""
     con = _db()
     try:
         return dict(con.execute(
-            "SELECT key, val FROM state WHERE key LIKE 'wm_mail%'"))
+            "SELECT key, val FROM state WHERE key LIKE 'wm_mail%' "
+            "OR key LIKE 'archive_seq:%'"))
     finally:
         con.close()
 
@@ -477,7 +559,7 @@ def incremental(log=lambda *a: None):
     bounded mail sweep."""
     n = backfill_imessage(limit=BATCH, log=log)
     if settings.get("mail_body_index"):
-        n += backfill_mail(limit=100, log=log)
+        n += backfill_mail(limit=100, log=log, archive_limit=ARCHIVE_TICK)
     return n
 
 
@@ -800,13 +882,15 @@ class Indexer(threading.Thread):
         self._stop.set()
 
 
-if __name__ == "__main__":  # python -m server.textindex backfill [mail [--full]]
+if __name__ == "__main__":  # python -m server.textindex backfill [mail [--full] | archive]
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     if cmd == "backfill":
         which = sys.argv[2] if len(sys.argv) > 2 else "all"
         if which in ("all", "imessage"):
             print("imessage:", backfill_imessage(log=print))
+        if which == "archive":
+            print("archive:", backfill_mail_from_archive(log=print))
         if which in ("all", "mail"):
             if "--full" in sys.argv:
                 print("mail:", backfill_mail_full(log=print))

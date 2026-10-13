@@ -405,11 +405,14 @@ SCHEMA = [
       "0 = no cap. A reached cap is reported in the sweep log and in the "
       "status payload, never silently applied.", advanced=True,
       range=(0, 100000)),
-    S("mail_archive_interval_min", "workers", "int", 30,
+    S("mail_archive_interval_min", "workers", "int", 5,
       "Minutes between mail archive sweeps",
-      "Each pass fetches what arrived since the last one, 200 messages per "
-      "account at most; the history is the CLI backfill's job.",
-      advanced=True, range=(1, 1440)),
+      "Each pass takes what arrived since the last one, then walks the "
+      "history newest first, 200 messages per account at most. The text "
+      "index and the attachment index read the archive's files for the "
+      "accounts it covers, so new mail is held, searchable and its "
+      "attachments indexed within minutes; the history is the CLI "
+      "backfill's job.", advanced=True, range=(1, 1440)),
     S("receipts_sweep_days", "workers", "int", 7, "Days between receipt sweeps",
       "The receipts pass sweeps mailboxes and indexed attachments for invoice "
       "and receipt evidence, flagged merchants first. Dormant until a mail "

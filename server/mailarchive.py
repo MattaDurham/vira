@@ -70,8 +70,10 @@ MAX_CONSECUTIVE_FAILURES = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
-  key        TEXT PRIMARY KEY,   -- account|<Message-ID>; without one,
-                                 -- account|uid:<validity>:<uid> or account|graph:<id>
+  seq        INTEGER PRIMARY KEY AUTOINCREMENT,  -- arrival order: the cursor the
+                                                 -- text and attachment indexes follow
+  key        TEXT UNIQUE NOT NULL,   -- account|<Message-ID>; without one,
+                                     -- account|uid:<validity>:<uid> or account|graph:<id>
   account    TEXT NOT NULL,
   message_id TEXT,
   sha        TEXT NOT NULL,
@@ -143,9 +145,37 @@ def _db(create=True):
         except sqlite3.OperationalError:
             pass
         con.executescript(SCHEMA)
+        _migrate(con)
         return con
     except (OSError, sqlite3.Error):
         return None
+
+
+def _migrate(con):
+    """The first shape of `messages` (2026-10-13, morning) had no `seq`:
+    the row's arrival order is what lets the text index and the attachment
+    index read the archive instead of downloading a message a second and
+    third time. Rebuilt in place, rows in the order they arrived. Two
+    connections may race here; the loser re-checks and is content."""
+    if "seq" in {r[1] for r in con.execute("PRAGMA table_info(messages)")}:
+        return
+    try:
+        con.executescript("""
+            CREATE TABLE messages_v2(
+              seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL,
+              account TEXT NOT NULL, message_id TEXT, sha TEXT NOT NULL,
+              size INTEGER, date TEXT, stored TEXT);
+            INSERT INTO messages_v2(key, account, message_id, sha, size, date, stored)
+              SELECT key, account, message_id, sha, size, date, stored
+              FROM messages ORDER BY rowid;
+            DROP TABLE messages;
+            ALTER TABLE messages_v2 RENAME TO messages;
+            CREATE INDEX IF NOT EXISTS idx_messages_sha ON messages(sha);
+            CREATE INDEX IF NOT EXISTS idx_messages_account_date ON messages(account, date);
+        """)
+    except sqlite3.OperationalError:
+        if "seq" not in {r[1] for r in con.execute("PRAGMA table_info(messages)")}:
+            raise
 
 
 def get_state(con, key, default=None):
@@ -264,6 +294,70 @@ def have_many(account, message_ids):
     finally:
         con.close()
     return out
+
+
+def covers(account):
+    """True when the archive is where this account's mail is fetched: it
+    is enabled and has begun on the account (a mark or a row). The text
+    index and the attachment index then read the archive's files instead
+    of downloading each message again (the owner's call, 2026-10-13:
+    download once)."""
+    if not enabled():
+        return False
+    con = _db(create=False)
+    if con is None:
+        return False
+    try:
+        if con.execute("SELECT 1 FROM state WHERE key=? OR key=?",
+                       (f"wm:{account}", f"low:{account}")).fetchone():
+            return True
+        return con.execute("SELECT 1 FROM messages WHERE account=? LIMIT 1",
+                           (account,)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+
+
+def iter_archived(account=None, after_seq=0, limit=None):
+    """Archived messages in arrival order, after a cursor: the feed the
+    indexes consume. Each row carries its `path`, or None when the blob
+    is not there (an unmounted drive), which a consumer reports rather
+    than treats as absent mail."""
+    con = _db(create=False)
+    if con is None:
+        return
+    try:
+        sql = "SELECT seq, account, key, message_id, sha, date FROM messages WHERE seq>?"
+        args = [int(after_seq or 0)]
+        if account:
+            sql += " AND account=?"
+            args.append(account)
+        sql += " ORDER BY seq"
+        if limit:
+            sql += " LIMIT ?"
+            args.append(int(limit))
+        rows = con.execute(sql, args).fetchall()
+    except sqlite3.Error:
+        return
+    finally:
+        con.close()
+    for seq, acct, key, mid, sha, date in rows:
+        path = blob_path(sha)
+        yield {"seq": seq, "account": acct, "key": key, "message_id": mid,
+               "sha": sha, "date": date,
+               "path": path if path is not None and _contained(path) else None}
+
+
+def message_bytes(row):
+    """The raw message for an iter_archived row, or None."""
+    path = row.get("path")
+    if path is None:
+        return None
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
 
 
 def _used_bytes(con):
