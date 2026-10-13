@@ -61,12 +61,19 @@ class FakeIMAP:
     def response(self, code):
         return code, [str(self.validity).encode()]
 
+    def status(self, mailbox, what):
+        nxt = (max(self.mailbox) if self.mailbox else 0) + 1
+        return "OK", [f'{mailbox} (UIDNEXT {nxt})'.encode()]
+
     def uid(self, cmd, *args):
         if cmd == "search":
-            lo = int(args[-1].split(":")[0])
-            hits = sorted(u for u in self.mailbox if u >= lo)
-            if not hits and self.mailbox:
-                hits = [max(self.mailbox)]
+            lo, _, hi = args[-1].partition(":")
+            lo = int(lo)
+            top = max(self.mailbox) if self.mailbox else 0
+            hi = top if hi in ("*", "") else int(hi)
+            if hi < lo:               # "N:*" past the last uid answers the last uid
+                lo, hi = hi, lo
+            hits = sorted(u for u in self.mailbox if lo <= u <= hi)
             return "OK", [" ".join(map(str, hits)).encode()]
         u = int(args[0])
         self.fetched.append(u)
@@ -181,16 +188,24 @@ class ImapTests(_Base):
         blobs = self.blobs()
         self.assertEqual(len(blobs), 2)
         self.assertEqual({p.read_bytes() for p in blobs}, {a, b})
+        self.assertEqual(self.imap.fetched, [42, 41])     # newest first
         self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "42")
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
         self.assertEqual(self.state(f"uidvalidity:{IMAP_ACCOUNT}"), "1")
         acct = mailarchive.stats()["accounts"][IMAP_ACCOUNT]
         self.assertEqual(acct["messages"], 2)
+        self.assertTrue(acct["history_complete"])
         self.assertEqual(acct["oldest"], "2012-10-01T09:00:00+00:00")
         self.assertEqual(acct["newest"], "2026-09-10T14:00:00+00:00")
         # The second pass asks for 43:* and gets 42 back; nothing is fetched.
         fetched = list(self.imap.fetched)
         self.assertEqual(mailarchive.sweep(log=lambda *a: None), 0)
         self.assertEqual(self.imap.fetched, fetched)
+        # New mail lands above the high mark without touching the history.
+        self.imap.mailbox[50] = raw_message("<c@example.test>")
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None), 1)
+        self.assertEqual(self.imap.fetched, fetched + [50])
+        self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "50")
 
     def test_identical_bytes_share_one_blob_and_one_message_id_is_one_row(self):
         same, a = raw_message(mid=None), raw_message(MID_A)
@@ -218,9 +233,10 @@ class ImapTests(_Base):
         self.use_imap({u: raw_message(f"<{u}@example.test>") for u in range(1, 7)},
                       poison={3: 9, 4: 9, 5: 9, 6: 9})
         said = []
-        self.assertEqual(mailarchive.sweep(log=said.append), 2)
-        self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "5")
-        self.assertEqual(mailarchive.stats()["failed"], 3)
+        self.assertEqual(mailarchive.sweep(log=said.append), 0)
+        self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "6")
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "4")   # held above uid 3
+        self.assertEqual(mailarchive.stats()["failed"], 3)         # 6, 5, 4 recorded
         self.assertTrue(any("repeated failures" in s for s in said))
 
     def test_uidvalidity_change_rewalks_without_duplicating(self):
@@ -229,7 +245,7 @@ class ImapTests(_Base):
         self.imap.validity = "2"
         self.imap.fetched.clear()
         self.assertEqual(mailarchive.sweep(log=lambda *a: None), 0)
-        self.assertEqual(self.imap.fetched, [41, 42])
+        self.assertEqual(self.imap.fetched, [42, 41])
         self.assertEqual(mailarchive.stats()["messages"], 2)
         self.assertEqual(len(self.blobs()), 2)
         self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "42")
@@ -238,8 +254,10 @@ class ImapTests(_Base):
     def test_limit_bounds_a_pass_and_the_next_pass_continues(self):
         self.use_imap({u: raw_message(f"<{u}@example.test>") for u in range(1, 6)})
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=2), 2)
-        self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "2")
+        self.assertEqual(self.imap.fetched, [5, 4])
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "4")
         self.assertEqual(mailarchive.sweep(log=lambda *a: None), 3)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
         self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "5")
 
 
@@ -308,7 +326,8 @@ class StoreTests(_Base):
         said = []
         self.assertEqual(mailarchive.sweep(log=said.append), 1)
         self.assertTrue(any("at cap" in s for s in said))
-        self.assertEqual(mailarchive.stats()["bytes"], len(a))
+        self.assertEqual(mailarchive.stats()["messages"], 1)
+        self.assertEqual(mailarchive.stats()["bytes"], len(b))   # newest first
 
     def test_lookup_and_have_many_serve_only_archived_mail(self):
         a = raw_message(MID_A)
@@ -359,7 +378,7 @@ class StoreTests(_Base):
 
         class PeekingIMAP(FakeIMAP):
             def uid(self, cmd, *args):
-                if cmd == "fetch" and int(args[0]) == 3:
+                if cmd == "fetch" and int(args[0]) == 2:      # third fetched
                     other = sqlite3.connect(db)
                     try:
                         seen["rows"] = other.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
