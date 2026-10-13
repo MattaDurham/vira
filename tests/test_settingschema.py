@@ -193,6 +193,7 @@ class Workers(unittest.TestCase):
         with mock.patch("server.jobboards.health", side_effect=OSError("boom")), \
                 mock.patch("server.textindex.status", return_value={"available": False}), \
                 mock.patch("server.mediaarchive.stats", return_value={"enabled": True, "available": False}), \
+                mock.patch("server.mailarchive.stats", return_value={"enabled": True, "available": False}), \
                 mock.patch("server.aihealth.summary", return_value={"state": "ok", "checked_at": "2026-10-13T09:00:00"}), \
                 mock.patch("server.contactintel.status", return_value={"pending_contacts": 2}), \
                 mock.patch.object(executive, "config", return_value=dict(executive.DEFAULT_CONFIG)), \
@@ -201,7 +202,7 @@ class Workers(unittest.TestCase):
                 mock.patch.object(settings, "get", side_effect=lambda k: settingschema.DEFAULTS[k]):
             out = workers.status("idle - last sweep 2026-10-01T00:00")
         rows = {w["id"]: w for w in out["workers"]}
-        self.assertEqual(list(rows), ["assistant", "intake", "textindex", "media_archive",
+        self.assertEqual(list(rows), ["assistant", "intake", "textindex", "media_archive", "mail_archive",
                                       "ai_health", "receipts", "boards"])
         self.assertIn("status unavailable", rows["boards"]["last_error"])
         self.assertEqual(rows["receipts"]["last_run"], "2026-10-01T00:00")
