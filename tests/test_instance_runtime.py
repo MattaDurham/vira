@@ -188,7 +188,7 @@ class OwnershipTests(unittest.TestCase):
         from server import main
         names = ("watcher", "mail_watcher", "whatsapp_watcher", "indexer", "text_indexer",
                  "idea_indexer", "doc_indexer", "doc_thumb_sweeper", "circle_watcher",
-                 "media_archiver", "vault_indexer")
+                 "media_archiver", "mail_archiver", "vault_indexer")
         patchers = [mock.patch.object(main, name) for name in names]
         others = [mock.patch.object(instance, "start_automation"),
                   mock.patch.object(main, "_start_account_workers"),

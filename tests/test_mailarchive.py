@@ -348,5 +348,27 @@ class StoreTests(_Base):
                           "mail archive backlog: +0 (total 3)"])
 
 
+class Contracts(unittest.TestCase):
+    def test_every_config_key_it_reads_has_a_default(self):
+        """settings.get raises KeyError on a key with no DEFAULTS entry (the
+        mail_body_index incident)."""
+        from server import settings
+        for key in ("mail_archive_enabled", "mail_archive_root",
+                    "mail_archive_max_gb", "mail_archive_interval_min"):
+            self.assertIn(key, settings.DEFAULTS)
+
+    def test_the_archiver_is_built_and_started(self):
+        """main.py starts the thread, and the startup test patches it by
+        name so a suite run never sweeps a checkout: the first full run
+        of this branch did exactly that after the thread's 90-second
+        settle, and tests/test_zz_data_untouched.py caught it."""
+        root = Path(__file__).resolve().parent.parent
+        src = (root / "server" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("mailarchive.Archiver(", src)
+        self.assertIn("mail_archiver.start()", src)
+        startup_test = (root / "tests" / "test_instance_runtime.py").read_text(encoding="utf-8")
+        self.assertIn('"mail_archiver"', startup_test)
+
+
 if __name__ == "__main__":
     unittest.main()
