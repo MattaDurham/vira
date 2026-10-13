@@ -235,15 +235,21 @@ class EmailResourceIndexTests(SourceIndexFixture):
         self.assertEqual(row["graph_id"], "full-graph-object-id")
         self.assertNotIn("message_id", row)
 
-    def test_graph_plain_text_links_are_retained_before_body_truncation(self):
+    def test_graph_long_body_is_stored_whole_with_its_links(self):
+        # A 20,000-character cap once cut bodies like this one and dropped
+        # the link after the cut. Bodies are stored whole now.
+        long_body = "x" * 50_000
         msg = self.graph_message()
-        msg["body"] = {"contentType": "text", "content": "x" * textindex.MAIL_BODY_MAX
-                       + "\nPay your invoice at " + PAY_URL}
+        msg["body"] = {"contentType": "text",
+                       "content": long_body + "\nPay your invoice at " + PAY_URL}
         with mock.patch.object(msgraph, "_graph_request", return_value={"value": [msg]}):
             textindex.backfill_graph(ACCOUNT, log=lambda *a: None)
         row = textindex.lookup_sources(["mail:<invoice@example.test>"])["mail:<invoice@example.test>"]
-        self.assertEqual(len(row["text"]), textindex.MAIL_BODY_MAX)
+        self.assertEqual(row["text"], long_body + " Pay your invoice at " + PAY_URL)
         self.assertEqual(row["links"][0]["url"], PAY_URL)
+        with closing(sqlite3.connect(self.path)) as con:
+            metadata = json.loads(con.execute("SELECT source_meta FROM items").fetchone()[0])
+        self.assertIs(metadata["body_complete"], True)
 
     def imap_message(self, mid=None):
         msg = EmailMessage()
@@ -280,6 +286,26 @@ class EmailResourceIndexTests(SourceIndexFixture):
             self.assertEqual(row["text"], "Your invoice is ready.")
         with closing(sqlite3.connect(self.path)) as con:
             self.assertEqual(con.execute("SELECT val FROM state").fetchone()[0], "42")
+
+    def test_imap_long_body_is_stored_whole(self):
+        long_body = "y" * 50_000
+        msg = EmailMessage()
+        msg["From"] = "billing@example.test"
+        msg["To"] = ACCOUNT
+        msg["Subject"] = "Long statement"
+        msg["Date"] = "Thu, 10 Sep 2026 14:00:00 +0000"
+        msg["Message-ID"] = "<long@example.test>"
+        msg.set_content(long_body + "\nPay your invoice at " + PAY_URL)
+        with mock.patch.object(textindex.imaplib, "IMAP4_SSL", return_value=FakeIMAP({7: msg.as_bytes()})), \
+             mock.patch.object(textindex.channels, "imap_special_folder", return_value="[Example]/All Mail"), \
+             mock.patch.object(textindex.mailmod, "keychain_password", return_value="synthetic-password"):
+            self.assertEqual(textindex.backfill_imap(self.account, log=lambda *a: None), 1)
+        row = textindex.lookup_sources(["mail:<long@example.test>"])["mail:<long@example.test>"]
+        self.assertEqual(row["text"], long_body + " Pay your invoice at " + PAY_URL)
+        self.assertEqual(row["links"][0]["url"], PAY_URL)
+        with closing(sqlite3.connect(self.path)) as con:
+            metadata = json.loads(con.execute("SELECT source_meta FROM items").fetchone()[0])
+        self.assertIs(metadata["body_complete"], True)
 
 
 if __name__ == "__main__":
