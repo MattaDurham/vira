@@ -147,8 +147,9 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             # The landing decision is the HARNESS's card, not the session's
             # closing question: a merge/test/discard question that lives only
             # in a transcript is how a branch drifts into the orphan sweeper
-            # (owner, 2026-09-02). runner.offer_landing serves the test
-            # instance and raises the card the moment the turn parks.
+            # (owner, 2026-09-02). runner.offer_landing raises the card the
+            # moment the turn parks; a test instance is served only when the
+            # owner asks for one from it (2026-10-12).
             #
             # The card goes up only over WORK (offer_landing reads git), so
             # the promise is conditional here too. Every writing session is
@@ -158,11 +159,12 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             # prompt. Their empty branch is removed at session end
             # (session._tidy_worktree).
             "WHEN YOUR TURN ENDS, VIRA HANDLES THE LANDING. If you changed "
-            "files on this branch, it serves a fully functional instance of "
-            "it and raises the merge / keep playing / discard decision card "
-            "itself. Do NOT ask whether to merge, test or discard, and do "
+            "files on this branch, it opens the PR and raises the merge / "
+            "try it first / keep playing / discard decision card itself; a "
+            "fresh test instance is served only when the owner picks Try it "
+            "first. Do NOT ask whether to merge, test or discard, and do "
             "not end on that question - end with what you built and what to "
-            "look at on the test instance. If you changed no file (your "
+            "look at when they try it. If you changed no file (your "
             "work went through Vira's tools, or you only read and "
             "reported), there is nothing to land: no card goes up, the "
             "empty branch is removed when the session ends, and you end "

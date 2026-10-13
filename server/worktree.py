@@ -351,6 +351,20 @@ def _instance_alive(wt):
         return False
 
 
+def instance_port(wt):
+    """The port of the live test instance `branch.sh serve` keeps in this
+    worktree, or None when there is none (no file, bad json, dead pid)."""
+    if not wt or not _instance_alive(wt):
+        return None
+    try:
+        import json
+        port = int(json.loads((Path(wt) / ".test-instance.json")
+                              .read_text(encoding="utf-8")).get("port"))
+        return port or None
+    except Exception:  # noqa: BLE001 — alive but unreadable reads as none
+        return None
+
+
 def _git_out(cwd, *args):
     """stdout of a git command, or None if it could not run."""
     try:

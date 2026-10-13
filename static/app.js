@@ -9603,12 +9603,12 @@ const choiceKicker = (p) =>
   p.kind === "landing" ? "Ready to land"
   : p.kind === "ask" ? "Vira is asking" : "Vira needs approval";
 
-// The harness's merge / keep playing / discard card (runner.offer_landing):
-// the ask card's numbered picker under a head that carries what the owner
-// needs before deciding - the branch, what it holds, the test instance that
-// was served for it, and the PR. The links are the point: the card exists
-// so "spin up a test instance" stops being an answer and becomes something
-// already on screen.
+// The harness's merge / try it first / keep playing / discard card
+// (runner.offer_landing): the ask card's numbered picker under a head that
+// carries what the owner needs before deciding - the branch, what it holds,
+// the PR, and the test instance once Try it first has served one (the card
+// comes back with the link). Serving is on request since 2026-10-12: a
+// merge the owner is already sure of should not wait a minute for a clone.
 function landingCard(sid, p) {
   const wrap = el("div", "landing-card");
   const head = el("div", "landing-head");

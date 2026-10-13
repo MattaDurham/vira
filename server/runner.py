@@ -182,25 +182,35 @@ RESULT_KEEP = 20_000
 # dispatched writer session parks with work on its branch. It never depends
 # on the model remembering to ask, and the model is told NOT to ask.
 #
-# The test instance is not one of the answers any more - it is served BEFORE
-# the card goes up (branch.sh serve --local: a personal snapshot is never
-# auto-bridged to the tailnet), so the card carries a URL to look at rather
-# than an offer to make one. The three verdicts that remain are the owner's:
+# The test instance is one of the answers, served only when asked for.
+# From 2026-09-02 to 2026-10-12 it was served BEFORE the card went up, so
+# the card carried a URL rather than an offer - and every landing paid a
+# minute of clone-and-boot whether the owner looked or not, while a plain
+# `serve` reused whatever instance was already up, two days old if that is
+# how old it was (owner, 2026-10-12: "if I'm ready to merge based on what I
+# already know, I don't want to waste the time"). Now Try it first serves a
+# FRESH local instance (branch.sh serve --fresh --local: a personal snapshot
+# is never auto-bridged to the tailnet) and the card comes back with its
+# link; the other three verdicts are the owner's as before:
 LANDING_KIND = "landing"
-LANDING_VERDICTS = ("merge", "keep", "discard")
+LANDING_VERDICTS = ("merge", "test", "keep", "discard")
 LANDING_OPTIONS = [
     {"label": "Merge it",
      "description": "Land this branch on main: the session commits, "
                     "catches up with main and re-tests; then Vira merges "
                     "(preflight, the suite gate, the required PR), pushes, "
-                    "and tears the branch and its test instance down."},
+                    "and tears the branch and any test instance down."},
+    {"label": "Try it first",
+     "description": "Serve a fresh, local-only instance of this branch "
+                    "(about a minute) and bring this card back with its "
+                    "link, so you can look before deciding."},
     {"label": "Keep playing",
-     "description": "Leave the branch and its test instance up. Reply below "
-                    "to keep working; the card comes back when the next turn "
-                    "ends."},
+     "description": "Leave the branch, and any test instance, as they are. "
+                    "Reply below to keep working; the card comes back when "
+                    "the next turn ends."},
     {"label": "Discard",
      "description": "Close the session and delete the branch, its worktree "
-                    "and its test instance. The PR, if one was opened, "
+                    "and any test instance. The PR, if one was opened, "
                     "closes unmerged with its diff kept on GitHub."},
 ]
 # What a parked session is steered with when the owner says Merge. It
@@ -1030,22 +1040,33 @@ class Runner:
         return out.returncode == 0, ((out.stdout or "")
                                      + (out.stderr or "")).strip()
 
-    def _serve_instance(self):
+    def _serve_instance(self, fresh=False):
         """Serve the branch as a LOCAL-ONLY branch instance and return
         (url, note). --local is not optional: the snapshot behind a test
         instance is the owner's personal data, and bridging it to the tailnet
         needs his explicit approval per instance (the standing rule in
-        branch.sh). A `serve` on a branch already serving prints "already
-        running (pid N, port P)" and exits 0, so a second park reuses the
-        instance instead of minting one per turn."""
-        ok, text = self._branch_sh(["serve", self._landing_slug(), "--local"],
-                                   SERVE_TIMEOUT)
+        branch.sh). A plain `serve` on a branch already serving prints
+        "already running (pid N, port P)" and exits 0; `fresh` stops that
+        instance and re-clones the snapshot first, which is what Try it
+        first asks for - the owner is about to review the branch as it is
+        now, not as it was when some earlier turn served it."""
+        argv = ["serve", self._landing_slug(), "--local"]
+        if fresh:
+            argv.append("--fresh")
+        ok, text = self._branch_sh(argv, SERVE_TIMEOUT)
         m = (re.search(r"localhost:(\d{4})", text)
              or re.search(r"port (\d{4})", text))
         if ok and m:
             return f"http://localhost:{m.group(1)}", ""
         tail = text.strip().splitlines()
         return "", (tail[-1] if tail else "no output")
+
+    def _running_instance_url(self):
+        """The branch's test instance if one is already up (an earlier Try
+        it first, or the session served one itself), else "". Carried on
+        the card as a link; never a reason to serve."""
+        port = worktree.instance_port(self.spec.get("worktree"))
+        return f"http://localhost:{port}" if port else ""
 
     def _pr_url(self):
         """The open PR for this branch, if GitHub knows one - asked of gh,
@@ -1120,9 +1141,9 @@ class Runner:
 
         The card only goes up over WORK: a session that read and reported
         has nothing to land, and a card offering to merge nothing is what
-        would teach the owner to dismiss these. The serve and the PR run in
-        a thread because a data clone plus boot takes a minute; the card
-        follows them so it carries a URL, not a promise."""
+        would teach the owner to dismiss these. The PR runs in a thread (gh
+        is slow); the card follows it. Nothing is served here: Try it first
+        on the card does that, on request (owner, 2026-10-12)."""
         if self.landing is not None:
             self.finished_cleanly = True
             self.finished_by_owner = True
@@ -1138,21 +1159,26 @@ class Runner:
         branch = self.spec["branch"]
         self.append(f"[vira] landing: {branch} carries "
                     f"{dirty} uncommitted path(s), {ahead} commit(s) ahead "
-                    "of main - serving a test instance\u2026\n")
-        test_url, serve_note = "", ""
-        if self.spec.get("auto_serve", True) is not False:
-            test_url, serve_note = await asyncio.to_thread(self._serve_instance)
+                    "of main\n")
         pr_url, pr_note = await asyncio.to_thread(self._ensure_pr)
+        test_url = await asyncio.to_thread(self._running_instance_url)
         if test_url:
-            self.append(f"[vira] test instance: {test_url}  ("
-                        f"local only)\n")
-        elif serve_note:
-            self.append(f"[vira] test instance could not start: "
-                        f"{serve_note}\n")
+            self.append(f"[vira] test instance already up: {test_url}  "
+                        "(local only)\n")
         if pr_url:
             self.append(f"[vira] pull request: {pr_url}\n")
         elif pr_note:
             self.append(f"[vira] {pr_note}\n")
+        self._raise_landing_card(dirty=dirty, ahead=ahead, test_url=test_url,
+                                 pr_url=pr_url, pr_note=pr_note)
+        return True
+
+    def _raise_landing_card(self, **ctx):
+        """Put the card up over `ctx` (dirty, ahead, test_url, serve_note,
+        pr_url, pr_note) and remember it, so Try it first can bring the
+        same card back with a link added, without re-reading git or gh."""
+        self._landing_ctx = ctx
+        branch = self.spec["branch"]
         req_id = uuid.uuid4().hex[:8]
         question = f"{branch} is ready - what happens to it?"
         self.state["pending"].append({
@@ -1160,17 +1186,43 @@ class Runner:
             "summary": question, "options": list(LANDING_OPTIONS),
             "allow_text": False, "branch": branch,
             "worktree": self.spec.get("worktree"),
-            "test_url": test_url, "serve_note": serve_note,
-            "pr_url": pr_url, "pr_note": pr_note,
-            "dirty": dirty, "ahead": ahead, "created": time.time(),
+            "test_url": ctx.get("test_url") or "",
+            "serve_note": ctx.get("serve_note") or "",
+            "pr_url": ctx.get("pr_url") or "", "pr_note": ctx.get("pr_note") or "",
+            "dirty": ctx.get("dirty") or 0, "ahead": ctx.get("ahead") or 0,
+            "created": time.time(),
         })
         self.record_card(req_id, LANDING_KIND, question)
         self.flush_state()
-        return True
+
+    async def _try_it_first(self):
+        """Try it first: serve a FRESH local instance and bring the card
+        back with its link. Its own task, so Stop and a typed reply stay
+        live during the minute the clone and boot take; the card returns
+        only if the session is still parked on it - a reply or a later
+        verdict in the meantime wins, and the link is then a line in the
+        feed."""
+        ctx = dict(getattr(self, "_landing_ctx", None) or {})
+        self.append("[vira] try it first - serving a fresh test "
+                    "instance\u2026\n")
+        self.flush_state()
+        test_url, note = await asyncio.to_thread(self._serve_instance, True)
+        if test_url:
+            self.append(f"[vira] test instance: {test_url}  (local only)\n")
+        else:
+            self.append(f"[vira] test instance could not start: {note}\n")
+        if (self.awaiting_reply and self.landing is None
+                and not self.closing and not self.interrupted):
+            ctx.update(test_url=test_url, serve_note=note)
+            self._raise_landing_card(**ctx)
+        else:
+            self.flush_state()
 
     async def handle_landing(self, cmd):
         """The owner's verdict on the landing card (control op `landing`).
-        keep: the card comes down and the session stays parked. discard and
+        keep: the card comes down and the session stays parked. test: the
+        card comes down while a fresh instance is served, then comes back
+        with its link (_try_it_first). discard and
         merge: the session ends cleanly and finished_by_owner - the ACT is
         the server's (orphanwork.land_session waits for the ledger row to
         leave `running`, then runs branch.sh). merge first steers a parked
@@ -1186,8 +1238,11 @@ class Runner:
             return
         self._drop_landing_card()
         if verdict == "keep":
-            self.append("[vira] keeping the branch and its test instance - "
-                        "reply to keep working\n")
+            self.append("[vira] keeping the branch as it is - reply to keep "
+                        "working\n")
+            return
+        if verdict == "test":
+            self._serving = asyncio.create_task(self._try_it_first())
             return
         self.state["landing"] = verdict
         if verdict == "discard":
