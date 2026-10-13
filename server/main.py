@@ -80,13 +80,14 @@ from . import (
                routines,
                routinesrc,
                search as msearch, secrets, send, sendpref, session,
-               sessiondiag, settings, restart, runtimework,
+               sessiondiag, settings, settingschema, restart, runtimework,
                genreroutes,
                skins,
                subs_visuals, worldgraph, worldsubsets,
                subscriptions, suggest, threadread, triage, uistate, update, vault,
                doctags, walkthroughs,
-               whatsapp)
+               whatsapp, workers,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -3626,6 +3627,7 @@ class VaultSourceReq(BaseModel):
     write_dirs: list[str] | None = None
     protected_dirs: list[str] | None = None
     model_exclude_dirs: list[str] | None = None
+    exclude_dirs: list[str] | None = None
     dirs: list[str] | None = None
     allow_publish: bool | None = None
     default_destination: bool | None = None
@@ -5432,6 +5434,34 @@ class ConfigReq(BaseModel):
     # Providers switched OFF (models.disabled_providers). Ids only; an id
     # the registry does not know is refused rather than stored inert.
     providers_disabled: list[str] | None = None
+
+
+# ---------- settings: the one table, the one writer ----------
+# GET hands the Config window every key with its group, label, help, type,
+# default and current value (server/settingschema.py). POST writes any set
+# of keys through settings.save, which validates every value first and
+# writes under the shared file lock. The older per-feature endpoints
+# (/api/assistant/config, /api/notify/config, /api/config) stay as thin
+# wrappers over the same writer.
+
+@app.get("/api/settings")
+def api_settings():
+    return settingschema.payload(settings.raw())
+
+
+@app.post("/api/settings")
+def api_settings_set(req: dict):
+    try:
+        settings.save(req)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    rows = settingschema.describe(settings.raw())
+    return {"saved": sorted(req), "values": {r["key"]: r["value"] for r in rows}}
+
+
+@app.get("/api/workers")
+def api_workers():
+    return workers.status(getattr(receipts_sweeper, "status", ""))
 
 
 @app.post("/api/config")

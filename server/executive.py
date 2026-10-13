@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import data as crm
 from . import commitments, jsonstore, notify, settings
+from . import settingschema
 from .filelock import locked
 
 STATE = settings.ROOT / "data" / "assistant-state.json"
@@ -21,40 +22,23 @@ _tick_lock = threading.Lock()
 _thread = None
 _worker_error = None
 
-DEFAULT_CONFIG = {
-    "assistant_enabled": False,
-    "assistant_contact_updates": True,
-    "assistant_notify": False,
-    "assistant_quiet_start": 22,
-    "assistant_quiet_end": 8,
-    "assistant_timezone": "",
-    "assistant_calendar_auto_create": False,
-    "assistant_calendar_name": "",
-    "assistant_calendar_id": "",
-    "assistant_calendar_kids_name": "",
-    "assistant_calendar_kids_id": "",
-    "assistant_calendar_family_name": "",
-    "assistant_calendar_family_id": "",
-    "assistant_kids_names": "",
-    "assistant_calendar_work_start": 9,
-    "assistant_calendar_work_end": 17,
-    "assistant_calendar_block_minutes": 30,
-    "assistant_stale_days": 3,
-    "assistant_notify_daily_cap": 3,
-    "assistant_due_soon_hours": 24,
-    "assistant_debounce_s": 90,
-    "assistant_batch_size": 3,
-    "assistant_catchup_days": 14,
-    "mail_body_index": False,
-}
-_RANGES = {
-    "assistant_quiet_start": (0, 23), "assistant_quiet_end": (0, 23),
-    "assistant_stale_days": (1, 90), "assistant_notify_daily_cap": (1, 20),
-    "assistant_due_soon_hours": (1, 168), "assistant_debounce_s": (0, 3600),
-    "assistant_batch_size": (1, 10), "assistant_catchup_days": (1, 90),
-    "assistant_calendar_work_start": (0, 23), "assistant_calendar_work_end": (1, 24),
-    "assistant_calendar_block_minutes": (15, 240),
-}
+# The keys the assistant form may write, with defaults from the one table
+# (server/settingschema.py). The form spans four groups there: assistant,
+# notifications, calendar, and the mail index switch.
+ASSISTANT_KEYS = (
+    "assistant_enabled", "assistant_contact_updates", "assistant_notify",
+    "assistant_quiet_start", "assistant_quiet_end", "assistant_timezone",
+    "assistant_calendar_auto_create", "assistant_calendar_name",
+    "assistant_calendar_id", "assistant_calendar_kids_name",
+    "assistant_calendar_kids_id", "assistant_calendar_family_name",
+    "assistant_calendar_family_id", "assistant_kids_names",
+    "assistant_calendar_work_start", "assistant_calendar_work_end",
+    "assistant_calendar_block_minutes", "assistant_stale_days",
+    "assistant_notify_daily_cap", "assistant_due_soon_hours",
+    "assistant_debounce_s", "assistant_batch_size", "assistant_catchup_days",
+    "mail_body_index",
+)
+DEFAULT_CONFIG = settingschema.defaults_for(ASSISTANT_KEYS)
 
 
 def config():
@@ -65,26 +49,11 @@ def config():
 def save_config(updates):
     if not isinstance(updates, dict) or set(updates) - DEFAULT_CONFIG.keys():
         raise ValueError("unknown assistant setting")
-    for key, value in updates.items():
-        default = DEFAULT_CONFIG[key]
-        if isinstance(default, bool):
-            if type(value) is not bool:
-                raise ValueError(f"{key} must be true or false")
-        elif key in _RANGES:
-            lo, hi = _RANGES[key]
-            if type(value) is not int or not lo <= value <= hi:
-                raise ValueError(f"{key} must be an integer from {lo} to {hi}")
-        elif not isinstance(value, str) or len(value) > 200:
-            raise ValueError(f"{key} must be a short string")
-        if key == "assistant_timezone" and value:
-            try:
-                ZoneInfo(value)
-            except (ZoneInfoNotFoundError, ValueError) as exc:
-                raise ValueError("use a valid IANA timezone, or leave it empty") from exc
+    settingschema.validate_many(updates)      # type, range and zone rules
     proposed = dict(config(), **updates)
     if proposed["assistant_calendar_work_start"] >= proposed["assistant_calendar_work_end"]:
         raise ValueError("Calendar work hours must end after they start")
-    jsonstore.mutate(settings.CONFIG_PATH, lambda s: s.update(updates), {})
+    settings.save(updates)
     return config()
 
 

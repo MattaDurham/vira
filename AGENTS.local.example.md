@@ -228,11 +228,17 @@ permission gate.
 - **A new store that cannot be regenerated joins `backup.FILES`** in
   `server/backup.py`. Rebuildable indexes never hold the only copy of
   anything.
-- **Every key read with `settings.get` needs a `settings.DEFAULTS` entry and
-  a line in `config.example.json`**: a missing default raises KeyError and
-  has broken startup twice. Config writes go through `onboard.config_set`.
-  An empty path setting maps to a sentinel, because `Path("")` resolves to
-  the working directory.
+- **Every config key is one row in `server/settingschema.py`** (group,
+  type, default, label, help). `settings.DEFAULTS`, the assistant's and
+  the AI module's default tables, the Config window's forms and
+  `config.example.json` are all derived from it; a missing default raises
+  KeyError and has broken startup twice, and `tests/test_settingschema.py`
+  fails on any key read from config that the table lacks. After editing
+  the table run `python -m server.settingschema example --write` to
+  regenerate the template. Config writes go through `settings.save` (or
+  `onboard.config_set`, which calls it): it validates every value first and
+  writes under the shared file lock. An empty path setting maps to a
+  sentinel, because `Path("")` resolves to the working directory.
 - **Agents never hand-write `data/config.json` or store files.** Agent
   writes go through Vira's validated tools (`viratools.WRITE_TOOLS`).
 - **Secrets go in the Keychain through `settings.keychain_service()`**,

@@ -37,6 +37,9 @@ def policy(row=None, primary=False):
         "write_scope": "all" if row.get("write_scope") == "all" else "selected",
         "model_exposure": bool(row.get("model_exposure", True)),
         "model_exclude_dirs": list(row.get("model_exclude_dirs") or []),
+        # Folders never indexed at all, per vault (the global
+        # vault_exclude_dirs applies to every vault; this one to this vault).
+        "exclude_dirs": list(row.get("exclude_dirs") or []),
         "purpose": str(row.get("purpose") or ""),
         "contexts": list(row.get("contexts") or []),
         "capture_dir": str(row.get("capture_dir") or "inbox"),

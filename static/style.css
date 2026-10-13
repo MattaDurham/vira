@@ -9005,3 +9005,29 @@ mark.doc-term {
 .graph-copy-item .btn { flex: 0 1 auto; max-width: 100%; white-space: normal; }
 
 .setup-adv [hidden] { display: none; }
+
+/* ---- settings forms (static/settings.js): one renderer for every Config
+   card that edits keys from server/settingschema.py ---- */
+.settings-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px 14px; margin: 8px 0; }
+.settings-form > .assistant-check, .settings-form > .settings-note, .settings-form > .settings-actions,
+.settings-form > .settings-error, .settings-form > .settings-sub { grid-column: 1 / -1; }
+.settings-form .field { margin: 0; min-width: 0; }
+.settings-form .field input:not([type="checkbox"]), .settings-form .field select, .settings-form .field textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.settings-form .field textarea { min-height: 64px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.settings-form .assistant-check { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.settings-form .assistant-check input { width: 15px; height: 15px; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--accent); }
+.settings-form .settings-help { display: block; font-size: 11px; color: var(--text-faint); margin-top: 3px; line-height: 1.4; }
+.settings-form .settings-default { color: var(--text-faint); font-size: 11px; }
+.settings-form .settings-sub { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-faint); margin: 10px 0 0; }
+.settings-form .settings-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.settings-form .settings-error { color: var(--red); font-size: 12px; margin: 0; }
+.settings-form .settings-note { font-size: 12px; color: var(--text-dim); margin: 0; line-height: 1.5; }
+.settings-saved { font-size: 12px; color: var(--text-faint); }
+.worker-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.worker-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.worker-row .worker-switch { grid-row: 1 / span 3; display: flex; align-items: center; height: 22px; }
+.worker-row .worker-switch input { width: 16px; height: 16px; accent-color: var(--accent); }
+.worker-row .worker-switch.none { width: 16px; }
+.worker-row .worker-title { font-size: 13px; color: var(--text-bright); }
+.worker-row .worker-meta { font-size: 11px; color: var(--text-faint); line-height: 1.4; }
+.worker-row .worker-error { font-size: 11px; color: var(--red); }

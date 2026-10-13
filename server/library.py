@@ -345,8 +345,7 @@ def _read_page(row):
 
 def _scan(spec):
     """Every page of a vault the Library may show, in path order."""
-    exclude = {str(d).strip().lower() for d in (settings.get("vault_exclude_dirs") or [])
-               if str(d).strip()}
+    exclude = {name.lower() for name in vault.exclude_names(spec)}
     policy = vault._read_policy()
     rows = []
     for row in worldgraph._note_paths(spec):

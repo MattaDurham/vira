@@ -50,14 +50,10 @@ def crm_target() -> Path:
 
 
 def config_set(*, _validate=None, **updates):
-    """Merge keys into data/config.json (atomic). settings has no setter and
-    suggest.save_config filters to the AI keys only — this one is for
-    identity/data keys (vault_root, crm_root)."""
-    def update(cfg):
-        if _validate is not None:
-            _validate(cfg)
-        cfg.update(updates)
-    return jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
+    """Merge keys into data/config.json through the one validated writer
+    (settings.save). Kept as the name every Setup caller already uses;
+    `_validate(cfg)` runs inside the file lock on the stored document."""
+    return settings.save(updates, validate=_validate)
 
 
 # ---------- contact sources ----------
@@ -497,7 +493,8 @@ def _paths_overlap(a, b):
 
 _VAULT_POLICY_FIELDS = (
     "read_enabled", "write_enabled", "write_scope", "model_exposure", "purpose", "contexts",
-    "capture_dir", "write_dirs", "protected_dirs", "model_exclude_dirs", "allow_publish", "dirs",
+    "capture_dir", "write_dirs", "protected_dirs", "model_exclude_dirs", "exclude_dirs",
+    "allow_publish", "dirs",
 )
 
 
@@ -523,7 +520,7 @@ def _vault_policy(existing, changes, primary=False):
             raise ValueError(f"{key} must be true or false")
     if policy.get("write_scope", "selected") not in ("all", "selected"):
         raise ValueError("write_scope must be all or selected")
-    for key in ("write_dirs", "protected_dirs", "model_exclude_dirs", "dirs"):
+    for key in ("write_dirs", "protected_dirs", "model_exclude_dirs", "exclude_dirs", "dirs"):
         if key in policy:
             if not isinstance(policy[key], list):
                 raise ValueError(f"{key} must be a list of relative folders")
@@ -680,7 +677,7 @@ def vault_source_set(path, name="", source_id=None, connect_only=False, **change
                       connected=root.is_dir(), removable=True, legacy=False,
                       default_destination=cfg.get("vault_default_destination") == sid)
 
-    jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
+    settings.save({}, validate=update)     # the one locked, validated writer
     return result
 
 
@@ -700,7 +697,7 @@ def vault_source_remove(source_id):
         # Keep a selected destination even when unavailable. An unqualified
         # save must fail closed until the owner chooses a new default.
 
-    jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
+    settings.save({}, validate=update)     # the one locked, validated writer
     return {"id": sid, "removed": True}
 
 
@@ -716,7 +713,7 @@ def vault_default_set(source_id):
                 raise ValueError("the default destination must be connected and writable")
         cfg["vault_default_destination"] = sid
 
-    jsonstore.mutate(settings.CONFIG_PATH, update, {}, indent=2)
+    settings.save({}, validate=update)     # the one locked, validated writer
     return {"default_destination": sid}
 
 
@@ -737,10 +734,22 @@ def status():
     # module cycle at server startup.
     from . import vault
     vault_sources = []
+    # The per-vault sheet in Config > Brain also shows the two settings
+    # other windows used to own: the Library's machine-output folders
+    # (library_machine_dirs, keyed by vault id) and Image Atlas membership
+    # (atlas_vaults). Both stay in config; the sheet is just their one home.
+    machine = settings.get("library_machine_dirs") or {}
+    machine = machine if isinstance(machine, dict) else {}
+    atlas_ids = {str(r.get("id") or "") for r in (settings.get("atlas_vaults") or [])
+                 if isinstance(r, dict)}
     for spec in vault.source_specs():
         connected = spec["root"].is_dir()
         notes = _md_count(spec["root"]) if connected else 0
+        chosen = machine.get(spec["id"])
         vault_sources.append({
+            "machine_dirs": [str(d) for d in chosen] if isinstance(chosen, list) else [],
+            "machine_source": "owner" if isinstance(chosen, list) else "suggested",
+            "atlas": bool(spec["primary"] or spec["id"] in atlas_ids),
             **{key: spec[key] for key in _VAULT_POLICY_FIELDS if key in spec},
             "id": spec["id"], "name": spec["name"],
             "root": str(spec["root"]), "primary": spec["primary"],

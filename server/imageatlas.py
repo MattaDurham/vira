@@ -139,7 +139,8 @@ def atlas():
     return atlas_for(PRIMARY)
 
 
-def register_vault(name: str, root: str, create: bool = False) -> dict:
+def register_vault(name: str, root: str, create: bool = False,
+                   vid: str | None = None) -> dict:
     """Add a vault to the registry (and optionally create its skeleton).
     Config is the store (atlas_vaults), written through onboard.config_set —
     the sanctioned identity-key writer. Directory creation lands in the
@@ -147,10 +148,15 @@ def register_vault(name: str, root: str, create: bool = False) -> dict:
     name = (name or "").strip()
     if not name:
         raise ValueError("a vault needs a name")
-    vid = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
-    vid = re.sub(r"-+", "-", vid)[:40]
-    if not VAULT_ID_RE.match(vid or ""):
-        raise ValueError("that name does not reduce to a usable id")
+    if vid:
+        vid = str(vid).strip().lower()
+        if not VAULT_ID_RE.match(vid):
+            raise ValueError("that vault id is not usable")
+    else:
+        vid = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
+        vid = re.sub(r"-+", "-", vid)[:40]
+        if not VAULT_ID_RE.match(vid or ""):
+            raise ValueError("that name does not reduce to a usable id")
     if vid in RESERVED_IDS or vault_by_id(vid) is not None:
         raise ValueError(f"a vault named '{vid}' already exists")
     p = Path(root).expanduser() if root else (Path.home() / "vaults" / vid)
@@ -176,6 +182,24 @@ def register_vault(name: str, root: str, create: bool = False) -> dict:
     onboard.config_set(atlas_vaults=rows)
     return {"id": vid, "name": name, "root": str(p), "exists": True,
             "primary": False}
+
+
+def forget_vault(vid: str) -> dict:
+    """Drop a registered atlas vault row (never the primary, never any
+    file). The Brain card's "Include in Image Atlas" switch turns this
+    way; the built atlas sidecar stays on disk for a re-register."""
+    from . import onboard
+    vid = str(vid or "").strip().lower()
+    if not vid or vid in RESERVED_IDS or vid == PRIMARY:
+        raise ValueError("the primary vault cannot be removed from the atlas")
+    rows = [r for r in (settings.get("atlas_vaults") or []) if isinstance(r, dict)]
+    keep = [r for r in rows if str(r.get("id") or "") != vid]
+    if len(keep) == len(rows):
+        raise KeyError(vid)
+    onboard.config_set(atlas_vaults=keep)
+    with _lock:
+        _active.pop(vid, None)
+    return {"id": vid, "removed": True}
 
 
 # ---------------------------------------------------------------- build ----

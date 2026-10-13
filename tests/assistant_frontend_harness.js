@@ -133,50 +133,64 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   await ui.load();
   assert.equal(card("r1").querySelector(".assistant-evidence"), evidence, "unchanged polling preserves the open evidence DOM");
 
-  const editingForm = host.querySelector("form");
-  field("assistant_calendar_id").value = "id:work-id";
-  await editingForm.emit("input");
   snapshot.contact.errors = [{ person_id: "sample", error: "ValueError", retry_at: 1900000000 }];
   await ui.load();
-  assert.equal(host.querySelector("form"), editingForm, "polling preserves unsaved settings");
   assert.match(text(), /Needs attention/);
   assert.equal(card("r1").querySelector(".assistant-evidence").open, true);
   await button("Open affected contact").emit("click");
   assert.deepEqual(opened, ["sample"]);
+
+  // Settings moved to Config (2026-10-13): Attention only says where, and
+  // the status words sit next to the links so "Paused" is never a mystery.
+  assert.match(text(), /Assistant on · texts off · texts only\. Settings live in Config/);
+  assert.equal(host.querySelector("form"), null, "no settings form in Attention");
+  assert.equal(field("assistant_notify"), undefined);
+  assert.equal(field("mail_body_index"), undefined);
+  await button("Assistant settings").emit("click");
+  assert.equal(opened.at(-1), "setup");
+  await button("Notifications").emit("click");
+  assert.equal(opened.at(-1), "setup");
+  opened.length = 1;
 
   const done = button("Done", card("r1"));
   await done.emit("click");
   await done.emit("click");
   assert.equal(posts.length, 1, "repeated action gestures submit only once");
   assert.deepEqual(posts[0], { url: "/api/assistant/reminders/r1", data: { action: "done" } });
-  assert.equal(card("r1"), undefined, "completed reminders update even while settings are edited");
+  assert.equal(card("r1"), undefined, "completed reminders update");
   assert.match(text(), /Commitment marked done\./);
-  assert.equal(field("assistant_calendar_id").value, "id:work-id");
-  await button("Cancel edits").emit("click");
-  assert.equal(field("assistant_calendar_id").value, "saved-name");
-  assert.equal(field("assistant_calendar_name"), undefined, "calendar destinations never require typing an exact name");
 
-  field("assistant_notify").checked = true;
-  await host.querySelector("form").emit("input");
-  assert.equal(posts.length, 1, "editing a checkbox alone cannot enable texts");
-  await host.querySelector("form").emit("submit");
-  assert.equal(posts[1].url, "/api/assistant/config");
-  assert.equal(posts[1].data.assistant_notify, true);
-  assert.equal(posts[1].data.mail_body_index, false);
-  assert.equal(typeof posts[1].data.assistant_catchup_days, "number");
-  assert.equal(posts[1].data.assistant_calendar_work_start, 9);
-  assert.equal(posts[1].data.assistant_calendar_work_end, 17);
-  assert.equal(posts[1].data.assistant_calendar_block_minutes, 30);
-  assert.equal(posts[1].data.assistant_calendar_id, "");
-  assert.equal(posts[1].data.assistant_calendar_name, "Personal", "saving unrelated settings preserves a legacy destination");
-  assert.match(text(), /Assistant settings saved/);
-  const beforeEmailOptIn = posts.length;
-  field("mail_body_index").checked = true;
-  await host.querySelector("form").emit("input");
-  assert.equal(posts.length, beforeEmailOptIn, "email body indexing changes only after saving");
-  await host.querySelector("form").emit("submit");
+  // The calendar card Config mounts: lane pickers, work hours, auto-create,
+  // saving through /api/assistant/config. Nothing about texts or email.
+  const calendarHost = new Element("div");
+  await ui.calendarCard(calendarHost);
+  assert.equal(requests.at(-1), "/api/assistant");
+  const cfield = (name, parent = calendarHost) =>
+    [...parent.querySelectorAll("input"), ...parent.querySelectorAll("select")].find((n) => n.name === name);
+  assert.equal(cfield("assistant_calendar_id").value, "saved-name");
+  assert.equal(cfield("assistant_calendar_name"), undefined, "calendar destinations never require typing an exact name");
+  assert.equal(cfield("assistant_notify"), undefined, "reminder texts are not a calendar setting");
+  assert.equal(cfield("mail_body_index"), undefined, "the email index is not a calendar setting");
+  assert.equal(cfield("assistant_timezone"), undefined, "the time zone lives under You");
+  const calendarForm = calendarHost.querySelector("form");
+  const beforeCalendarEdit = posts.length;
+  await calendarForm.emit("input");
+  assert.equal(posts.length, beforeCalendarEdit, "editing alone writes nothing");
+  await calendarForm.emit("submit");
   assert.equal(posts.at(-1).url, "/api/assistant/config");
-  assert.equal(posts.at(-1).data.mail_body_index, true);
+  assert.equal(posts.at(-1).data.assistant_calendar_id, "");
+  assert.equal(posts.at(-1).data.assistant_calendar_name, "Personal", "saving unrelated settings preserves a legacy destination");
+  assert.equal(posts.at(-1).data.assistant_calendar_work_start, 9);
+  assert.equal(posts.at(-1).data.assistant_calendar_work_end, 17);
+  assert.equal(posts.at(-1).data.assistant_calendar_block_minutes, 30);
+  assert.equal(posts.at(-1).data.assistant_calendar_auto_create, false);
+  assert.equal("assistant_notify" in posts.at(-1).data, false, "the calendar card never writes notification keys");
+  assert.match(text(calendarHost), /Saved\./);
+  cfield("assistant_calendar_id").value = "id:work-id";
+  await calendarForm.emit("submit");
+  assert.equal(posts.at(-1).data.assistant_calendar_id, "work-id");
+  assert.equal(posts.at(-1).data.assistant_calendar_name, "");
+  assert.equal(button("Save calendar settings", calendarHost).disabled, false, "branch instances can change calendar settings");
 
   actionResult = { status: "uncertain", reason: "Check Calendar.app before retrying", can_create: false };
   await button("Create my event", card("c1")).emit("click");
@@ -215,15 +229,16 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   assert.match(text(), /still checks messages for commitments/);
   assert.doesNotMatch(text(), /Reminders use the profiles already saved/);
   snapshot.settings.assistant_contact_updates = true;
-  assert.equal(button("Save assistant settings").disabled, false, "branch instances can change assistant settings");
   assert.equal(button("Dismiss", card("c2")).disabled, false, "branch instances can act on reminders");
   snapshot.fixture = true;
   await ui.load();
   assert.match(text(), /Sample data/);
-  assert.equal(button("Save assistant settings").disabled, true);
   assert.equal(button("Dismiss", card("c2")).disabled, true);
+  const fixtureCalendar = new Element("div");
+  await ui.calendarCard(fixtureCalendar);
+  assert.equal(button("Save calendar settings", fixtureCalendar).disabled, true);
   const beforePreviewSubmit = posts.length;
-  await host.querySelector("form").emit("submit");
+  await fixtureCalendar.querySelector("form").emit("submit");
   assert.equal(posts.length, beforePreviewSubmit, "fixture form submission is guarded even without a mouse click");
   await ui.reveal("c2");
   assert.equal(card("c2").scroll.behavior, "auto", "reveal respects reduced motion");
@@ -278,43 +293,49 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
 
   snapshot = structuredClone(fixture);
   await ui.load();
-  const destination = field("assistant_calendar_id");
+  let calHost = new Element("div");
+  await ui.calendarCard(calHost);
+  const cf = (name, parent = calHost) =>
+    [...parent.querySelectorAll("input"), ...parent.querySelectorAll("select")].find((n) => n.name === name);
+  const destination = cf("assistant_calendar_id");
   assert.match(text(destination), /Auto - Personal \(system default\)/);
   assert.equal(destination.children.find((o) => o.value === "id:holidays-id").disabled, true);
   destination.value = "id:work-id";
   await destination.emit("change");
-  field("assistant_calendar_block_minutes").value = "45";
-  const editsBeforeRefresh = host.querySelector("form");
+  cf("assistant_calendar_block_minutes").value = "45";
+  const editsBeforeRefresh = calHost.querySelector("form");
   snapshot.calendar.destinations.calendars.push({id:"new-id",name:"New calendar",writable:true});
   const beforeDiscovery = posts.length;
-  await button("Refresh calendars").emit("click");
+  await button("Refresh calendars", calHost).emit("click");
   assert.equal(requests.at(-1), "/api/assistant/calendars?refresh=true");
   assert.equal(posts.length, beforeDiscovery, "discovering destinations never saves a setting");
-  assert.equal(host.querySelector("form"), editsBeforeRefresh);
-  assert.equal(field("assistant_calendar_id").value, "id:work-id");
-  assert.equal(field("assistant_calendar_block_minutes").value, "45");
+  assert.equal(calHost.querySelector("form"), editsBeforeRefresh);
+  assert.equal(cf("assistant_calendar_id").value, "id:work-id");
+  assert.equal(cf("assistant_calendar_block_minutes").value, "45");
   assert.match(text(destination), /New calendar/);
   await ui.load();
-  assert.equal(host.querySelector("form"), editsBeforeRefresh, "polling preserves an unsaved destination choice");
-  await host.querySelector("form").emit("submit");
+  assert.equal(calHost.querySelector("form"), editsBeforeRefresh, "Attention polling never touches the Config card");
+  await calHost.querySelector("form").emit("submit");
   assert.equal(posts.at(-1).data.assistant_calendar_id, "work-id");
   assert.equal(posts.at(-1).data.assistant_calendar_name, "", "an explicit ID selection clears the legacy typed name");
-  field("assistant_calendar_id").value = "";
-  await field("assistant_calendar_id").emit("change");
-  await host.querySelector("form").emit("submit");
+  cf("assistant_calendar_id").value = "";
+  await cf("assistant_calendar_id").emit("change");
+  await calHost.querySelector("form").emit("submit");
   assert.equal(posts.at(-1).data.assistant_calendar_id, "");
   assert.equal(posts.at(-1).data.assistant_calendar_name, "", "Auto saves blank settings, never an inferred ID");
   snapshot.settings.assistant_calendar_id = "gone-id";
   snapshot.calendar.destinations = { available: false, calendars: [], selected: null, error: "Calendar access is unavailable." };
-  await ui.load();
-  assert.equal(field("assistant_calendar_id").value, "id:gone-id");
-  assert.match(text(), /Saved calendar \(unavailable\)/);
-  assert.match(text(), /Calendar access is unavailable/);
+  calHost = new Element("div");
+  await ui.calendarCard(calHost);
+  assert.equal(cf("assistant_calendar_id").value, "id:gone-id");
+  assert.match(text(calHost), /Saved calendar \(unavailable\)/);
+  assert.match(text(calHost), /Calendar access is unavailable/);
   snapshot.settings.assistant_calendar_id = "";
   snapshot.calendar.destinations = { available: true, default_id: "", selected: null,
     calendars: fixture.calendar.destinations.calendars.filter((c) => c.writable).map((c) => ({...c,is_default:false})) };
-  await ui.load();
-  assert.match(text(), /No system default was found. Choose a writable calendar above/);
+  calHost = new Element("div");
+  await ui.calendarCard(calHost);
+  assert.match(text(calHost), /No system default was found. Choose a writable calendar above/);
 
   snapshot = structuredClone(fixture);
   snapshot.reminders[0].resources = [
@@ -448,6 +469,7 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   assert.equal(landingRequests.length, 0);
   ready();
   assert.deepEqual(landingRequests.map((r) => r.url), ["/api/assistant"], "focused boot never fetches unrelated modules");
-  vm.runInContext('openPerson("sample/id"); openApp("setup")', landingContext);
-  assert.deepEqual(navigations, ["/#person/sample%2Fid", "/#setup/notifications"]);
+  vm.runInContext('openPerson("sample/id"); openApp("setup"); openApp("setup", "notifications")', landingContext);
+  assert.deepEqual(navigations, ["/#person/sample%2Fid", "/#setup/assistant", "/#setup/notifications"],
+    "the focused page deep-links into the Config row that owns the setting");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
