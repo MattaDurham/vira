@@ -54,6 +54,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "text-index.sqlite"
 
 BATCH = 2000          # rows per commit on the iMessage backfill
+IMAP_COMMIT_EVERY = 100   # fetches per commit on the IMAP walk (see backfill_imap)
 MIN_CHARS = 2
 # Mail bodies are stored whole. A 20,000-character cap (MAIL_BODY_MAX)
 # used to cut long mail and mark it body_complete=False; the owner removed
@@ -86,6 +87,16 @@ def _db():
     DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB, timeout=60)
     con.row_factory = sqlite3.Row
+    # Write-ahead mode, as mediaindex: readers never wait on a writer. In
+    # rollback mode the mail backfill's batch spilled the page cache and
+    # held an EXCLUSIVE lock for the whole batch, so Find and the assistant
+    # saw "database is locked" for minutes at a time (2026-10-13, the first
+    # uncapped body backfill). The switch needs the file to itself; while
+    # another connection holds a transaction it is left for the next open.
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        pass
     con.executescript(SCHEMA)
     # Add metadata only when an index is opened for normal indexing. Old
     # rows remain untouched: a missing locator must not trigger a mail scan.
@@ -319,7 +330,16 @@ def backfill_imap(acct, limit=400, log=print):
             # connection dying, not the mail — the batch aborts with the
             # watermark held, so a network blip can't skip real mail.
             fails = 0
+            since_commit = 0
             for uid in uids:
+                if since_commit >= IMAP_COMMIT_EVERY:
+                    # The walk commits as it goes, the watermark with the
+                    # rows it covers: a reader waits for a hundred fetches
+                    # at most, and a resume starts near where it stopped.
+                    set_state(con, key, wm)
+                    con.commit()
+                    since_commit = 0
+                since_commit += 1
                 try:
                     _, md = imap.uid("fetch", str(uid), "(RFC822)")
                     if not md or md[0] is None:
