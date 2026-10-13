@@ -55,7 +55,11 @@ DB = ROOT / "data" / "text-index.sqlite"
 
 BATCH = 2000          # rows per commit on the iMessage backfill
 MIN_CHARS = 2
-MAIL_BODY_MAX = 20000
+# Mail bodies are stored whole. A 20,000-character cap (MAIL_BODY_MAX)
+# used to cut long mail and mark it body_complete=False; the owner removed
+# it on 2026-10-13: this index is the only local copy of a body, so a cut
+# copy is a lost one. The flag stays in source_meta because its readers
+# (correspondence, answer_sources) treat a missing flag as "unverified".
 GRAPH_PAGE = 50
 # Exact source reads return complete indexed bodies. Bound each request to
 # avoid an unbounded response and keep below SQLite's parameter limits.
@@ -226,8 +230,6 @@ def backfill_graph(account, since=None, limit=400, log=print):
                     content = _strip_html(content)
                 links = extract_links(content, html=html_body)
                 content = re.sub(r"\s+", " ", content).strip()
-                body_complete = len(content) <= MAIL_BODY_MAX
-                content = content[:MAIL_BODY_MAX]
                 if len(content) < MIN_CHARS:
                     continue
                 try:
@@ -250,7 +252,7 @@ def backfill_graph(account, since=None, limit=400, log=print):
                     source_meta={"message_id": m.get("internetMessageId") or "",
                                  "graph_id": m.get("id") or "",
                                  "web_link": m.get("webLink") or "",
-                                 "body_complete": body_complete,
+                                 "body_complete": True,
                                  "has_attachments": bool(m.get("hasAttachments")),
                                  "links": links})
             con.commit()
@@ -324,7 +326,7 @@ def backfill_imap(acct, limit=400, log=print):
                         wm = max(wm, uid)
                         continue
                     msg = email.message_from_bytes(md[0][1])
-                    body = mailmod._body_preview(msg, limit=MAIL_BODY_MAX)
+                    body = mailmod._body_preview(msg, limit=None)
                     if len(body) < MIN_CHARS:
                         fails = 0
                         wm = max(wm, uid)
@@ -358,7 +360,7 @@ def backfill_imap(acct, limit=400, log=print):
                                      # These UIDs belong to the selected All
                                      # Mail folder, not mailread's INBOX rowid.
                                      "imap_uid": uid, "mailbox": box,
-                                     "body_complete": len(body) < MAIL_BODY_MAX,
+                                     "body_complete": True,
                                      "has_attachments": any(part.get_filename() or
                                          "attachment" in str(part.get("Content-Disposition") or "").lower()
                                          for part in msg.walk()),
