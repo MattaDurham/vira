@@ -592,9 +592,9 @@
       const p = window.ViraKoiPond.unproject((e.clientX-v.left)/v.pw,(e.clientY-v.top)/v.ph);
       return p;
     }
+    // A single click ripples the water; a double-click still reaches the
+    // desktop's own gesture (Close all modules), as with any other background.
     const waterClick = e => { const p = clickPoint(e); if (p && flickWater(p.x,p.y)) e.preventDefault(); };
-    // Rapid water flicks must not invoke the desktop's double-click "close all".
-    const waterDouble = e => { if (moving() && clickPoint(e)) e.preventDefault(); };
     const pointerMove=e=>{
       if(!pond)return;
       const v=view(innerWidth,innerHeight),p=io.canInteract?.(e.target)
@@ -609,7 +609,6 @@
       document.addEventListener("pointermove",pointerMove);document.addEventListener("pointerleave",clearPointer);
       addEventListener("blur",clearPointer);
       document.addEventListener("click",waterClick);
-      document.addEventListener("dblclick",waterDouble,true);
     }
     const dispose = () => {
       closed = true; cancelAnimationFrame(raf);
@@ -618,7 +617,6 @@
       document.removeEventListener("pointermove",pointerMove);document.removeEventListener("pointerleave",clearPointer);
       removeEventListener("blur",clearPointer);
       document.removeEventListener("click",waterClick);
-      document.removeEventListener("dblclick",waterDouble,true);
       plate?.close(); canvas.remove();
     };
     dispose.motion = visibility;

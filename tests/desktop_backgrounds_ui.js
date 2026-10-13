@@ -141,9 +141,8 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   assert.equal(draws, prior, "window controls must not disturb or repaint the pond");
   document.emit("click", { ...click, target: document.body });
   assert.equal(prevented, true); assert.ok(draws > prior, "ripples paint immediately");
-  prevented = false;
-  document.emit("dblclick", { ...click, target: document.body });
-  assert.equal(prevented, true, "rapid water flicks must protect the desktop's double-click gesture");
+  assert.equal(document.listeners.get("dblclick")?.size ?? 0, 0,
+    "a double-click on the pond must reach the desktop's close-all gesture");
   motion.emit("click");
   const pausedDraws = draws;
   document.emit("click", { ...click, target: document.body });
@@ -161,7 +160,6 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   assert.equal(document.listeners.get("visibilitychange").size, 0);
   assert.equal(windowEvents.listeners.get("resize").size, 0);
   assert.equal(document.listeners.get("click").size, 0);
-  assert.equal(document.listeners.get("dblclick").size, 0);
   scene("aurora"); pendingImages.get("aurora.jpg").onerror(); await flush();
   assert.match(panel().querySelector(".background-status").textContent, /Could not load/);
   scene("aurora"); resolve("aurora.jpg"); await flush(); assert.equal(frames.size, 1);
