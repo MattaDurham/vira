@@ -24,9 +24,12 @@ The shape is mediaarchive's on purpose:
 Each blob carries the .eml suffix, so a message opens in Mail or drags
 into any client as it is: the archive is a restore, not a rendering.
 
-Sources: IMAP walks the All Mail folder (or INBOX) by ascending UID from
-a per-account watermark; Graph (M365/Outlook) pages the mailbox and
-fetches each message's MIME through /$value. A message that fails to
+Sources: IMAP walks the All Mail folder (or INBOX) newest first: new mail
+above a high mark, then the history downward from a low mark, so the mail
+the owner needs first is held within hours and a 300,000-message Gmail
+history over the days after (the owner's call, 2026-10-13). Graph
+(M365/Outlook) pages the mailbox newest first and fetches each message's
+MIME through /$value. A message that fails to
 fetch is recorded and retried on the next sweep, never skipped quietly;
 more than three consecutive failures read as the connection dying and
 end the pass with the watermark held.
@@ -276,7 +279,10 @@ def _used_bytes(con):
 
 
 def _watermarks(con):
-    return dict(con.execute("SELECT key, val FROM state WHERE key LIKE 'wm:%'"))
+    """Every mark a walk moves: the new-mail marks and the IMAP history
+    marks. The backlog loop's done signal."""
+    return dict(con.execute(
+        "SELECT key, val FROM state WHERE key LIKE 'wm:%' OR key LIKE 'low:%'"))
 
 
 def stats():
@@ -302,9 +308,15 @@ def stats():
         for acct, n, oldest, newest in con.execute(
                 "SELECT account, COUNT(*), MIN(date), MAX(date) "
                 "FROM messages GROUP BY account"):
+            low = get_state(con, f"low:{acct}")
+            wm = get_state(con, f"wm:{acct}")
             out["accounts"][acct] = {
                 "messages": n, "oldest": oldest, "newest": newest,
-                "watermark": get_state(con, f"wm:{acct}")}
+                "watermark": wm,
+                # IMAP: the history mark reads 1 once the whole mailbox is
+                # held. Graph: a stamped mark means a walk completed.
+                "history_low": int(low) if low else None,
+                "history_complete": (int(low) <= 1) if low else bool(wm)}
     except sqlite3.Error:
         pass
     finally:
@@ -421,7 +433,16 @@ def _uidvalidity(imap):
     return ""
 
 
+BACKLOG_SPAN = 500           # uids per SEARCH while walking the history down
+
+
 def _imap_sweep(acct, store, limit, log):
+    """Newest first. Two marks per account: `wm` (the newest uid covered;
+    new mail lies above it) and `low` (how far down the history the walk
+    has reached; 1 means the whole mailbox is held). A sweep retries its
+    failures, takes new mail above `wm`, then spends the rest of its budget
+    walking down from `low`, so the mail the owner needs first is backed up
+    within hours and a 300,000-message history over the days after."""
     addr, host = acct["email"], acct.get("host", "")
     pw = mailmod.keychain_password(addr)
     if not pw:
@@ -438,81 +459,136 @@ def _imap_sweep(acct, store, limit, log):
         # readonly: a FETCH must never mark the owner's mail as read.
         imap.select(f'"{box}"', readonly=True)
         validity = _uidvalidity(imap)
-        wm_key, val_key = f"wm:{addr}", f"uidvalidity:{addr}"
+        wm_key, low_key, val_key = f"wm:{addr}", f"low:{addr}", f"uidvalidity:{addr}"
         wm = int(get_state(con, wm_key, 0) or 0)
+        low = int(get_state(con, low_key, 0) or 0)
         seen_validity = get_state(con, val_key)
         if validity and seen_validity and validity != seen_validity:
             log(f"  imap {addr}: UIDVALIDITY changed, walking the mailbox again")
-            wm = 0
+            wm = low = 0
             con.execute("DELETE FROM failures WHERE account=?", (addr,))
         if validity:
             set_state(con, val_key, validity)
-        retry = []
-        for ref in store.retries(addr):
+        if not low:
+            # First sweep (or the ascending walk's state from before this
+            # shape): new mail starts at today's newest uid, and the walk
+            # down starts just above it. What an older ascending walk
+            # already holds costs a known key, not a blob.
+            wm = channels.imap_newest_uid(imap, f'"{box}"')
+            low = wm + 1
+            set_state(con, wm_key, wm)
+            set_state(con, low_key, low)
+            store.commit()
+        budget = [limit]            # fetches left in this sweep, None = unbounded
+
+        def spent():
+            if budget[0] is None:
+                return False
+            budget[0] -= 1
+            return budget[0] < 0
+
+        fails = [0]
+
+        def fetch_one(uid):
+            """Archive one uid. Returns "ok", "gone", "failed" or "abort"
+            (the connection is dying); raises on a busy index."""
             try:
-                retry.append(int(ref))
-            except ValueError:
-                store.recovered(addr, ref)    # not a uid: nothing to retry
-        typ, data = imap.uid("search", None, "UID", f"{wm + 1}:*")
-        fresh = []
-        if typ == "OK" and data and data[0]:
-            # "N:*" with N past the last uid answers with the last uid
-            # itself; only what lies above the watermark is new.
-            fresh = [int(u) for u in data[0].split() if int(u) > wm]
-        todo = list(dict.fromkeys(sorted(retry) + fresh))
-        if limit:
-            todo = todo[:limit]
-        fails = 0
+                typ, md = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
+                raw = (md[0][1] if typ == "OK" and md and
+                       isinstance(md[0], tuple) else None)
+                if raw is None:
+                    fails[0] = 0
+                    return "gone"              # gone between SEARCH and FETCH
+                rows = store.put(account=addr, raw=raw,
+                                 fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
+                fails[0] = 0
+                return ("ok", rows)
+            except (ArchiveFull, sqlite3.OperationalError):
+                raise
+            except Exception as e:  # noqa: BLE001
+                fails[0] += 1
+                if fails[0] > MAX_CONSECUTIVE_FAILURES:
+                    return "abort"
+                # A lone failure: recorded for the next sweep, and the walk
+                # steps past it so one poison message cannot hold the mailbox.
+                store.failed(addr, uid, e)
+                log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                return "failed"
+
         try:
-            for uid in todo:
-                is_retry = uid <= wm
+            # 1. Failures from earlier sweeps.
+            for ref in store.retries(addr):
                 try:
-                    typ, md = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
-                    raw = (md[0][1] if typ == "OK" and md and
-                           isinstance(md[0], tuple) else None)
-                    if raw is None:
-                        # Gone between SEARCH and FETCH: nothing to keep.
-                        store.recovered(addr, uid)
-                        if not is_retry:
-                            wm = max(wm, uid)
-                        fails = 0
-                        continue
-                    n += store.put(account=addr, raw=raw,
-                                   fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
-                    fails = 0
-                    if is_retry:
-                        store.recovered(addr, uid)
-                    else:
-                        wm = max(wm, uid)
-                except ArchiveFull as e:
-                    store.full = str(e)
-                    log(f"  imap {addr}: {e}")
+                    uid = int(ref)
+                except ValueError:
+                    store.recovered(addr, ref)    # not a uid: nothing to retry
+                    continue
+                if spent():
                     break
-                except sqlite3.OperationalError:
-                    # The INDEX is busy, not the message: end the walk with
-                    # the watermark below this uid, and let the sweep report
-                    # it. Filed as a message failure it would be retried as
-                    # one, and the real reason never surfaces.
-                    raise
-                except Exception as e:  # noqa: BLE001
-                    fails += 1
-                    if fails > MAX_CONSECUTIVE_FAILURES:
-                        log(f"  imap {addr}: pass ended after repeated "
-                            f"failures at uid {uid}; watermark held at {wm}")
-                        break
-                    # A lone failure: recorded for the next sweep, and the
-                    # watermark steps past it so one poison message cannot
-                    # hold the whole mailbox.
-                    store.failed(addr, uid, e)
-                    log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
-                    if not is_retry:
-                        wm = max(wm, uid)
+                r = fetch_one(uid)
+                if r == "abort":
+                    log(f"  imap {addr}: pass ended after repeated failures at uid {uid}")
+                    return n
+                if r != "failed":
+                    store.recovered(addr, uid)
+                if isinstance(r, tuple):
+                    n += r[1]
+                store.commit()
+            # 2. New mail above the high mark, oldest of it first so the
+            #    mark only ever moves up.
+            typ, data = imap.uid("search", None, "UID", f"{wm + 1}:*")
+            fresh = []
+            if typ == "OK" and data and data[0]:
+                # "N:*" with N past the last uid answers with the last uid
+                # itself; only what lies above the mark is new.
+                fresh = sorted(int(u) for u in data[0].split() if int(u) > wm)
+            for uid in fresh:
+                if spent():
+                    break
+                r = fetch_one(uid)
+                if r == "abort":
+                    log(f"  imap {addr}: pass ended after repeated failures at uid {uid}; "
+                        f"new-mail mark held at {wm}")
+                    return n
+                if isinstance(r, tuple):
+                    n += r[1]
+                wm = max(wm, uid)
                 set_state(con, wm_key, wm)
+                store.commit()
+            # 3. The history, newest first, down from the low mark.
+            while low > 1 and not (budget[0] is not None and budget[0] <= 0):
+                hi = low - 1
+                lo = max(1, hi - BACKLOG_SPAN + 1)
+                typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
+                uids = []
+                if typ == "OK" and data and data[0]:
+                    uids = sorted((int(u) for u in data[0].split()
+                                   if lo <= int(u) <= hi), reverse=True)
+                stopped = False
+                for uid in uids:
+                    if spent():
+                        stopped = True
+                        break
+                    r = fetch_one(uid)
+                    if r == "abort":
+                        log(f"  imap {addr}: pass ended after repeated failures at uid {uid}; "
+                            f"history mark held at {low}")
+                        return n
+                    if isinstance(r, tuple):
+                        n += r[1]
+                    low = uid
+                    set_state(con, low_key, low)
+                    store.commit()
+                if stopped:
+                    break
+                low = lo                 # the span is done, gaps included
+                set_state(con, low_key, low)
                 store.commit()
         finally:
             set_state(con, wm_key, wm)
+            set_state(con, low_key, low)
             store.commit()
-        log(f"  imap {addr}: {n} archived (uid {wm})")
+            log(f"  imap {addr}: {n} archived (new mail to uid {wm}, history down to uid {low})")
     finally:
         try:
             imap.logout()
