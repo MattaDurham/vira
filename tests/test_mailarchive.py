@@ -332,7 +332,11 @@ class StoreTests(_Base):
 
     def test_unreachable_root_degrades_to_no_copy(self):
         self.use_imap({1: raw_message(MID_A)})
-        with mock.patch.object(mailarchive, "root", lambda: Path("/dev/null/nowhere")):
+        # A root under a regular file cannot be created on any platform;
+        # a Unix-only path such as /dev/null/nowhere is creatable on Windows.
+        blocker = Path(self.tmp.name) / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        with mock.patch.object(mailarchive, "root", lambda: blocker / "nowhere"):
             self.assertIsNone(mailarchive.lookup(IMAP_ACCOUNT, MID_A))
             self.assertFalse(mailarchive.stats()["available"])
             said = []
