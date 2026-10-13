@@ -1,8 +1,11 @@
 name: ci
 
+# One run per change: a branch is tested through its pull request, and main
+# is tested after a merge lands. Listing claude/** under push as well ran
+# every branch twice per push, doubling CI time and flake exposure.
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: [main]
   pull_request:
 
 jobs:
