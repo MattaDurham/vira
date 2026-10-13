@@ -379,6 +379,69 @@ class PoisonResilienceTests(unittest.TestCase):
         self.assertEqual(mailmod._decode_header(raw), "hello world")
 
 
+class CommitCadenceTests(unittest.TestCase):
+    """The index runs in write-ahead mode and the IMAP walk commits every
+    IMAP_COMMIT_EVERY fetches, the watermark with the rows. The first
+    uncapped body backfill (2026-10-13) held the live index locked for the
+    length of each 2,000-message batch, and every reader waited on it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.acct = {"email": "me@example.test", "host": "imap.example.test"}
+        patches = [
+            mock.patch.object(textindex, "DB",
+                              Path(self.tmp.name) / "text-index.sqlite"),
+            mock.patch.object(textindex.channels, "mail_accounts",
+                              return_value=[self.acct]),
+            mock.patch.object(textindex.channels, "imap_special_folder",
+                              return_value="INBOX"),
+            mock.patch.object(textindex.mailmod, "keychain_password",
+                              return_value="pw"),
+            mock.patch.object(crm, "resolve_handle", lambda h: None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_the_index_runs_in_write_ahead_mode(self):
+        con = textindex._db()
+        try:
+            self.assertEqual(con.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        finally:
+            con.close()
+
+    def test_the_imap_walk_commits_as_it_goes(self):
+        every = textindex.IMAP_COMMIT_EVERY
+        db = textindex.DB
+        seen = {}
+
+        class PeekingIMAP(FakeIMAP):
+            # A second connection reads what is COMMITTED while the walk is
+            # mid-batch, as Find would.
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and int(args[0]) == every + every // 2:
+                    other = sqlite3.connect(db)
+                    try:
+                        seen["rows"] = other.execute(
+                            "SELECT COUNT(*) FROM items").fetchone()[0]
+                        row = other.execute(
+                            "SELECT val FROM state WHERE key='wm_mail:me@example.test'").fetchone()
+                        seen["wm"] = row[0] if row else None
+                    finally:
+                        other.close()
+                return super().uid(cmd, *args)
+
+        mailbox = {u: _rfc822(f"m{u}") for u in range(1, 2 * every + 1)}
+        with mock.patch.object(textindex.imaplib, "IMAP4_SSL",
+                               return_value=PeekingIMAP(mailbox)), \
+             mock.patch.object(textindex.mailmod, "_body_preview",
+                               return_value="a real body long enough to index"):
+            n = textindex.backfill_imap(self.acct, log=lambda *a: None)
+        self.assertEqual(n, 2 * every)
+        self.assertEqual(seen, {"rows": every, "wm": str(every)})
+
+
 class IncrementalSettingTests(unittest.TestCase):
     def test_the_sweep_setting_has_a_default(self):
         # settings.get raises KeyError for a key absent from BOTH config
