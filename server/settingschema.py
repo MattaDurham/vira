@@ -392,6 +392,24 @@ SCHEMA = [
       "Minutes between media archive sweeps",
       "Each pass only has to copy what macOS has downloaded since the last "
       "one.", advanced=True, range=(1, 1440)),
+    S("mail_archive_enabled", "workers", "bool", True,
+      "Keep a copy of every email",
+      "The raw message as the provider holds it, attachments inside, one "
+      ".eml per message. Without it mail lives only on the provider: the "
+      "text index keeps a stripped body and the attachment index the files "
+      "it chose, and neither gives a message back."),
+    S("mail_archive_root", "workers", "path", "", "Mail archive folder",
+      "Empty = data/mail-archive. Point it at an external volume to keep a "
+      "large mailbox off the boot disk.", advanced=True),
+    S("mail_archive_max_gb", "workers", "float", 0, "Mail archive cap (GB)",
+      "0 = no cap. A reached cap is reported in the sweep log and in the "
+      "status payload, never silently applied.", advanced=True,
+      range=(0, 100000)),
+    S("mail_archive_interval_min", "workers", "int", 30,
+      "Minutes between mail archive sweeps",
+      "Each pass fetches what arrived since the last one, 200 messages per "
+      "account at most; the history is the CLI backfill's job.",
+      advanced=True, range=(1, 1440)),
     S("receipts_sweep_days", "workers", "int", 7, "Days between receipt sweeps",
       "The receipts pass sweeps mailboxes and indexed attachments for invoice "
       "and receipt evidence, flagged merchants first. Dormant until a mail "

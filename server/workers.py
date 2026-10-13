@@ -106,6 +106,22 @@ def _media_archive():
                 last_run=_log_last(_DATA / "media-archive.log"), detail=detail)
 
 
+def _mail_archive():
+    from . import mailarchive
+    st = mailarchive.stats()
+    gb = st.get("bytes", 0) / 1e9
+    if st.get("available"):
+        detail = f"{st.get('messages', 0):,} messages, {gb:.1f} GB"
+        if st.get("failed"):
+            detail += f", {st['failed']} to retry"
+    else:
+        detail = "archive not created yet"
+    return _row("mail_archive", "Mail archive",
+                enabled_key="mail_archive_enabled", enabled=bool(st.get("enabled")),
+                cadence=f"every {settings.get('mail_archive_interval_min')} minutes",
+                last_run=_log_last(_DATA / "mail-archive.log"), detail=detail)
+
+
 def _ai_health():
     from . import aihealth
     s = aihealth.summary()
@@ -148,7 +164,7 @@ def status(receipts_status=""):
     status read fails shows its error instead of hiding the row."""
     out = []
     for build, args in ((_assistant, ()), (_intake, ()), (_text_index, ()),
-                        (_media_archive, ()), (_ai_health, ()),
+                        (_media_archive, ()), (_mail_archive, ()), (_ai_health, ()),
                         (_receipts, (receipts_status,)), (_boards, ())):
         try:
             out.append(build(*args))
