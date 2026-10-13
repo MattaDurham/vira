@@ -189,6 +189,53 @@ class RuntimeBudgetTests(unittest.TestCase):
         self.assertEqual(seed, {"evidence_scope": ["vault:sample"]})
 
 
+class _DialledClock:
+    """`time` as runner.py sees it: `monotonic` reads a dial the test turns,
+    everything else is the real module. The turn deadline measures active
+    execution off this dial, so a test states how long the model ran instead
+    of sleeping and hoping the runner kept pace (once, on Windows CI, it
+    did not: the 80 ms budget expired before ask_owner released the slot)."""
+    def __init__(self):
+        self.now = 1000.0
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+class _PacedAsyncio:
+    """`asyncio` as runner.py sees it: a positive `sleep` pauses until the
+    test calls `tick()`, everything else is the real module. The deadline
+    watcher sleeps between looks at the clock, so each look becomes an event
+    the test schedules, and `looks` counts the ones that found budget left."""
+    def __init__(self):
+        self.looks = 0
+        self._ticks = None
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+    async def sleep(self, delay, result=None):
+        if delay <= 0:
+            return await asyncio.sleep(0, result)
+        self.looks += 1
+        await self._queue().get()
+        return result
+
+    def tick(self):
+        self._queue().put_nowait(None)
+
+    def _queue(self):
+        if self._ticks is None:
+            self._ticks = asyncio.Queue()
+        return self._ticks
+
+
 class RunnerRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -231,33 +278,72 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertEqual(sent["effort"], "medium")
         self.assertEqual(self.runner.state["execution"]["usage"]["total"]["totalTokens"], 10)
 
+    def control_time(self):
+        """Hand runner.py a dialled clock and a paced sleep (the two classes
+        above) so the deadline tests run on events, not on wall time."""
+        self.clock, self.paced = _DialledClock(), _PacedAsyncio()
+        for name, stand_in in (("time", self.clock), ("asyncio", self.paced)):
+            patcher = mock.patch.object(runner, name, stand_in)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def settle(self, what, ready):
+        """Turn the loop until `ready()` holds: a bounded wait, never a sleep."""
+        for _ in range(1000):
+            if ready():
+                return
+            await asyncio.sleep(0)
+        self.fail(f"{what} did not happen within 1000 turns of the loop")
+
+    async def deadline_looks(self):
+        """Let the deadline watcher take one look at the clock, and return
+        once it has paused again (budget left) or fired (budget spent)."""
+        looked = self.paced.looks
+        if looked:  # pausing after an earlier look; a fresh watcher is already runnable
+            self.paced.tick()
+        await self.settle("the deadline watcher's look at the clock",
+                          lambda: self.paced.looks > looked or self.runner._deadline_task.done())
+
     def test_deadline_requests_interrupt_without_claiming_terminal_state(self):
-        self.runner.state["runtime"]["latency_budget"] = {"hard_limit_s": .01}
+        self.control_time()
+        self.runner.state["runtime"]["latency_budget"] = {"hard_limit_s": 30}
         self.runner.client = mock.Mock(interrupt=mock.AsyncMock())
         async def run():
             await self.runner.begin_turn()
-            await asyncio.sleep(.13)
+            self.clock.advance(29)  # one second of budget left
+            await self.deadline_looks()
+            self.assertFalse(self.runner.interrupted)
+            self.assertEqual(self.runner.state["execution"]["status"], "running")
+            self.clock.advance(2)  # the model runs over
+            await self.deadline_looks()
             self.assertEqual(self.runner.state["execution"]["status"], "stopping")
             self.runner.client.interrupt.assert_awaited_once()
+            self.runner._deadline_task.result()  # surfaces an exception inside the watcher
             self.runner.end_turn("interrupted")
         asyncio.run(run())
 
     def test_owner_wait_releases_capacity_and_does_not_consume_execution_deadline(self):
-        self.runner.state["runtime"]["latency_budget"] = {"hard_limit_s": .08}
+        self.control_time()
+        self.runner.state["runtime"]["latency_budget"] = {"hard_limit_s": 30}
         self.runner.client = mock.Mock(interrupt=mock.AsyncMock())
         async def run():
             await self.runner.begin_turn()
             task = asyncio.create_task(self.runner.ask_owner("Choose a scope", []))
-            await asyncio.sleep(.12)
+            await self.settle("ask_owner handing back the slot", lambda: self.runner._lease is None)
+            self.assertEqual(self.runner.state["execution"]["status"], "awaiting_input")
+            self.clock.advance(600)  # the owner takes ten minutes to answer
+            await self.deadline_looks()
             self.assertFalse(self.runner.interrupted)
-            self.assertIsNone(self.runner._lease)
             self.assertEqual(self.runner.state["execution"]["status"], "awaiting_input")
             future = next(iter(self.runner.futures.values()))
             future.set_result("Sample")
             self.assertEqual(await task, "Sample")
             self.assertTrue(self.runner._lease.active)
             self.assertEqual(self.runner.state["execution"]["status"], "running")
-            self.runner.end_turn("completed", "Sample answer")
+            self.clock.advance(45)  # then the model works past its whole budget
+            await self.deadline_looks()
+            self.assertEqual(self.runner.state["execution"]["status"], "stopping")
+            self.runner.end_turn("interrupted")
         asyncio.run(run())
 
     def test_tool_receipts_record_partial_evidence_and_json_errors(self):
