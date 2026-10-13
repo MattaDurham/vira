@@ -186,6 +186,33 @@ def api_vault_create(req: VaultCreateReq):
         raise HTTPException(400, str(e))
 
 
+class VaultRegisterReq(BaseModel):
+    name: str
+    root: str
+    id: str | None = None
+
+
+@router.post("/imageatlas/api/vaults/register")
+def api_vault_register(req: VaultRegisterReq):
+    """Add an EXISTING folder (a Brain vault, say) to the atlas."""
+    try:
+        return imageatlas.register_vault(req.name, req.root, create=False, vid=req.id)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/imageatlas/api/vaults/{vid}")
+def api_vault_forget(vid: str):
+    try:
+        return imageatlas.forget_vault(vid)
+    except KeyError:
+        raise HTTPException(404, "unknown atlas vault")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.get("/imageatlas/api/ops")
 def api_ops_recent():
     return {"plans": atlasops.recent()}

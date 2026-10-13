@@ -196,36 +196,45 @@ window.ViraAssistant = (() => {
       updates[picker.nameKey] = chosen.name;
     };
   }
-  function settingsPanel(data) {
-    const details = node("details", "assistant-settings");
-    details.open = settingsOpen == null ? false : settingsOpen;
-    details.addEventListener("toggle", () => { settingsOpen = details.open; });
-    details.appendChild(node("summary", "", "Assistant settings"));
+  /* Settings moved to Config (2026-10-13): the assistant, notifications,
+     calendar and the mail index each have a card there, built from the one
+     settings table. This panel only says where, and keeps the status word
+     next to the link so "Paused" is never a mystery. */
+  function settingsLink(data) {
+    const box = node("div", "assistant-settings-link");
+    const s = data.settings || {};
+    const bits = [];
+    bits.push(s.assistant_enabled ? "Assistant on" : "Assistant off");
+    bits.push(s.assistant_notify ? "texts on" : "texts off");
+    bits.push(s.mail_body_index ? "email indexed" : "texts only");
+    notice(box, bits.join(" · ") + ". Settings live in Config.");
+    const actions = node("div", "assistant-actions");
+    actions.appendChild(button("Assistant settings", () => {
+      openApp("setup", "assistant");
+      if (typeof dashJump === "function") dashJump("assistant");
+    }));
+    actions.appendChild(button("Notifications", () => {
+      openApp("setup", "notifications");
+      if (typeof dashJump === "function") dashJump("notifications");
+    }));
+    actions.appendChild(button("Calendar", () => {
+      openApp("setup", "calendar");
+      if (typeof dashJump === "function") dashJump("calendar");
+    }));
+    box.appendChild(actions);
+    return box;
+  }
+  /* The calendar card in Config: three lane pickers, the kids' names,
+     work hours, block length, auto-create. Saves through
+     /api/assistant/config, the same validated writer as every other
+     settings form. */
+  function calendarSettings(container, data) {
     const form = node("form", "assistant-form");
     const s = data.settings || {};
     const values = {};
     const add = (key, label, type, options) => {
       values[key] = field(form, key, label, type, s[key], options);
     };
-    add("assistant_enabled", "Run the assistant in the background", "checkbox");
-    add("assistant_contact_updates", "Update contact profiles from new messages", "checkbox");
-    add("mail_body_index", "Include full email bodies and sent replies", "checkbox");
-    add("assistant_notify", "Text me when a commitment needs attention", "checkbox");
-    notice(form, "Texts use the owner notification channel in Config. "
-      + "Quiet hours and a daily limit keep reminders bounded.");
-    const channelActions = node("div", "assistant-actions");
-    channelActions.appendChild(button("Open notification settings", () => {
-      openApp("setup");
-      if (typeof dashJump === "function") dashJump("notifications");
-    }));
-    form.appendChild(channelActions);
-    add("assistant_quiet_start", "Quiet hours start (0–23)", "number", { min: 0, max: 23, required: "" });
-    add("assistant_quiet_end", "Quiet hours end (0–23)", "number", { min: 0, max: 23, required: "" });
-    add("assistant_timezone", "Assistant time zone", "text", { placeholder: "Server local time, or an IANA time zone" });
-    add("assistant_notify_daily_cap", "Maximum reminder texts per day", "number", { min: 1, max: 20, required: "" });
-    add("assistant_stale_days", "Flag an undated commitment after this many days", "number", { min: 1, max: 90, required: "" });
-    add("assistant_due_soon_hours", "Remind me this many hours before a deadline", "number", { min: 1, max: 168, required: "" });
-    add("assistant_catchup_days", "Check this many recent days when first enabled", "number", { min: 1, max: 90, required: "" });
     const saveDestination = calendarDestination(form, data);
     const saveKidsDestination = calendarDestination(form, data, "kids");
     const saveFamilyDestination = calendarDestination(form, data, "family");
@@ -233,28 +242,23 @@ window.ViraAssistant = (() => {
       { placeholder: "An event naming one of them files on the kids calendar" });
     notice(form, "Kid and family events Vira reads out of messages and mail land on those calendars "
       + "as entries for you only; nobody is invited. Either lane falls back to the personal calendar.");
-    add("assistant_calendar_work_start", "Weekday work hours start (0–23)", "number", { min: 0, max: 23, required: "" });
-    add("assistant_calendar_work_end", "Weekday work hours end (1–24)", "number", { min: 1, max: 24, required: "" });
+    add("assistant_calendar_work_start", "Weekday work hours start (0-23)", "number", { min: 0, max: 23, required: "" });
+    add("assistant_calendar_work_end", "Weekday work hours end (1-24)", "number", { min: 1, max: 24, required: "" });
     add("assistant_calendar_block_minutes", "Personal task block length (minutes)", "number", { min: 15, max: 240, required: "" });
-    notice(form, "Personal task blocks use these working hours and the assistant time zone above.");
+    notice(form, "Personal task blocks use these working hours and the time zone under You.");
     add("assistant_calendar_auto_create", "Create events automatically when I am the only attendee", "checkbox");
     notice(form, "Vira can reserve free personal work time before a task's deadline, "
       + "create an event from your explicit solo scheduling request, or file a kids or "
       + "family entry whose date and times are quoted in the source. "
-      + "Meetings with others on your own calendar stay as suggestions for you to invite. "
-      + "Equal quiet-hour values turn quiet hours off.");
-    form.addEventListener("input", () => { dirty = true; });
+      + "Meetings with others on your own calendar stay as suggestions for you to invite.");
     const actions = node("div", "assistant-actions");
-    const save = node("button", "btn primary", "Save assistant settings");
+    const save = node("button", "btn primary", "Save calendar settings");
     save.type = "submit";
     save.disabled = !!data.fixture;
-    actions.appendChild(save);
-    actions.appendChild(button("Cancel edits", () => {
-      dirty = false;
-      painted = "";
-      render(latest);
-    }));
+    const saved = node("span", "settings-saved", "");
+    actions.appendChild(save); actions.appendChild(saved);
     form.appendChild(actions);
+    form.addEventListener("input", () => { saved.textContent = ""; });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (save.disabled) return;
@@ -269,20 +273,31 @@ window.ViraAssistant = (() => {
       save.disabled = true;
       form.querySelector(".assistant-action-error")?.remove();
       try {
-        const saved = await request("/api/assistant/config", updates);
-        latest = { ...latest, settings: saved, enabled: saved.assistant_enabled };
-        dirty = false;
-        feedback = { text: "Assistant settings saved." };
-        await load(true);
+        await request("/api/assistant/config", updates);
+        if (window.ViraSettings) window.ViraSettings.invalidate();
+        saved.textContent = "Saved.";
+        painted = "";
+        load(true).catch(() => {});
       } catch (e) {
         const error = node("p", "assistant-action-error", e.message);
         error.setAttribute("role", "alert");
         form.appendChild(error);
-        save.disabled = false;
-      }
+      } finally { save.disabled = false; }
     });
-    details.appendChild(form);
-    return details;
+    container.appendChild(form);
+    return form;
+  }
+  async function calendarCard(container) {
+    const wait = node("p", "hint waiting", "Reading calendars...");
+    container.appendChild(wait);
+    try {
+      const data = await request("/api/assistant");
+      wait.remove();
+      calendarSettings(container, data);
+    } catch (e) {
+      wait.className = "hint warn";
+      wait.textContent = "Calendar settings could not be loaded: " + e.message;
+    }
   }
   function evidence(parent, value) {
     const rows = Array.isArray(value) ? value : value ? [value] : [];
@@ -698,7 +713,7 @@ window.ViraAssistant = (() => {
       notice(body, "Contact facts and summaries are paused. Vira still checks messages for commitments.");
     reminders(data, body);
     calendar(data, body);
-    body.appendChild(editing || settingsPanel(data));
+    body.appendChild(settingsLink(data));
     coverage(data, body);
     body.querySelector(".assistant-coverage").open = !!coverageOpen;
     if (body.querySelector(".assistant-more")) body.querySelector(".assistant-more").open = !!moreOpen;
@@ -743,5 +758,5 @@ window.ViraAssistant = (() => {
     if (!document.hidden && pane && pane.style.display !== "none"
         && host()?.getClientRects().length) load();
   }, 30000);
-  return { load, reveal };
+  return { load, reveal, calendarCard };
 })();

@@ -74,17 +74,17 @@ def config():
 
 
 def save_config(updates):
-    with _lock:
-        try:
-            cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            cfg = {}
-        if "enabled" in updates:
-            cfg["notify_enabled"] = bool(updates["enabled"])
-        if "handle" in updates and updates["handle"] is not None:
-            cfg["notify_handle"] = str(updates["handle"]).strip()
-        CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    """Through the one validated writer (settings.save): the old private
+    read-modify-write here ran outside the shared file lock, so a save from
+    another form in the same second could be lost."""
+    from . import settings
+    clean = {}
+    if "enabled" in updates:
+        clean["notify_enabled"] = bool(updates["enabled"])
+    if "handle" in updates and updates["handle"] is not None:
+        clean["notify_handle"] = str(updates["handle"]).strip()
+    if clean:
+        settings.save(clean)
     return config()
 
 

@@ -16,45 +16,23 @@ from pathlib import Path
 
 from . import data as crm
 from . import imessage
-from . import settings
+from . import settings, settingschema
 from . import jsonstore, modulemodels
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 
-DEFAULTS = {
-    "ai_provider": "anthropic",   # any server/models.py PROVIDERS id
-    # Providers switched OFF (models.disabled_providers): a disabled id is
-    # never drafted on or run as a session - every path REFUSES by name
-    # rather than rerouting. The eval switch (docs/model-parity-eval).
-    "providers_disabled": [],
-    "ai_backend": "cli",          # "cli" (subscription login) | "api" (key)
-    # cli_model is an ALIAS, so it names a tier and never a generation.
-    "cli_model": "sonnet",
-    # Corrections for aliases this machine's CLI resolves WRONG, e.g.
-    # {"opus": "claude-opus-5"} when `--model opus` still gives 4.8.
-    # Empty by default; see session.ALIAS_OVERRIDE_KEY for why this is
-    # owner data rather than a shipped table, and how to re-measure.
-    "model_alias_overrides": {},
-    # Every api_model default is EMPTY on purpose (models.py MODEL SOURCES):
-    # a shipped model id is the thing that goes stale, and it goes stale in
-    # the one place only an admin edit and a push could fix. Empty resolves
-    # at call time from the key's own live list — the newest model of the
-    # tier cli_model names. An empty CLI model means the same for codex: run
-    # whatever ~/.codex/config.toml is set to.
-    "api_model": "",
-    "api_key_env": "VIRA_ANTHROPIC_KEY",
-    "openai_cli_model": "",
-    "openai_api_model": "",
-    "google_api_model": "",
-    "xai_api_model": "",
-    # The curated model roster (the Cursor pattern, owner's ask 2026-07-28):
-    # the model ids enabled for pickers across every provider. EMPTY means
-    # "everything the catalog offers" — so a fresh install shows all, and a
-    # future model arrives enabled unless the owner has curated.
-    "model_roster": [],
-    "module_models": {},
-    "timeout": 120,
-}
+# The AI keys, with defaults and help from the one table
+# (server/settingschema.py, group "ai"). Why each default is what it is
+# lives there: cli_model is an alias so it never names a generation; every
+# api_model is empty so the newest model of the tier resolves at call time
+# from the key's own live list; model_roster empty means "everything".
+AI_KEYS = (
+    "ai_provider", "providers_disabled", "ai_backend", "cli_model",
+    "model_alias_overrides", "api_model", "api_key_env", "openai_cli_model",
+    "openai_api_model", "google_api_model", "xai_api_model", "model_roster",
+    "module_models", "timeout",
+)
+DEFAULTS = settingschema.defaults_for(AI_KEYS)
 
 # Providers with no CLI draft path — their backend is always the API.
 API_ONLY = ("google", "xai")
@@ -74,10 +52,8 @@ def config():
 
 
 def save_config(updates):
-    def update(stored):
-        stored.update({k: v for k, v in updates.items() if k in DEFAULTS})
-        return stored
-    jsonstore.mutate(CONFIG_PATH, update, {}, indent=2)
+    settings.save({k: v for k, v in updates.items() if k in DEFAULTS},
+                  path=CONFIG_PATH)
     return base_config()
 
 

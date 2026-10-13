@@ -107,16 +107,23 @@ def vault_dirs():
     return list(settings.get("vault_dirs") or DEFAULT_DIRS)
 
 
-def exclude_names():
+def exclude_names(spec=None):
     """Directory names the owner never wants indexed, at any depth.
 
     A listed dir is walked whole (qocha rglobs it), so this is the only way
     to take a tree and skip one branch of it - `raw/` carries 1,007 loose
     full transcripts that exist nowhere else AND `raw/instagram`, whose
     clippings are already carried in full by their wiki notes.
+
+    The global list (vault_exclude_dirs) applies to every vault; a spec's
+    own `exclude_dirs` (set per vault in Config > Brain) adds to it.
     """
-    return {str(n).strip() for n in (settings.get("vault_exclude_dirs") or [])
-            if str(n).strip()}
+    names = {str(n).strip() for n in (settings.get("vault_exclude_dirs") or [])
+             if str(n).strip()}
+    if spec:
+        names |= {str(n).strip() for n in (spec.get("exclude_dirs") or [])
+                  if str(n).strip()}
+    return names
 
 
 def _source_id(value, root):
@@ -288,7 +295,7 @@ def _vault_rows():
                 # engine's business, and a config key that silently turned
                 # those back on would be a footgun. Applies to every
                 # connected source, primary and secondary alike.
-                cfg.exclude_dirs = set(cfg.exclude_dirs) | exclude_names()
+                cfg.exclude_dirs = set(cfg.exclude_dirs) | exclude_names(spec)
                 v = _QochaVault(cfg.root, config=cfg,
                                 embedder=_ViraEmbedder(), answerer=_answer)
                 if spec["primary"]:

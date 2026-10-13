@@ -12,7 +12,7 @@ async function assistantRequest(path, data) {
 function api(path) { return assistantRequest(path); }
 function post(path, data) { return assistantRequest(path, data); }
 function openPerson(id) { location.assign("/#person/" + encodeURIComponent(id)); }
-function openApp(id) { location.assign("/#" + (id === "setup" ? "setup/notifications" : encodeURIComponent(id))); }
+function openApp(id, row) { location.assign("/#" + (id === "setup" ? "setup/" + (row || "assistant") : encodeURIComponent(id))); }
 
 document.addEventListener("DOMContentLoaded", () => {
   window.ViraAssistant.load();

@@ -107,7 +107,7 @@ def save_config(updates):
         raise ValueError("routes must be a list of at most 100 routes")
     if "routes" not in updates:
         # Pausing must still work after a destination is disconnected.
-        jsonstore.mutate(settings.CONFIG_PATH, lambda s: s.update(correspondence=cfg), {})
+        settings.save({"correspondence": cfg})
         return cfg
     normalized, used = [], set()
     fields = {"id", "destination", "folder", "context", "purpose", "terms", "sender", "account", "automatic"}
@@ -132,7 +132,7 @@ def save_config(updates):
                            "terms": [t.strip().casefold() for t in terms],
                            "automatic": route.get("automatic", False)})
     cfg["routes"] = normalized
-    jsonstore.mutate(settings.CONFIG_PATH, lambda s: s.update(correspondence=cfg), {})
+    settings.save({"correspondence": cfg})
     return cfg
 
 

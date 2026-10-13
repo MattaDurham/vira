@@ -15,6 +15,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from . import settingschema
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # The platform seam, named once. Modules that shell out to Mac-only tools
@@ -45,139 +47,10 @@ CONFIG_PATH = ROOT / "data" / "config.json"
 FIXTURES = ROOT / "fixtures"
 FIXTURE_CRM = ROOT / "data" / "fixture-crm"
 
-DEFAULTS = {
-    "crm_root": "~/.vira/crm",           # people.json / master.json / profiles/
-                                         # (the Setup importers create it; a
-                                         # configured path in config.json wins)
-    "graph_email": "",                   # default account for Connect M365 + cockpit banner
-    "owner_name": "",                    # greeting name in the cockpit banner
-    "notify_handle": "",                 # iMessage handle for pings; empty = notifications dormant
-    # The reply channel (server/inbound.py): the self-thread read as a
-    # command line. Dormant without notify_handle, like every sender.
-    "imessage_reply_enabled": True,
-    # Machine senders that are neither notify.py nor prefixed "Vira: " —
-    # extends inbound.MACHINE_PREFIXES so their texts are never read as
-    # the owner talking. Match is a prefix, not a substring.
-    "inbound_ignore_prefixes": [],
-    # The standing assistant is opt-in; all records stay in local stores.
-    "assistant_enabled": False,
-    "assistant_contact_updates": True,
-    "assistant_notify": False,
-    "assistant_quiet_start": 22,
-    "assistant_quiet_end": 8,
-    "assistant_timezone": "",
-    "assistant_calendar_auto_create": False,
-    "assistant_calendar_name": "",
-    "assistant_calendar_id": "",
-    # Calendar lanes (2026-09-22). kids = school, classes, playdates and
-    # childcare, filed for the owner's information; family = whole-family
-    # plans the owner is expected to attend. Either lane falls back to the
-    # personal calendar above when unset or not found in Calendar.app.
-    "assistant_calendar_kids_name": "",
-    "assistant_calendar_kids_id": "",
-    "assistant_calendar_family_name": "",
-    "assistant_calendar_family_id": "",
-    "assistant_kids_names": "",          # comma-separated first names; a proposal
-                                         # naming one files under kids when the
-                                         # model states no lane
-    "assistant_calendar_work_start": 9,
-    "assistant_calendar_work_end": 17,
-    "assistant_calendar_block_minutes": 30,
-    "assistant_stale_days": 3,
-    "assistant_notify_daily_cap": 3,
-    "assistant_due_soon_hours": 24,
-    "assistant_debounce_s": 90,
-    "assistant_batch_size": 3,
-    "assistant_catchup_days": 14,
-    "family_calendars": [],              # calendar names tagged "family" in the brief
-    "brief_remote_events": [],           # event-title substrings treated as remote/virtual
-                                         # (a remote event never conflicts with an in-person one)
-    "fixture_mode": None,                # None = auto (fixture when crm_root missing)
-    "ytdlp_path": "",                    # yt-dlp binary for reading-room staging;
-                                         # empty = probe PATH (fullingest.ytdlp_path)
-    "apple_contacts_push": True,         # contact-card saves push to Apple Contacts
-                                         # (macOS only; AppleScript spoke, syncs to phone)
-    "mail_body_index": False,            # incremental mail-body sweep in the
-                                         # Indexer tick (the backlog CLI flips
-                                         # it on once the full walk lands)
-    "mercury_poll_hours": 6,             # subscriptions charge-poll cadence
-    "receipts_sweep_days": 7,            # receipts-pass sweep cadence
-    "idea_tag_interval_min": 10,         # backlog tag/vector pass cadence
-    "doc_tag_interval_min": 10,          # Reader document tagging cadence
-    "doc_thumb_interval_min": 15,        # Reader document thumbnail cadence
-                                         # (one model call per tick at most)
-    "subs_notify_threshold_usd": 100,    # renewal ping floor ($/cycle; annuals always ping)
-    "vault_root": "",                    # notes vault for the Brain index; empty = dormant
-                                         # (set via Setup > Brain or config.json)
-    "vault_dirs": [],                    # vault subdirs to index; empty = vault.DEFAULT_DIRS
-    "vault_exclude_dirs": [],            # directory NAMES never indexed, at any
-                                         # depth, in any connected vault. Use it to
-                                         # take a tree while skipping one branch of
-                                         # it (raw/ minus raw/instagram).
-    "library_machine_dirs": {},          # Library: {vault id: [folder, "!folder"]}
-                                         # machine-output folders the owner chose;
-                                         # a vault missing here uses the build's
-                                         # suggestion (server/library.py)
-    "vault_sources": [],                 # connected markdown vaults with stable ids
-                                         # and independent read/write/model policy
-    "vault_primary": {},                # policy overrides for the primary source
-    "vault_default_destination": "",    # stable source id; empty asks when ambiguous
-    "reader_sources": [],                # folders connected to the Reader; empty = only
-                                         # the places Vira writes itself
-    "judge_model": "opus",               # fresh-eyes judge sessions (circuits + Jobs history)
-    # Chat with Vira: the model its session runs on; empty = the session
-    # default (cli_model), which is what every other owner session uses.
-    "chat_model": "",
-    "atlas_anchor_org": "",              # pinned anchor-org cluster in the Contact Atlas
-    "atlas_max_nodes": 200,              # atlas node cap (most-active contacts)
-    "atlas_min_edge_weight": 0.15,       # edges below this fused weight are dropped
-    "circle_refresh_min": 60,            # minutes between circle sync passes (server/circles.py)
-    # Vira's own copy of every iMessage attachment (server/mediaarchive.py).
-    # macOS evicts ~/Library/Messages/Attachments under storage pressure and
-    # keeps the chat.db row, so without this the media history decays into a
-    # list of filenames. Point the root at an external volume to keep the
-    # archive off the boot disk whose fullness causes the eviction.
-    "media_archive_enabled": True,
-    "media_archive_root": "",            # empty = data/media-archive
-    "media_archive_max_gb": 0,           # 0 = no cap; a cap is REPORTED, never silent
-    "media_archive_interval_min": 30,    # background sweep cadence
-    "atlas_vaults": [],                  # extra Image Atlas vaults: [{id, name, root}]
-                                         # (the primary is always vault_root; see
-                                         # imageatlas.vaults / atlasops.create rules)
-    "companion_hub_url": "",             # URL the pairing QR points the phone at;
-                                         # empty = auto-detect (tailnet, then LAN)
-    "design_foundation_root": "~/workspace/design-foundation",  # design-system repo the studio edits; missing = dormant
-    "site_root": "",                     # thedurham-nyc checkout (sitedocs migration + blog publish); empty = dormant
-    "whatsapp_bridge_port": 18377,       # linked-device sidecar, 127.0.0.1 only
-    "whatsapp_poll_seconds": 5,          # watcher poll cadence against the sidecar
-    "whatsapp_node_bin": "node",         # node binary for the sidecar (PATH or absolute)
-    "sms_fallback": True,                # re-send a failed iMessage as a text (needs
-                                         # Text Message Forwarding on the paired iPhone)
-    "send_verify_seconds": 8,            # how long to watch chat.db for an iMessage
-                                         # delivery error before giving up (0 = off)
-    "evidence_retro_dir": "",            # Evidence Ledger's session-retro source;
-                                         # empty = ~/TC-IL/Sessions
-    "lessons_ledger_path": "",           # corrections ledger; empty = ~/.claude/LESSONS.md
-                                         # (missing file = lesson counter dormant)
-    "lessons_state_dir": "",             # provenance stores (results/, proposed/decided
-                                         # jsonl); empty = ~/.claude/sessions
-    "lessons_retro_dirs": "",            # comma list of retro dirs for the counter;
-                                         # empty = evidence_retro_dir + repo retros/
-    "lesson_promote_at": 3,              # distinct sessions before a tier-2 rule
-                                         # proposes building its mechanism
-    "lesson_candidates_per_rule": 12,    # rung-2 adjudication cost ceiling per rule
-    "lessons_script_path": "",           # the corrections-ledger CLI the review
-                                         # queue shells out to (it owns every
-                                         # ledger write); empty =
-                                         # ~/.claude/scripts/lessons.py
-    "review_inbox_dir": "",              # self-record capture inbox surfaced in
-                                         # the review queue; empty =
-                                         # <self_record>/inbox/notes
-    "review_history_path": "",           # canonical record read for open
-                                         # adjudication flags and questions;
-                                         # empty =
-                                         # <self_record>/canon/MASTER_HISTORY.md
-}
+# Every key, its default, its group and its help text live in ONE table:
+# server/settingschema.py. This dict is derived from it so a key cannot be
+# declared here and missing from config.example.json or the Config window.
+DEFAULTS = settingschema.DEFAULTS
 
 
 def raw():
@@ -190,6 +63,29 @@ def raw():
 def get(key):
     v = raw().get(key)
     return v if v not in (None, "") else DEFAULTS[key]
+
+
+def save(updates, *, validate=None, path=None):
+    """The one writer for data/config.json.
+
+    Every value is checked against the table (type, range, choices, time
+    zone) before anything is written, so a bad field never lands beside a
+    good one. The write is jsonstore.mutate: a fresh read under the file
+    lock, then an atomic replace, so two forms saving in the same second
+    cannot lose each other's keys (notify.save_config once rewrote the file
+    outside that lock). `validate(cfg)` runs inside the lock on the stored
+    document, for callers with a rule that depends on what is already
+    there (a vault path that must not overlap another). `path` is a test
+    seam for a module that pins its own config path. Returns the stored
+    document."""
+    from . import jsonstore
+    clean = settingschema.validate_many(updates)
+
+    def update(cfg):
+        if validate is not None:
+            validate(cfg)
+        cfg.update(clean)
+    return jsonstore.mutate(path or CONFIG_PATH, update, {}, indent=2)
 
 
 def keychain_service(name: str) -> str:

@@ -14177,7 +14177,7 @@ async function loadSetup() {
 // sublines and the cards' first paint. Update is the un-fetched (local sha)
 // call; the slow network fetch only runs when the owner opens the card.
 async function loadSetupExtra() {
-  const [notify, companion, update, config, connections, banking, whatsapp] = await Promise.all([
+  const [notify, companion, update, config, connections, banking, whatsapp, settings] = await Promise.all([
     api("/api/notify").then((r) => r.config).catch(() => null),
     api("/api/companion/status").catch(() => null),
     api("/api/update").catch(() => null),
@@ -14185,8 +14185,9 @@ async function loadSetupExtra() {
     api("/api/data/connections").catch((e) => ({ error: errText(e) })),
     api("/api/banking").catch((e) => ({ error: errText(e) })),
     api("/api/whatsapp/status").catch(() => null),
+    api("/api/settings").catch(() => null),   // the one table, for the row sublines
   ]);
-  return { notify, companion, update, config, connections, banking, whatsapp };
+  return { notify, companion, update, config, connections, banking, whatsapp, settings };
 }
 
 function pollSetup() {
@@ -14339,6 +14340,49 @@ function dashPillClass(r) {
 }
 
 // Expand one row and bring it into view from an attention chip or link.
+// The settings table (GET /api/settings) as {key: value}, for the row
+// sublines. Cards render their own forms from the same table (settings.js).
+function settingsValues(payload) {
+  const out = {};
+  ((payload && payload.groups) || []).forEach((g) =>
+    (g.settings || []).forEach((s) => { out[s.key] = s.value; }));
+  return out;
+}
+
+// One row per settings card. The state dot says whether the thing is on,
+// never whether it is "configured": an unset name is optional, not a gap.
+function settingsRow(id, title, sv) {
+  const row = { id, title, state: "optional", pill: "", sub: "",
+                render: (card) => settingsCard(id, card) };
+  if (id === "you") {
+    row.state = sv.owner_name ? "done" : "optional";
+    row.pill = sv.owner_name ? "set" : "optional";
+    row.sub = sv.owner_name
+      ? sv.owner_name + " · " + (sv.assistant_timezone || "this computer's time zone")
+      : "Your name, time zone and the children's names";
+  } else if (id === "assistant") {
+    row.state = sv.assistant_enabled ? "done" : "optional";
+    row.pill = sv.assistant_enabled ? "on" : "off";
+    row.sub = sv.assistant_enabled
+      ? "Reading new messages for commitments" + (sv.assistant_contact_updates ? " and contact facts" : "")
+      : "Off · reminders come only from People profiles until this is on";
+  } else if (id === "calendar") {
+    const chosen = sv.assistant_calendar_id || sv.assistant_calendar_name;
+    row.state = chosen ? "done" : "optional";
+    row.pill = chosen ? "set" : "optional";
+    row.sub = chosen ? "Personal calendar chosen · work hours "
+      + sv.assistant_calendar_work_start + "-" + sv.assistant_calendar_work_end
+      : "Where events land, and the hours the assistant plans around";
+  } else if (id === "workers") {
+    row.state = "manage";
+    row.sub = "Every sweep and watcher, its switch and its last run";
+  } else if (id === "advanced") {
+    row.state = "manage";
+    row.sub = "Every tuning knob with its default · change only if you know why";
+  }
+  return row;
+}
+
 function dashJump(id) {
   if (id === "connections") id = "contacts"; // Previous storage links still land somewhere useful.
   leaveManageCard();
@@ -14362,6 +14406,7 @@ function renderSetup(flow, st) {
   const ai = byId.ai || { providers: [], active_id: "" };
   const cfg = (setupExtra && setupExtra.config) || {};
   const x = setupExtra || {};
+  const sv = settingsValues(x.settings);
 
   // One row per AI provider, then the defaults row.
   const aiRows = (ai.providers || []).map((pr) => ({
@@ -14420,9 +14465,19 @@ function renderSetup(flow, st) {
             : "Optional · connect a read-only transaction feed for Subscriptions",
           render: cardBanking },
         manageRow("channels"), manageRow("whatsapp")] },
-    { title: "Preferences & maintenance", rows: [
+    // Settings grouped by what they are about, not by which module reads
+    // them (the 2026-10-13 audit): the assistant's time zone is yours, its
+    // quiet hours belong to the channel, its calendars to Calendar.
+    { title: "You and your assistant", rows: [
+      settingsRow("you", "You", sv),
+      settingsRow("assistant", "Assistant", sv),
+      settingsRow("calendar", "Calendar", sv),
       manageRow("notifications"),
+      settingsRow("workers", "Background work", sv),
+    ] },
+    { title: "Preferences & maintenance", rows: [
       manageRow("updates"),
+      settingsRow("advanced", "Advanced settings", sv),
       { id: "welcome", title: "Welcome tour", state: "optional", pill: "optional",
         sub: "Replay the introduction whenever you like",
         run: () => openFirstrun() },
@@ -15206,6 +15261,9 @@ function cardContacts(card, step, st) {
   if (st.crm.people) card.appendChild(importHost);
   connectionSection(card, "Contact storage (advanced)",
     "You do not need to choose a new folder to import contacts.", cardContactStorage);
+  connectionSection(card, "Who may change contacts",
+    "Writers that update People cards on their own.",
+    (body) => { window.ViraSettings?.form(body, { keys: ["assistant_contact_updates", "apple_contacts_push"] }); });
 }
 
 function connectionSummary(container, summary) {
@@ -15599,6 +15657,69 @@ function brainError(error) {
   return message;
 }
 
+// The two per-vault settings other windows used to own, now on the sheet:
+// Image Atlas membership (atlas_vaults) and the Library's machine-output
+// folders (library_machine_dirs). Each change posts at once; the sheet's
+// Save button is for the policy fields.
+function brainVaultExtras(host, source) {
+  const box = el("div", "vault-config-capabilities vault-config-extras");
+  const atlasWrap = el("label", "vault-config-toggle");
+  const atlas = el("input"); atlas.type = "checkbox"; atlas.name = "atlas";
+  atlas.checked = !!source.atlas; atlas.disabled = !!source.primary || !source.connected;
+  const atlasWords = el("span");
+  atlasWords.appendChild(el("strong", "", "Include in Image Atlas"));
+  atlasWords.appendChild(el("span", "hint", source.primary
+    ? "The primary vault is always in the atlas."
+    : "Adds this vault's images to the Image Atlas; the built atlas stays on disk when it is removed."));
+  atlasWrap.appendChild(atlas); atlasWrap.appendChild(atlasWords); box.appendChild(atlasWrap);
+  const note = el("p", "hint vault-extras-note");
+  atlas.onchange = async () => {
+    atlas.disabled = true; note.textContent = "";
+    try {
+      if (atlas.checked) await post("/imageatlas/api/vaults/register", { name: source.name, root: source.root, id: source.id });
+      else await del("/imageatlas/api/vaults/" + encodeURIComponent(source.id));
+      note.textContent = atlas.checked ? "Added to the Image Atlas." : "Removed from the Image Atlas.";
+    } catch (e) { atlas.checked = !atlas.checked; note.textContent = brainError(e); }
+    finally { atlas.disabled = false; }
+  };
+  box.appendChild(note);
+  host.appendChild(box);
+
+  const machineWrap = el("div", "vault-config-field wide");
+  machineWrap.appendChild(el("span", "vault-config-label", "Machine-output folders"));
+  const list = el("div", "vault-folder-list");
+  const paint = (dirs, src) => {
+    list.replaceChildren();
+    if (!dirs.length) list.appendChild(el("span", "hint", "None chosen; the Library hides nothing."));
+    dirs.forEach((d) => {
+      const row = el("span", "vault-folder-chip");
+      const knowledge = d.startsWith("!");
+      row.appendChild(el("span", "", (knowledge ? "keep as knowledge: " : "") + d.replace(/^!/, "")));
+      const rm = el("button", "btn small", "Remove"); rm.type = "button";
+      rm.onclick = () => change(d.replace(/^!/, ""), knowledge);
+      row.appendChild(rm); list.appendChild(row);
+    });
+    list.appendChild(el("span", "hint", src === "owner"
+      ? "Chosen by you. The Library map's folder detail changes the same list."
+      : "Suggested by the Library's last build until you choose."));
+  };
+  const change = async (folderName, machine) => {
+    try {
+      const r = await post("/api/library/machine", { vault: source.id, folder: folderName, machine });
+      paint(r.dirs || [], r.source || "owner");
+    } catch (e) { note.textContent = brainError(e); }
+  };
+  paint(source.machine_dirs || [], source.machine_source);
+  const addRow = el("div", "setup-row");
+  const input = el("input", "search"); input.type = "text"; input.placeholder = "Folder inside the vault, e.g. Reports";
+  const add = el("button", "btn small", "Count as machine output"); add.type = "button";
+  add.onclick = () => { const v = input.value.trim(); if (v) { change(v, true); input.value = ""; } };
+  addRow.appendChild(input); addRow.appendChild(add);
+  machineWrap.appendChild(list); machineWrap.appendChild(addRow);
+  machineWrap.appendChild(el("span", "hint", "Generated reports, session logs and bulk captures the Library keeps off the subject map until shown."));
+  host.appendChild(machineWrap);
+}
+
 function brainSourceEditor(card, source, step, st) {
   const tile = el("details", "setup-prov vault-config" + (source.connected ? " on" : ""));
   tile.dataset.sourceId = source.id;
@@ -15695,6 +15816,10 @@ function brainSourceEditor(card, source, step, st) {
   const excluded = brainFolderList("Folders hidden from models", source.model_exclude_dirs, () => folder.value,
     "Keep these folders out of model prompts while allowing local reading.");
   advanced.appendChild(excluded.wrap);
+  const neverIndexed = brainFolderList("Folders never indexed", source.exclude_dirs || [], () => folder.value,
+    "Skipped at any depth in this vault: Find, the Library and the Brain never read them.");
+  advanced.appendChild(neverIndexed.wrap);
+  brainVaultExtras(advanced, source);
   const defaultWrap = el("label", "vault-config-toggle vault-config-default");
   const useDefault = el("input"); useDefault.type = "checkbox"; useDefault.name = "default_destination";
   useDefault.checked = !!source.default_destination;
@@ -15729,7 +15854,8 @@ function brainSourceEditor(card, source, step, st) {
     const body = { id: source.id, name: controls.name.value.trim(), path: folder.value,
       purpose: controls.purpose.value.trim(), contexts: controls.contexts.value.split(",").map((x) => x.trim()).filter(Boolean),
       capture_dir: capture.value, write_scope: scope.value, write_dirs: writeDirs.value,
-      protected_dirs: protectedDirs.value, model_exclude_dirs: excluded.value, default_destination: useDefault.checked };
+      protected_dirs: protectedDirs.value, model_exclude_dirs: excluded.value,
+      exclude_dirs: neverIndexed.value, default_destination: useDefault.checked };
     ["read_enabled", "write_enabled", "model_exposure", "allow_publish"].forEach((key) => { body[key] = controls[key].checked; });
     brainOpenSource = source.id;
     setupAct(save, async () => {
@@ -15832,6 +15958,9 @@ function cardMail(card, step, st) {
   card.appendChild(acctBox);
   renderMailAccounts(acctBox).catch(() => {});
   mailAddForms(card, st);
+  connectionSection(card, "Email index",
+    "What the searchable message index holds from these mailboxes. Texts are always indexed.",
+    (body) => { window.ViraSettings?.form(body, { keys: ["mail_body_index", "graph_email"] }); });
 }
 
 // ---- manage cards: the config half of the Setup surface ----------------
@@ -16043,6 +16172,14 @@ function cardNotifications(card) {
   hint.style.alignSelf = "center";
   bar.appendChild(test); bar.appendChild(hint);
   card.appendChild(bar);
+  // Everything that may use the channel, in one place: the assistant's
+  // reminder texts and quiet hours used to live in Attention, the AI
+  // health and renewal pings were file-only.
+  card.appendChild(el("div", "jobs-sub", "What may text you"));
+  window.ViraSettings?.form(card, { keys: [
+    "assistant_notify", "assistant_quiet_start", "assistant_quiet_end",
+    "assistant_notify_daily_cap", "ai_health_notify", "subs_notify_threshold_usd",
+    "imessage_reply_enabled", "sms_fallback"] });
   // the notifications-sent log (moved here from the retired Jobs window);
   // the boot poller refreshes it while this card is on screen. The card is
   // built DETACHED (renderSetup attaches the pane last), so the first load
@@ -16053,6 +16190,60 @@ function cardNotifications(card) {
   sent.id = "notify-list";
   card.appendChild(sent);
   setTimeout(() => loadNotify().catch(() => {}), 0);
+}
+
+// ---- settings cards: forms built from the one table (static/settings.js) --
+// A card names a group or a list of keys; the renderer does the rest, so a
+// new key is a row in server/settingschema.py and nothing here.
+
+function settingsCard(id, card) {
+  const S = window.ViraSettings;
+  if (!S) { card.appendChild(el("p", "hint warn", "Settings renderer not loaded.")); return; }
+  const refresh = () => { loadSetupExtra().then((x) => { setupExtra = x; refreshSettingsRows(); }).catch(() => {}); };
+  if (id === "you") {
+    card.appendChild(el("p", "card-lede", "Who Vira is working for. The time zone drives quiet hours, deadlines and calendar planning everywhere."));
+    S.form(card, { group: "you", onSaved: refresh });
+  } else if (id === "assistant") {
+    card.appendChild(el("p", "card-lede", "The background worker that reads new texts and mail for commitments and deadlines and keeps Attention's reminders current."));
+    S.form(card, { group: "assistant", onSaved: refresh });
+    const links = el("div", "setup-row");
+    const open = el("button", "btn", "Open reminders in Attention");
+    open.onclick = () => { setAttentionTab("day", { defer: true }); openApp("attention"); };
+    const notif = el("button", "btn", "Reminder texts and quiet hours");
+    notif.onclick = () => dashJump("notifications");
+    const cal = el("button", "btn", "Calendars");
+    cal.onclick = () => dashJump("calendar");
+    links.appendChild(open); links.appendChild(notif); links.appendChild(cal);
+    card.appendChild(links);
+    card.appendChild(el("p", "hint", "Which contacts the assistant may update is under Contacts; the email index switch is under Mail."));
+  } else if (id === "calendar") {
+    card.appendChild(el("p", "card-lede", "Where the assistant files events, and the hours it plans personal task blocks around."));
+    if (window.ViraAssistant?.calendarCard) window.ViraAssistant.calendarCard(card).then(refresh);
+    else card.appendChild(el("p", "hint warn", "Calendar pickers not loaded."));
+    connectionSection(card, "Daily brief", "How the brief reads your calendars.", (body) => {
+      S.form(body, { keys: ["family_calendars", "brief_remote_events"], onSaved: refresh });
+    });
+  } else if (id === "workers") {
+    card.appendChild(el("p", "card-lede", "Every background sweep and watcher, with the setting that switches it and when it last ran."));
+    S.workers(card);
+  } else if (id === "advanced") {
+    card.appendChild(el("p", "card-lede", "Every tuning knob, grouped, with its default. Each one is also a key in data/config.json; this is the same file."));
+    S.form(card, { advanced: true, grouped: true, onSaved: refresh });
+  }
+}
+
+function refreshSettingsRows() {
+  const sv = settingsValues(setupExtra?.settings);
+  ["you", "assistant", "calendar"].forEach((id) => {
+    const r = settingsRow(id, "", sv);
+    const row = $(`#setup-body [data-setup-id="${id}"] .dash-row`);
+    if (!row) return;
+    ["done", "optional", "manage"].forEach((name) => row.classList.toggle("s-" + name, r.state === name));
+    const sub = row.querySelector(".setup-step-sub");
+    if (sub) sub.textContent = r.sub;
+    const pill = row.querySelector(".dash-pill");
+    if (pill) { pill.textContent = r.pill; pill.className = "dash-pill " + dashPillClass(r); }
+  });
 }
 
 function cardUpdates(card) {
@@ -26968,8 +27159,7 @@ const HASH_ROUTES = {
   },
   "setup": (rest) => {
     openApp("setup");
-    if (rest[0] === "notifications") dashJump("notifications");
-    if (rest[0] === "brain") dashJump("brain");
+    if (rest[0]) dashJump(decodeURIComponent(rest[0]));
   },
   "subs-visuals": "subsviz",
   "brief": "brief",

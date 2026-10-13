@@ -297,10 +297,14 @@ PC the wizard skips what does not exist there - see **Windows** above):
    local registrations take precedence. Never use an owner's private tenant
    registration as the public default. Until then, first-time users need
    their own registration or help from their Microsoft administrator.
-6. **Config extras** - copy `config.example.json` to `data/config.json`
-   for identity details: your name, the iMessage handle Vira texts
-   notifications to, family calendar names. Every key is optional; an
-   absent value leaves that feature dormant.
+6. **Config extras** - everything else lives in **Config** too: your name
+   and time zone under **You**, the assistant, notifications, calendars,
+   background work, and an **Advanced settings** card listing every tuning
+   knob with its default. `config.example.json` documents the same keys
+   for anyone who prefers to edit `data/config.json` by hand; it is
+   generated from the one table in `server/settingschema.py`, so the two
+   never disagree. Every key is optional; an absent value leaves that
+   feature dormant.
 7. **Phone access (optional)** - open **Config > Phone messages > Use Vira
    on your phone** for the detected phone address and a copy button.
    Vira binds `0.0.0.0:8377`. Install Tailscale on the computer and phone,
@@ -436,8 +440,9 @@ goes live because its data landed - not because a run said so.
 
 ## Background assistant
 
-Open **Attention > Day > Assistant settings**, or the focused `/assistant` page,
-to enable background learning.
+Open **Config > Assistant** (Attention and the focused `/assistant` page link
+there) to enable background learning; reminder texts and quiet hours are under
+**Config > Notifications**, calendars and work hours under **Config > Calendar**.
 The assistant processes new messages and reconciles recent indexed messages
 after downtime. It keeps source quotes with learned facts, promises, deadlines,
 and completion evidence. Updates merge into existing contact profiles; owner
@@ -558,7 +563,7 @@ Access grant is tied to its python binary (see "Making it real").
 
 ## Updates
 
-Settings > Updates shows the running commit and whether the remote is
+Config > Updates shows the running commit and whether the remote is
 ahead; one click pulls (fast-forward only), installs any dependency
 changes into the existing venv (pinned versions from
 `requirements.txt`; editable dev installs are never overwritten), and
