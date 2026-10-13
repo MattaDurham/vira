@@ -422,6 +422,10 @@ class ResumePromptContent(_RepoCase):
         self.assertIn("Merge / Try it first / Keep testing / Discard", text)
         self.assertIn("served only if they pick Try it first", text)
         self.assertIn("do not ask that yourself", text)
+        # 2026-10-12: three Resume sessions each ran the 4,900-test suite
+        # two or three times at once. The suite is CI's; once, to a file.
+        self.assertIn("Run the tests that cover the change", text)
+        self.assertIn("at most once, to a file", text)
 
     def test_names_the_originating_job_when_known(self):
         wt = self.make_worktree("p2", commits=1)

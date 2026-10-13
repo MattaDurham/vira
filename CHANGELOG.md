@@ -74,6 +74,15 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Changed
 
+- A Resume session runs the tests that cover its change and the full
+  suite at most once, to a file, and only when the change is wide or
+  touches shared server code. On 2026-10-12 three Resume sessions each
+  ran the 4,900-test suite two or three times at the same time, on top
+  of every other instance on the machine. The public rules template
+  carries the same tests rule and the on-request test instance in its
+  handoff: the test instance is served only when the owner picks Try it
+  first, never as a step before the handoff.
+
 - A landing serves a test instance only on request. The card a finished
   coding session raises now reads Merge it / Try it first / Keep playing /
   Discard; Try it first serves a fresh, local-only instance of the branch

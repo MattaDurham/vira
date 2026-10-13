@@ -838,7 +838,11 @@ Commits on this branch not yet on main (git log --oneline main..branch):
 {log}
 
 Finish the work: read what is already there, understand what was being \
-built, and carry it through to completion. Run the test suite. When you \
+built, and carry it through to completion. Run the tests that cover the \
+change. The full suite is CI's job (it runs on every PR): run it locally \
+at most once, to a file you then read, and only when the change is wide \
+or touches shared server code - other sessions may be running theirs on \
+this machine at the same time. When you \
 are done, or stuck and in need of the owner's judgment, end your turn \
 with a compact review brief: lead with the outcome, name the workflow or \
 before/after relationship, list verification, and state what remains. \

@@ -70,8 +70,11 @@ merely to make that document appear locally.
   The tell that one slipped is `git status` in the live checkout showing
   modified tracked files; check that before trusting a test result or
   concluding "the fix did not take".
-- **Tests.** `.venv/bin/python -m unittest discover tests`: stdlib
-  unittest, no pytest needed; CI runs the suite on macOS and Windows. In a
+- **Tests.** Run the tests that cover what you changed, for example
+  `.venv/bin/python -m unittest tests.test_x` or `node tests/x.js`. The full
+  suite (`.venv/bin/python -m unittest discover tests`, stdlib unittest, no
+  pytest) is CI's job: it runs on macOS and Windows on every PR. Run it
+  locally only when the change is wide or touches shared server code. In a
   worktree with no `.venv` symlink, run the live checkout's interpreter by
   absolute path from your own cwd. A green suite in a fresh worktree is not
   proof: some tests read the real config or checkout, so before calling a
@@ -123,14 +126,29 @@ merely to make that document appear locally.
 
 ## 3. Finishing a branch
 
-End every branch session with a short handoff, then one question:
+When the work is done and committed, carry it all the way to a decision
+the owner can make at a glance. The owner looks at nothing until the
+handoff appears.
 
-- **What I did** - a few short bullets.
-- **Where it is** - branch, worktree, latest commit.
-- **The test instance** - its `localhost:<port>` URL, served with
-  `scripts/branch.sh serve <slug> --fresh --local`.
-- **Private state touched** - the kind of data and where it lives, or "none".
-- **Then ask: keep testing, merge, or discard?**
+1. Open the PR: `scripts/branch.sh pr <slug>` (a draft until merge time;
+   the merge requires one).
+2. **Watch CI yourself until every check finishes**, for example with
+   `gh pr checks <number> --watch` running in the background. If a check
+   fails, fix it, commit, push, and watch again. A check that fails on a
+   test your diff does not touch is rerun once (`gh run rerun <id>
+   --failed`) before anything else. Never hand the wait to the owner or
+   ask them to say when it is green.
+3. **The moment CI is green, post the handoff in the chat, unprompted:**
+   - **What I did** - a few short bullets.
+   - **Where it is** - branch and PR link.
+   - **Private state touched** - the kind of data and where it lives, or
+     "none".
+   - **Then the choice, as clickable options where the harness has them:
+     Merge it / Try it first / Keep testing / Discard.**
+
+   A test instance is served only when the owner picks Try it first:
+   `scripts/branch.sh serve <slug> --fresh --local`, then give its
+   `localhost:<port>` URL. Not before, and not by default.
 
 If Vira dispatched you, do not ask that question yourself: when your turn
 ends Vira opens the PR and raises the landing card: Merge it / Try it
@@ -142,21 +160,29 @@ teardown once your turn ends, because the merge deletes the worktree you
 are running in.
 
 In a session the owner runs directly, **"merge it" from the owner is the
-authorization for the whole landing**, run end to end:
+authorization for the whole landing**, run end to end without stopping:
 
-1. Commit everything on the branch with a real message (ASCII, no emoji).
+1. Commit anything outstanding with a real message (ASCII, no emoji).
 2. If `main` moved, rebase in the worktree, never in the live tree, and
-   re-run the tests. If preflight's `base` check says main's history was
-   rewritten, use `git rebase --onto main <old-base>`, not `git rebase main`.
-3. `scripts/branch.sh pr <slug> --ready`: the merge requires an open PR.
+   push. If the rebase was clean and the commits on `main` touch none of
+   your files, merge straight away: CI runs on `main` after the push, so
+   watch that run and fix forward if it goes red. Only when files overlap
+   do you re-run the affected tests and wait for the branch's CI again. If
+   preflight's `base` check says main's history was rewritten, use
+   `git rebase --onto main <old-base>`, not `git rebase main`.
+3. `scripts/branch.sh pr <slug> --ready`.
 4. `scripts/branch.sh merge <slug>`: preflight, the merge into `main`, and
    the teardown of the spent worktree.
-5. Push: `git -C <live checkout> push`.
-6. If `server/` changed, name the restart for the owner; never run it.
+5. Push: `git -C <live checkout> push`, then `scripts/branch.sh discard
+   <slug>` to remove the remote branch once the PR reads Merged.
+6. If `server/` changed, say so and give the restart command. A session
+   running inside Vira never runs it (it would kill itself); a session the
+   owner runs directly runs it when the owner asks, then confirms the
+   server answers again.
 
 Never merge or push without that word. "Discard" is
-`scripts/branch.sh discard <slug>`. "Keep testing" leaves the branch and
-its instance up.
+`scripts/branch.sh discard <slug>`. "Keep testing" leaves the branch, the
+PR and the instance up.
 
 ---
 
