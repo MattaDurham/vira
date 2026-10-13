@@ -343,6 +343,70 @@ class StoreTests(_Base):
             self.assertEqual(mailarchive.sweep(log=said.append), 0)
         self.assertTrue(any("unreachable" in s for s in said))
 
+    def test_the_index_runs_in_write_ahead_mode(self):
+        con = mailarchive._db()
+        try:
+            self.assertEqual(con.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        finally:
+            con.close()
+
+    def test_each_message_is_committed_on_its_own(self):
+        # A sweep spends its time on network fetches; a transaction held
+        # across them locked the index against the other writer. A second
+        # connection reading mid-walk sees every earlier message.
+        seen = {}
+        db = self.root / "index.sqlite"
+
+        class PeekingIMAP(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and int(args[0]) == 3:
+                    other = sqlite3.connect(db)
+                    try:
+                        seen["rows"] = other.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+                    finally:
+                        other.close()
+                return super().uid(cmd, *args)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        self.imap = PeekingIMAP({u: raw_message(f"<{u}@example.test>") for u in range(1, 5)})
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None), 4)
+        self.assertEqual(seen, {"rows": 2})
+
+    def test_a_busy_index_ends_the_pass_and_the_backfill_retries(self):
+        # The background thread and the CLI write the same index. A lock
+        # that outlasts the wait ends the walk, keeps what landed, and the
+        # backfill tries again after a pause instead of reading an empty
+        # pass as "done" (the CLI's first real pass, 2026-10-13).
+        self.use_imap({u: raw_message(f"<{u}@example.test>") for u in range(1, 4)})
+        real = mailarchive._Store.put
+        calls = []
+
+        def put(store, **kw):
+            calls.append(1)
+            if len(calls) == 2:
+                raise sqlite3.OperationalError("database is locked")
+            return real(store, **kw)
+        said = []
+        with mock.patch.object(mailarchive._Store, "put", put), \
+             mock.patch.object(mailarchive.time, "sleep", lambda s: None):
+            self.assertEqual(mailarchive.backfill(log=said.append), 3)
+        self.assertEqual(mailarchive.stats()["messages"], 3)
+        self.assertEqual(mailarchive.stats()["failed"], 0)
+        self.assertTrue(any("walk ended early" in m for m in said), said)
+        self.assertTrue(any("retrying (1 of" in m for m in said), said)
+        self.assertEqual([m for m in said if m.startswith("mail archive backlog: +")],
+                         ["mail archive backlog: +1 (total 1)",
+                          "mail archive backlog: +2 (total 3)",
+                          "mail archive backlog: +0 (total 3)"])
+
+    def test_the_backfill_gives_up_after_repeated_error_passes(self):
+        self.use_imap({1: raw_message(MID_A)})
+        with mock.patch.object(mailarchive._Store, "put",
+                               side_effect=sqlite3.OperationalError("database is locked")), \
+             mock.patch.object(mailarchive.time, "sleep", lambda s: None):
+            said = []
+            self.assertEqual(mailarchive.backfill(log=said.append), 0)
+        self.assertTrue(any("giving up after 3" in m for m in said), said)
+
     def test_backfill_loops_until_a_pass_is_quiet(self):
         self.use_imap({u: raw_message(f"<{u}@example.test>") for u in range(1, 4)})
         said = []

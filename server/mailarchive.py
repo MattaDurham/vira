@@ -63,7 +63,6 @@ _DATA = Path(__file__).resolve().parent.parent / "data"
 GRAPH_PAGE = 50
 SWEEP_LIMIT = 200            # messages per account per background tick;
                              # the backlog is the CLI's job
-COMMIT_EVERY = 25            # rows per transaction
 MAX_CONSECUTIVE_FAILURES = 3
 
 SCHEMA = """
@@ -133,6 +132,13 @@ def _db(create=True):
             r.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(path, timeout=30)
         con.execute("PRAGMA busy_timeout=30000")
+        # Write-ahead mode, as the other indexes: a status read never
+        # waits on a sweep. Skipped while another connection holds a
+        # transaction; taken on the next open.
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass
         con.executescript(SCHEMA)
         return con
     except (OSError, sqlite3.Error):
@@ -332,15 +338,22 @@ def _write_blob(raw):
 
 
 class _Store:
-    """One sweep's view of the index: the cap, the commit cadence, and the
-    failure ledger. Watermarks are written by the source walks, inside the
-    same transaction as the rows they cover."""
+    """One sweep's view of the index: the cap, the failure ledger, and the
+    counts the sweep reports. Every message commits on its own: a sweep
+    spends its time on network fetches, and a transaction held open across
+    twenty-five of them (the media archive's cadence, where the work
+    between commits is a local file copy) kept the index locked for
+    longer than the other writer's 30 s wait. The background thread and
+    the CLI backfill write the same index, and on 2026-10-13 the CLI's
+    first pass died on exactly that."""
 
     def __init__(self, con):
         self.con = con
         self.cap = max_bytes()
         self.used = _used_bytes(con) if self.cap else 0
-        self.pending = 0
+        self.archived = 0       # rows this sweep added, counted here so an
+                                # error that ends a walk cannot lose them
+        self.errors = 0         # walks this sweep ended in an error
         self.full = None        # the ArchiveFull message once the cap is hit;
                                 # the walks stop and sweep reports it
 
@@ -366,16 +379,13 @@ class _Store:
             (key, account, mid or None, sha, size, date, _now()))
         if new_bytes:
             self.used += size
-        return int(cur.rowcount > 0)
-
-    def maybe_commit(self):
-        self.pending += 1
-        if self.pending >= COMMIT_EVERY:
-            self.commit()
+        self.con.commit()
+        new_row = int(cur.rowcount > 0)
+        self.archived += new_row
+        return new_row
 
     def commit(self):
         self.con.commit()
-        self.pending = 0
 
     def failed(self, account, ref, err):
         row = self.con.execute(
@@ -478,6 +488,12 @@ def _imap_sweep(acct, store, limit, log):
                     store.full = str(e)
                     log(f"  imap {addr}: {e}")
                     break
+                except sqlite3.OperationalError:
+                    # The INDEX is busy, not the message: end the walk with
+                    # the watermark below this uid, and let the sweep report
+                    # it. Filed as a message failure it would be retried as
+                    # one, and the real reason never surfaces.
+                    raise
                 except Exception as e:  # noqa: BLE001
                     fails += 1
                     if fails > MAX_CONSECUTIVE_FAILURES:
@@ -492,7 +508,7 @@ def _imap_sweep(acct, store, limit, log):
                     if not is_retry:
                         wm = max(wm, uid)
                 set_state(con, wm_key, wm)
-                store.maybe_commit()
+                store.commit()
         finally:
             set_state(con, wm_key, wm)
             store.commit()
@@ -536,10 +552,12 @@ def _graph_sweep(acct, store, limit, log):
             log(f"  graph {account}: {e}")
             store.commit()
             return n
+        except sqlite3.OperationalError:
+            raise                       # the index, not the message
         except Exception as e:  # noqa: BLE001
             store.failed(account, ref, e)
             log(f"  graph {account}: retry of {ref} failed again: {e}")
-        store.maybe_commit()
+        store.commit()
     since = get_state(con, wm_key)
     flt = f"receivedDateTime ge {since}" if since else ""
     path = ("/me/messages?" + (f"$filter={urllib.parse.quote(flt)}&" if flt else "")
@@ -582,7 +600,7 @@ def _graph_sweep(acct, store, limit, log):
                     log(f"  graph {account}: {e}")
                     truncated = True
                     break
-                store.maybe_commit()
+                store.commit()
             store.commit()
             if truncated:
                 break
@@ -599,61 +617,86 @@ def _graph_sweep(acct, store, limit, log):
 
 # ---------- the sweep ----------
 
-@runtimework.tracked("Mail archiving")
-def sweep(log=print, limit=None, account=None):
-    """Archive what each account holds that the archive does not. Bounded
-    per account by `limit` (the background tick) or unbounded (the CLI).
-
-    Cheap to repeat once the history is in: IMAP asks for UIDs above the
-    watermark and Graph for mail received since it."""
+def _sweep(log, limit, account):
+    """(archived, errored) for one pass over the accounts."""
     if not enabled():
         log("mail archive: disabled")
-        return 0
+        return 0, False
     con = _db()
     if con is None:
         log(f"mail archive: root unreachable ({root()}), nothing archived")
-        return 0
+        return 0, False
     try:
         store = _Store(con)
-        total = 0
         for acct in _accounts():
             addr = acct.get("email") or ""
             if not addr or (account and addr != account):
                 continue
             try:
                 if acct.get("type") == "graph":
-                    total += _graph_sweep(acct, store, limit, log)
+                    _graph_sweep(acct, store, limit, log)
                 else:
-                    total += _imap_sweep(acct, store, limit, log)
+                    _imap_sweep(acct, store, limit, log)
             except Exception as e:  # noqa: BLE001 - one bad mailbox never
-                log(f"  {addr}: {e}")               # stops the others
+                store.errors += 1                   # stops the others
+                log(f"  {addr}: walk ended early: {e}")
             if store.full:
                 log(f"mail archive: {store.full}; nothing more archived")
                 break
         store.commit()
-        log(f"mail archive: {total} newly archived")
-        return total
+        log(f"mail archive: {store.archived} newly archived"
+            + (f", {store.errors} walk(s) ended early" if store.errors else ""))
+        return store.archived, store.errors > 0
     finally:
         con.close()
 
 
+@runtimework.tracked("Mail archiving")
+def sweep(log=print, limit=None, account=None):
+    """Archive what each account holds that the archive does not. Bounded
+    per account by `limit` (the background tick) or unbounded (the CLI).
+    Returns the number of messages archived, counted as they land, so a
+    walk that ends in an error still reports what it did.
+
+    Cheap to repeat once the history is in: IMAP asks for UIDs above the
+    watermark and Graph for mail received since it."""
+    return _sweep(log, limit, account)[0]
+
+
+BACKFILL_RETRIES = 3     # passes ending in an error before the CLI gives up
+
+
 def backfill(log=print, account=None):
-    """The backlog: unbounded sweeps until a pass archives nothing and
-    moves no watermark. Resumable at any point; a pass that ends early
-    (a dying connection) leaves its watermark where the mail is."""
+    """The backlog: unbounded sweeps until a clean pass archives nothing
+    and moves no watermark. A pass that ends in an error (the index busy
+    under the background thread, a dying connection) is retried after a
+    pause, a few times in a row before giving up; its rows are already in,
+    and its watermark sits where the mail is. Resumable at any point."""
     total = 0
+    errored_in_a_row = 0
     while True:
         con = _db()
         before = _watermarks(con) if con is not None else {}
         if con is not None:
             con.close()
-        n = sweep(log=log, account=account)
+        n, errored = _sweep(log, None, account)
         total += n
         log(f"mail archive backlog: +{n} (total {total})")
         con = _db()
         after = _watermarks(con) if con is not None else {}
         if con is not None:
             con.close()
+        if errored:
+            errored_in_a_row += 1
+            if errored_in_a_row >= BACKFILL_RETRIES:
+                log(f"mail archive backlog: giving up after {errored_in_a_row} "
+                    f"passes ending in errors; rerun to resume")
+                return total
+            log(f"mail archive backlog: pass ended in an error, retrying "
+                f"({errored_in_a_row} of {BACKFILL_RETRIES})")
+            time.sleep(5)
+            continue
+        errored_in_a_row = 0
         if n == 0 and after == before:
             return total
 
