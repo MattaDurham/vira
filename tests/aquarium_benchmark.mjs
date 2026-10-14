@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {Vector3,Texture} from '../static/vendor/three.webgpu.js';
-import {createSwimmer,referencePose} from '../static/aquarium-motion.js';
+import {createSwimmer,referencePose,finActuation} from '../static/aquarium-motion.js';
 import {applySwimPose,createFacialRig} from '../static/aquarium-rig.js';
 import {createContainment} from '../static/aquarium-collision.js';
 
@@ -136,6 +136,54 @@ assert.ok(curious.fish.y>idle.fish.y+.15,'a high cursor encourages an actual cli
 assert.ok(startleMax>normalMax*1.5,'a close tap creates a short, faster escape response');
 curious.reset();assert.equal(curious.fish.y,referencePose.y);assert.equal(curious.fish.speed,0);
 
+const seeded=initial=>{let value=initial;return ()=>{value=(Math.imul(value,1664525)+1013904223)>>>0;return value/4294967296;};};
+const modes=new Set();let coasts=0,heldCourses=0,quietFrames=0,levelFrames=0,minDepth=2,maxDepth=0;
+for(const seed of [913,481,33]){
+ const routine=createSwimmer(seeded(seed));
+ for(let i=0;i<12000;i++){
+  const phase=routine.fish.phase;routine.step(1/60);
+  const f=routine.fish,b=routine.behavior;modes.add(b.intent);
+  if(b.gait==='coast'&&f.stroke<.03){
+    coasts++;if(Math.abs(f.yawRate)<.12)heldCourses++;
+    assert.ok(f.phase-phase<.005,'a relaxed coast does not keep beating the tail as though it were swimming hard');
+  }
+  if(f.speed<.025)quietFrames++;
+  if(Math.abs(f.pitch)<.09)levelFrames++;
+  minDepth=Math.min(minDepth,f.y);maxDepth=Math.max(maxDepth,f.y);
+ }
+}
+assert.deepEqual([...modes].sort(),['cruise','hover','inspect'],'routine choices include travel, inspection and quiet pauses');
+assert.ok(coasts>600&&heldCourses/coasts>.85,'most relaxed glides hold a course instead of continuously homing toward a random point');
+assert.ok(quietFrames>600&&quietFrames<30000,'the repertoire includes quiet intervals without getting stuck for most of the runs');
+assert.ok(levelFrames>18000&&maxDepth-minDepth>.20,'the fish mostly swims level but also makes slower, substantial depth excursions');
+const finHover=finActuation({speed:0,brake:1,finPhase:0},1);
+const finCruise=finActuation({speed:.25,brake:0,finPhase:0},1);
+assert.ok(finHover.spread>finCruise.spread+.25,'paired fins open for hovering and braking, and trail in a forward burst');
+assert.notEqual(finActuation({speed:0,brake:1,finPhase:0},-1).paddle,finHover.paddle,'paired fins need not paddle in mechanical synchrony');
+
+const attentive=createSwimmer(seeded(481));
+attentive.follow({x:-.9,y:1.1,z:.2});
+for(let i=0;i<120;i++)attentive.step(1/60);
+assert.equal(attentive.behavior.intent,'curious','the fish notices cursor movement after a short attention delay');
+for(let i=0;i<1200;i++)attentive.step(1/60);
+assert.ok(attentive.behavior.attention<.03,'an unmoving pointer loses its novelty rather than trapping the fish in a permanent chase');
+attentive.follow({x:.7,y:.8,z:.2});
+for(let i=0;i<75;i++)attentive.step(1/60);
+assert.equal(attentive.behavior.intent,'curious','fresh cursor movement can attract attention again');
+
+// Check navigation against real skinned surfaces, not only the root bounds.
+// Sampling at 10 Hz keeps the asset harness affordable on CPU-only CI runners.
+const turns=createSwimmer(seeded(913));let turnContacts=0,largestCorrection=0;
+for(let i=0;i<1800;i++){
+  turns.step(1/30);
+  if(i%3)continue;
+  applySwimPose(asset,joints,rest,turns.fish);
+  const correction=containment.correction(),magnitude=Math.hypot(correction.x,correction.y,correction.z);
+  if(magnitude>.001)turnContacts++;
+  largestCorrection=Math.max(largestCorrection,magnitude);turns.contain(correction);
+}
+assert.ok(turnContacts<4&&largestCorrection<.005,`routine turns avoid visible collision translations: ${turnContacts} contacts, ${largestCorrection} m correction`);
+
 let seed=913;
 const roam=createSwimmer(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;});
 for(let i=0;i<18000;i++){
@@ -145,4 +193,4 @@ for(let i=0;i<18000;i++){
   const f=roam.fish;
   assert.ok(f.x>=-1.16&&f.x<=1.16&&f.y>=.34&&f.y<=1.34&&f.z>=-.67&&f.z<=.31,'the whole fish has room inside the glass');
 }
-console.log('Aquarium: exported geometry, three-axis skin deformation, facial articulation, pitched swimming, curiosity, startle and five-minute confinement passed');
+console.log('Aquarium: geometry, three-axis deformation, face, pitched swimming, deliberate behavior, glides, fin control, attention, startle and actual-body turn clearance passed');

@@ -3,10 +3,10 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=40';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=40';
-import {waterOptics} from './aquarium-optics.js?v=40';
-import {createContainment} from './aquarium-collision.js?v=40';
+import {createSwimmer,waterFlow,finActuation} from './aquarium-motion.js?v=44';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=44';
+import {waterOptics} from './aquarium-optics.js?v=44';
+import {createContainment} from './aquarium-collision.js?v=44';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const swimmer=createSwimmer(),fish=swimmer.fish,clock=uniform(0);
@@ -258,7 +258,8 @@ function key(event){
   else return;event.preventDefault();setCamera();
 }
 function pose(){
-  const held={...fish,x:.3,y:.77,z:-.15,yaw:-.40,yawRate:0,pitch:0,pitchRate:0,bank:0,drive:.2,speed:.2,stroke:1,phase:studyPhase};
+  const held={...fish,x:.3,y:.77,z:-.15,yaw:-.40,yawRate:0,pitch:0,pitchRate:0,bank:0,
+    drive:.2,speed:.2,forwardSpeed:.2,stroke:1,brake:0,maneuver:0,finSteer:0,finPhase:studyPhase*.55,phase:studyPhase};
   if(state.study){
     const axis=state.studyAxis;
     held.lateralGain=axis==='vertical'||axis==='twist'?0:1;
@@ -276,6 +277,11 @@ function pose(){
   canvas.dataset.phase=sample.phase.toFixed(4);
   canvas.dataset.age=fish.age.toFixed(2);canvas.dataset.pitch=sample.pitch.toFixed(3);
   canvas.dataset.rootPosition=[sample.x,sample.y,sample.z].map(v=>v.toFixed(3)).join(',');
+  const behavior=swimmer.behavior;
+  canvas.dataset.behavior=state.study?'held study':behavior.intent;
+  canvas.dataset.gait=behavior.gait;canvas.dataset.speed=sample.speed.toFixed(3);
+  canvas.dataset.stroke=sample.stroke.toFixed(3);canvas.dataset.yawRate=sample.yawRate.toFixed(3);
+  canvas.dataset.wallContacts=String(behavior.contacts);
 }
 function draw(now){
   if(disposed)return;frame=requestAnimationFrame(draw);
@@ -287,16 +293,20 @@ function draw(now){
       if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
     }
     swimmer.step(elapsed);studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.05);clock.value=fish.age;pose();}
-  for(const {points,base,paired,root,sign,geometry} of fins){
+  for(const {points,base,paired,pectoral,root,sign,geometry} of fins){
+    const actuation=finActuation(visualFish,sign,pectoral);
     for(let i=0;i<points.count;i++){
       const x=base[i*3],y=base[i*3+1],z=base[i*3+2];
       if(paired){
         const side=Math.sign(z)||sign,rz=Math.abs(root.z)*side;
-        const a=(.25+.25*visualFish.speed)*Math.sin(visualFish.phase*.65+.6)*side,dy=y-root.y,dz=z-rz;
+        const a=-(actuation.spread+actuation.paddle)*side,dy=y-root.y,dz=z-rz;
         const flex=Math.min(1,Math.hypot(dy,dz)/.15);
         const bend=a*Math.pow(flex,.8);
-        points.setXYZ(i,x-.015*flex*Math.sin(visualFish.phase*.65),root.y+dy*Math.cos(bend)-dz*Math.sin(bend),rz+dy*Math.sin(bend)+dz*Math.cos(bend)+.009*flex*flex*Math.sin(visualFish.phase-1.1));
-      }else points.setXYZ(i,x,y,z+.035*Math.sin(x*12-visualFish.phase-1.1)*Math.max(0,x-.48));
+        const trail=side*THREE.MathUtils.clamp(visualFish.speed*.95,0,.32)*flex;
+        const stretchedZ=dy*Math.sin(bend)+dz*Math.cos(bend);
+        points.setXYZ(i,root.x+(x-root.x)*Math.cos(trail)+stretchedZ*Math.sin(trail)+actuation.sweep*flex,
+          root.y+dy*Math.cos(bend)-dz*Math.sin(bend),rz+stretchedZ*Math.cos(trail)-(x-root.x)*Math.sin(trail));
+      }else points.setXYZ(i,x,y,z+.035*(visualFish.stroke??1)*Math.sin(x*12-visualFish.phase-1.1)*Math.max(0,x-.48));
     }
     points.needsUpdate=true;
     geometry.computeVertexNormals();
@@ -339,7 +349,8 @@ function draw(now){
 function setPause(paused){state.paused=paused;$('motion').textContent=paused?'Resume motion':'Pause motion';$('motion').setAttribute('aria-pressed',String(paused));}
 function setView(reference){
   state.reference=reference;$('reference').hidden=!reference;$('live-view').setAttribute('aria-pressed',String(!reference));$('reference-view').setAttribute('aria-pressed',String(reference));
-  $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=reference;
+  $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=$('record-length').disabled=reference;
+  $('record').disabled=reference||recording?.state==='recording';
   $('hint').textContent=reference?'Cycles reference: the same authored fish, rendered offline through glass and volumetric water.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';
   $('engine').textContent=reference?'Cycles / offline':liveEngine;
   $('performance').textContent=reference&&referenceMetadata?`${referenceMetadata.samples} samples / ${referenceMetadata.resolution.join(' × ')} still`:reference?'Offline still':'Measuring';
@@ -354,7 +365,7 @@ function cleanup(){
 
 function record(){
   if(state.reference||recording?.state==='recording')return;
-  const button=$('record'),link=$('download-recording');
+  const button=$('record'),link=$('download-recording'),seconds=$('record-length').value==='30'?30:8;
   try{
     if(!canvas.captureStream||!window.MediaRecorder)throw new Error('Canvas recording unavailable');
     const mimeType=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type));
@@ -380,11 +391,11 @@ function record(){
         const response=await fetch('__recording',{method:'POST',headers:{'Content-Type':mimeType},body:blob});
         if(response.ok){const saved=await response.json();link.href=saved.url;link.removeAttribute('download');link.textContent='Review recording';}
       }catch{/* Ordinary static servers retain the browser-download fallback. */}
-      button.disabled=false;button.textContent='Record 8 seconds (1080p)';
+      button.disabled=state.reference;button.textContent=`Record ${$('record-length').value} seconds (1080p)`;
     };
     recording.onerror=event=>{button.textContent=`Recording failed: ${event.error?.message??'encoder error'}`;button.disabled=false;recordingStream.getTracks().forEach(track=>track.stop());};
     link.hidden=true;button.disabled=true;button.textContent='Recording live frames';recording.start();
-    recordingTimer=setTimeout(()=>{if(recording.state==='recording')recording.stop();},8000);
+    recordingTimer=setTimeout(()=>{if(recording.state==='recording')recording.stop();},seconds*1000);
   }catch(error){button.textContent=error.message;button.disabled=true;}
 }
 
@@ -407,7 +418,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=40');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=44');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -421,7 +432,8 @@ async function start(){
         const paired=!object.name.startsWith('Caudal');
         let z=0;for(let i=0;i<points.count;i++)z+=points.getZ(i);
         const sign=Math.sign(z)||1;
-        fins.push({points,base,paired,sign,geometry:object.geometry,root:{y:points.getY(0),z:points.getZ(0)}});
+        fins.push({points,base,paired,pectoral:object.name.startsWith('Pectoral'),sign,geometry:object.geometry,
+          root:{x:points.getX(0),y:points.getY(0),z:points.getZ(0)}});
       }
       if(object.name.includes('sensory_barbel')){const points=object.geometry.attributes.position;barbels.push({points,base:Float32Array.from(points.array)});}
       const replace=mat=>{if(!converted.has(mat)){converted.set(mat,immerse(mat));for(const value of Object.values(mat))if(value?.isTexture)ownedTextures.add(value);mat.dispose();}return converted.get(mat);};
@@ -441,7 +453,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=40').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=44').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
@@ -476,6 +488,7 @@ async function start(){
   $('camera-angle').addEventListener('change',()=>{state.cameraAngle=$('camera-angle').value;state.closeup=false;$('closeup').setAttribute('aria-pressed','false');setCamera();});
   $('closeup').addEventListener('click',()=>{state.closeup=!state.closeup;if(state.closeup){if(state.studyAxis==='swim'){state.studyAxis='combined';$('study-axis').value='combined';}state.study=true;$('study').setAttribute('aria-pressed','true');pose();}$('closeup').setAttribute('aria-pressed',String(state.closeup));setCamera();});
   $('record').addEventListener('click',record);
+  $('record-length').addEventListener('change',()=>{if(recording?.state!=='recording')$('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;});
   $('reference-view').addEventListener('click',()=>setView(true));$('live-view').addEventListener('click',()=>setView(false));
   $('light').addEventListener('input',()=>{renderer.toneMappingExposure=Number($('light').value);$('light-value').value=`${Math.round(Number($('light').value)*100)}%`;});
   frame=requestAnimationFrame(draw);

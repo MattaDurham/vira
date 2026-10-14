@@ -8,6 +8,8 @@ a Blender Cycles reference. The controls compare the two renderers, restart the
 swim, isolate body motion, inspect the mesh and deformation joints, and adjust
 illumination. A restart resumes motion rather than silently freezing the fish.
 Move the pointer to invite a loose approach; a close tap produces a brief escape.
+Attention has a short delay and fades when the pointer remains still, so the
+animal can resume its own activity instead of chasing indefinitely.
 Drag, scroll or use the focused canvas's arrow keys to inspect the tank.
 
 ## Authoring
@@ -84,7 +86,11 @@ biological accuracy follows from the test suite passing.
 checks its skin weights, UVs and scale normals, and exercises the production pose
 function against actual skinned vertices to catch a tail that rolls instead of bending. It also verifies
 pitched climbing, pointer curiosity, startle acceleration and five minutes of
-bounded swimming. Its unittest wrapper runs in CI without Blender or a GPU.
+bounded swimming. Three repeatable behavior runs exercise cruising, inspection,
+quiet pauses, heading stability during relaxed glides and pointer habituation.
+A joined navigation/asset check tests a minute of routine swimming against the
+actual articulated body and fins, catching visible collision corrections at
+the glass. Its unittest wrapper runs in CI without Blender or a GPU.
 
 Browser checks cover the reference toggle, pause/resume, mesh inspection,
 camera controls, desktop rendering and a fresh mobile-width load. The displayed
@@ -114,7 +120,7 @@ applied as absolute body-space orientations,
 so adding joints does not multiply the bend. It approximates fish-water
 interaction; it does not run the paper's Navier-Stokes solver.
 
-The Record 8 seconds (1080p) control copies real live frames at up to
+The recording control offers 8 or 30 seconds and copies real live frames at up to
 1920 pixels wide into a 30 fps recording canvas. It adds no interpolated frames. With the
 engineering preview server, its WebM is saved to
 `.aquarium-build/recordings/latest.webm` and available through Review recording.
@@ -158,6 +164,27 @@ controller as normal wandering. It changes a goal, rather than translating
 height directly. Turns, coasts and boundary reactions remain active. Routine
 swimming bouts vary in duration, and small eye rotations compensate turning
 and banking without adding eyelids to a fish.
+
+Routine choices maintain a course for several seconds, alternate travel with
+slower inspection and occasional hovering, and retain a depth preference longer
+than a single stroke. This is an authored behavior model, not a fitted ethogram.
+The observational references are original [pond footage](https://www.youtube.com/watch?v=5XJteeTP5SA)
+and [underwater koi footage](https://www.youtube.com/watch?v=zhLm3EsDDqc).
+[Yang et al. (2009), Flow Physics of Routine Turns of Koi Carp](https://doi.org/10.1299/jbse.4.67)
+describes a single-sided stroke, return toward straight, and a subsequent coast.
+The controller approximates that separation through short turning bouts,
+relaxing the tail and holding the course during the glide. Its rates and forces
+are tuned for this large authored fish; they are not copied from the paper's
+small experimental specimen or derived by solving its fluid equations.
+
+Paired fins paddle independently at low speed, open for braking and trail during
+a propulsive burst. Their phase is independent of the tail. A body-envelope
+forecast reserves room for tail sweep and constrains turning torque before a
+pane is reached. Small paired-fin forces can centre the fish or briefly scull
+backward when a turn is tight; these are horizontal forces integrated against
+water drag, not position offsets. The actual skinned-surface collision guard
+remains the final fallback. Vertical acceleration still comes from pitched
+forward swimming, with neutral buoyancy and no height tween.
 
 Opaque body, scale and facial surfaces avoid transparent margins in the
 photographic projection. The authoring script records reprojected UV samples;
