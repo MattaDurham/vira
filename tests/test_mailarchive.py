@@ -49,7 +49,8 @@ class FakeIMAP:
     def __init__(self, mailbox, validity="1", poison=None):
         self.mailbox = mailbox
         self.validity = validity
-        self.poison = dict(poison or {})
+        self.poison = poison if poison is not None else {}   # shared: a poison
+                                                              # message fails on any connection
         self.fetched = []
 
     def login(self, *a):
@@ -105,6 +106,7 @@ class _Base(unittest.TestCase):
             mock.patch.object(mailarchive, "root", lambda: self.root),
             mock.patch.object(mailarchive, "enabled", lambda: True),
             mock.patch.object(mailarchive, "max_bytes", lambda: self.cap),
+            mock.patch.object(mailarchive, "_default_workers", lambda: 1),
             mock.patch.object(mailarchive, "_accounts", lambda: self.accounts),
             mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", lambda *a, **k: self.imap),
             mock.patch.object(mailarchive.channels, "imap_special_folder",
@@ -259,6 +261,96 @@ class ImapTests(_Base):
         self.assertEqual(mailarchive.sweep(log=lambda *a: None), 3)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
         self.assertEqual(self.state(f"wm:{IMAP_ACCOUNT}"), "5")
+
+
+class ParallelHistoryTests(_Base):
+    """The CLI backfill walks the history on several connections; the
+    background sweep (a limit) stays on one."""
+
+    def connections(self, mailbox, **kw):
+        """A fresh fake connection per IMAP4_SSL call, all over one mailbox."""
+        made = []
+
+        def factory(*a, **k):
+            c = FakeIMAP(mailbox, **kw)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        return made
+
+    def test_the_history_is_walked_by_several_connections(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        made = self.connections(mailbox)
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=3), 1200)
+        self.assertEqual(len(made), 1 + 3)       # the sweep's own, plus the walkers
+        fetched = sorted(u for c in made for u in c.fetched)
+        self.assertEqual(fetched, list(range(1, 1201)))
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+        self.assertEqual(mailarchive.stats()["accounts"][IMAP_ACCOUNT]["messages"], 1200)
+        self.assertTrue(mailarchive.stats()["accounts"][IMAP_ACCOUNT]["history_complete"])
+
+    def test_a_bounded_sweep_stays_on_one_connection(self):
+        made = self.connections({u: raw_message(f"<{u}@example.test>") for u in range(1, 30)})
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=10, workers=4), 10)
+        self.assertEqual(len(made), 1)
+
+    def test_seen_uids_make_a_walk_met_again_cost_no_fetch(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 701)}
+        made = self.connections(mailbox)
+        mailarchive.sweep(log=lambda *a: None, workers=2)
+        # A crash before the mark was saved: put it back at the top.
+        con = mailarchive._db()
+        mailarchive.set_state(con, f"low:{IMAP_ACCOUNT}", 701)
+        con.commit()
+        con.close()
+        before = sum(len(c.fetched) for c in made)
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 0)
+        self.assertEqual(sum(len(c.fetched) for c in made), before)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
+    def test_a_dying_connection_holds_the_mark_and_the_others_finish(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1001)}
+        poison = {999: 9, 998: 9, 997: 9, 996: 9}
+        self.connections(mailbox, poison=poison)
+        said = []
+        # The top span (501..1000) dies at its fourth failure; the bottom
+        # span completes on another connection but cannot move the mark
+        # past the broken span above it.
+        self.assertEqual(mailarchive.sweep(log=said.append, workers=2), 501)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1001")
+        self.assertEqual(mailarchive.stats()["failed"], 3)
+        self.assertTrue(any("a connection ended after repeated failures" in m for m in said), said)
+        # The next pass retries the three recorded failures, then meets the
+        # top span again: uid 1000 is seen and costs nothing, uid 996 and
+        # the 495 the dying connection never reached are fetched, and the
+        # bottom span is all seen.
+        poison.clear()
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 499)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+        self.assertEqual(mailarchive.stats()["messages"], 1000)
+
+    def test_a_busy_index_in_a_walker_ends_the_pass_as_an_error(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 11)}
+        self.connections(mailbox)
+        real = mailarchive._Store.put
+        calls = []
+
+        def put(store, **kw):
+            calls.append(1)
+            if len(calls) == 3:
+                raise sqlite3.OperationalError("database is locked")
+            return real(store, **kw)
+        said = []
+        with mock.patch.object(mailarchive._Store, "put", put):
+            archived, errored = mailarchive._sweep(said.append, None, None, 2)
+        self.assertTrue(errored)
+        self.assertTrue(any("walk ended early" in m for m in said), said)
+        self.assertEqual(archived, 2)            # the walker stopped at the lock
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 8)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
 
 class GraphTests(_Base):

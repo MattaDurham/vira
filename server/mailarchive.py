@@ -36,7 +36,7 @@ end the pass with the watermark held.
 
 CLI:  .venv/bin/python -m server.mailarchive status
       .venv/bin/python -m server.mailarchive sweep [--limit N]
-      .venv/bin/python -m server.mailarchive backfill [--account ADDR]
+      .venv/bin/python -m server.mailarchive backfill [--account ADDR] [--workers N]
 """
 import email.parser
 import email.utils
@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS messages(
 );
 CREATE INDEX IF NOT EXISTS idx_messages_sha ON messages(sha);
 CREATE INDEX IF NOT EXISTS idx_messages_account_date ON messages(account, date);
+CREATE TABLE IF NOT EXISTS seen_uids(
+  account  TEXT NOT NULL,        -- every IMAP uid fetched (held or gone), per
+  validity TEXT NOT NULL,        -- UIDVALIDITY, so a span met again costs a
+  uid      INTEGER NOT NULL,     -- SEARCH and not a fetch
+  PRIMARY KEY(account, validity, uid)
+);
 CREATE TABLE IF NOT EXISTS failures(
   account  TEXT NOT NULL,
   ref      TEXT NOT NULL,        -- IMAP uid or Graph message id
@@ -506,6 +512,16 @@ class _Store:
         self.con.execute("DELETE FROM failures WHERE account=? AND ref=?",
                          (account, str(ref)))
 
+    def seen(self, account, validity, uid):
+        return self.con.execute(
+            "SELECT 1 FROM seen_uids WHERE account=? AND validity=? AND uid=?",
+            (account, validity or "", int(uid))).fetchone() is not None
+
+    def mark_seen(self, account, validity, uid):
+        self.con.execute(
+            "INSERT OR IGNORE INTO seen_uids(account, validity, uid) VALUES (?,?,?)",
+            (account, validity or "", int(uid)))
+
     def retries(self, account):
         return [r[0] for r in self.con.execute(
             "SELECT ref FROM failures WHERE account=? ORDER BY ref", (account,))]
@@ -530,7 +546,128 @@ def _uidvalidity(imap):
 BACKLOG_SPAN = 500           # uids per SEARCH while walking the history down
 
 
-def _imap_sweep(acct, store, limit, log):
+def _default_workers():
+    try:
+        return int(settings.get("mail_archive_workers") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
+    """The history phase on `workers` connections at once (the CLI
+    backfill; the background sweep stays on one). One message per round
+    trip per connection is the rate limit, not bandwidth: four connections
+    turned a six-day Gmail walk into a day and a half (2026-10-14). A
+    dispenser hands each connection the next span down; the history mark
+    moves only past spans that are complete and contiguous with it, and
+    seen_uids makes a span met again cost a SEARCH, not a fetch. Returns
+    (archived, low, cap_message, error): the error is raised by the
+    caller once the marks are saved, so the backfill's retry applies."""
+    lock = threading.Lock()
+    st = {"next_hi": low - 1, "done": set(), "low": low,
+          "n": 0, "full": None, "stop": None}
+
+    def take():
+        with lock:
+            if st["stop"] is not None or st["full"] or st["next_hi"] < 1:
+                return None
+            hi = st["next_hi"]
+            lo = max(1, hi - BACKLOG_SPAN + 1)
+            st["next_hi"] = lo - 1
+            return lo, hi
+
+    def finish(lo, hi):
+        with lock:
+            st["done"].add((lo, hi))
+            while True:
+                top = next((sp for sp in st["done"] if sp[1] == st["low"] - 1), None)
+                if top is None:
+                    return st["low"]
+                st["done"].discard(top)
+                st["low"] = top[0]
+
+    def run():
+        con = _db()
+        if con is None:
+            with lock:
+                st["stop"] = st["stop"] or OSError(f"archive root unreachable: {root()}")
+            return
+        store = _Store(con)
+        fails = 0
+        try:
+            imap = imaplib.IMAP4_SSL(host, timeout=60)
+            try:
+                imap.login(addr, pw)
+                imap.select(f'"{box}"', readonly=True)
+                while True:
+                    span = take()
+                    if span is None:
+                        return
+                    lo, hi = span
+                    typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
+                    uids = []
+                    if typ == "OK" and data and data[0]:
+                        uids = sorted((int(u) for u in data[0].split()
+                                       if lo <= int(u) <= hi), reverse=True)
+                    for uid in uids:
+                        if store.seen(addr, validity, uid):
+                            continue
+                        try:
+                            typ, md = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
+                            raw = (md[0][1] if typ == "OK" and md and
+                                   isinstance(md[0], tuple) else None)
+                            if raw is not None:
+                                got = store.put(account=addr, raw=raw,
+                                                fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
+                                with lock:
+                                    st["n"] += got
+                            store.mark_seen(addr, validity, uid)
+                            store.commit()
+                            fails = 0
+                        except ArchiveFull as e:
+                            with lock:
+                                st["full"] = str(e)
+                            return
+                        except sqlite3.OperationalError as e:
+                            with lock:
+                                st["stop"] = st["stop"] or e
+                            return
+                        except Exception as e:  # noqa: BLE001
+                            fails += 1
+                            if fails > MAX_CONSECUTIVE_FAILURES:
+                                # This connection is dying: its span stays
+                                # incomplete and holds the mark; the others
+                                # go on, and the next pass meets the span
+                                # again at the cost of a SEARCH.
+                                log(f"  imap {addr}: a connection ended after "
+                                    f"repeated failures at uid {uid}")
+                                return
+                            store.failed(addr, uid, e)
+                            store.commit()
+                            log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                    set_state(con, f"low:{addr}", finish(lo, hi))
+                    con.commit()
+            finally:
+                try:
+                    imap.logout()
+                except Exception:  # noqa: BLE001 - best-effort close
+                    pass
+        except Exception as e:  # noqa: BLE001 - a connection that cannot log in
+            with lock:
+                st["stop"] = st["stop"] or e
+        finally:
+            con.close()
+
+    threads = [threading.Thread(target=run, name=f"mailarchive-{i}", daemon=True)
+               for i in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return st["n"], st["low"], st["full"], st["stop"]
+
+
+def _imap_sweep(acct, store, limit, log, workers=None):
     """Newest first. Two marks per account: `wm` (the newest uid covered;
     new mail lies above it) and `low` (how far down the history the walk
     has reached; 1 means the whole mailbox is held). A sweep retries its
@@ -561,6 +698,7 @@ def _imap_sweep(acct, store, limit, log):
             log(f"  imap {addr}: UIDVALIDITY changed, walking the mailbox again")
             wm = low = 0
             con.execute("DELETE FROM failures WHERE account=?", (addr,))
+            con.execute("DELETE FROM seen_uids WHERE account=?", (addr,))
         if validity:
             set_state(con, val_key, validity)
         if not low:
@@ -583,18 +721,24 @@ def _imap_sweep(acct, store, limit, log):
 
         fails = [0]
 
-        def fetch_one(uid):
-            """Archive one uid. Returns "ok", "gone", "failed" or "abort"
-            (the connection is dying); raises on a busy index."""
+        def fetch_one(uid, skip_seen=False):
+            """Archive one uid. Returns ("ok", rows), "seen", "gone",
+            "failed" or "abort" (the connection is dying); raises on a
+            busy index."""
             try:
+                if skip_seen and store.seen(addr, validity, uid):
+                    fails[0] = 0
+                    return "seen"
                 typ, md = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
                 raw = (md[0][1] if typ == "OK" and md and
                        isinstance(md[0], tuple) else None)
                 if raw is None:
+                    store.mark_seen(addr, validity, uid)
                     fails[0] = 0
                     return "gone"              # gone between SEARCH and FETCH
                 rows = store.put(account=addr, raw=raw,
                                  fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
+                store.mark_seen(addr, validity, uid)
                 fails[0] = 0
                 return ("ok", rows)
             except (ArchiveFull, sqlite3.OperationalError):
@@ -649,35 +793,52 @@ def _imap_sweep(acct, store, limit, log):
                 wm = max(wm, uid)
                 set_state(con, wm_key, wm)
                 store.commit()
-            # 3. The history, newest first, down from the low mark.
-            while low > 1 and not (budget[0] is not None and budget[0] <= 0):
-                hi = low - 1
-                lo = max(1, hi - BACKLOG_SPAN + 1)
-                typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
-                uids = []
-                if typ == "OK" and data and data[0]:
-                    uids = sorted((int(u) for u in data[0].split()
-                                   if lo <= int(u) <= hi), reverse=True)
-                stopped = False
-                for uid in uids:
-                    if spent():
-                        stopped = True
-                        break
-                    r = fetch_one(uid)
-                    if r == "abort":
-                        log(f"  imap {addr}: pass ended after repeated failures at uid {uid}; "
-                            f"history mark held at {low}")
-                        return n
-                    if isinstance(r, tuple):
-                        n += r[1]
-                    low = uid
-                    set_state(con, low_key, low)
-                    store.commit()
-                if stopped:
-                    break
-                low = lo                 # the span is done, gaps included
+            # 3. The history, newest first, down from the low mark. The CLI
+            #    backfill (no budget) walks it on several connections.
+            workers = int(workers or _default_workers())
+            if limit is None and workers > 1 and low > 1:
+                # Nothing of ours may hold the index while the walkers
+                # write: an open write here is a 30 s wait for each of them.
+                store.commit()
+                got, low, full, stop = _walk_history_parallel(
+                    addr, host, pw, box, validity, low, log, workers)
+                n += got
+                store.archived += got
                 set_state(con, low_key, low)
                 store.commit()
+                if full:
+                    store.full = full
+                if stop is not None:
+                    raise stop
+            else:
+                while low > 1 and not (budget[0] is not None and budget[0] <= 0):
+                    hi = low - 1
+                    lo = max(1, hi - BACKLOG_SPAN + 1)
+                    typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
+                    uids = []
+                    if typ == "OK" and data and data[0]:
+                        uids = sorted((int(u) for u in data[0].split()
+                                       if lo <= int(u) <= hi), reverse=True)
+                    stopped = False
+                    for uid in uids:
+                        if spent():
+                            stopped = True
+                            break
+                        r = fetch_one(uid, skip_seen=True)
+                        if r == "abort":
+                            log(f"  imap {addr}: pass ended after repeated failures at uid {uid}; "
+                                f"history mark held at {low}")
+                            return n
+                        if isinstance(r, tuple):
+                            n += r[1]
+                        low = uid
+                        set_state(con, low_key, low)
+                        store.commit()
+                    if stopped:
+                        break
+                    low = lo                 # the span is done, gaps included
+                    set_state(con, low_key, low)
+                    store.commit()
         finally:
             set_state(con, wm_key, wm)
             set_state(con, low_key, low)
@@ -787,7 +948,7 @@ def _graph_sweep(acct, store, limit, log):
 
 # ---------- the sweep ----------
 
-def _sweep(log, limit, account):
+def _sweep(log, limit, account, workers=None):
     """(archived, errored) for one pass over the accounts."""
     if not enabled():
         log("mail archive: disabled")
@@ -806,7 +967,7 @@ def _sweep(log, limit, account):
                 if acct.get("type") == "graph":
                     _graph_sweep(acct, store, limit, log)
                 else:
-                    _imap_sweep(acct, store, limit, log)
+                    _imap_sweep(acct, store, limit, log, workers=workers)
             except Exception as e:  # noqa: BLE001 - one bad mailbox never
                 store.errors += 1                   # stops the others
                 log(f"  {addr}: walk ended early: {e}")
@@ -822,7 +983,7 @@ def _sweep(log, limit, account):
 
 
 @runtimework.tracked("Mail archiving")
-def sweep(log=print, limit=None, account=None):
+def sweep(log=print, limit=None, account=None, workers=None):
     """Archive what each account holds that the archive does not. Bounded
     per account by `limit` (the background tick) or unbounded (the CLI).
     Returns the number of messages archived, counted as they land, so a
@@ -830,13 +991,13 @@ def sweep(log=print, limit=None, account=None):
 
     Cheap to repeat once the history is in: IMAP asks for UIDs above the
     watermark and Graph for mail received since it."""
-    return _sweep(log, limit, account)[0]
+    return _sweep(log, limit, account, workers)[0]
 
 
 BACKFILL_RETRIES = 3     # passes ending in an error before the CLI gives up
 
 
-def backfill(log=print, account=None):
+def backfill(log=print, account=None, workers=None):
     """The backlog: unbounded sweeps until a clean pass archives nothing
     and moves no watermark. A pass that ends in an error (the index busy
     under the background thread, a dying connection) is retried after a
@@ -849,7 +1010,7 @@ def backfill(log=print, account=None):
         before = _watermarks(con) if con is not None else {}
         if con is not None:
             con.close()
-        n, errored = _sweep(log, None, account)
+        n, errored = _sweep(log, None, account, workers)
         total += n
         log(f"mail archive backlog: +{n} (total {total})")
         con = _db()
@@ -912,8 +1073,9 @@ if __name__ == "__main__":
         sweep(limit=lim)
     elif cmd == "backfill":
         who = args[args.index("--account") + 1] if "--account" in args else None
-        backfill(account=who)
+        workers = int(args[args.index("--workers") + 1]) if "--workers" in args else None
+        backfill(account=who, workers=workers)
         print(json.dumps(stats(), indent=2))
     else:
         print("usage: python -m server.mailarchive status | sweep [--limit N] "
-              "| backfill [--account ADDR]")
+              "| backfill [--account ADDR] [--workers N]")
