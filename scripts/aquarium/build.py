@@ -72,7 +72,7 @@ def build():
     scene.render.image_settings.file_format = "PNG"
     scene.view_settings.view_transform = "AgX"
     scene.view_settings.look = "AgX - Medium High Contrast"
-    scene.view_settings.exposure = -0.25
+    scene.view_settings.exposure = -0.45
     scene.world.use_nodes = True
     scene.world.node_tree.nodes["Background"].inputs[0].default_value = (0.025, 0.045, 0.065, 1)
     scene.world.node_tree.nodes["Background"].inputs[1].default_value = 0.23
@@ -111,13 +111,12 @@ def build():
     fin.node_tree.nodes["Principled BSDF"].inputs["Subsurface Weight"].default_value = 0.16
     fin.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value = 0.72
     fin.diffuse_color = (0.42, 0.52, 0.44, 0.72)
-    fin_texture = fin.node_tree.nodes.new("ShaderNodeTexImage")
-    fin_texture.image = skin_image
-    fin_node = fin.node_tree.nodes.get("Principled BSDF")
-    fin.node_tree.links.new(fin_texture.outputs["Color"], fin_node.inputs["Base Color"])
-    fin.node_tree.links.new(fin_texture.outputs["Alpha"], fin_node.inputs["Alpha"])
-    fin_ray = material("Fin rays", (0.48, 0.55, 0.43), 0.36, transmission=0.25)
-    fin_ray.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value = 0.25
+    fin.node_tree.nodes["Principled BSDF"].inputs["IOR"].default_value = 1.035
+    fin.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value = .02
+    fin_ray = material("Fin rays", (0.72, 0.68, 0.55), 0.42, transmission=0.5)
+    fin_ray.node_tree.nodes["Principled BSDF"].inputs["IOR"].default_value = 1.04
+    fin_ray.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value = .02
+    fin_ray.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value = 0.32
     lip = material("Soft lips and barbels", (0.63, 0.58, 0.40), 0.28)
     mouth_inside = material("Mouth opening", (0.055, 0.018, 0.017), 0.4)
     iris = material("Golden iris", (0.29, 0.23, 0.095), 0.23, metal=0.08)
@@ -344,11 +343,45 @@ def build():
 
     author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil)
 
-    def fin_mesh(name, base, boundary, mat=fin, base_end=None):
+    fin_materials={}
+    def fin_material(ray_count):
+        if ray_count in fin_materials:
+            return fin_materials[ray_count]
+        # Radial tissue coordinates are independent of the fish's body photo.
+        # Optical coverage decreases toward the tip; branched fibres and the
+        # denser ray tissue remain visible through the thin membrane.
+        from array import array
+        width,height=1024,256
+        image=bpy.data.images.new(f"Fin tissue {ray_count} rays",width=width,height=height,alpha=True)
+        image.colorspace_settings.name="sRGB"
+        pixels=array("f")
+        for y in range(height):
+            s=y/(height-1)
+            split=max(0,(s-.52)/.48)*.23
+            for x in range(width):
+                u=x/(width-1);phase=u*ray_count-.5
+                fiber=math.exp(-(math.sin(math.pi*phase)/.11)**2)
+                branch=max(math.exp(-(math.sin(math.pi*(phase-split))/.070)**2),
+                           math.exp(-(math.sin(math.pi*(phase+split))/.070)**2))*max(0,(s-.45)/.55)
+                grain=.012*math.sin(x*1.71+y*3.13)*math.sin(x*.37-y*1.19)
+                coverage=max(.12,min(.90,.52-.32*s+.20*fiber+.10*branch+grain))
+                tissue=.012*fiber+.006*branch+grain*.3
+                pixels.extend((.79+tissue,.75+tissue,.66+tissue,coverage))
+        image.pixels.foreach_set(pixels)
+        image.filepath_raw=str(work/f"fin-tissue-{ray_count}.png");image.file_format="PNG";image.save()
+        mat=fin.copy();mat.name=f"Ivory fin membrane {ray_count} rays"
+        node=mat.node_tree.nodes.new("ShaderNodeTexImage");node.image=image
+        bsdf=mat.node_tree.nodes["Principled BSDF"]
+        mat.node_tree.links.new(node.outputs["Color"],bsdf.inputs["Base Color"])
+        mat.node_tree.links.new(node.outputs["Alpha"],bsdf.inputs["Alpha"])
+        fin_materials[ray_count]=mat
+        return mat
+
+    def fin_mesh(name, base, boundary, base_end=None):
         # A fan has many segmented rays and a curved, scalloped membrane.
         base = Vector(base)
         rays = 42 if name.startswith("Dorsal") else 14 if name.startswith("Anal") else 38 if name.startswith("Caudal") else 32 if name.startswith("Pectoral") else 16
-        rings = 8
+        rings = 16
         edges = [Vector(p) for p in boundary]
         vertices, faces = [], []
         for i in range(rays+1):
@@ -372,14 +405,16 @@ def build():
             for j in range(rings):
                 a = i*(rings+1)+j
                 faces.append((a, a+rings+1, a+rings+2, a+1))
-        obj = mesh(name, vertices, faces, [mat])
-        obj.data.materials[0].use_nodes = True
-        skin_uv(obj)
+        obj = mesh(name, vertices, faces, [fin_material(rays//2)])
+        uv=obj.data.uv_layers.new(name="UVMap")
+        for loop in obj.data.loops:
+            i,j=divmod(loop.vertex_index,rings+1)
+            uv.data[loop.index].uv=(i/rays,j/rings)
         for i in range(1, rays, 2):
-            curve(name+" ray", [vertices[i*(rings+1)+j] for j in [0, 2, 5, 8]], 0.00032, fin_ray)
+            curve(name+" ray", [vertices[i*(rings+1)+j] for j in [0, 4, 10, 16]], 0.00032, fin_ray)
             for offset in [-0.35, 0.35]:
-                tip = vertices[i*(rings+1)+8].lerp(vertices[(i+(1 if offset > 0 else -1))*(rings+1)+8], abs(offset))
-                curve(name+" ray branch", [vertices[i*(rings+1)+5], tip], 0.00013, fin_ray)
+                tip = vertices[i*(rings+1)+16].lerp(vertices[(i+(1 if offset > 0 else -1))*(rings+1)+16], abs(offset))
+                curve(name+" ray branch", [vertices[i*(rings+1)+10], tip], 0.00013, fin_ray)
         return obj
 
     fin_mesh("Caudal membrane", (0.54, 0, 0.028), [(0.59, 0, 0.051), (0.74, 0, 0.17), (0.81, 0, 0.175), (0.835, 0, 0.15), (0.77, 0, 0.055), (0.70, 0, 0.016), (0.77, 0, -0.055), (0.835, 0, -0.16), (0.81, 0, -0.19), (0.74, 0, -0.18), (0.59, 0, -0.028)], base_end=(0.54,0,-.024))
@@ -612,18 +647,24 @@ def build():
     links.new(scatter.outputs[0], add.inputs[0])
     links.new(absorption.outputs[0], add.inputs[1])
     links.new(add.outputs[0], outlet.inputs["Volume"])
-    cube("Water", (0, 0.21, 0.88), (4, 1.75, 1.8), water)
+    # Keep the participating medium separate from the refractive boundary.
+    # Cycles' caustic sampling cannot use a volume as its surface caster.
+    cube("Water volume", (0, 0.205, 0.905), (3.996, 1.786, 1.766), water)
+    boundary_mat=material("Water interface",(1,1,1),0,transmission=1)
+    boundary_mat.node_tree.nodes["Principled BSDF"].inputs["IOR"].default_value=1.333
+    boundary_mat.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value=0
+    boundary=cube("Water boundary", (0, 0.205, 0.905), (4, 1.79, 1.77), boundary_mat)
+    boundary.cycles.is_caustics_caster=True
     # Front glass is a thin solid, rather than a transparency overlay.
-    cube("Front glass", (0, -0.69, 0.9), (4, 0.012, 1.9), glass)
-    surface_mat = material("Water surface", (0.90, 0.98, 1), 0.035, transmission=1)
-    surface_mat.node_tree.nodes["Principled BSDF"].inputs["IOR"].default_value = 1.333
-    cube("Waterline", (0, 0.20, 1.79), (4, 1.78, 0.004), surface_mat)
+    pane=cube("Front glass", (0, -0.698, 0.9), (4, 0.012, 1.9), glass)
+    pane.cycles.is_caustics_caster=True
 
     def area(name, location, target, power, size, color):
         data = bpy.data.lights.new(name, "AREA")
         data.energy, data.size, data.color = power, size, color
+        data.cycles.is_caustics_light=True
         data.shape = "RECTANGLE"
-        data.size_y = 0.45
+        data.size_y = 0.10
         obj = bpy.data.objects.new(name, data)
         scene.collection.objects.link(obj)
         obj.location = location
@@ -633,9 +674,17 @@ def build():
         obj.visible_transmission = True
         return obj
 
-    area("Overhead softbox", (0.45, -0.65, 2.35), (0.2, 0.1, 0.4), 500, 1.3, (1.0, 0.93, 0.82))
-    area("Side fill", (-2.2, 0.0, 1.75), (0.2, 0.1, 0.7), 100, 0.9, (0.63, 0.76, 0.84))
-    area("Rim strip", (1.0, 0.9, 2.6), (0.2, 0.1, 0.7), 150, 0.55, (0.56, 0.81, 0.90))
+    # A submerged diffuser and dim fills provide a plausible aquarium lighting
+    # design without relying on a difficult direct-light path through a volume.
+    area("Submerged diffuser", (0.1, -0.4, 1.70), (0.1, 0.15, 0.65), 100, 1.3, (1.0, 0.93, 0.82))
+    area("Side fill", (-1.75, 0.0, 1.25), (0.2, 0.1, 0.7), 45, 0.9, (0.63, 0.76, 0.84))
+    area("Rim strip", (1.0, 0.8, 1.60), (0.2, 0.1, 0.7), 45, 0.55, (0.56, 0.81, 0.90))
+    for obj in scene.objects:
+        if obj.type=="MESH" and obj.name not in {"Water volume","Water boundary","Front glass"}:
+            obj.cycles.is_caustics_receiver=True
+    for mat in [floor_mat,rock_mat]:
+        mat.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value=.02
+        mat.node_tree.nodes["Principled BSDF"].inputs["IOR"].default_value=1.12
     camera_data = bpy.data.cameras.new("Aquarium camera")
     camera = bpy.data.objects.new("Aquarium camera", camera_data)
     scene.collection.objects.link(camera)

@@ -36,9 +36,11 @@ model, and `--output DIR` changes the exported asset directory. Metal is used
 on macOS when available; other systems attempt CUDA and otherwise use CPU.
 Blender and cwebp are authoring tools; the Vira server does not require them.
 
-All geometry is authored by this repository's Blender script. The skin and fin source
+All geometry is authored by this repository's Blender script. The skin source
 `static/aquarium/side-projection.png` was created with the built-in imagegen
-tool and calibrated onto volumetric body and articulated fin meshes. Its
+tool and calibrated onto the volumetric body. Fins have separate generated
+root-to-tip membrane textures, with translucent tissue and fibres aligned to
+their modeled branched rays; they do not reuse the body photograph. The skin's
 production prompt is preserved in `projection-prompt.txt`. The earlier atlas
 and prompt are retained as ignored authoring alternatives in `.aquarium-build/`. These original assets
 use the repository's MIT license. Stone color, height and packed material
@@ -54,9 +56,9 @@ Three.js and its loader utilities are vendored with provenance in
 |---|---|---|
 | Fish | Shared GLB geometry, 1,330 scales, layered eyes and fin rays | Same mesh and skin weights |
 | Motion | Frozen reference pose | 34 axial and 6 facial controls, lateral/vertical curvature and axial torsion, a travelling trunk wave, burst-and-coast propulsion, flexing paired fins and articulated respiratory jaw/gill motion |
-| Water | Absorption and scattering in a bounded volume | Beer-Lambert extinction plus camera-ray single scattering through the bounded water volume; specular dielectric surface approximation |
+| Water | Separate closed dielectric boundary and absorption/scattering volume, with path-traced refraction | Beer-Lambert extinction and camera-ray single scattering, with a moving planar reflection, exact dielectric Fresnel lookup and underwater total internal reflection |
 | Glass | Solid thin pane, path-traced refraction | Thin reflective pane approximation at near-normal incidence |
-| Fins | Translucent Cycles material | Alpha-blended tissue, branched ray geometry and approximate subsurface backlighting; front glass no longer excludes them |
+| Fins | Separate translucent membrane maps and branched ray geometry | Same membrane UVs and rays, alpha-blended tissue and approximate subsurface backlighting |
 | Resolution | 4K still, sample count recorded in manifest | Native pixels up to 16,777,216 total pixels and device ratio 2 |
 | Timing | Offline render | Rolling browser frame cadence; milliseconds are frame intervals, not GPU timestamps |
 
@@ -121,7 +123,8 @@ so adding joints does not multiply the bend. It approximates fish-water
 interaction; it does not run the paper's Navier-Stokes solver.
 
 The recording control offers 8 or 30 seconds and copies real live frames at up to
-1920 pixels wide into a 30 fps recording canvas. It adds no interpolated frames. With the
+1920 x 1080 into a 30 fps recording canvas, preserving the view's aspect ratio.
+It adds no interpolated frames. With the
 engineering preview server, its WebM is saved to
 `.aquarium-build/recordings/latest.webm` and available through Review recording.
 On an ordinary static server it offers a browser download. No microphone,
@@ -155,9 +158,19 @@ judged in moving footage rather than from a texture or a still.
 Front, three-quarter and above-water views expose the same articulated
 geometry. Extinction clips the camera-to-fragment segment against all six
 water-volume bounds, rather than assuming every view enters the front pane.
-The live surface adds dielectric reflection without a screen-space
-transmission pass that would omit alpha-blended fins. Refraction and energy
-conservation at the surface remain approximations requiring further work.
+The live surface blends the mirrored scene using the air/water Fresnel
+coefficients, including total internal reflection when observed from below.
+Reflection uses a quarter of the main framebuffer dimensions and omits scale relief
+and individual pebbles, retaining the articulated fish silhouette, membrane
+tissue and large stones. Native detail is retained in the main view.
+The reflection renders separately before the main scene, is skipped when the
+surface is outside the view, and reuses the preceding main-view shadow maps.
+It refreshes every third live frame; camera changes force an immediate refresh.
+Main-view swimming and water normals continue to update each frame.
+The reflected and direct paths share extinction coefficients. The lights sit
+below the water surface in both renderers. Live surface refraction remains
+an approximation requiring further work; the offline reference traces the
+separate glass, water boundary and participating medium.
 
 The Swimming ascent / descent study uses the same forward-thrust and water-drag
 controller as normal wandering. It changes a goal, rather than translating
@@ -178,7 +191,9 @@ are tuned for this large authored fish; they are not copied from the paper's
 small experimental specimen or derived by solving its fluid equations.
 
 Paired fins paddle independently at low speed, open for braking and trail during
-a propulsive burst. Their phase is independent of the tail. A body-envelope
+a propulsive burst. Their phase is independent of the tail; merged ray geometry
+uses each membrane's basal pivot and the corresponding side's paddle phase.
+A body-envelope
 forecast reserves room for tail sweep and constrains turning torque before a
 pane is reached. Small paired-fin forces can centre the fish or briefly scull
 backward when a turn is tight; these are horizontal forces integrated against

@@ -1,10 +1,29 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
-import {Vector3,Texture} from '../static/vendor/three.webgpu.js';
+import {Vector3,Texture,PerspectiveCamera,WebGPUCoordinateSystem,WebGLCoordinateSystem} from '../static/vendor/three.webgpu.js';
 import {createSwimmer,referencePose,finActuation} from '../static/aquarium-motion.js';
 import {applySwimPose,createFacialRig} from '../static/aquarium-rig.js';
 import {createContainment} from '../static/aquarium-collision.js';
+import {dielectricReflectance,fresnelTable,waterExtinction,updateReflectionCamera} from '../static/aquarium-water.js';
+
+assert.ok(dielectricReflectance(1,1,1.333)>.020&&dielectricReflectance(1,1,1.333)<.021,'a near-normal air/water interface reflects roughly two percent');
+assert.equal(dielectricReflectance(.5,1.333,1),1,'a submerged sixty-degree incidence undergoes total internal reflection');
+assert.equal(dielectricReflectance(0,1,1),0,'equal indices do not produce a reflective boundary');
+const fresnel=fresnelTable();
+assert.equal(fresnel[4*Math.round(.5*1023)+1],255,'the actual GPU lookup includes the underwater TIR regime');
+assert.ok(fresnel[4*1023]>=5&&fresnel[4*1023]<=6,'the GPU lookup preserves weak reflection when looking down from air');
+assert.ok(waterExtinction.every(v=>v>0),'viewing and reflected paths use finite positive water extinction');
+for(const system of [WebGPUCoordinateSystem,WebGLCoordinateSystem])for(const eye of [[0,1.02,4.1],[-2.6,.935,2.45],[0,3.35,1.75]]){
+  const camera=new PerspectiveCamera(26,1,.06,25);camera.coordinateSystem=system;
+  camera.updateProjectionMatrix();camera.position.set(...eye);camera.lookAt(0,.86,-.2);camera.updateMatrixWorld();
+  const mirror=updateReflectionCamera(camera,new PerspectiveCamera());
+  assert.ok(Math.abs(mirror.position.y+camera.position.y-3.58)<1e-12,'the actual reflection camera mirrors metre-scaled height at the water interface');
+  const direct=camera.getWorldDirection(new Vector3()),reflected=mirror.getWorldDirection(new Vector3());
+  assert.ok(Math.abs(reflected.y+direct.y)<1e-12&&Math.abs(reflected.x-direct.x)<1e-12&&Math.abs(reflected.z-direct.z)<1e-12,'reflection reverses the vertical ray direction without changing horizontal travel');
+  const near=system===WebGPUCoordinateSystem?0:-1;
+  assert.ok(Math.abs(new Vector3(0,1.79,-.15).project(mirror).z-near)<1e-10,'both renderer projections clip at the real water interface');
+}
 
 const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url));
 // Node has no image decoder. Geometry tests retain real materials/UVs and
@@ -45,6 +64,11 @@ for(const fin of skins.filter(m=>/^(Pectoral|Pelvic|Dorsal)_membrane/.test(m.nam
   let separation=Infinity;
   for(let i=0;i<surface.count;i++)separation=Math.min(separation,root.distanceTo(new Vector3().fromBufferAttribute(surface,i)));
   assert.ok(separation<.007,`${fin.name} basal tissue attaches to the actual exported skin, rather than hovering below or above it`);
+  const uv=fin.geometry.attributes.uv;
+  assert.ok(uv.getY(0)>.99,'fin root uses its own basal tissue coordinates rather than the body photograph');
+  let lo=1,hi=0;
+  for(let i=0;i<uv.count;i++){lo=Math.min(lo,uv.getY(i));hi=Math.max(hi,uv.getY(i));}
+  assert.ok(lo<.01&&hi>.99,'the real membrane spans its root-to-tip tissue map');
 }
 
 const positions=body.geometry.attributes.position;

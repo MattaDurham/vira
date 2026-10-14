@@ -1,6 +1,7 @@
 /* Single-scattering water, integrated along the actual camera ray to scene
  * depth. The participating medium shares the aquarium's metre coordinates. */
 import {PostProcessing} from './vendor/three.webgpu.js';
+import {waterAbsorption,waterScattering} from './aquarium-water.js?v=57';
 import {Fn,Loop,pass,screenUV,uniform,
   getViewPosition,vec3,vec4,float,min,max,exp,pow,select} from './vendor/three.tsl.js';
 
@@ -10,12 +11,12 @@ export function waterOptics(renderer,scene,camera){
   // aquarium camera explicitly, including its changing orbit and projection.
   const origin=uniform(camera.position),cameraFrame=uniform(camera.matrixWorld),projectionInverse=uniform(camera.projectionMatrixInverse);
   const image=scenePass.getTextureNode('output'),depth=scenePass.getTextureNode('depth');
-  const absorption=vec3(.26,.085,.065),scattering=vec3(.010,.027,.033);
+  const absorption=vec3(...waterAbsorption),scattering=vec3(...waterScattering);
   const extinction=absorption.add(scattering);
   const boxMin=vec3(-2,.02,-1.1),boxMax=vec3(2,1.79,.69);
   const lights=[
-    {position:vec3(.1,2.3,.85),radiance:vec3(20,18.6,16.4)},
-    {position:vec3(1,1.8,-.9),radiance:vec3(5.6,8.1,9.0)},
+    {position:vec3(.1,1.70,.4),radiance:vec3(8,7.44,6.56)},
+    {position:vec3(1,1.60,-.8),radiance:vec3(2.5,3.6,4.0)},
   ];
   const inverseDirection=Fn(([direction])=>select(direction.greaterThanEqual(0),vec3(1),vec3(-1)).div(max(direction.abs(),vec3(.00001))));
   const output=Fn(()=>{
