@@ -9,7 +9,7 @@
 <body>
   <main id="tank" aria-label="Interactive aquarium benchmark">
     <canvas id="aquarium" tabindex="0" aria-label="Aquarium. Move to draw the koi closer, click to tap the glass, drag or use arrow keys to look around."></canvas>
-    <img id="reference" src="aquarium/reference.webp" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
+    <img id="reference" src="aquarium/reference.webp?v=40" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
     <div class="loading" id="loading" role="status">Preparing the aquarium</div>
     <header>
       <div class="wordmark">VIRA <span>/ AQUARIUM STUDY</span></div>
@@ -23,15 +23,26 @@
       </div>
       <div class="actions">
         <button id="motion" aria-pressed="false">Pause motion</button>
-        <button id="reset">Match reference pose</button>
+        <button id="reset">Restart swim</button>
         <button id="wireframe" aria-pressed="false">Wireframe</button>
+        <button id="study" aria-pressed="false">Study body motion</button>
+        <label for="study-axis">Study axis</label>
+        <select id="study-axis"><option value="combined">Combined motion</option><option value="lateral">Side to side</option><option value="vertical">Up and down</option><option value="twist">Axial twist</option><option value="swim">Swimming ascent / descent</option></select>
+        <label for="camera-angle">Camera</label>
+        <select id="camera-angle"><option value="front">Front</option><option value="quarter">Three-quarter</option><option value="top">Above the water</option></select>
+        <button id="closeup" aria-pressed="false">Face close-up</button>
+        <button id="record">Record 8 seconds (1080p)</button>
+        <a id="download-recording" hidden download="vira-aquarium-live.webm">Download recording</a>
       </div>
       <div class="light-control"><label for="light">Light</label><input id="light" type="range" min="0.45" max="1.6" step="0.05" value="1"><output id="light-value" for="light">100%</output></div>
       <p class="hint" id="hint">Move to invite the koi closer. Tap to startle or interest it. Drag to look around.</p>
       <div class="metrics" aria-label="Measured rendering performance"><span id="engine">Starting renderer</span><span id="performance">Measuring</span><span id="pixels"></span></div>
     </aside>
-    <footer><span id="detail">Blender-authored geometry / 1,330 overlapping scales / 11-joint swim rig</span><span>INTERACTIVE MATERIAL STUDY</span></footer>
+    <footer><span id="detail">Blender-authored geometry / 1,330 overlapping scales / 34 axial joints / 6 facial controls</span><span>INTERACTIVE MATERIAL STUDY</span></footer>
   </main>
-  <script type="module" src="aquarium-benchmark.js"></script>
+  <script>
+    if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
+  </script>
+  <script type="module" src="aquarium-benchmark.js?v=40"></script>
 </body>
 </html>

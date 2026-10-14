@@ -7,6 +7,7 @@ Rendering also needs cwebp to encode the browser's WebP comparison asset.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -19,7 +20,10 @@ from pathlib import Path
 def build():
     # Blender owns these modules; the ordinary Vira runtime does not need them.
     import bpy
-    from mathutils import Vector
+    from mathutils import Vector,Quaternion,Matrix
+    sys.path.insert(0,str(Path(__file__).resolve().parent))
+    from anatomy import author_anatomy,spine_height,vertebral_positions
+    from face import author_face
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--draft", action="store_true")
@@ -87,6 +91,15 @@ def build():
         return mat
 
     ivory = material("Pearl skin", (0.70, 0.72, 0.65), 0.27)
+    skin_image = bpy.data.images.load(str(root / "static/aquarium/side-projection.png"))
+    texture = ivory.node_tree.nodes.new("ShaderNodeTexImage")
+    texture.image = skin_image
+    skin_node = ivory.node_tree.nodes.get("Principled BSDF")
+    ivory.node_tree.links.new(texture.outputs["Color"], skin_node.inputs["Base Color"])
+    skin_node.inputs["Subsurface Weight"].default_value = 0.08
+    skin_node.inputs["Coat Weight"].default_value = 0.26
+    skin_node.inputs["Roughness"].default_value = 0.38
+    skin_node.inputs["IOR"].default_value = 1.04
     red = material("Vermilion pigment", (0.65, 0.055, 0.012), 0.29)
     scale_materials = []
     for family, base in [("pearl", (0.73, 0.76, 0.69)), ("vermilion", (0.68, 0.067, 0.019))]:
@@ -98,28 +111,51 @@ def build():
     fin.node_tree.nodes["Principled BSDF"].inputs["Subsurface Weight"].default_value = 0.16
     fin.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value = 0.72
     fin.diffuse_color = (0.42, 0.52, 0.44, 0.72)
+    fin_texture = fin.node_tree.nodes.new("ShaderNodeTexImage")
+    fin_texture.image = skin_image
+    fin_node = fin.node_tree.nodes.get("Principled BSDF")
+    fin.node_tree.links.new(fin_texture.outputs["Color"], fin_node.inputs["Base Color"])
+    fin.node_tree.links.new(fin_texture.outputs["Alpha"], fin_node.inputs["Alpha"])
     fin_ray = material("Fin rays", (0.48, 0.55, 0.43), 0.36, transmission=0.25)
+    fin_ray.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value = 0.25
     lip = material("Soft lips and barbels", (0.63, 0.58, 0.40), 0.28)
     mouth_inside = material("Mouth opening", (0.055, 0.018, 0.017), 0.4)
     iris = material("Golden iris", (0.29, 0.23, 0.095), 0.23, metal=0.08)
+    orbital = material("Orbital tissue", (0.61, 0.64, 0.52), 0.36)
     pupil = material("Black pupil", (0.003, 0.009, 0.012), 0.11)
     cornea = material("Corneal highlight", (0.28, 0.40, 0.38), 0.045, transmission=0.9)
+    cornea_node=cornea.node_tree.nodes.get("Principled BSDF")
+    cornea_node.inputs["Base Color"].default_value=(1,1,1,1)
+    cornea_node.inputs["IOR"].default_value=1.035
+    cornea_node.inputs["Transmission Weight"].default_value=1
+    cornea_node.inputs["Coat Weight"].default_value=.02
 
     # Nose at negative X; the body narrows to a real caudal peduncle.
     # (X, lateral half-width, dorsal height, ventral depth, centre height).
-    profile = [
-        (-0.66, 0.037, 0.036, 0.030, -0.023),
-        (-0.62, 0.065, 0.072, 0.050, -0.010),
-        (-0.54, 0.088, 0.109, 0.075, 0.012),
-        (-0.43, 0.111, 0.141, 0.095, 0.019),
-        (-0.30, 0.136, 0.156, 0.124, 0.021),
-        (-0.14, 0.137, 0.156, 0.137, 0.015),
-        (0.04, 0.119, 0.130, 0.125, 0.007),
-        (0.20, 0.090, 0.095, 0.090, 0.004),
-        (0.34, 0.054, 0.058, 0.053, 0.008),
-        (0.46, 0.025, 0.034, 0.032, 0.013),
-        (0.54, 0.021, 0.038, 0.038, 0.015),
-    ]
+    # Calibrated body silhouette of the original photographic projection.
+    # Fin contours are excluded: they are separately articulated surfaces.
+    projection_scale = (2144-30)/1.5
+    projection_axis = 374
+    silhouette = [(30,386,456), (100,336,489), (200,260,516), (300,215,542),
+                  (400,173,560), (500,144,574), (600,124,575), (700,114,576),
+                  (800,105,578), (900,110,579), (1000,118,577), (1100,135,560),
+                  (1200,160,545), (1300,184,536), (1400,210,518),
+                  (1500,231,498), (1600,262,476), (1700,278,465), (1722,281,464)]
+    profile = []
+    for px, top, bottom in silhouette:
+        x = -0.66+(px-30)/projection_scale
+        high, low = (projection_axis-top)/projection_scale, (projection_axis-bottom)/projection_scale
+        center, radius = (high+low)/2, (high-low)/2
+        width = radius*(0.86 if x < 0.2 else 0.86-0.31*min(1,(x-0.2)/0.34))
+        profile.append((x,width,radius,radius,center))
+    # The last alpha silhouette includes the caudal membrane, not flesh.
+    # Taper the actual peduncle into the fin's thin root instead of leaving
+    # a flat cylindrical end where a photographic fin begins.
+    profile[-3:] = [(0.454,.026,.048,.048,.004),
+                    (0.525,.014,.028,.028,.002),
+                    (0.54,.009,.024,.024,.002)]
+    profile[0]=(-.66,.0245,.025,.025,-.03335)
+    profile.append((.58,.0008,.010,.010,.002))
 
     def interpolate(x):
         for i in range(len(profile) - 1):
@@ -140,7 +176,16 @@ def build():
         width, upper, lower, center = interpolate(x)
         c, s = math.cos(angle), math.sin(angle)
         radius = upper if s >= 0 else lower
-        return Vector((x, (width + offset) * c, center + (radius + offset) * s))
+        point=Vector((x, (width + offset) * c, center + (radius + offset) * s))
+        if x<-.43:
+            orbit=math.exp(-((x+.534)**2+(point.z-.0035)**2)/.018**2)
+            point.y-=math.copysign(.0032*orbit,point.y)
+            # Soft cheek volume and minute physical dermal relief, limited to
+            # the scale-free head. It is fixed on the animal, never time-noise.
+            point.y+=math.copysign(.0012*math.exp(-((x+.570)/.038)**2)*math.exp(-((point.z+.041)/.035)**2),point.y)
+            pore=.000035*math.sin(x*1700+angle*37)*math.sin(x*1100-angle*71)
+            point.y+=pore*c;point.z+=pore*s
+        return point
 
     def pigment(x, angle):
         # Three disconnected, asymmetrical Kohaku patches with scalloped edges.
@@ -169,20 +214,74 @@ def build():
         return obj
 
     vertices, faces, mat_indices = [], [], []
-    rings, sides = 160, 96
+    rings, sides = 240, 144
     for i in range(rings + 1):
-        x = -0.66 + 1.2*i/rings
+        x = -0.66 + 1.24*i/rings
         for j in range(sides):
             vertices.append(surface(x, math.tau*j/sides))
     for i in range(rings):
-        x = -0.66 + 1.2*(i+0.5)/rings
+        x = -0.66 + 1.24*(i+0.5)/rings
         for j in range(sides):
             a, b = i*sides+j, i*sides+(j+1)%sides
             faces.append((a, b, b+sides, a+sides))
             mat_indices.append(int(pigment(x, math.tau*(j+0.5)/sides)))
-    faces += [tuple(reversed(range(sides))), tuple(rings*sides+j for j in range(sides))]
-    mat_indices += [0, 0]
-    body = mesh("Koi skin", vertices, faces, [ivory, red], mat_indices)
+    # The rostral ring stays open: the modeled lips and buccal cavity occupy it.
+    faces += [tuple(rings*sides+j for j in range(sides))]
+    mat_indices += [0]
+    body = mesh("Koi skin", vertices, faces, [ivory])
+
+    # RGB in transparent cutout margins is undefined. Opaque 3D tissues
+    # reproject boundary samples into real dermis; fin membranes retain alpha.
+    from array import array
+    source_width,source_height=skin_image.size
+    alpha_pixels=array("f",skin_image.pixels)[3::4]
+    uv_cache={}
+    uv_repairs=0
+
+    def opaque_uv(u,v):
+        nonlocal uv_repairs
+        x=max(1,min(source_width-2,int(u*source_width)))
+        y=max(1,min(source_height-2,int(v*source_height)))
+        key=(x,y)
+        if key in uv_cache:
+            return uv_cache[key]
+        def valid(px,py):
+            if not 1<=px<source_width-1 or not 1<=py<source_height-1:
+                return False
+            return min(alpha_pixels[(py+dy)*source_width+px+dx] for dx in [-1,0,1] for dy in [-1,0,1])>.94
+        if valid(x,y):
+            return u,v
+        for radius in [1,2,3,4,6,8,12,16,24,32,48,64,96]:
+            for dx,dy in [(0,-radius),(radius,0),(-radius,0),(0,radius),
+                          (radius,-radius),(-radius,-radius),(radius,radius),(-radius,radius)]:
+                px,py=x+dx,y+dy
+                if valid(px,py):
+                    result=((px+.5)/source_width,(py+.5)/source_height)
+                    uv_cache[key]=result;uv_repairs+=1;return result
+        raise RuntimeError(f"Opaque skin projection has no valid dermis near pixel {x},{y}")
+
+    def skin_uv(obj):
+        uv = obj.data.uv_layers.new(name="Photographic side projection")
+        for loop in obj.data.loops:
+            point = obj.matrix_world @ obj.data.vertices[loop.vertex_index].co
+            px,pz=point.x,point.z
+            if obj.name.startswith(("Koi skin","Rostral lip attachment")) and px<-.626:
+                # A side cutout's leading edge is transparent. The 3D rostral
+                # pole needs dermis from inside its silhouette, not black RGB
+                # from the transparent border of that photograph-like source.
+                px=-.626+(px+.626)*.12
+            if obj.name.startswith(("Koi skin","Orbital dermal")):
+                dx,dz=px+.534,pz-.0035
+                radius=math.hypot(dx,dz)
+                if radius<.037:
+                    # The head projection supplies dermis only. The separate
+                    # modeled eye must not sit above a second printed eye.
+                    a=math.atan2(dz,dx)
+                    px=-.534+.037*math.cos(a);pz=.0035+.037*math.sin(a)
+            u=(30+(px+0.66)*projection_scale)/source_width
+            v=1-(projection_axis-pz*projection_scale)/source_height
+            uv.data[loop.index].uv=(u,v) if "membrane" in obj.name.lower() else opaque_uv(u,v)
+    skin_uv(body)
 
     # Individual overlapping scales have actual curved geometry; the head is smooth.
     vertices, faces, mat_indices = [], [], []
@@ -207,7 +306,8 @@ def build():
             for k in range(n):
                 faces.append((start, start+1+(k+1)%n, start+1+k))
                 mat_indices.append(material_id)
-    mesh("Overlapping scales", vertices, faces, scale_materials, mat_indices)
+    scales = mesh("Overlapping scales", vertices, faces, [ivory])
+    skin_uv(scales)
 
     def sphere(name, location, dimensions, mat, segments=32):
         bpy.ops.mesh.primitive_uv_sphere_add(segments=segments, ring_count=20, location=location)
@@ -242,25 +342,13 @@ def build():
         objects.append(bpy.context.object)
         return bpy.context.object
 
-    # Eyes are set in the skull; the layered pupil/cornea catches small highlights.
-    for sign in [-1, 1]:
-        eye = (-0.525, sign*0.081, 0.055)
-        sphere("Eye socket", eye, (0.026, 0.015, 0.024), lip)
-        sphere("Iris", (-0.528, sign*0.095, 0.057), (0.018, 0.005, 0.018), iris)
-        sphere("Pupil", (-0.531, sign*0.0995, 0.057), (0.010, 0.0035, 0.011), pupil)
-        sphere("Cornea", (-0.528, sign*0.101, 0.057), (0.019, 0.005, 0.019), cornea)
-        # Gill plate crease and two pairs of sensory barbels.
-        curve("Operculum crease", [(-0.395, sign*0.070, 0.115), (-0.36, sign*0.12, 0.035), (-0.375, sign*0.112, -0.050)], 0.0012, lip)
-        curve("Mouth barbel", [(-0.63, sign*0.035, -0.035), (-0.675, sign*0.055, -0.045), (-0.70, sign*0.064, -0.080)], 0.002, lip)
-        curve("Small barbel", [(-0.60, sign*0.049, -0.021), (-0.645, sign*0.077, -0.035)], 0.0013, lip)
-    sphere("Mouth cavity", (-0.661, 0, -0.023), (0.004, 0.019, 0.012), mouth_inside)
-    for shift in [-0.009, 0.009]:
-        curve("Lip", [(-0.664, -0.020, -0.023), (-0.669, 0, -0.023+shift), (-0.664, 0.020, -0.023)], 0.0038, lip)
+    author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil)
 
-    def fin_mesh(name, base, boundary, mat=fin):
+    def fin_mesh(name, base, boundary, mat=fin, base_end=None):
         # A fan has many segmented rays and a curved, scalloped membrane.
         base = Vector(base)
-        rays, rings = 30, 8
+        rays = 42 if name.startswith("Dorsal") else 14 if name.startswith("Anal") else 38 if name.startswith("Caudal") else 32 if name.startswith("Pectoral") else 16
+        rings = 8
         edges = [Vector(p) for p in boundary]
         vertices, faces = [], []
         for i in range(rays+1):
@@ -272,8 +360,13 @@ def build():
             edge = 0.5*((2*a)+(-p+b)*u+(2*p-5*a+4*b-q)*u*u+(-p+3*a-3*b+q)*u*u*u)
             for j in range(rings+1):
                 s = j/rings
-                point = base.lerp(edge, s)
-                point.y += math.sin(s*math.pi)*0.007*math.sin(i/rays*math.pi)
+                anchor = base.lerp(Vector(base_end), i/rays) if base_end else base
+                if name.startswith("Dorsal"):
+                    anchor.z=surface(anchor.x,math.pi/2).z+.0005
+                point = anchor.lerp(edge, s)
+                point.y += math.sin(s*math.pi)*0.005*math.sin(i/rays*math.pi)
+                # Fine corrugation between the branched rays of the membrane.
+                point.y += math.sin(i/rays*math.pi*30)*s*s*0.001
                 vertices.append(point)
         for i in range(rays):
             for j in range(rings):
@@ -281,18 +374,40 @@ def build():
                 faces.append((a, a+rings+1, a+rings+2, a+1))
         obj = mesh(name, vertices, faces, [mat])
         obj.data.materials[0].use_nodes = True
-        for i in range(0, rays+1, 2):
-            curve(name+" ray", [vertices[i*(rings+1)+j] for j in [0, 2, 5, 8]], 0.00045, fin_ray)
+        skin_uv(obj)
+        for i in range(1, rays, 2):
+            curve(name+" ray", [vertices[i*(rings+1)+j] for j in [0, 2, 5, 8]], 0.00032, fin_ray)
+            for offset in [-0.35, 0.35]:
+                tip = vertices[i*(rings+1)+8].lerp(vertices[(i+(1 if offset > 0 else -1))*(rings+1)+8], abs(offset))
+                curve(name+" ray branch", [vertices[i*(rings+1)+5], tip], 0.00013, fin_ray)
         return obj
 
-    fin_mesh("Caudal membrane", (0.49, 0, 0.015), [(0.60, 0, 0.055), (0.76, 0, 0.21), (0.82, 0, 0.20), (0.72, 0, 0.045), (0.68, 0, 0.016), (0.73, 0, -0.045), (0.82, 0, -0.18), (0.76, 0, -0.19), (0.59, 0, -0.035)])
-    fin_mesh("Dorsal membrane", (-0.18, 0, 0.16), [(-0.32, 0, 0.16), (-0.24, 0, 0.27), (-0.13, 0, 0.255), (0.06, 0, 0.205), (0.27, 0, 0.105)])
+    fin_mesh("Caudal membrane", (0.54, 0, 0.028), [(0.59, 0, 0.051), (0.74, 0, 0.17), (0.81, 0, 0.175), (0.835, 0, 0.15), (0.77, 0, 0.055), (0.70, 0, 0.016), (0.77, 0, -0.055), (0.835, 0, -0.16), (0.81, 0, -0.19), (0.74, 0, -0.18), (0.59, 0, -0.028)], base_end=(0.54,0,-.024))
+    fin_mesh("Dorsal membrane", (-0.08, 0, 0.19), [(-0.08, 0, 0.193), (-0.04, 0, 0.245), (0.0, 0, 0.254), (0.08, 0, 0.224), (0.18, 0, 0.209), (0.30, 0, 0.15), (0.43, 0, 0.091)], base_end=(0.43, 0, 0.08))
     for sign in [-1, 1]:
-        fin_mesh("Pectoral membrane", (-0.35, sign*0.105, -0.036), [(-0.28, sign*0.25, -0.12), (-0.20, sign*0.28, -0.14), (-0.11, sign*0.21, -0.13), (-0.15, sign*0.15, -0.07)])
-        fin_mesh("Pelvic membrane", (0.0, sign*0.075, -0.11), [(0.055, sign*0.16, -0.17), (0.15, sign*0.12, -0.16), (0.11, sign*0.065, -0.095)])
-    fin_mesh("Anal membrane", (0.18, 0, -0.077), [(0.22, 0, -0.18), (0.34, 0, -0.11), (0.32, 0, -0.045)])
+        fin_mesh("Pectoral membrane", surface(-.35,-.73 if sign>0 else math.pi+.73,.001), [(-0.28, sign*0.22, -0.15), (-0.20, sign*0.27, -0.208), (-0.15, sign*0.24, -0.21), (-0.12, sign*0.17, -0.14), (-0.20, sign*0.14, -0.10)])
+        fin_mesh("Pelvic membrane", surface(.06,-.85 if sign>0 else math.pi+.85,.001), [(0.11, sign*0.19, -0.21), (0.18, sign*0.14, -0.23), (0.23, sign*0.085, -0.19), (0.12, sign*0.085, -0.14)])
+    fin_mesh("Anal membrane", (0.27, 0, -0.109), [(0.28, 0, -0.14), (0.34, 0, -0.17), (0.41, 0, -0.14), (0.44, 0, -0.071)])
 
-    # This is an animation rig, not a claim of a complete veterinary skeleton.
+    # Keep paired fins separate, but combine each fin's branched ray geometry.
+    # Hundreds of separate skinned draw calls cost more than the skin detail.
+    for prefix in ["Caudal", "Dorsal", "Pectoral", "Pelvic", "Anal"]:
+        pieces = [obj for obj in objects if obj.name.startswith(prefix) and "ray" in obj.name]
+        if not pieces:
+            continue
+        bpy.ops.object.select_all(action="DESELECT")
+        for obj in pieces:
+            obj.select_set(True)
+        bpy.context.view_layer.objects.active = pieces[0]
+        bpy.ops.object.join()
+        combined = bpy.context.object
+        combined.name = prefix+" branched rays"
+        objects = [obj for obj in objects if obj not in pieces]+[combined]
+
+    positions = vertebral_positions()
+    author_anatomy(objects,mesh,curve,sphere,material,interpolate,surface,positions)
+    # Rigid skull, 32 representative vertebral centra, and a caudal-fin handle.
+    # This remains a simplified model, not a complete veterinary skeleton.
     bpy.ops.object.select_all(action="DESELECT")
     armature_data = bpy.data.armatures.new("Koi swimming rig")
     armature = bpy.data.objects.new("KoiRig", armature_data)
@@ -300,31 +415,76 @@ def build():
     armature.select_set(True)
     bpy.context.view_layer.objects.active = armature
     bpy.ops.object.mode_set(mode="EDIT")
-    positions = [-0.67, -0.40, -0.29, -0.18, -0.07, 0.04, 0.15, 0.26, 0.37, 0.48, 0.62, 0.84]
     names = []
     previous = None
     for i in range(len(positions)-1):
         bone = armature_data.edit_bones.new(f"spine_{i:02}")
-        bone.head = (positions[i], 0, 0)
-        bone.tail = (positions[i+1], 0, 0)
+        bone.head = (positions[i],0,0 if i==0 else spine_height(positions[i]))
+        bone.tail = (positions[i+1],0,spine_height(positions[i+1]) if i<len(positions)-2 else spine_height(.54))
         if previous:
             bone.parent = previous
             bone.use_connect = True
         names.append(bone.name)
         previous = bone
+    facial_specs={
+        "jaw_lower": ((-.53,0,-.057),(-.67,0,-.048)),
+        "jaw_upper": ((-.606,0,-.010),(-.67,0,-.028)),
+        "operculum_L": ((-.50,.067,.028),(-.375,.112,.010)),
+        "operculum_R": ((-.50,-.067,.028),(-.375,-.112,.010)),
+        "eye_L": ((-.534,.080,.0035),(-.534,.088,.0035)),
+        "eye_R": ((-.534,-.080,.0035),(-.534,-.088,.0035)),
+    }
+    for name,(head,tail) in facial_specs.items():
+        bone=armature_data.edit_bones.new(name);bone.head=head;bone.tail=tail
+        bone.parent=armature_data.edit_bones[names[0]]
+    axial_names=list(names)
+    names+=list(facial_specs)
     bpy.ops.object.mode_set(mode="OBJECT")
     for obj in objects:
         modifier = obj.modifiers.new("Swim deformation", "ARMATURE")
         modifier.object = armature
         obj.parent = armature
         groups = [obj.vertex_groups.new(name=name) for name in names]
+        centers = [(positions[i]+positions[i+1])/2 for i in range(len(axial_names))]
         for vertex in obj.data.vertices:
-            x = (obj.matrix_world @ vertex.co).x
+            rigid = obj.get("rigid_joint")
+            if rigid is not None:
+                groups[rigid].add([vertex.index],1,"REPLACE")
+                continue
+            point=obj.matrix_world @ vertex.co
+            x=point.x
+            facial=obj.get("facial_joint")
+            if facial:
+                weight=1.0
+                if obj.name.startswith(("Opercular", "Branchiostegal")):
+                    weight=max(0,min(1,(x+.505)/.09))*max(0,min(1,(point.z+.18)/.035,(.06-point.z)/.035))
+                if obj.name.startswith("Rostral"):
+                    u=max(0,min(1,(-x-.660)/.012))
+                    anchor=0
+                    if facial=="jaw_lower":
+                        sine=(point.z-(-.03335-.00965*u))/(.025-.0175*u)
+                        root_z=-.03335+.025*sine
+                        anchor=max(0,min(1,(-root_z-.041)/.024))
+                    weight=anchor*(1-u)+u
+                groups[names.index(facial)].add([vertex.index],weight,"REPLACE")
+                groups[0].add([vertex.index],1-weight,"REPLACE")
+                continue
+            if obj.name=="Koi skin" and x<-.52 and point.z<-.041:
+                weight=max(0,min(1,(-x-.53)/.13))*max(0,min(1,(-point.z-.041)/.024))
+                groups[names.index("jaw_lower")].add([vertex.index],weight,"REPLACE")
+                groups[0].add([vertex.index],1-weight,"REPLACE")
+                continue
+            # Paired fins articulate at a basal attachment. Their distal rays
+            # must not be dragged by whatever trunk vertebra shares their X.
+            if obj.name.startswith(("Pectoral", "Pelvic", "Caudal")):
+                root_x = -.35 if obj.name.startswith("Pectoral") else .06 if obj.name.startswith("Pelvic") else .69
+                root_joint = min(range(len(axial_names)),key=lambda i:abs(centers[i]-root_x))
+                groups[root_joint].add([vertex.index],1,"REPLACE")
+                continue
             if x <= -0.43:
                 groups[0].add([vertex.index], 1, "REPLACE")
                 continue
-            centers = [(positions[i]+positions[i+1])/2 for i in range(len(names))]
-            nearest = sorted(range(len(names)), key=lambda i: abs(centers[i]-x))[:2]
+            nearest = sorted(range(len(axial_names)), key=lambda i: abs(centers[i]-x))[:2]
             distances = [max(0.0001, abs(centers[i]-x)) for i in nearest]
             total = sum(1/d for d in distances)
             for i, d in zip(nearest, distances):
@@ -341,17 +501,50 @@ def build():
 
     # Aquarium reference: real geometry, volumetric water and overhead softboxes.
     for obj in objects+[armature]:
+        if obj.name.startswith("Anatomy") or "branched rays" in obj.name:
+            obj.hide_render=True
         obj.select_set(False)
     armature.location = (0.30, -0.14, 0.77)
     armature.rotation_euler.z = -0.12
     # Slight body wave, not an independent translation of the tail.
-    for i, name in enumerate(names):
+    previous_head = None
+    previous_rotation = None
+    previous_length = None
+    free_start = positions[5]
+    free_length = positions[-2]-free_start
+    for i, name in enumerate(axial_names):
         bone = armature.pose.bones[name]
-        bone.rotation_mode = "XYZ"
-        bone.rotation_euler.z = 0 if i == 0 else 0.014*(i/10)**2*math.sin(-i/10*4.0)
+        s=max(0,(positions[i]-free_start)/free_length)
+        phase=-s*4.8
+        tangent=0 if i<=4 else math.atan(.09/free_length*(2*s*math.sin(phase)-4.8*s*s*math.cos(phase)))
+        rotation=Quaternion((0,0,1),tangent) @ bone.bone.matrix_local.to_quaternion()
+        head=bone.bone.head_local.copy() if i==0 else previous_head+previous_rotation @ Vector((0,previous_length,0))
+        bone.matrix=Matrix.LocRotScale(head,rotation,Vector((1,1,1)))
+        previous_head,previous_rotation,previous_length=head,rotation,bone.length
+        bpy.context.view_layer.update()
+    lateral=total=0
+    for name in axial_names:
+        point=armature.pose.bones[name].head
+        weight=math.exp(-((point.x+.18)/.30)**2)
+        lateral+=point.y*weight;total+=weight
+    armature.location+=armature.rotation_euler.to_matrix() @ Vector((0,-lateral/total,0))
     floor_mat = material("Dark river gravel", (0.020, 0.027, 0.032), 0.88)
     rock_mat = material("Water worn stone", (0.026, 0.039, 0.042), 0.69)
-    for mat, scale, strength in [(floor_mat, 280, 0.35), (rock_mat, 38, 0.45)]:
+    nodes,links=rock_mat.node_tree.nodes,rock_mat.node_tree.links
+    coordinates=nodes.new("ShaderNodeTexCoord")
+    mapping=nodes.new("ShaderNodeMapping");mapping.inputs["Scale"].default_value=(2,2,2)
+    links.new(coordinates.outputs["Object"],mapping.inputs["Vector"])
+    textures={}
+    for name,file in [("color","stone-color.jpg"),("height","stone-height.jpg"),("arm","stone-arm.jpg")]:
+        image=bpy.data.images.load(str(root/"static/aquarium"/file))
+        if name!="color":image.colorspace_settings.name="Non-Color"
+        texture=nodes.new("ShaderNodeTexImage");texture.image=image;texture.projection="BOX";texture.projection_blend=.3
+        links.new(mapping.outputs["Vector"],texture.inputs["Vector"]);textures[name]=texture
+    links.new(textures["color"].outputs["Color"],nodes.get("Principled BSDF").inputs["Base Color"])
+    bump=nodes.new("ShaderNodeBump");bump.inputs["Distance"].default_value=.007;bump.inputs["Strength"].default_value=.75
+    links.new(textures["height"].outputs["Color"],bump.inputs["Height"])
+    links.new(bump.outputs["Normal"],nodes.get("Principled BSDF").inputs["Normal"])
+    for mat, scale, strength in [(floor_mat, 280, 0.35)]:
         nodes, links = mat.node_tree.nodes, mat.node_tree.links
         noise = nodes.new("ShaderNodeTexNoise")
         noise.inputs["Scale"].default_value = scale
@@ -376,13 +569,23 @@ def build():
 
     cube("Substrate", (0, 0.2, -0.025), (4, 1.8, 0.09), floor_mat)
     cube("Rear glass backing", (0, 1.12, 0.90), (4, 0.02, 1.95), back_mat)
-    for i in range(950):
+    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=1)
+    prototype = bpy.context.object
+    stone_vertices = [v.co.copy() for v in prototype.data.vertices]
+    stone_faces = [tuple(p.vertices) for p in prototype.data.polygons]
+    bpy.data.objects.remove(prototype, do_unlink=True)
+    vertices, faces = [], []
+    for i in range(22000):
         x, y = rng.uniform(-2, 2), rng.uniform(-0.65, 1.02)
-        radius = rng.uniform(0.007, 0.025)
-        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=radius, location=(x, y, radius*0.45))
-        pebble = bpy.context.object
-        pebble.scale = (rng.uniform(0.8, 1.3), rng.uniform(0.7, 1.2), rng.uniform(0.4, 0.75))
-        pebble.data.materials.append(floor_mat)
+        radius = rng.uniform(0.007, 0.022)
+        scale = (radius*rng.uniform(0.8, 1.3), radius*rng.uniform(0.7, 1.2), radius*rng.uniform(0.4, 0.75))
+        angle = rng.random()*math.tau
+        start = len(vertices)
+        for v in stone_vertices:
+            px, py, pz = v.x*scale[0], v.y*scale[1], v.z*scale[2]
+            vertices.append((x+px*math.cos(angle)-py*math.sin(angle), y+px*math.sin(angle)+py*math.cos(angle), 0.0205+radius*0.45+pz))
+        faces.extend(tuple(start+j for j in face) for face in stone_faces)
+    mesh("Gravel bed", vertices, faces, [floor_mat])
     for x, y, r in [(-1.63, 0.39, 0.25), (-1.27, 0.64, 0.13), (1.64, 0.68, 0.28), (1.23, 0.78, 0.15)]:
         bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=4, radius=r, location=(x, y, r*0.4))
         rock = bpy.context.object
@@ -400,11 +603,11 @@ def build():
     outlet = nodes.new("ShaderNodeOutputMaterial")
     scatter = nodes.new("ShaderNodeVolumeScatter")
     scatter.inputs["Color"].default_value = (0.16, 0.34, 0.38, 1)
-    scatter.inputs["Density"].default_value = 0.09
+    scatter.inputs["Density"].default_value = 0.025
     scatter.inputs["Anisotropy"].default_value = 0.28
     absorption = nodes.new("ShaderNodeVolumeAbsorption")
     absorption.inputs["Color"].default_value = (0.07, 0.38, 0.49, 1)
-    absorption.inputs["Density"].default_value = 0.13
+    absorption.inputs["Density"].default_value = 0.075
     add = nodes.new("ShaderNodeAddShader")
     links.new(scatter.outputs[0], add.inputs[0])
     links.new(absorption.outputs[0], add.inputs[1])
@@ -420,16 +623,19 @@ def build():
         data = bpy.data.lights.new(name, "AREA")
         data.energy, data.size, data.color = power, size, color
         data.shape = "RECTANGLE"
-        data.size_y = 0.06
+        data.size_y = 0.45
         obj = bpy.data.objects.new(name, data)
         scene.collection.objects.link(obj)
         obj.location = location
         obj.rotation_euler = (Vector(target)-obj.location).to_track_quat("-Z", "Y").to_euler()
+        obj.visible_camera = False
+        obj.visible_glossy = True
+        obj.visible_transmission = True
         return obj
 
-    area("Overhead softbox", (0.45, -0.15, 2.35), (0.2, 0.1, 0.4), 190, 1.3, (0.76, 0.86, 1.0))
-    area("Side fill", (-1.7, -0.3, 1.4), (0.2, 0.1, 0.7), 35, 0.9, (0.39, 0.66, 0.80))
-    area("Rim strip", (1.0, 0.9, 1.8), (0.2, 0.1, 0.7), 95, 0.55, (0.56, 0.81, 0.90))
+    area("Overhead softbox", (0.45, -0.65, 2.35), (0.2, 0.1, 0.4), 500, 1.3, (1.0, 0.93, 0.82))
+    area("Side fill", (-2.2, 0.0, 1.75), (0.2, 0.1, 0.7), 100, 0.9, (0.63, 0.76, 0.84))
+    area("Rim strip", (1.0, 0.9, 2.6), (0.2, 0.1, 0.7), 150, 0.55, (0.56, 0.81, 0.90))
     camera_data = bpy.data.cameras.new("Aquarium camera")
     camera = bpy.data.objects.new("Aquarium camera", camera_data)
     scene.collection.objects.link(camera)
@@ -438,15 +644,24 @@ def build():
     camera_data.lens = 47
     scene.camera = camera
     bpy.ops.wm.save_as_mainfile(filepath=str(work/"aquarium.blend"), compress=True)
+    geometry_hash = hashlib.sha256((output/"koi.glb").read_bytes()).hexdigest()
+    old_manifest = json.loads((output/"manifest.json").read_text(encoding="utf-8")) if (output/"manifest.json").exists() else {}
+    reference_metadata = old_manifest.get("reference")
     metadata = {
         "generator": f"Blender {bpy.app.version_string}", "asset": "koi.glb",
         "units": "metres", "fish_length": 1.5, "rig_joints": len(names),
+        "facial_joints":list(facial_specs),
+        "facial_reference":"https://xromm.org/projects/fish-feeding/",
+        "anatomy": {"vertebral_centra":32,"weberian_region":4,"abdominal_region":17,"hypurals":6,
+                    "reference":"https://doi.org/10.26842/binhm.7.2026.19.1.0139",
+                    "scope":"Species-informed simplified axial anatomy; not a CT reconstruction"},
+        "opaque_uv_repairs":uv_repairs,
         "scale_count": rows*columns, "source": "scripts/aquarium/build.py",
         "license": "Original Vira benchmark asset; repository license applies",
-        "reference": {"engine": "Cycles", "samples": scene.cycles.samples,
-                      "resolution": [scene.render.resolution_x, scene.render.resolution_y]},
+        "geometry_sha256": geometry_hash,
+        "reference": reference_metadata,
+        "reference_matches_asset": bool(reference_metadata and reference_metadata.get("geometry_sha256") == geometry_hash),
     }
-    (output/"manifest.json").write_text(json.dumps(metadata, indent=2)+"\n", encoding="utf-8")
     if not args.no_render:
         reference = work / ("reference-draft.png" if args.draft else "reference.png")
         scene.render.filepath = str(reference)
@@ -455,6 +670,11 @@ def build():
         subprocess.run([encoder, "-q", "94", "-m", "6", str(reference),
                         "-o", str(output / "reference.webp")],
                        check=True, capture_output=True, timeout=120)
+        metadata["reference"] = {"engine": "Cycles", "samples": scene.cycles.samples,
+                                 "resolution": [scene.render.resolution_x, scene.render.resolution_y],
+                                 "geometry_sha256": geometry_hash}
+        metadata["reference_matches_asset"] = True
+    (output/"manifest.json").write_text(json.dumps(metadata, indent=2)+"\n", encoding="utf-8")
     print("AQUARIUM: complete", flush=True)
 
 

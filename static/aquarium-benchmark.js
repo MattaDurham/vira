@@ -1,14 +1,23 @@
 import * as THREE from './vendor/three.webgpu.js';
 import {GLTFLoader} from './vendor/GLTFLoader.js';
-import {cameraPosition,positionWorld,output,uniform,vec3,vec4,max,exp,sin,pow} from './vendor/three.tsl.js';
-import {createSwimmer} from './aquarium-motion.js';
-import {applySwimPose} from './aquarium-rig.js';
+import {mergeVertices} from './vendor/BufferGeometryUtils.js';
+import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
+import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=40';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=40';
+import {waterOptics} from './aquarium-optics.js?v=40';
+import {createContainment} from './aquarium-collision.js?v=40';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const swimmer=createSwimmer(),fish=swimmer.fish,clock=uniform(0);
-const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false};
+const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front'};
 let renderer,scene,camera,asset,environment,disposed=false,frame=0,previous=0,metrics=0;
 let liveEngine='Starting renderer',referenceMetadata=null;
+let skeleton;
+let optics;
+let containment,facialRig;
+let recording,recordingStream,recordingTimer,recordingUrl,recordingSurface,recordingContext;
+let studyPhase=0,visualFish=fish,navigationLeg=-1;
 const ownedGeometries=new Set(),ownedMaterials=new Set(),ownedTextures=new Set(),joints=[],rest=[];
 const frameTimes=[];
 let seed=913;
@@ -20,42 +29,117 @@ const target=new THREE.Vector3(0,.86,-.2);
 const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2(),interactionPlane=new THREE.Plane(new THREE.Vector3(0,0,1),-.14),hit=new THREE.Vector3();
 const deformable=[];
 const fins=[];
+const barbels=[];
+const finSupports=[];
+const anatomicalMeshes=[];
+const scaleMeshes=[],wireSettings=new Map();
+let wireMaterial;
+const particleData=[],particlePose=new THREE.Object3D();
+let particles;
+let finMap;
+
+function finTexture(){
+  const image=document.createElement('canvas');image.width=2048;image.height=512;
+  const ctx=image.getContext('2d'),pixels=ctx.createImageData(image.width,image.height);
+  for(let y=0;y<image.height;y++)for(let x=0;x<image.width;x++){
+    const u=x/(image.width-1),s=1-y/(image.height-1),i=(y*image.width+x)*4;
+    const ray=Math.pow(.5+.5*Math.cos(u*Math.PI*30),18);
+    const branches=Math.pow(.5+.5*Math.cos((u+s*.004)*Math.PI*90),24)*Math.max(0,(s-.45)/.55);
+    const tissue=ray*.22+branches*.14,grain=(random()-.5)*.05;
+    pixels.data[i]=255*(.80+grain+tissue*.16-s*.08);
+    pixels.data[i+1]=255*(.75+grain+tissue*.2+s*.02);
+    pixels.data[i+2]=255*(.62+grain+tissue*.30+s*.12);
+    pixels.data[i+3]=255*(.64-s*.33+tissue);
+  }
+  ctx.putImageData(pixels,0,0);
+  const map=ownTexture(new THREE.CanvasTexture(image));map.colorSpace=THREE.SRGBColorSpace;map.flipY=false;
+  return map;
+}
 
 function size(){
   const width=canvas.clientWidth,height=canvas.clientHeight;
-  // Preserve native 4K while bounding sustained GPU work on extreme displays.
-  const ratio=Math.min(devicePixelRatio,2,Math.sqrt(8388608/(width*height)));
+  // Preserve native 5K while bounding sustained GPU work beyond large desktop displays.
+  const ratio=Math.min(devicePixelRatio,2,Math.sqrt(16777216/(width*height)));
   renderer.setPixelRatio(ratio);renderer.setSize(width,height,false);
   camera.aspect=width/height;
-  camera.fov=width<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
+  camera.fov=state.closeup?10:width<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
   camera.updateProjectionMatrix();
   $('pixels').textContent=`${canvas.width.toLocaleString()} × ${canvas.height.toLocaleString()}`;
   canvas.dataset.renderWidth=String(canvas.width);canvas.dataset.renderHeight=String(canvas.height);
 }
 function setCamera(){
-  camera.position.set(Math.sin(orbit)*distance,1.02+elevation,Math.cos(orbit)*distance);
-  camera.lookAt(target);camera.updateMatrixWorld();
+  if(state.closeup&&asset){
+    const focus=asset.localToWorld(new THREE.Vector3(-.536,.004,.02));
+    camera.position.set(focus.x-2.4+orbit*2,focus.y+.16+elevation,2.45);
+    camera.lookAt(focus);camera.fov=10;camera.updateProjectionMatrix();camera.updateMatrixWorld();return;
+  }
+  camera.fov=canvas.clientWidth<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
+  camera.updateProjectionMatrix();
+  const bearing=orbit+(state.cameraAngle==='quarter'?-.55:0);
+  if(state.cameraAngle==='top')camera.position.set(Math.sin(orbit)*distance*.55,3.35+elevation,1.75);
+  else camera.position.set(Math.sin(bearing)*distance,1.02+elevation,Math.cos(bearing)*distance);
+  camera.lookAt(target.x,canvas.clientWidth<650?.20:target.y,target.z);camera.updateMatrixWorld();
 }
 function immerse(mat){
-  const material=ownMaterial(new THREE.MeshPhysicalNodeMaterial());
+  const tissue=mat.name==='Pearl skin'||mat.name==='Ivory fin membrane';
+  const anatomical=mat.name.startsWith('Anatomy');
+  const basic=anatomical||mat.isMeshBasicMaterial;
+  const material=ownMaterial(basic?new THREE.MeshBasicNodeMaterial():tissue?new THREE.MeshSSSNodeMaterial():new THREE.MeshPhysicalNodeMaterial());
   // glTF supplies ordinary materials. NodeMaterial.copy also copies shader
   // hooks, which do not exist on those sources and must retain their defaults.
-  THREE.MeshStandardMaterial.prototype.copy.call(material,mat);
-  if(mat.isMeshPhysicalMaterial)THREE.MeshPhysicalMaterial.prototype.copy.call(material,mat);
-  if(mat.name==='Ivory fin membrane'){
-    // The front glass samples the opaque transmission buffer, excluding
-    // alpha-blended membranes. Keep fins in that buffer and approximate
-    // their thin tissue with a pale diffuse material and faint backlighting.
-    material.transmission=0;material.opacity=1;material.transparent=false;
-    material.depthWrite=true;material.clearcoat=.12;material.color.setRGB(.40,.49,.43);
-    material.emissive.setRGB(.013,.020,.019);
+  if(basic){
+    THREE.Material.prototype.copy.call(material,mat);
+    material.color.copy(mat.color);material.map=mat.map??null;material.vertexColors=mat.vertexColors;
+  }else{
+    THREE.MeshStandardMaterial.prototype.copy.call(material,mat);
+    if(mat.isMeshPhysicalMaterial)THREE.MeshPhysicalMaterial.prototype.copy.call(material,mat);
   }
-  // The observer is outside the front pane. Only the path through water absorbs.
-  const waterPath=max(cameraPosition.sub(positionWorld).length().mul(max(positionWorld.z.negate().add(.69),0)).div(cameraPosition.z.sub(positionWorld.z)),0);
-  const transmission=exp(vec3(.26,.085,.065).mul(waterPath).negate());
-  const waterColor=vec3(.006,.019,.027);
+  if(anatomical){
+    material.color.setRGB(...(mat.name.includes('notochord')?[.9,.55,.20]:mat.name.includes('cartilage')?[.25,.60,.90]:[.28,.85,.70]));
+    material.userData.anatomy=true;
+  }
+  if(mat.name==='Ivory fin membrane'){
+    material.transmission=0;material.opacity=mat.map?.72:1;material.transparent=true;
+    material.depthWrite=false;material.clearcoat=.12;material.side=THREE.DoubleSide;material.alphaTest=.2;
+    material.color.setRGB(1,1,1);material.roughness=.48;
+    material.map=mat.map??(finMap??=finTexture());
+    material.thicknessColorNode=vec3(.7,.48,.28);
+    material.thicknessAttenuationNode=float(.12);material.thicknessScaleNode=float(2);
+    // Standard depth shadows treat thin tissue as opaque. Retain a soft,
+    // tinted transmission approximation rather than black fin silhouettes.
+    material.castShadowNode=vec4(.50,.56,.42,texture(material.map).a.mul(.32));
+  }
+  if(mat.name==='Pearl skin'){
+    material.normalNode=bumpMap(mx_noise_float(positionGeometry.mul(900)).mul(.00009),.65);
+    material.roughnessNode=mx_noise_float(positionGeometry.mul(450)).mul(.055).add(.34);
+    // The skin-water interface has far less Fresnel contrast than skin-air.
+    material.ior=1.04;material.specularIntensity=.6;
+    material.clearcoat=.08;material.clearcoatRoughness=.35;
+    material.thicknessColorNode=texture(mat.map).rgb.mul(.22);
+    material.thicknessAttenuationNode=float(.08);material.thicknessScaleNode=float(1.8);
+  }
+  if(mat.name==='Golden iris'&&!mat.map){
+    material.colorNode=vec3(.26,.29,.19).mul(mx_noise_float(positionLocal.mul(2000)).mul(.45).add(.85));
+    material.roughness=.32;material.metalness=0;
+  }
+  if(mat.name==='Corneal highlight'){
+    material.color.setRGB(1,1,1);material.ior=1.035;material.transmission=1;
+    material.thickness=.003;material.clearcoat=.02;material.roughness=.025;
+    material.castShadowNode=vec4(1,1,1,.001);
+  }
+  // Clip the complete camera-to-fragment segment to the actual tank volume.
+  // Front-pane distance is wrong when looking through the surface or side.
+  const ray=positionWorld.sub(cameraPosition);
+  const safeRay=max(abs(ray),vec3(.000001)).mul(step(vec3(0),ray).mul(2).sub(1));
+  const a=vec3(-2,.02,-1.1).sub(cameraPosition).div(safeRay);
+  const b=vec3(2,1.79,.69).sub(cameraPosition).div(safeRay);
+  const entry=min(a,b),exit=max(a,b);
+  const near=max(max(entry.x,entry.y),max(entry.z,0));
+  const far=min(min(exit.x,exit.y),min(exit.z,1));
+  const waterPath=max(far.sub(near),0).mul(ray.length());
+  const transmission=exp(vec3(.27,.112,.098).mul(waterPath).negate());
   const caustic=pow(sin(positionWorld.x.mul(12).add(sin(positionWorld.z.mul(9).add(clock)))).mul(.5).add(.5),12);
-  material.outputNode=vec4(output.rgb.mul(transmission).mul(caustic.mul(.045).add(1)).add(waterColor.mul(transmission.oneMinus())),output.a);
+  material.outputNode=vec4(output.rgb.mul(transmission).mul(caustic.mul(.045).add(1)),output.a);
   return material;
 }
 function pebbleMaterial(){
@@ -81,43 +165,65 @@ function softboxEnvironment(){
   environment=generator.fromScene(room,.035,.05,20,{size:256});scene.environment=environment.texture;scene.environmentIntensity=.72;
   generator.dispose();room.traverse(o=>{o.geometry?.dispose();o.material?.dispose();});
 }
-function habitat(){
-  const ground=pebbleMaterial(),rock=immerse(new THREE.MeshPhysicalMaterial({color:0x253c40,roughness:.68,clearcoat:.12}));
+function habitat(stoneMaps){
+  const ground=pebbleMaterial(),rock=immerse(new THREE.MeshPhysicalMaterial({color:0x253c40,roughness:.85,clearcoat:.04}));
+  const projected=map=>triplanarTexture(texture(map),null,null,float(2));
+  const arm=projected(stoneMaps.arm);
+  rock.normalNode=bumpMap(projected(stoneMaps.height).r.mul(.007),.75);
+  rock.colorNode=projected(stoneMaps.color).rgb;
+  rock.roughnessNode=arm.g.mul(.55).add(.12);rock.aoNode=arm.r;
+  rock.ior=1.12;
   mesh(new THREE.BoxGeometry(4, .09,1.8),ground,[0,-.025,-.2]);
-  const pebbles=new THREE.InstancedMesh(ownGeometry(new THREE.IcosahedronGeometry(1,1)),ground,950),dummy=new THREE.Object3D();
-  for(let i=0;i<950;i++){
-    const radius=.007+random()*.018;dummy.position.set((random()-.5)*4,radius*.45,(random()-.5)*1.68-.2);
+  const pebbles=new THREE.InstancedMesh(ownGeometry(new THREE.IcosahedronGeometry(1,1)),ground,22000),dummy=new THREE.Object3D();
+  for(let i=0;i<22000;i++){
+    const radius=.007+random()*.015;dummy.position.set((random()-.5)*4,.0205+radius*.45,(random()-.5)*1.68-.2);
     dummy.scale.set(radius*(.8+random()*.5),radius*(.4+random()*.35),radius*(.7+random()*.5));
     dummy.rotation.set(random()*3,random()*3,random()*3);dummy.updateMatrix();pebbles.setMatrixAt(i,dummy.matrix);
+    const shade=.30+random()*.45;pebbles.setColorAt(i,new THREE.Color(shade*.84,shade*.94,shade));
   }
   pebbles.receiveShadow=true;scene.add(pebbles);
   for(const [x,z,r] of [[-1.63,-.39,.25],[-1.27,-.64,.13],[1.64,-.68,.28],[1.23,-.78,.15]]){
-    const geometry=new THREE.IcosahedronGeometry(r,4),positions=geometry.attributes.position;
+    const raw=new THREE.IcosahedronGeometry(r,24);
+    raw.deleteAttribute('normal');raw.deleteAttribute('uv');
+    const geometry=mergeVertices(raw,1e-6);raw.dispose();
+    const positions=geometry.attributes.position;
     // Coincident corners must move together; random offsets split triangles
     // and turn smooth stone into a pile of disconnected facets.
     for(let i=0;i<positions.count;i++){
       const px=positions.getX(i),py=positions.getY(i),pz=positions.getZ(i);
-      const scale=1+.025*Math.sin(px*31+py*17)*Math.cos(pz*23);
+      const scale=1+.13*Math.sin(px*17+py*11)*Math.cos(pz*19)+.04*Math.sin(px*77-pz*39);
       positions.setXYZ(i,px*scale,py*scale,pz*scale);
     }
+    geometry.computeVertexNormals();
     const stone=mesh(geometry,rock,[x,r*.4,z]);stone.scale.set(1.2,.73,.8);stone.castShadow=true;
   }
-  mesh(new THREE.PlaneGeometry(4,1.95),ownMaterial(new THREE.MeshBasicNodeMaterial({color:0x030f18})),[0,.9,-1.11]);
-  const surface=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0x6d929e,roughness:.065,metalness:.25,transmission:.25,thickness:.006,ior:1.333,side:THREE.DoubleSide}));
+  mesh(new THREE.PlaneGeometry(4,1.95),immerse(new THREE.MeshBasicMaterial({color:0x030f18})),[0,.9,-1.11]);
+  // A specular dielectric layer preserves transparent tissue below the
+  // surface. The live interface approximates reflection; Cycles refracts it.
+  const surface=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0x000000,roughness:.035,metalness:0,
+    transmission:0,ior:1.333,transparent:true,opacity:1,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide}));
   const water=mesh(new THREE.PlaneGeometry(4,1.78,64,32),surface,[0,1.79,-.2]);water.rotation.x=-Math.PI/2;
-  const points=water.geometry.attributes.position,base=Float32Array.from(points.array);deformable.push({points,base});
-  const glass=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0xd7f0ed,roughness:.022,transmission:1,thickness:.012,ior:1.46,clearcoat:1,clearcoatRoughness:.01,side:THREE.DoubleSide}));
+  const points=water.geometry.attributes.position,base=Float32Array.from(points.array);deformable.push({points,base,geometry:water.geometry});
+  // At this near-normal viewing angle a 12 mm parallel pane displaces the
+  // image by millimetres. A faint reflective pane preserves that appearance
+  // without a nested transmission pass that omits the translucent fin tissue.
+  const glass=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0x152631,roughness:.10,metalness:.3,transparent:true,opacity:.035,depthWrite:false,clearcoat:1,clearcoatRoughness:.04,side:THREE.DoubleSide}));
   const pane=mesh(new THREE.PlaneGeometry(4,1.9),glass,[0,.9,.69]);pane.receiveShadow=false;
   const edge=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0x446b74,roughness:.18,metalness:.25,transparent:true,opacity:.35}));
   for(const x of [-1.98,1.98])mesh(new THREE.BoxGeometry(.014,1.86,.025),edge,[x,.92,.68]);
   const particulate=ownMaterial(new THREE.MeshBasicNodeMaterial({color:0x57747d,transparent:true,opacity:.19}));
-  const particles=new THREE.InstancedMesh(ownGeometry(new THREE.IcosahedronGeometry(.0016,0)),particulate,180);
-  for(let i=0;i<180;i++){dummy.position.set((random()-.5)*3.7,.1+random()*1.6,(random()-.5)*1.5-.2);dummy.scale.setScalar(.5+random());dummy.updateMatrix();particles.setMatrixAt(i,dummy.matrix);}
+  particles=new THREE.InstancedMesh(ownGeometry(new THREE.IcosahedronGeometry(.0016,0)),particulate,180);
+  for(let i=0;i<180;i++){
+    const point={x:(random()-.5)*3.7,y:.1+random()*1.6,z:(random()-.5)*1.5-.2,scale:.5+random()};particleData.push(point);
+    dummy.position.set(point.x,point.y,point.z);dummy.scale.setScalar(point.scale);dummy.updateMatrix();particles.setMatrixAt(i,dummy.matrix);
+  }
   scene.add(particles);
-  scene.add(new THREE.HemisphereLight(0xc6dce3,0x0b252e,.32));
+  scene.add(new THREE.HemisphereLight(0xe0e5df,0x0b252e,.25));
+  const key=new THREE.RectAreaLight(0xfff0db,14,1.4,.7);
+  key.position.set(.1,2.3,.85);key.lookAt(.1,.65,-.15);scene.add(key);
   for(const [position,targetPosition,power,color,angle] of [
-    [[.45,2.35,.15],[.2,.4,-.1],19,0xc2dbff,.85],
-    [[-1.7,1.4,.3],[.2,.7,-.1],5,0x64a9cd,.8],
+    [[.45,2.35,.65],[.2,.4,-.1],9,0xfff0db,.85],
+    [[-1.7,1.4,.3],[.2,.7,-.1],5,0xaccad6,.8],
     [[1,1.8,-.9],[.2,.7,-.1],11,0x8fcfe6,.7],
   ]){
     const light=new THREE.SpotLight(color,power,8,angle,.7,2);light.position.set(...position);light.target.position.set(...targetPosition);
@@ -152,28 +258,77 @@ function key(event){
   else return;event.preventDefault();setCamera();
 }
 function pose(){
-  applySwimPose(asset,joints,rest,fish);
+  const held={...fish,x:.3,y:.77,z:-.15,yaw:-.40,yawRate:0,pitch:0,pitchRate:0,bank:0,drive:.2,speed:.2,stroke:1,phase:studyPhase};
+  if(state.study){
+    const axis=state.studyAxis;
+    held.lateralGain=axis==='vertical'||axis==='twist'?0:1;
+    held.verticalGain=axis==='lateral'||axis==='twist'?0:1;
+    held.twistGain=axis==='lateral'||axis==='vertical'?0:1;
+    if(axis==='vertical'||axis==='combined')held.pitchRate=.38*Math.sin(studyPhase*.32);
+    if(axis==='twist'||axis==='combined')held.torsionDrive=.28*Math.sin(studyPhase*.27);
+  }
+  const sample=state.study?held:fish;
+  visualFish=sample;
+  applySwimPose(asset,joints,rest,sample);
+  facialRig?.pose(sample);
+  const p=joints.at(-1).getWorldPosition(hit);
+  canvas.dataset.tailPosition=[p.x,p.y,p.z].map(v=>v.toFixed(4)).join(',');
+  canvas.dataset.phase=sample.phase.toFixed(4);
+  canvas.dataset.age=fish.age.toFixed(2);canvas.dataset.pitch=sample.pitch.toFixed(3);
+  canvas.dataset.rootPosition=[sample.x,sample.y,sample.z].map(v=>v.toFixed(3)).join(',');
 }
 function draw(now){
   if(disposed)return;frame=requestAnimationFrame(draw);
   const elapsed=previous?(now-previous)/1000:0;previous=now;
   if(document.hidden||state.reference)return;
-  if(!state.paused){swimmer.step(elapsed);clock.value=fish.age;pose();}
-  for(const {points,base,paired,root,sign} of fins){
+  if(!state.paused){
+    if(state.studyAxis==='swim'&&!state.study){
+      const leg=Math.floor(fish.age/12)%2;
+      if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
+    }
+    swimmer.step(elapsed);studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.05);clock.value=fish.age;pose();}
+  for(const {points,base,paired,root,sign,geometry} of fins){
     for(let i=0;i<points.count;i++){
       const x=base[i*3],y=base[i*3+1],z=base[i*3+2];
       if(paired){
-        const a=(.10+.20*fish.speed)*Math.sin(fish.phase*.8)*sign,dy=y-root.y,dz=z-root.z;
-        points.setXYZ(i,x,root.y+dy*Math.cos(a)-dz*Math.sin(a),root.z+dy*Math.sin(a)+dz*Math.cos(a));
-      }else points.setXYZ(i,x,y,z+.004*Math.sin(x*16-fish.phase)*Math.max(0,x-.45));
+        const side=Math.sign(z)||sign,rz=Math.abs(root.z)*side;
+        const a=(.25+.25*visualFish.speed)*Math.sin(visualFish.phase*.65+.6)*side,dy=y-root.y,dz=z-rz;
+        const flex=Math.min(1,Math.hypot(dy,dz)/.15);
+        const bend=a*Math.pow(flex,.8);
+        points.setXYZ(i,x-.015*flex*Math.sin(visualFish.phase*.65),root.y+dy*Math.cos(bend)-dz*Math.sin(bend),rz+dy*Math.sin(bend)+dz*Math.cos(bend)+.009*flex*flex*Math.sin(visualFish.phase-1.1));
+      }else points.setXYZ(i,x,y,z+.035*Math.sin(x*12-visualFish.phase-1.1)*Math.max(0,x-.48));
+    }
+    points.needsUpdate=true;
+    geometry.computeVertexNormals();
+  }
+  for(const {points,base} of barbels){
+    const rootX=base[0],extent=Math.max(.001,Math.abs(base[(points.count-16)*3]-rootX));
+    for(let i=0;i<points.count;i++){
+      const x=base[i*3],y=base[i*3+1],z=base[i*3+2],s=THREE.MathUtils.clamp(Math.abs(x-rootX)/extent,0,1);
+      // Anchored base, a tapering drag response and delayed tip compliance.
+      points.setXYZ(i,x+.001*s*s*Math.sin(fish.age*2.1-s),y+.0018*s*s*Math.sin(fish.age*3.2-s*1.7),z+.0022*s*s*Math.sin(fish.age*2.7-s*2));
     }
     points.needsUpdate=true;
   }
-  for(const {points,base} of deformable){
+  for(const {points,base,geometry} of deformable){
     for(let i=0;i<points.count;i++)points.setZ(i,base[i*3+2]+.0015*Math.sin(base[i*3]*5+fish.age*.8)*Math.cos(base[i*3+1]*6-fish.age*.3));
-    points.needsUpdate=true;
+    points.needsUpdate=true;geometry?.computeVertexNormals();
   }
-  renderer.render(scene,camera);
+  if(!state.paused){
+    const dt=Math.min(elapsed,.05);
+    particleData.forEach((point,i)=>{
+      const flow=waterFlow(point,fish.age);point.x+=flow.x*dt;point.z+=flow.z*dt;point.y-=.00025*dt;
+      if(point.y<.04)point.y=1.7;
+      particlePose.position.set(point.x,point.y,point.z);particlePose.scale.setScalar(point.scale);
+      particlePose.updateMatrix();particles.setMatrixAt(i,particlePose.matrix);
+    });particles.instanceMatrix.needsUpdate=true;
+  }
+  if(!state.study)for(let i=0;i<3;i++){
+    if(!swimmer.contain(containment.correction()))break;pose();
+  }
+  if(state.closeup)setCamera();
+  optics.render();
+  if(recordingContext&&recording?.state==='recording')recordingContext.drawImage(canvas,0,0,recordingSurface.width,recordingSurface.height);
   if(elapsed>0&&elapsed<.25){frameTimes.push(elapsed*1000);if(frameTimes.length>180)frameTimes.shift();}
   if(now-metrics>1000&&frameTimes.length>20){
     const average=frameTimes.reduce((a,b)=>a+b,0)/frameTimes.length;
@@ -184,56 +339,143 @@ function draw(now){
 function setPause(paused){state.paused=paused;$('motion').textContent=paused?'Resume motion':'Pause motion';$('motion').setAttribute('aria-pressed',String(paused));}
 function setView(reference){
   state.reference=reference;$('reference').hidden=!reference;$('live-view').setAttribute('aria-pressed',String(!reference));$('reference-view').setAttribute('aria-pressed',String(reference));
-  $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=reference;
+  $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=reference;
   $('hint').textContent=reference?'Cycles reference: the same authored fish, rendered offline through glass and volumetric water.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';
   $('engine').textContent=reference?'Cycles / offline':liveEngine;
-  $('performance').textContent=reference&&referenceMetadata?`${referenceMetadata.samples} samples / 4K still`:reference?'Offline still':'Measuring';
+  $('performance').textContent=reference&&referenceMetadata?`${referenceMetadata.samples} samples / ${referenceMetadata.resolution.join(' × ')} still`:reference?'Offline still':'Measuring';
   previous=0;frameTimes.length=0;
 }
 function cleanup(){
   disposed=true;cancelAnimationFrame(frame);window.removeEventListener('resize',size);
+  clearTimeout(recordingTimer);if(recording?.state==='recording')recording.stop();recordingStream?.getTracks().forEach(track=>track.stop());if(recordingUrl)URL.revokeObjectURL(recordingUrl);
   canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerCancel);canvas.removeEventListener('pointerleave',pointerLeave);canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('keydown',key);
-  ownedGeometries.forEach(g=>g.dispose());ownedMaterials.forEach(m=>m.dispose());ownedTextures.forEach(t=>t.dispose());environment?.dispose();renderer?.dispose();
+  optics?.dispose();ownedGeometries.forEach(g=>g.dispose());ownedMaterials.forEach(m=>m.dispose());ownedTextures.forEach(t=>t.dispose());environment?.dispose();renderer?.dispose();
+}
+
+function record(){
+  if(state.reference||recording?.state==='recording')return;
+  const button=$('record'),link=$('download-recording');
+  try{
+    if(!canvas.captureStream||!window.MediaRecorder)throw new Error('Canvas recording unavailable');
+    const mimeType=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type));
+    if(!mimeType)throw new Error('No supported video codec');
+    // A full-resolution canvas is costly to encode while inspecting motion.
+    // Export the real rendered frames at up to 1080p; live rendering stays native.
+    if(canvas.width<=1920)recordingStream=canvas.captureStream(30);
+    else{
+      recordingSurface=document.createElement('canvas');recordingSurface.width=1920;
+      recordingSurface.height=Math.round(recordingSurface.width*canvas.height/canvas.width);
+      recordingContext=recordingSurface.getContext('2d',{alpha:false});
+      recordingContext.drawImage(canvas,0,0,recordingSurface.width,recordingSurface.height);
+      recordingStream=recordingSurface.captureStream(30);
+    }
+    recording=new MediaRecorder(recordingStream,{mimeType,videoBitsPerSecond:15000000});
+    const chunks=[];recording.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
+    recording.onstop=async()=>{
+      recordingStream.getTracks().forEach(track=>track.stop());recordingContext=recordingSurface=null;if(disposed)return;
+      if(recordingUrl)URL.revokeObjectURL(recordingUrl);
+      const blob=new Blob(chunks,{type:mimeType});
+      recordingUrl=URL.createObjectURL(blob);link.href=recordingUrl;link.hidden=false;
+      try{
+        const response=await fetch('__recording',{method:'POST',headers:{'Content-Type':mimeType},body:blob});
+        if(response.ok){const saved=await response.json();link.href=saved.url;link.removeAttribute('download');link.textContent='Review recording';}
+      }catch{/* Ordinary static servers retain the browser-download fallback. */}
+      button.disabled=false;button.textContent='Record 8 seconds (1080p)';
+    };
+    recording.onerror=event=>{button.textContent=`Recording failed: ${event.error?.message??'encoder error'}`;button.disabled=false;recordingStream.getTracks().forEach(track=>track.stop());};
+    link.hidden=true;button.disabled=true;button.textContent='Recording live frames';recording.start();
+    recordingTimer=setTimeout(()=>{if(recording.state==='recording')recording.stop();},8000);
+  }catch(error){button.textContent=error.message;button.disabled=true;}
 }
 
 async function start(){
   const forceWebGL=new URLSearchParams(location.search).get('renderer')==='webgl';
   renderer=new THREE.WebGPURenderer({canvas,antialias:true,alpha:false,powerPreference:'high-performance',forceWebGL});
   await renderer.init();
-  renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.AgXToneMapping;renderer.toneMappingExposure=1;
+  RectAreaLightTexturesLib.init();THREE.RectAreaLightNode.setLTC(RectAreaLightTexturesLib);
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
+  renderer.toneMapping=new URLSearchParams(location.search).get('tone')==='agx'?THREE.AgXToneMapping:THREE.NeutralToneMapping;
+  renderer.toneMappingExposure=1;
   renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
   scene=new THREE.Scene();scene.background=new THREE.Color(0x030b12);
-  camera=new THREE.PerspectiveCamera(26,1,.06,25);setCamera();size();softboxEnvironment();habitat();
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb');asset=gltf.scene;scene.add(asset);
+  camera=new THREE.PerspectiveCamera(26,1,.06,25);setCamera();size();softboxEnvironment();
+  const mapLoader=new THREE.TextureLoader();
+  const mapFiles={color:'stone-color.jpg',height:'stone-height.jpg',arm:'stone-arm.jpg'},stoneMaps={};
+  await Promise.all(Object.entries(mapFiles).map(async([key,file])=>{
+    const map=ownTexture(await mapLoader.loadAsync(`aquarium/${file}`));
+    map.wrapS=map.wrapT=THREE.RepeatWrapping;map.anisotropy=8;
+    if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
+  }));
+  habitat(stoneMaps);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=40');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
     if(object.isMesh){
+      if(object.name.startsWith('Overlapping_scales'))scaleMeshes.push(object);
+      if(object.name.startsWith('Anatomy')){anatomicalMeshes.push(object);object.visible=false;}
+      if(object.name.includes('branched_rays')){finSupports.push(object);object.visible=false;}
       ownedGeometries.add(object.geometry);object.castShadow=object.receiveShadow=true;object.frustumCulled=false;
       if(/Caudal|Pectoral|Pelvic/.test(object.name)){
         const points=object.geometry.attributes.position,base=Float32Array.from(points.array);
-        const paired=!object.name.startsWith('Caudal'),pelvic=object.name.startsWith('Pelvic');
+        const paired=!object.name.startsWith('Caudal');
         let z=0;for(let i=0;i<points.count;i++)z+=points.getZ(i);
         const sign=Math.sign(z)||1;
-        fins.push({points,base,paired,sign,root:{y:pelvic?-.11:-.036,z:sign*(pelvic?.075:.105)}});
+        fins.push({points,base,paired,sign,geometry:object.geometry,root:{y:points.getY(0),z:points.getZ(0)}});
       }
+      if(object.name.includes('sensory_barbel')){const points=object.geometry.attributes.position;barbels.push({points,base:Float32Array.from(points.array)});}
       const replace=mat=>{if(!converted.has(mat)){converted.set(mat,immerse(mat));for(const value of Object.values(mat))if(value?.isTexture)ownedTextures.add(value);mat.dispose();}return converted.get(mat);};
       object.material=Array.isArray(object.material)?object.material.map(replace):replace(object.material);
     }
   });
-  joints.sort((a,b)=>a.name.localeCompare(b.name));joints.forEach(b=>rest.push(b.quaternion.clone()));pose();
+  joints.sort((a,b)=>a.name.localeCompare(b.name));joints.forEach(b=>rest.push(b.quaternion.clone()));pose();facialRig=createFacialRig(asset);pose();
+  containment=createContainment(asset);
+  skeleton=new THREE.SkeletonHelper(asset);
+  skeleton.material.dispose();skeleton.material=ownMaterial(new THREE.LineBasicNodeMaterial({color:0x80ffdc,transparent:true,opacity:.85,depthTest:false}));
+  ownedGeometries.add(skeleton.geometry);skeleton.visible=false;skeleton.renderOrder=10;scene.add(skeleton);
   liveEngine=renderer.backend.isWebGPUBackend?'WebGPU / local GPU':'WebGL 2 fallback';
   $('engine').textContent=liveEngine;
-  canvas.dataset.engine=renderer.backend.isWebGPUBackend?'webgpu':'webgl2';canvas.dataset.joints=String(joints.length);
+  canvas.dataset.engine=renderer.backend.isWebGPUBackend?'webgpu':'webgl2';canvas.dataset.joints=String(joints.length);canvas.dataset.facialJoints=String(facialRig.jointCount);
+  canvas.dataset.optics='single-scattering-camera-volume';canvas.dataset.rig='three-axis-arched-centra';
+  canvas.dataset.collisionProbes=String(containment.probeCount);canvas.dataset.anatomyMeshes=String(anatomicalMeshes.length);
+  optics=waterOptics(renderer,scene,camera);
+  await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  await renderer.compileAsync(scene,camera);renderer.render(scene,camera);loading.hidden=true;
-  fetch('aquarium/manifest.json').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=40').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
   $('motion').addEventListener('click',()=>setPause(!state.paused));
-  $('reset').addEventListener('click',()=>{swimmer.reset();orbit=elevation=0;distance=4.1;setCamera();pose();setPause(true);});
-  $('wireframe').addEventListener('click',()=>{state.wireframe=!state.wireframe;$('wireframe').setAttribute('aria-pressed',String(state.wireframe));converted.forEach(mat=>{mat.wireframe=state.wireframe;mat.needsUpdate=true;});});
+  $('reset').addEventListener('click',()=>{swimmer.reset();state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
+  $('wireframe').addEventListener('click',()=>{
+    state.wireframe=!state.wireframe;skeleton.visible=state.wireframe;
+    [...finSupports,...anatomicalMeshes].forEach(mesh=>{mesh.visible=state.wireframe;});scaleMeshes.forEach(mesh=>{mesh.visible=!state.wireframe;});
+    $('wireframe').setAttribute('aria-pressed',String(state.wireframe));
+    wireMaterial??=ownMaterial(new THREE.MeshBasicNodeMaterial({color:0x32d4cf,wireframe:true,transparent:true,opacity:.022,depthWrite:false,side:THREE.DoubleSide}));
+    asset.traverse(mesh=>{
+      if(!mesh.isMesh||mesh.name.startsWith('Anatomy'))return;
+      if(state.wireframe){
+        wireSettings.set(mesh,{material:mesh.material,visible:mesh.visible});
+        mesh.visible=/^(Koi_skin|Caudal|Dorsal|Pectoral|Pelvic|Anal)/.test(mesh.name);
+        mesh.material=wireMaterial;
+      }else{
+        const saved=wireSettings.get(mesh);
+        if(saved){mesh.material=saved.material;mesh.visible=saved.visible;}
+      }
+    });
+    scaleMeshes.forEach(mesh=>{mesh.visible=!state.wireframe;});
+    finSupports.forEach(mesh=>{mesh.visible=state.wireframe;});
+  });
+  $('study').addEventListener('click',()=>{if(state.studyAxis==='swim'){state.studyAxis='combined';$('study-axis').value='combined';}state.study=!state.study;studyPhase=fish.phase;$('study').setAttribute('aria-pressed',String(state.study));$('hint').textContent=state.study?'Held position reveals the spine. Choose an axis to isolate it; vertical flexion and twist are amplified for inspection.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';pose();});
+  $('study-axis').addEventListener('change',()=>{
+    state.studyAxis=$('study-axis').value;state.study=state.studyAxis!=='swim';
+    if(!state.study){swimmer.reset();Object.assign(fish,{x:.65,y:.58,z:.12,yaw:0});navigationLeg=-1;}
+    $('hint').textContent=state.study?'Held orientation: vertical flexion and twist are amplified for inspection. Change camera angle to inspect in 3D.':'Ascent and descent come from nose-up and nose-down propulsion through the water.';
+    $('study').setAttribute('aria-pressed',String(state.study));pose();setPause(false);
+  });
+  $('camera-angle').addEventListener('change',()=>{state.cameraAngle=$('camera-angle').value;state.closeup=false;$('closeup').setAttribute('aria-pressed','false');setCamera();});
+  $('closeup').addEventListener('click',()=>{state.closeup=!state.closeup;if(state.closeup){if(state.studyAxis==='swim'){state.studyAxis='combined';$('study-axis').value='combined';}state.study=true;$('study').setAttribute('aria-pressed','true');pose();}$('closeup').setAttribute('aria-pressed',String(state.closeup));setCamera();});
+  $('record').addEventListener('click',record);
   $('reference-view').addEventListener('click',()=>setView(true));$('live-view').addEventListener('click',()=>setView(false));
   $('light').addEventListener('input',()=>{renderer.toneMappingExposure=Number($('light').value);$('light-value').value=`${Math.round(Number($('light').value)*100)}%`;});
   frame=requestAnimationFrame(draw);

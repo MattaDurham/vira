@@ -3,16 +3,37 @@
   "asset": "koi.glb",
   "units": "metres",
   "fish_length": 1.5,
-  "rig_joints": 11,
+  "rig_joints": 40,
+  "facial_joints": [
+    "jaw_lower",
+    "jaw_upper",
+    "operculum_L",
+    "operculum_R",
+    "eye_L",
+    "eye_R"
+  ],
+  "facial_reference": "https://xromm.org/projects/fish-feeding/",
+  "anatomy": {
+    "vertebral_centra": 32,
+    "weberian_region": 4,
+    "abdominal_region": 17,
+    "hypurals": 6,
+    "reference": "https://doi.org/10.26842/binhm.7.2026.19.1.0139",
+    "scope": "Species-informed simplified axial anatomy; not a CT reconstruction"
+  },
+  "opaque_uv_repairs": 581,
   "scale_count": 1330,
   "source": "scripts/aquarium/build.py",
   "license": "Original Vira benchmark asset; repository license applies",
+  "geometry_sha256": "c048cc6647846d165de2be2c87e8968887abfa021ecaac8f9d1b64c84efcbcd2",
   "reference": {
     "engine": "Cycles",
-    "samples": 64,
+    "samples": 96,
     "resolution": [
       3840,
       2160
-    ]
-  }
+    ],
+    "geometry_sha256": "c048cc6647846d165de2be2c87e8968887abfa021ecaac8f9d1b64c84efcbcd2"
+  },
+  "reference_matches_asset": true
 }
