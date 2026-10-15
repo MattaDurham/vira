@@ -68,6 +68,11 @@ SWEEP_LIMIT = 200            # messages per account per background tick;
                              # the backlog is the CLI's job
 MAX_CONSECUTIVE_FAILURES = 3
 WORKER_RECONNECTS = 5        # stalled connections a history walker replaces per pass
+CONNECTION_LIMIT = "Too many simultaneous connections"   # Gmail's alert at 15 per account
+
+
+def _at_connection_limit(exc):
+    return CONNECTION_LIMIT.lower() in str(exc).lower()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
@@ -566,7 +571,7 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
     caller once the marks are saved, so the backfill's retry applies."""
     lock = threading.Lock()
     st = {"next_hi": low - 1, "done": set(), "low": low,
-          "n": 0, "full": None, "stop": None}
+          "n": 0, "full": None, "stop": None, "connected": 0, "refused": 0}
 
     def take():
         with lock:
@@ -645,13 +650,34 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                 state["imap"].logout()
             except Exception:  # noqa: BLE001
                 pass
-            state["imap"] = connect()
+            state["imap"] = None
+            try:
+                state["imap"] = connect()
+            except Exception as e:  # noqa: BLE001
+                if not _at_connection_limit(e):
+                    raise
+                log(f"  imap {addr}: walker refused at Gmail's connection "
+                    f"limit while reconnecting; stepping aside")
+                return False
             state["fails"] = 0
             return True
 
         why = "no spans left"
         try:
-            state["imap"] = connect()
+            try:
+                state["imap"] = connect()
+            except Exception as e:  # noqa: BLE001
+                if not _at_connection_limit(e):
+                    raise
+                # Gmail allows 15 connections per account, shared with the
+                # owner's mail apps. A walker refused at the limit steps
+                # aside; the pass goes on with the others (2026-10-15).
+                why = "Gmail's connection limit; walking with fewer"
+                with lock:
+                    st["refused"] += 1
+                return
+            with lock:
+                st["connected"] += 1
             while True:
                 if ending():
                     why = "the pass is ending"
@@ -728,6 +754,14 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
         t.start()
     for t in threads:
         t.join()
+    if st["refused"]:
+        log(f"  imap {addr}: {st['refused']} of {workers} walkers refused at "
+            f"Gmail's connection limit")
+    if not st["connected"] and st["stop"] is None:
+        # Nothing walked: the pass must count as an error, so the backfill
+        # tries again with fewer connections rather than reading an empty
+        # pass as done.
+        st["stop"] = RuntimeError(f"{CONNECTION_LIMIT}: no walker could connect")
     return st["n"], st["low"], st["full"], st["stop"]
 
 
@@ -1013,14 +1047,16 @@ def _graph_sweep(acct, store, limit, log):
 # ---------- the sweep ----------
 
 def _sweep(log, limit, account, workers=None):
-    """(archived, errored) for one pass over the accounts."""
+    """(archived, errored, note) for one pass over the accounts; `note` is
+    the first error's text, for the backfill loop to read."""
     if not enabled():
         log("mail archive: disabled")
-        return 0, False
+        return 0, False, ""
     con = _db()
     if con is None:
         log(f"mail archive: root unreachable ({root()}), nothing archived")
-        return 0, False
+        return 0, False, ""
+    note = ""
     try:
         store = _Store(con)
         for acct in _accounts():
@@ -1034,6 +1070,7 @@ def _sweep(log, limit, account, workers=None):
                     _imap_sweep(acct, store, limit, log, workers=workers)
             except Exception as e:  # noqa: BLE001 - one bad mailbox never
                 store.errors += 1                   # stops the others
+                note = note or str(e)
                 log(f"  {addr}: walk ended early: {e}")
             if store.full:
                 log(f"mail archive: {store.full}; nothing more archived")
@@ -1041,7 +1078,7 @@ def _sweep(log, limit, account, workers=None):
         store.commit()
         log(f"mail archive: {store.archived} newly archived"
             + (f", {store.errors} walk(s) ended early" if store.errors else ""))
-        return store.archived, store.errors > 0
+        return store.archived, store.errors > 0, note
     finally:
         con.close()
 
@@ -1069,12 +1106,13 @@ def backfill(log=print, account=None, workers=None):
     and its watermark sits where the mail is. Resumable at any point."""
     total = 0
     errored_in_a_row = 0
+    workers = int(workers or _default_workers())
     while True:
         con = _db()
         before = _watermarks(con) if con is not None else {}
         if con is not None:
             con.close()
-        n, errored = _sweep(log, None, account, workers)
+        n, errored, note = _sweep(log, None, account, workers)
         total += n
         log(f"mail archive backlog: +{n} (total {total})")
         con = _db()
@@ -1082,6 +1120,14 @@ def backfill(log=print, account=None, workers=None):
         if con is not None:
             con.close()
         if errored:
+            if _at_connection_limit(note) and workers > 1:
+                # Gmail's 15 per account are shared with the owner's mail
+                # apps; walk with fewer rather than keep being refused.
+                workers = max(1, workers // 2)
+                log(f"mail archive backlog: Gmail's connection limit; "
+                    f"retrying with {workers} connection(s)")
+                time.sleep(5)
+                continue
             errored_in_a_row += 1
             if errored_in_a_row >= BACKFILL_RETRIES:
                 log(f"mail archive backlog: giving up after {errored_in_a_row} "
