@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=72';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=74';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -43,7 +43,8 @@ export function createSwimmer(random=Math.random){
     Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,bank:0,
       age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
       yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
-      muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0});
+      muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
+      turnRecruitment:0,turnRecruitment1:0,turnRecruitment2:0,turnRecruitment3:0});
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
     cursor=goal=null;cursorAge=attention=escapeTime=wallTime=0;
     gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=.4;turnSign=1;
@@ -244,6 +245,14 @@ export function createSwimmer(random=Math.random){
     const u=clamp(bendTime/bendDuration,0,1),pulse=u<.3?u/.3:(1-u)/.7;
     const shaped=pulse*pulse*(3-2*pulse);
     fish.turnBend=u<.3?bendStart+(bendStrength-bendStart)*shaped:bendStrength*shaped;
+    // Unsigned activity shares the bend's causal response. Opposing turns can
+    // cross zero while their still-loaded posterior regions remain recruited.
+    fish.turnRecruitment=Math.abs(fish.turnBend)/.22;
+    let recruited=fish.turnRecruitment;
+    axialRates.forEach((rate,i)=>{
+      const key='turnRecruitment'+(i+1);
+      fish[key]=approach(fish[key],recruited,rate,dt);recruited=fish[key];
+    });
     let bending=fish.turnBend;
     axialRates.forEach((rate,i)=>{
       const key='turnBend'+(i+1);
@@ -321,6 +330,8 @@ export function spinalField(fish,axial){
   const pitchHistory=history('pitchLag',clamp(fish.pitchRate??0,-.5,.5));
   const turnHistory=fish.poseHistory===false?[0,0,0,0]:
     [fish.turnBend??0,fish.turnBend1??0,fish.turnBend2??0,fish.turnBend3??0];
+  const recruitmentHistory=fish.poseHistory===false?[0,0,0,0]:
+    [fish.turnRecruitment??0,fish.turnRecruitment1??0,fish.turnRecruitment2??0,fish.turnRecruitment3??0];
   // Authored studies have no elapsed history: show a steady bend at the given
   // angular rate and a full travelling stroke, rather than borrowing live state.
   const muscleHistory=fish.poseHistory===false||!Number.isFinite(fish.muscle1)?
@@ -329,7 +340,12 @@ export function spinalField(fish,axial){
     if(i<=4)return {lateral:0,vertical:0,twist:0};
     const s=clamp((x-axial[5])/length,0,1),phase=fish.phase-4.8*s;
     const muscle=alongBody(muscleHistory,s);
-    const amplitude=(.09+drive*.10)*muscle*(1-.45*Math.min(1,Math.abs(fish.maneuver??0)));
+    // A body-driven turn replaces the independent cruise wave where it loads.
+    // Full recruitment at a quarter of maximum bend is an authored mode
+    // policy, not a koi measurement; tiny fin-trim corrections recruit little.
+    const activity=clamp(alongBody(recruitmentHistory,s)/.25,0,1);
+    const recruitment=activity*activity*(3-2*activity);
+    const amplitude=(.09+drive*.10)*muscle*(1-recruitment);
     const lateral=(Math.atan(amplitude/length*(2*s*Math.sin(phase)-4.8*s*s*Math.cos(phase)))
       +alongBody(yawHistory,s)-alongBody(turnHistory,s)*s*s*(3-2*s))*lateralGain;
     // Carp propulsion remains predominantly lateral. Vertical flexion follows

@@ -5,6 +5,7 @@ import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {applySwimPose} from '../static/aquarium-rig.js';
 import {projectResearchPoint,researchFinAnchor} from '../static/aquarium-research.js';
 import {researchTopics,buildChapters} from '../static/aquarium-research-data.js';
+import {createResearchTrace,traceLimit} from '../static/aquarium-research-trace.js';
 
 const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url));
 const loader=new GLTFLoader().register(()=>({name:'GeometryOnlyImages',loadTexture:()=>Promise.resolve(new Texture())}));
@@ -33,6 +34,9 @@ for(const system of [WebGPUCoordinateSystem,WebGLCoordinateSystem])for(const [wi
     previous=screen;
   }
   assert.equal(projectResearchPoint(camera.position.clone().add(camera.getWorldDirection(new Vector3()).multiplyScalar(-1)),camera,width,height).visible,false,'features behind the camera cannot leave visible overlay artifacts');
+  const above=projectResearchPoint(camera.position.clone().add(camera.getWorldDirection(new Vector3()).multiplyScalar(2)).add(new Vector3(0,100,0).applyQuaternion(camera.quaternion)),camera,width,height);
+  assert.equal(above.visible,false,'offscreen features do not receive visible pins');
+  assert.equal(above.inFront,true,'a true projected depth segment can continue toward the offscreen surface');
 }
 const ids=new Set(researchTopics.map(topic=>topic.id));
 assert.equal(ids.size,6);
@@ -41,4 +45,20 @@ for(const topic of researchTopics){
   topic.sources.forEach(source=>assert.equal(new URL(source.url).protocol,'https:'));
 }
 buildChapters.forEach(chapter=>chapter.topics.forEach(id=>assert.ok(ids.has(id),'story links resolve to actual cited research topics')));
+const history=createResearchTrace();
+const sample=Array.from({length:34},()=>({lateral:0,vertical:0,twist:0}));
+sample[24]={lateral:traceLimit,vertical:-traceLimit/2,twist:.1};
+sample[33]={lateral:-traceLimit,vertical:traceLimit/2,twist:-.1};
+history.record(0,sample);history.record(0,sample);
+assert.equal(history.samples.length,1,'paused renders cannot invent motion history');
+assert.equal(history.paths(0,0,0),'M286.00,14.00','the plotted trunk sample uses its actual angular value on a fixed scale');
+assert.equal(history.paths(0,1,0),'M286.00,36.00','the dotted caudal trace samples a separate station');
+assert.equal(history.paths(1,0,0),'M286.00,60.50','vertical orientation retains its own signed axis');
+history.record(.05,sample);history.record(1,sample);
+assert.equal((history.paths(0,0,1).match(/M/g)||[]).length,2,'unobserved gaps do not become invented continuous motion');
+history.record(4.1,sample);
+assert.ok(history.samples.every(s=>s.age>=.1),'the history expires by simulation time');
+history.record(.01,sample);
+assert.equal(history.samples.length,1,'restarting the swimmer clears the previous trajectory');
+history.clear();assert.equal(history.paths(0,0,0),'','closing/reopening starts an honest new observation window');
 console.log('Research overlay: actual rig/camera attachment and cited story links passed.');

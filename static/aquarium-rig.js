@@ -1,5 +1,5 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {spinalField} from './aquarium-motion.js?v=72';
+import {spinalField} from './aquarium-motion.js?v=74';
 
 const up=new Vector3(0,1,0),side=new Vector3(0,0,1),axis=new Vector3(1,0,0);
 const turn=new Quaternion(),bend=new Quaternion(),twist=new Quaternion(),center=new Vector3();
@@ -17,13 +17,15 @@ export function applySwimPose(asset,joints,rest,fish){
       bone.getWorldPosition(center);asset.worldToLocal(center);
       bone.userData.bodyCenter=center.clone();bone.userData.axial=center.x;
     }
+    // The authored bone's local Y follows its length, including the rest arch.
+    bone.userData.bodyTangent??=new Vector3(0,1,0).applyQuaternion(bone.userData.bodyRest).normalize();
   });
   const field=spinalField(fish,joints.map(b=>b.userData.axial));
   joints.forEach((bone,i)=>{
     const f=field[i];
     // Absolute orientations in the animal's frame keep the rest arch intact.
     // Roll is about the bent longitudinal axis, not a fixed world axis.
-    turn.setFromAxisAngle(up,f.lateral);bend.setFromAxisAngle(side,f.vertical);twist.setFromAxisAngle(axis,f.twist);
+    turn.setFromAxisAngle(up,f.lateral);bend.setFromAxisAngle(side,f.vertical);twist.setFromAxisAngle(bone.userData.bodyTangent,f.twist);
     desired.copy(bodyRotation).multiply(turn).multiply(bend).multiply(twist).multiply(bone.userData.bodyRest);
     bone.parent.getWorldQuaternion(parentRotation).invert();
     bone.quaternion.copy(parentRotation.multiply(desired));bone.updateMatrixWorld(true);

@@ -15,7 +15,11 @@ Drag, scroll or use the focused canvas's arrow keys to inspect the tank.
 The optional **Research layer** follows the rendered skeleton with projected
 labels for head-led steering, the travelling muscle envelope, fin control,
 anatomy, water depth and authored surfaces. Its live diagram displays the
-rendered axial bend and authored activation envelope, not recorded EMG. Six
+authored axial pose offsets and activation envelope, not recorded EMG or a
+reconstructed centerline. A four-second history traces trunk and tail offsets
+separately in lateral bending, vertical bending and twist, on fixed degree
+scales. Pausing preserves the observed samples; restarting clears the trail,
+and gaps are not joined into invented motion. Six
 research notes distinguish observations, implementation and the limits of each
 comparison; linked papers and original footage retain their species context.
 **How this was built** connects observation, geometry, controls and lighting,
@@ -128,6 +132,13 @@ passing does not establish measured biological timing.
 Turning torque builds and releases with the manoeuvre envelope, rather than
 switching between a full turn and fin trim at each bout boundary. Gesture
 regressions reject abrupt onset and release during broad and small turns.
+Unsigned turn activity follows the finite bend through the same regional
+response. A smooth local blend lets the ordinary swim wave yield during
+loading and return during release, so an opposing carrier phase cannot erase
+a loaded turn. The recruitment threshold is authored, not a measured koi
+muscle parameter. Mirrored, phase-varied actual-skin checks distinguish loaded
+strokes from nascent loading and anterior recovery. Pure twist follows each
+vertebra's arched rest tangent without adding unintended centerline bending.
 `tests/aquarium_fins.mjs` checks the actual paired membranes and ray geometry
 through a shared field: fixed attachments, close ray-to-tissue alignment,
 continuous phases, local volume preservation and unfolded surface triangles.
@@ -194,9 +205,12 @@ The face is authored in `face.py`: a genuinely open oral vestibule, fleshy
 labial folds, paired recessed olfactory canals and valves, tapered sensory
 barbels, a curved radial iris mesh and shallow corneal domes. Separate lower
 jaw, upper jaw, paired opercular and ocular controls move the exported tissue and
-corresponding schematic bones. Respiratory sequencing is an artistic
-approximation informed by [Gidmark et al.'s common-carp XROMM study](https://xromm.org/projects/fish-feeding/),
-not a reconstructed measured trial or a full jaw linkage simulation.
+corresponding schematic bones. Jaw protrusion and the feeding mechanism are
+informed by [Gidmark et al.'s common-carp XROMM study](https://xromm.org/projects/fish-feeding/).
+The respiratory sequence and timing are authored; the model does not
+reconstruct a measured breathing trial or a full jaw linkage simulation.
+The opercular seal is informed by [Ballintijn's carp valve study](https://pubmed.ncbi.nlm.nih.gov/4001607/),
+which does not supply this animation's timing.
 
 The two narial apertures on each side are cut through the actual head mesh,
 with recessed cups, a raised anterior inlet and a dividing crest. The slightly
@@ -215,6 +229,12 @@ chamber; the ventral seal blends between stationary and moving tissue. Attached
 and dorsal/ventral margins stay flush with the curved head envelope.
 
 The study selector isolates lateral bending, vertical bending and axial twist.
+**Swimming turn** replays the real navigation and propulsion model with a
+resettable random stream and fixed 120 Hz steps. The destination reverses
+after two seconds; Restart swim and Record replay the same course while
+preserving the chosen camera. Cursor attraction and taps are ignored during
+this comparison. It animates no prescribed body poses; fin history is sampled
+at each physics tick so display cadence does not change the replay.
 Paired fin control holds the trunk while exposing cupping and feathered
 recovery under an authored braking load. Head-on study follows the same fish
 from in front; it can be combined with the side and quarter views to judge

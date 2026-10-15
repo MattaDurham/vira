@@ -1,7 +1,8 @@
 import {Vector3} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=72';
-import {waterMax} from './aquarium-space.js?v=72';
-import {spinalField} from './aquarium-motion.js?v=72';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=74';
+import {waterMax} from './aquarium-space.js?v=74';
+import {spinalField} from './aquarium-motion.js?v=74';
+import {createResearchTrace,traceAxes} from './aquarium-research-trace.js?v=74';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -20,8 +21,9 @@ const element=(tag,className,text)=>{
 export function projectResearchPoint(world,camera,width,height){
   const view=world.clone().applyMatrix4(camera.matrixWorldInverse);
   const p=world.clone().project(camera);
-  return {x:(p.x+1)*width/2,y:(1-p.y)*height/2,
-    visible:view.z<-camera.near&&view.z>-camera.far&&Math.abs(p.x)<1&&Math.abs(p.y)<1};
+  const inFront=view.z<-camera.near&&view.z>-camera.far;
+  return {x:(p.x+1)*width/2,y:(1-p.y)*height/2,inFront,
+    visible:inFront&&Math.abs(p.x)<1&&Math.abs(p.y)<1};
 }
 
 export function researchFinAnchor(asset,prefix){
@@ -32,7 +34,7 @@ export function researchFinAnchor(asset,prefix){
 
 export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints,camera,getState,getFish,onAction,onVisibility=()=>{}}){
   const events=new AbortController(),signal=events.signal;
-  let open=false,mode='research',active='head',reference=false,previous=-Infinity;
+  let open=false,mode='research',active='head',reference=false,previous=-Infinity,traceMode;
   const layer=element('section','research-layer');layer.id='research-layer';layer.hidden=true;
   const pectoralAnchor=researchFinAnchor(asset,'Pectoral_membrane'),pelvicAnchor=researchFinAnchor(asset,'Pelvic_membrane');
   layer.setAttribute('aria-label','Aquarium research layer');
@@ -60,16 +62,28 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const notes=element('div','research-notes'),topicTitle=element('h3'),claim=element('p','research-claim');
   const mini=svg('svg',{'class':'research-sequence',viewBox:'0 0 300 83','role':'img','aria-label':'Live steering and activation diagram'});
   const miniPath=svg('path',{'class':'research-sequence-path'});mini.append(miniPath);
-  const miniCaption=element('p','research-diagram-caption','Axial bend / circle size: authored activation');
+  const miniCaption=element('p','research-diagram-caption','Axial pose offsets / authored activation');
   const miniDots=Array.from({length:4},(_,i)=>{
     const circle=svg('circle',{cx:24+i*84,cy:26,r:4,'class':'research-sequence-dot'});
     const text=svg('text',{x:24+i*84,y:65,'text-anchor':'middle'});text.textContent=['Head','Shoulder','Trunk','Tail'][i];mini.append(circle,text);return circle;
   });
   const live=element('div','research-live'),liveTag=element('span','','LIVE MODEL'),liveValue=element('span');live.append(liveTag,liveValue);
+  const trace=createResearchTrace(),traceBox=element('div','research-trace');
+  const traceTitle=element('div','research-trace-title','BEND HISTORY / 4 SECONDS');
+  const tracePlot=svg('svg',{viewBox:'0 0 300 108',role:'img','aria-label':'Authored trunk and tail pose offsets from rest over the last four simulation seconds, in three axes. Each row uses a fixed scale of minus to plus 45 degrees; values outside that range are clipped.'});
+  const tracePaths=traceAxes.map((axis,i)=>{
+    const label=svg('text',{x:0,y:28+i*30});label.textContent=['Sideways','Vertical','Twist'][i];
+    const baseline=svg('path',{d:`M58,${25+i*30}H286`,'class':'research-trace-baseline'});
+    const paths=[0,1].map(station=>svg('path',{'class':`research-trace-path research-trace-${axis}${station?' research-trace-tail':''}`}));
+    tracePlot.append(label,baseline,...paths);return paths;
+  });
+  const traceStart=svg('text',{x:58,y:106}),traceEnd=svg('text',{x:286,y:106,'text-anchor':'end'});
+  traceStart.textContent='−4 s';traceEnd.textContent='Now';tracePlot.append(traceStart,traceEnd);
+  traceBox.append(traceTitle,tracePlot,element('p','research-trace-caption','Trunk solid / tail dotted · ±45° · authored model'));
   const implementationLabel=element('h4','','In this build'),implementation=element('p');
   const limitationLabel=element('h4','','Scope of the evidence'),limitation=element('p','research-caveat');
   const sourceLabel=element('h4','','Sources & footage'),sources=element('ol','research-sources');
-  notes.append(topicTitle,claim,mini,miniCaption,live,implementationLabel,implementation,limitationLabel,limitation,sourceLabel,sources);
+  notes.append(topicTitle,claim,mini,miniCaption,traceBox,live,implementationLabel,implementation,limitationLabel,limitation,sourceLabel,sources);
   const story=element('div','research-story');story.hidden=true;
   buildChapters.forEach((chapter,index)=>{
     const section=element('section','research-chapter'),number=element('span','research-chapter-number',String(index+1).padStart(2,'0'));
@@ -85,7 +99,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const allSources=element('ol','research-sources'),seen=new Set();
   researchTopics.flatMap(topic=>topic.sources).forEach(source=>{
     if(seen.has(source.url))return;seen.add(source.url);allSources.append(sourceItem(source));
-  });bibliography.append(allSources);story.append(bibliography);
+  });summary.textContent=`Complete source index · ${seen.size} references`;bibliography.append(allSources);story.append(bibliography);
   const controls=element('div','research-controls'),pause=element('button','','Pause fish'),bones=element('button','','Show skeleton');
   pause.type=bones.type='button';pause.addEventListener('click',()=>onAction('pause'),{signal});bones.addEventListener('click',()=>onAction('skeleton'),{signal});controls.append(pause,bones);
   const unavailable=element('p','research-unavailable','Open Live aquarium to follow the moving anatomy.');unavailable.hidden=true;
@@ -97,6 +111,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   }
   function select(id){
     const topic=researchTopics.find(item=>item.id===id);if(!topic)return;active=id;
+    card.scrollTop=0;
     topicButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.topic===id)));
     topicTitle.textContent=topic.title;claim.textContent=topic.claim;implementation.textContent=topic.implementation;limitation.textContent=topic.limitation;
     sources.replaceChildren(...topic.sources.map(sourceItem));eyebrow.textContent=`FIELD NOTES / ${String(researchTopics.indexOf(topic)+1).padStart(2,'0')}`;
@@ -104,7 +119,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     layer.dataset.topic=id;
   }
   function setMode(value){
-    mode=value;notes.hidden=topics.hidden=mode!=='research';story.hidden=mode!=='story';
+    mode=value;card.scrollTop=0;notes.hidden=topics.hidden=mode!=='research';story.hidden=mode!=='story';
     eyebrow.textContent=mode==='story'?'BUILD JOURNAL / 04 STEPS':`FIELD NOTES / ${String(researchTopics.findIndex(topic=>topic.id===active)+1).padStart(2,'0')}`;
     notesButton.setAttribute('aria-pressed',String(mode==='research'));buildButton.setAttribute('aria-pressed',String(mode==='story'));
     title.textContent=mode==='story'?'How this was built':'The living mechanics';
@@ -114,7 +129,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   function setOpen(value,view='research'){
     open=value;layer.hidden=!value;root.dataset.research=String(value);toggle.setAttribute('aria-expanded',String(value));toggle.setAttribute('aria-pressed',String(value));
     onVisibility(value);
-    if(value){setMode(view);update(performance.now());}else toggle.focus();
+    if(value){trace.clear();setMode(view);update(performance.now());}else toggle.focus();
   }
   toggle.addEventListener('click',()=>setOpen(!open),{signal});storyButton.addEventListener('click',()=>setOpen(true,'story'),{signal});
   toggle.disabled=storyButton.disabled=false;
@@ -129,6 +144,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     bones.textContent=state.wireframe?'Hide skeleton':'Show skeleton';bones.setAttribute('aria-pressed',String(state.wireframe));
     controls.hidden=reference;unavailable.hidden=!reference;
     mini.style.display=!reference&&['head','muscle','anatomy'].includes(active)?'':'none';miniCaption.hidden=reference||!['head','muscle','anatomy'].includes(active);live.hidden=reference;
+    traceBox.hidden=reference||!['head','muscle','anatomy'].includes(active);
     if(reference||mode==='story')return;
     const width=canvas.clientWidth,height=canvas.clientHeight;
     const steady=fish.poseHistory===false||!Number.isFinite(fish.muscle1);
@@ -153,7 +169,9 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       const center=joints[15].getWorldPosition(vector).clone(),surface=center.clone();surface.y=waterMax[1];
       const a=projectResearchPoint(surface,camera,width,height),b=points[15];
       labels=[[a,'Water interface'],[b,'Vertical depth'],[local(0,0,.12),'View-path attenuation']];
-      ray.setAttribute('d',a.visible&&b.visible?`M${a.x},${a.y}L${b.x},${b.y}`:'');
+      // The surface is often above the frame. Let the SVG clip its true
+      // projected segment instead of removing the depth diagram altogether.
+      ray.setAttribute('d',a.inFront&&b.visible?`M${a.x},${a.y}L${b.x},${b.y}`:'');
     }else labels=[[local(-.53,.015,.09),'Modeled facial tissue'],[points[15],'Overlapping scales'],[projectResearchPoint(pectoralAnchor(),camera,width,height),'Branched fin rays']];
     if(active!=='optics')ray.setAttribute('d','');
     const box=card.getBoundingClientRect(),bounds=root.getBoundingClientRect(),placed=[];
@@ -183,12 +201,16 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     // Read the same axial field that poses the rig, including the finite
     // turning stroke. An orientation-lag estimate alone misses that bend.
     const field=spinalField(fish,joints.map(joint=>joint.userData.axial));
+    const currentTraceMode=state.study?state.studyAxis:'swimming';
+    if(traceMode!==currentTraceMode){trace.clear();traceMode=currentTraceMode;}
+    trace.record(fish.age,field);
+    tracePaths.forEach((paths,axis)=>paths.forEach((path,station)=>path.setAttribute('d',trace.paths(axis,station,fish.age))));
     const ys=[4,14,24,33].map(i=>26+clamp(field[i][vertical?'vertical':'lateral'],-.7,.7)*25);
     miniPath.setAttribute('d',ys.map((y,i)=>`${i?'L':'M'}${24+i*84},${y}`).join(' '));
     miniDots.forEach((dot,i)=>{dot.setAttribute('cy',ys[i]);dot.setAttribute('r',3+activation[i]*5);dot.setAttribute('opacity',.3+.7*activation[i]);});
-    miniCaption.textContent=`${steady?'Authored study':vertical?'Vertical axial bend':'Lateral axial bend'} / circle size: authored activation`;
-    mini.setAttribute('aria-label','Live diagram: the line shows the rendered axial bend relative to the head; circle size shows the authored muscle activation envelope, not measured EMG.');
-    liveValue.textContent=active==='optics'?`${Math.max(0,waterMax[1]-fish.y).toFixed(2)} m below surface`:
+    miniCaption.textContent=`${vertical?'Vertical':'Sideways'} pose offsets / ±40° / dot size: authored activation`;
+    mini.setAttribute('aria-label','Four axial orientation offsets from rest in the animal frame, with a fixed plus or minus 40 degree scale. This is an orientation profile, not a centerline shape. Circle size shows the authored activation envelope, not measured EMG.');
+    liveValue.textContent=active==='optics'?`${Math.max(0,waterMax[1]-joints[15].getWorldPosition(vector).y).toFixed(2)} m below surface`:
       active==='fins'?`${(fish.speed??0).toFixed(2)} m/s / ${fish.brake>.2?'braking':fish.stroke>.2?'propulsive bout':'glide / trim'}`:
       `${(fish.pitch*180/Math.PI).toFixed(1)}° pitch / ${(fish.speed??0).toFixed(2)} m/s`;
     canvas.dataset.researchAnchor=anchor?`${anchor.x.toFixed(1)},${anchor.y.toFixed(1)}`:'';

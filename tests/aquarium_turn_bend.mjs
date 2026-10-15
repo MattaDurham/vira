@@ -10,6 +10,7 @@ import {tankCenterZ} from '../static/aquarium-space.js';
 import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from '../static/aquarium-fins.js';
 
 const bendKeys=['turnBend','turnBend1','turnBend2','turnBend3'];
+const recruitmentKeys=['turnRecruitment','turnRecruitment1','turnRecruitment2','turnRecruitment3'];
 const withoutBend=Object.fromEntries(bendKeys.map(key=>[key,0]));
 const seeded=seed=>()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
 const yaw=quaternion=>{
@@ -41,6 +42,12 @@ async function geometry(){
     }
     return index;
   });
+  const skinXs=Array.from({length:skin.count},(_,i)=>skin.getX(i));
+  const ringIndices=[-.315,0,.2].map(x=>{
+    const nearest=skinXs.reduce((best,value)=>Math.abs(value-x)<Math.abs(best-x)?value:best);
+    return skinXs.map((value,i)=>Math.abs(value-nearest)<1e-6?i:-1).filter(i=>i>=0);
+  });
+  assert.ok(ringIndices.every(indices=>indices.length>100),'the trunk probe averages complete material rings');
   for(const pectoral of [true,false]){
     const family=fins.filter(fin=>fin.paired&&fin.pectoral===pectoral);
     const frames=Object.fromEntries(family.filter(fin=>fin.mesh.name.includes('_membrane'))
@@ -51,14 +58,24 @@ async function geometry(){
     body.skeleton.update();
     return skinIndices.map(index=>asset.worldToLocal(body.getVertexPosition(index,new Vector3()).applyMatrix4(body.matrixWorld)));
   };
-  return {asset,joints,rest,fins,skinPoints};
+  const trunkSag=()=>{
+    body.skeleton.update();
+    const [a,b,c]=ringIndices.map(indices=>{
+      const center=new Vector3();
+      for(const index of indices)center.add(asset.worldToLocal(body.getVertexPosition(index,new Vector3()).applyMatrix4(body.matrixWorld)));
+      return center.divideScalar(indices.length);
+    });
+    const dx=c.x-a.x,dz=c.z-a.z;
+    return (dx*(b.z-a.z)-dz*(b.x-a.x))/Math.hypot(dx,dz);
+  };
+  return {asset,joints,rest,fins,skinPoints,trunkSag};
 }
 
 // These are bounds and temporal relationships for this authored model, not
 // universal biological curvature or reaction-time limits. Read actual bones
 // and skin so a diagnostic field with no geometric effect cannot pass.
 export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
-  const {asset,joints,rest,fins,skinPoints}=await geometry(),report={turns:[],maximumCorrection:0};
+  const {asset,joints,rest,fins,skinPoints,trunkSag}=await geometry(),report={turns:[],maximumCorrection:0};
   const stations=[14,24,32]; // anterior trunk, posterior trunk, peduncle.
   const isolated=fish=>({...fish,drive:0,stroke:0,muscle1:0,muscle2:0,muscle3:0,bank:0});
   for(const sign of [-1,1]){
@@ -68,10 +85,11 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
     const headOrigin=joints[0].getWorldQuaternion(new Quaternion()).invert();
     const lengths=joints.slice(1).map(b=>b.getWorldPosition(new Vector3()).distanceTo(b.parent.getWorldPosition(new Vector3())));
     swimmer.navigate({x:0,y:.8,z:tankCenterZ+sign*.345});
-    const records=[];let headOnset=null,previousSkin,maxSkinStep=0,maxAngle=0;
+    const records=[];let headOnset=null,previousSkin,maxSkinStep=0,maxAngle=0,phaseSample;
     for(let frame=0;frame<420;frame++){
       swimmer.step(1/120);
       const fish=swimmer.fish;
+      if(frame===120)phaseSample={...fish};
       // Finish one actual turning bout, then request a quiet stop before a
       // subsequent bout can hide the first pulse's posterior recovery.
       if(frame===131)swimmer.navigate({...fish});
@@ -89,6 +107,8 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
         assert.ok(angle*sign<=1e-8,'the internal turn bend follows its latched side without copying carrier phase');});
       bendKeys.forEach(key=>assert.ok(Number.isFinite(fish[key])&&Math.abs(fish[key])<=.22+1e-12,
         'the finite turning command and its regional responses respect the authored magnitude bound'));
+      recruitmentKeys.forEach(key=>assert.ok(Number.isFinite(fish[key])&&fish[key]>=0&&fish[key]<=1,
+        'causal regional turn recruitment remains a bounded mode blend'));
       joints.slice(1).forEach((bone,i)=>assert.ok(Math.abs(bone.getWorldPosition(new Vector3())
         .distanceTo(bone.parent.getWorldPosition(new Vector3()))-lengths[i])<1e-6,'bending preserves every actual bone length'));
       // The skull's extra pulse is exactly zero; its normal heading remains
@@ -116,19 +136,76 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
     assert.ok(maxAngle<=.22+1e-8,'the actual added axial rotation respects the command bound');
     assert.ok(maxSkinStep<.008,'the added bend moves actual skin continuously without a regional snap');
     assert.ok(bendKeys.every(key=>Math.abs(swimmer.fish[key])<1e-8),'the finite stroke settles during a quiet glide');
+    assert.ok(recruitmentKeys.every(key=>swimmer.fish[key]<.001),'regional carrier recruitment releases during a quiet glide');
     assert.ok(records.at(-1).angles.every(angle=>Math.abs(angle)<1e-8),'settled regional commands leave the actual body straight');
+
+    // A frozen authored study must not borrow a previous live turn's history.
+    const phasePose=sample=>{
+      pose(asset,joints,rest,{...sample,bank:0,verticalGain:0,twistGain:0});
+      return skinPoints();
+    };
+    const held={...phaseSample,poseHistory:false,stroke:1};
+    const heldA=phasePose({...held,...Object.fromEntries(recruitmentKeys.map(key=>[key,0]))});
+    const heldB=phasePose({...held,...Object.fromEntries(recruitmentKeys.map(key=>[key,1]))});
+    assert.ok(heldA.every((point,i)=>point.distanceTo(heldB[i])<1e-10),
+      'an authored held pose ignores stale live carrier-recruitment history');
     report.turns.push({sign,headOnset,onset,peakTime,returned,peaks,maxSkinStep});
+  }
+
+  // Sample loading, the loaded stroke and recovery on both sides. A nascent
+  // yaw lag is not the finite turn stroke: existing cruise beats may continue
+  // before that region loads, then return as its finite bend relaxes.
+  report.carrierPhase=[];
+  for(const sign of [-1,1]){
+    const swimmer=create(()=>.5);
+    Object.assign(swimmer.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
+    swimmer.navigate({x:.8,y:.8,z:tankCenterZ+sign*.2});
+    const measure=sample=>{
+      pose(asset,joints,rest,{...sample,x:0,y:0,z:0,yaw:0,pitch:0,bank:0,verticalGain:0,twistGain:0});
+      return {sag:trunkSag(),tail:joints[32].getWorldQuaternion(new Quaternion())};
+    };
+    for(let frame=1;frame<=132;frame++){
+      swimmer.step(1/120);
+      if(![60,87,108,132].includes(frame))continue;
+      const fish={...swimmer.fish},intended=measure(isolated(fish));
+      const yawOnly=measure({...isolated(fish),...withoutBend});
+      const neutral=measure({...isolated(fish),...withoutBend,yawLag1:0,yawLag2:0,yawLag3:0});
+      const idealSag=intended.sag-neutral.sag;
+      const finiteSag=intended.sag-yawOnly.sag;
+      const inverse=neutral.tail.invert();
+      const idealTail=yaw(intended.tail.clone().multiply(inverse));
+      const low={sag:Infinity,tail:Infinity},high={sag:-Infinity,tail:-Infinity};
+      for(let phase=0;phase<12;phase++){
+        const actual=measure({...fish,phase:phase*Math.PI/6});
+        const values={sag:Math.sign(idealSag)*(actual.sag-neutral.sag),
+          tail:Math.sign(idealTail)*yaw(actual.tail.multiply(inverse))};
+        for(const key of ['sag','tail']){low[key]=Math.min(low[key],values[key]);high[key]=Math.max(high[key],values[key]);}
+      }
+      // These are authored visibility policies, not measured koi thresholds.
+      // Gate the skin assertion on finite-pulse sag, not total yaw-lag sag.
+      if(Math.abs(finiteSag)>.003)assert.ok(low.sag>Math.abs(idealSag)*.5,
+        'a meaningfully loaded finite turn retains actual trunk curvature across opposing carrier phases');
+      if(Math.abs(fish.turnBend3)>.22*.25)assert.ok(low.tail>Math.abs(idealTail)*.5,
+        'a loaded posterior turn cannot reverse with an independent cruise beat');
+      if(frame===60)assert.ok(high.tail-low.tail>.05,
+        'a nascent posterior turn retains the preceding cruise beat before regional loading');
+      if(frame===132)assert.ok(high.sag-low.sag>.003,
+        'anterior carrier motion resumes as the finite stroke releases');
+      report.carrierPhase.push({sign,age:fish.age,finiteSag,idealSag,idealTail,low,high});
+    }
   }
 
   const tiny=create(()=>.5);
   Object.assign(tiny.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
   tiny.navigate({x:-.9*Math.cos(.2),y:.8,z:tankCenterZ+.9*Math.sin(.2)});
-  let tinyPeak=0;
+  let tinyPeak=0,tinyRecruitment=0;
   for(let frame=0;frame<180;frame++){
     tiny.step(1/120);pose(asset,joints,rest,isolated(tiny.fish));
     bendKeys.forEach(key=>{tinyPeak=Math.max(tinyPeak,Math.abs(tiny.fish[key]));});
+    recruitmentKeys.forEach(key=>{tinyRecruitment=Math.max(tinyRecruitment,tiny.fish[key]);});
   }
   assert.ok(tinyPeak<.001,'a small course correction does not recruit the large-turn C bend');
+  assert.ok(tinyRecruitment<.01,'gentle fin trim does not switch off the cruise wave');
   report.tinyPeak=tinyPeak;
 
   // Flick escape enters its bout through a separate production path. It must
@@ -183,6 +260,22 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
       'the preserved command progresses smoothly to the newly selected turn side');
     report.repeatedFlicks.push({firstSign,relativeSign,commandJump,skinDifference});
   }
+
+  // During recovery and rapid retriggers, the full carrier-to-turn transition
+  // must also remain continuous, rather than only its isolated C-bend channel.
+  const transitions=create(()=>.5);
+  Object.assign(transitions.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
+  let priorFullSkin,maximumFullStep=0;
+  for(let frame=0;frame<480;frame++){
+    if([0,24,48].includes(frame))flickToward(transitions,frame===24?Math.PI/2:-Math.PI/2);
+    if(frame===180)transitions.navigate({...transitions.fish});
+    transitions.step(1/120);pose(asset,joints,rest,transitions.fish);
+    const current=skinPoints();
+    if(priorFullSkin)current.forEach((point,i)=>{maximumFullStep=Math.max(maximumFullStep,point.distanceTo(priorFullSkin[i]));});
+    priorFullSkin=current;
+  }
+  assert.ok(maximumFullStep<.015,'the full skin remains continuous through carrier release and repeated turn recruitment');
+  report.maximumFullTransitionStep=maximumFullStep;
 
   // Complete joint check: actual membranes/rays receive their production
   // deformation before the articulated skin and collision probes are read.
