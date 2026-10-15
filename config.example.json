@@ -155,6 +155,8 @@
   "_mail_archive_max_gb": "0 = no cap. A reached cap is reported in the sweep log and in the status payload, never silently applied.",
   "mail_archive_interval_min": 5,
   "_mail_archive_interval_min": "Each pass takes what arrived since the last one, then walks the history newest first, 200 messages per account at most. The text index and the attachment index read the archive's files for the accounts it covers, so new mail is held, searchable and its attachments indexed within minutes; the history is the CLI backfill's job.",
+  "mail_archive_workers": 4,
+  "_mail_archive_workers": "IMAP connections walking the history at once when the CLI backfill runs; the background sweep uses one. One message per round trip per connection is the rate, so four is about four times faster. Gmail allows 15 per account.",
   "receipts_sweep_days": 7,
   "_receipts_sweep_days": "The receipts pass sweeps mailboxes and indexed attachments for invoice and receipt evidence, flagged merchants first. Dormant until a mail account is configured. On demand per merchant from its card.",
   "mercury_poll_hours": 6,
