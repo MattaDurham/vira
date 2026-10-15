@@ -23,7 +23,7 @@ def build():
     from mathutils import Vector,Quaternion,Matrix
     sys.path.insert(0,str(Path(__file__).resolve().parent))
     from anatomy import author_anatomy,spine_height,vertebral_positions
-    from face import author_face
+    from face import author_face,NARIAL_OPENINGS,opercular_coordinates
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--draft", action="store_true")
@@ -91,7 +91,8 @@ def build():
         return mat
 
     ivory = material("Pearl skin", (0.70, 0.72, 0.65), 0.27)
-    skin_image = bpy.data.images.load(str(root / "static/aquarium/side-projection.png"))
+    # Dermis has no printed eye, naris or gill crease: those are modeled tissue.
+    skin_image = bpy.data.images.load(str(root / "static/aquarium/skin-dermis.png"))
     texture = ivory.node_tree.nodes.new("ShaderNodeTexImage")
     texture.image = skin_image
     skin_node = ivory.node_tree.nodes.get("Principled BSDF")
@@ -212,21 +213,52 @@ def build():
         objects.append(obj)
         return obj
 
-    vertices, faces, mat_indices = [], [], []
-    rings, sides = 240, 144
-    for i in range(rings + 1):
-        x = -0.66 + 1.24*i/rings
-        for j in range(sides):
-            vertices.append(surface(x, math.tau*j/sides))
-    for i in range(rings):
-        x = -0.66 + 1.24*(i+0.5)/rings
-        for j in range(sides):
-            a, b = i*sides+j, i*sides+(j+1)%sides
-            faces.append((a, b, b+sides, a+sides))
-            mat_indices.append(int(pigment(x, math.tau*(j+0.5)/sides)))
+    vertices,faces=[],[]
+    # Millimetre tessellation is local to the small nasal region. The rest of
+    # the fish retains its original density; true apertures need more than the
+    # old 5 mm longitudinal grid to expose the recessed sensory cups.
+    ring_x=sorted(set(round(x,9) for x in
+        [-.66+1.24*i/240 for i in range(241)]+[-.608+.001*i for i in range(41)]))
+    ring_counts=[640 if -.608<=x<=-.568 else 144 for x in ring_x]
+    offsets=[]
+    openings=[]
+    for x,angle,w,h,_ in NARIAL_OPENINGS:
+        for theta in [angle,math.pi-angle]:
+            tangent=surface(x,theta+.0001)-surface(x,theta-.0001)
+            openings.append((x,theta,w,h/(tangent.length/.0002)))
+    def in_aperture(x,theta):
+        # The outer cover overlaps the retained attachment and margins. There
+        # is no second opaque cheek underneath its moving central surface.
+        t,u=opercular_coordinates(x,theta)
+        if .06<t<.94 and .10<u<.96:
+            return True
+        for cx,angle,w,arc in openings:
+            if abs(x-cx)>w:
+                continue
+            da=math.atan2(math.sin(theta-angle),math.cos(theta-angle))
+            if ((x-cx)/w)**2+(da/arc)**2<1:
+                return True
+        return False
+    for x,count in zip(ring_x,ring_counts):
+        offsets.append(len(vertices))
+        vertices.extend(surface(x,math.tau*j/count) for j in range(count))
+    for row in range(len(ring_x)-1):
+        a,b=offsets[row:row+2];na,nb=ring_counts[row:row+2]
+        x=(ring_x[row]+ring_x[row+1])*.5
+        if na==nb:
+            for j in range(na):
+                if not in_aperture(x,math.tau*(j+.5)/na):
+                    faces.append((a+j,a+(j+1)%na,b+(j+1)%nb,b+j))
+        else:
+            # Zip the differently sampled circumferences without a seam.
+            i=j=0
+            while i<na or j<nb:
+                if (i+1)/na<(j+1)/nb:
+                    faces.append((a+i%na,a+(i+1)%na,b+j%nb));i+=1
+                else:
+                    faces.append((a+i%na,b+(j+1)%nb,b+j%nb));j+=1
     # The rostral ring stays open: the modeled lips and buccal cavity occupy it.
-    faces += [tuple(rings*sides+j for j in range(sides))]
-    mat_indices += [0]
+    faces.append(tuple(offsets[-1]+j for j in range(ring_counts[-1])))
     body = mesh("Koi skin", vertices, faces, [ivory])
 
     # RGB in transparent cutout margins is undefined. Opaque 3D tissues
@@ -268,17 +300,11 @@ def build():
                 # A side cutout's leading edge is transparent. The 3D rostral
                 # pole needs dermis from inside its silhouette, not black RGB
                 # from the transparent border of that photograph-like source.
-                px=-.626+(px+.626)*.12
-            if obj.name.startswith(("Koi skin","Orbital dermal")):
-                dx,dz=px+.534,pz-.0035
-                radius=math.hypot(dx,dz)
-                if radius<.037:
-                    # The head projection supplies dermis only. The separate
-                    # modeled eye must not sit above a second printed eye.
-                    a=math.atan2(dz,dx)
-                    px=-.534+.037*math.cos(a);pz=.0035+.037*math.sin(a)
-            u=(30+(px+0.66)*projection_scale)/source_width
-            v=1-(projection_axis-pz*projection_scale)/source_height
+                # The source mouth is also a separate 3D structure. Sample
+                # clean cheek dermis for this pole and the labial attachment.
+                px=-.580+(px+.626)*.04
+            tx=30+(px+.66)*projection_scale;ty=projection_axis-pz*projection_scale
+            u=tx/source_width;v=1-ty/source_height
             uv.data[loop.index].uv=(u,v) if "membrane" in obj.name.lower() else opaque_uv(u,v)
     skin_uv(body)
 
@@ -491,8 +517,10 @@ def build():
             facial=obj.get("facial_joint")
             if facial:
                 weight=1.0
-                if obj.name.startswith(("Opercular", "Branchiostegal")):
-                    weight=max(0,min(1,(x+.505)/.09))*max(0,min(1,(point.z+.18)/.035,(.06-point.z)/.035))
+                if obj.name.startswith("Opercular"):
+                    weight=max(0,min(1,(x+.505)/.012))
+                if obj.get("facial_weights") is not None:
+                    weight=obj["facial_weights"][vertex.index]
                 if obj.name.startswith("Rostral"):
                     u=max(0,min(1,(-x-.660)/.012))
                     anchor=0
@@ -602,8 +630,11 @@ def build():
         obj.data.materials.append(mat)
         return obj
 
-    cube("Substrate", (0, 0.2, -0.025), (4, 1.8, 0.09), floor_mat)
-    cube("Rear glass backing", (0, 1.12, 0.90), (4, 0.02, 1.95), back_mat)
+    # Browser coordinates (x,y,z) map to Blender (x,-z,y). A 2.5 m
+    # front-to-back volume gives this large authored fish room to swim turns.
+    tank_depth,tank_y=2.5,.205
+    cube("Substrate", (0,tank_y,-0.025), (4,tank_depth,0.09), floor_mat)
+    cube("Rear glass backing", (0,tank_y+tank_depth/2+.01,0.90), (4,0.02,1.95), back_mat)
     bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=1)
     prototype = bpy.context.object
     stone_vertices = [v.co.copy() for v in prototype.data.vertices]
@@ -611,7 +642,7 @@ def build():
     bpy.data.objects.remove(prototype, do_unlink=True)
     vertices, faces = [], []
     for i in range(22000):
-        x, y = rng.uniform(-2, 2), rng.uniform(-0.65, 1.02)
+        x, y = rng.uniform(-2,2),rng.uniform(tank_y-tank_depth/2+.06,tank_y+tank_depth/2-.06)
         radius = rng.uniform(0.007, 0.022)
         scale = (radius*rng.uniform(0.8, 1.3), radius*rng.uniform(0.7, 1.2), radius*rng.uniform(0.4, 0.75))
         angle = rng.random()*math.tau
@@ -649,14 +680,14 @@ def build():
     links.new(add.outputs[0], outlet.inputs["Volume"])
     # Keep the participating medium separate from the refractive boundary.
     # Cycles' caustic sampling cannot use a volume as its surface caster.
-    cube("Water volume", (0, 0.205, 0.905), (3.996, 1.786, 1.766), water)
+    cube("Water volume", (0,tank_y,0.905), (3.996,tank_depth-.004,1.766), water)
     boundary_mat=material("Water interface",(1,1,1),0,transmission=1)
     boundary_mat.node_tree.nodes["Principled BSDF"].inputs["IOR"].default_value=1.333
     boundary_mat.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value=0
-    boundary=cube("Water boundary", (0, 0.205, 0.905), (4, 1.79, 1.77), boundary_mat)
+    boundary=cube("Water boundary", (0,tank_y,0.905), (4,tank_depth,1.77), boundary_mat)
     boundary.cycles.is_caustics_caster=True
     # Front glass is a thin solid, rather than a transparency overlay.
-    pane=cube("Front glass", (0, -0.698, 0.9), (4, 0.012, 1.9), glass)
+    pane=cube("Front glass", (0,tank_y-tank_depth/2-.008,0.9), (4,0.012,1.9), glass)
     pane.cycles.is_caustics_caster=True
 
     def area(name, location, target, power, size, color):
@@ -705,6 +736,7 @@ def build():
                     "reference":"https://doi.org/10.26842/binhm.7.2026.19.1.0139",
                     "scope":"Species-informed simplified axial anatomy; not a CT reconstruction"},
         "opaque_uv_repairs":uv_repairs,
+        "water_bounds":{"min":[-2,.02,-tank_y-tank_depth/2],"max":[2,1.79,-tank_y+tank_depth/2]},
         "scale_count": rows*columns, "source": "scripts/aquarium/build.py",
         "license": "Original Vira benchmark asset; repository license applies",
         "geometry_sha256": geometry_hash,

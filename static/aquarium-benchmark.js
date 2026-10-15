@@ -3,11 +3,12 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow,finActuation} from './aquarium-motion.js?v=57';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=57';
-import {waterOptics} from './aquarium-optics.js?v=57';
-import {createContainment} from './aquarium-collision.js?v=57';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=57';
+import {createSwimmer,waterFlow,finActuation} from './aquarium-motion.js?v=63';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=63';
+import {waterOptics} from './aquarium-optics.js?v=63';
+import {createContainment} from './aquarium-collision.js?v=63';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=63';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=63';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const swimmer=createSwimmer(),fish=swimmer.fish,clock=uniform(0);
@@ -19,6 +20,7 @@ let optics;
 let waterInterface;
 let containment,facialRig;
 let recording,recordingStream,recordingTimer,recordingUrl,recordingSurface,recordingContext;
+let recordingExtent=null;
 let studyPhase=0,visualFish=fish,navigationLeg=-1;
 const ownedGeometries=new Set(),ownedMaterials=new Set(),ownedTextures=new Set(),joints=[],rest=[];
 const frameTimes=[];
@@ -61,7 +63,10 @@ function finTexture(){
 function size(){
   const width=canvas.clientWidth,height=canvas.clientHeight;
   // Preserve native 5K while bounding sustained GPU work beyond large desktop displays.
-  const ratio=Math.min(devicePixelRatio,2,Math.sqrt(16777216/(width*height)));
+  const nativeRatio=Math.min(devicePixelRatio,2,Math.sqrt(16777216/(width*height)));
+  // The encoder receives 1080p. Avoid rendering millions of extra pixels only
+  // to discard them during capture; restore native pixels when capture ends.
+  const ratio=recordingExtent?Math.min(nativeRatio,recordingExtent.width/width,recordingExtent.height/height):nativeRatio;
   renderer.setPixelRatio(ratio);renderer.setSize(width,height,false);
   camera.aspect=width/height;
   camera.fov=state.closeup?10:width<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
@@ -139,8 +144,8 @@ function immerse(mat){
   // Front-pane distance is wrong when looking through the surface or side.
   const ray=positionWorld.sub(cameraPosition);
   const safeRay=max(abs(ray),vec3(.000001)).mul(step(vec3(0),ray).mul(2).sub(1));
-  const a=vec3(-2,.02,-1.1).sub(cameraPosition).div(safeRay);
-  const b=vec3(2,1.79,.69).sub(cameraPosition).div(safeRay);
+  const a=vec3(...waterMin).sub(cameraPosition).div(safeRay);
+  const b=vec3(...waterMax).sub(cameraPosition).div(safeRay);
   const entry=min(a,b),exit=max(a,b);
   const near=max(max(entry.x,entry.y),max(entry.z,0));
   const far=min(min(exit.x,exit.y),min(exit.z,1));
@@ -181,10 +186,10 @@ function habitat(stoneMaps){
   rock.colorNode=projected(stoneMaps.color).rgb;
   rock.roughnessNode=arm.g.mul(.55).add(.12);rock.aoNode=arm.r;
   rock.ior=1.12;
-  mesh(new THREE.BoxGeometry(4, .09,1.8),ground,[0,-.025,-.2]).layers.enable(1);
+  mesh(new THREE.BoxGeometry(4,.09,tankDepth),ground,[0,-.025,tankCenterZ]).layers.enable(1);
   const pebbles=new THREE.InstancedMesh(ownGeometry(new THREE.IcosahedronGeometry(1,1)),ground,22000),dummy=new THREE.Object3D();
   for(let i=0;i<22000;i++){
-    const radius=.007+random()*.015;dummy.position.set((random()-.5)*4,.0205+radius*.45,(random()-.5)*1.68-.2);
+    const radius=.007+random()*.015;dummy.position.set((random()-.5)*4,.0205+radius*.45,(random()-.5)*(tankDepth-.12)+tankCenterZ);
     dummy.scale.set(radius*(.8+random()*.5),radius*(.4+random()*.35),radius*(.7+random()*.5));
     dummy.rotation.set(random()*3,random()*3,random()*3);dummy.updateMatrix();pebbles.setMatrixAt(i,dummy.matrix);
     const shade=.30+random()*.45;pebbles.setColorAt(i,new THREE.Color(shade*.84,shade*.94,shade));
@@ -205,22 +210,22 @@ function habitat(stoneMaps){
     geometry.computeVertexNormals();
     const stone=mesh(geometry,rock,[x,r*.4,z]);stone.scale.set(1.2,.73,.8);stone.castShadow=true;stone.layers.enable(1);
   }
-  mesh(new THREE.PlaneGeometry(4,1.95),immerse(new THREE.MeshBasicMaterial({color:0x030f18})),[0,.9,-1.11]).layers.enable(1);
+  mesh(new THREE.PlaneGeometry(4,1.95),immerse(new THREE.MeshBasicMaterial({color:0x030f18})),[0,.9,waterMin[2]-.01]).layers.enable(1);
   waterInterface=createWaterInterface(scene,camera);
   const surface=ownMaterial(waterInterface.material);
-  const water=mesh(new THREE.PlaneGeometry(4,1.78,64,32),surface,[0,1.79,-.2]);water.rotation.x=-Math.PI/2;
+  const water=mesh(new THREE.PlaneGeometry(4,tankDepth,64,48),surface,[0,waterMax[1],tankCenterZ]);water.rotation.x=-Math.PI/2;
   const points=water.geometry.attributes.position,base=Float32Array.from(points.array);deformable.push({points,base,geometry:water.geometry});
   // At this near-normal viewing angle a 12 mm parallel pane displaces the
   // image by millimetres. A faint reflective pane preserves that appearance
   // without a nested transmission pass that omits the translucent fin tissue.
   const glass=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0x101c23,roughness:.035,metalness:0,ior:1.46,transparent:true,opacity:.035,depthWrite:false,clearcoat:0,side:THREE.DoubleSide}));
-  const pane=mesh(new THREE.PlaneGeometry(4,1.9),glass,[0,.9,.69]);pane.receiveShadow=false;
+  const pane=mesh(new THREE.PlaneGeometry(4,1.9),glass,[0,.9,waterMax[2]]);pane.receiveShadow=false;
   const edge=ownMaterial(new THREE.MeshPhysicalNodeMaterial({color:0x446b74,roughness:.18,metalness:.25,transparent:true,opacity:.35}));
-  for(const x of [-1.98,1.98])mesh(new THREE.BoxGeometry(.014,1.86,.025),edge,[x,.92,.68]);
+  for(const x of [-1.98,1.98])mesh(new THREE.BoxGeometry(.014,1.86,.025),edge,[x,.92,waterMax[2]-.01]);
   const particulate=ownMaterial(new THREE.MeshBasicNodeMaterial({color:0x57747d,transparent:true,opacity:.19}));
   particles=new THREE.InstancedMesh(ownGeometry(new THREE.IcosahedronGeometry(.0016,0)),particulate,180);
   for(let i=0;i<180;i++){
-    const point={x:(random()-.5)*3.7,y:.1+random()*1.6,z:(random()-.5)*1.5-.2,scale:.5+random()};particleData.push(point);
+    const point={x:(random()-.5)*3.7,y:.1+random()*1.6,z:(random()-.5)*(tankDepth-.3)+tankCenterZ,scale:.5+random()};particleData.push(point);
     dummy.position.set(point.x,point.y,point.z);dummy.scale.setScalar(point.scale);dummy.updateMatrix();particles.setMatrixAt(i,dummy.matrix);
   }
   scene.add(particles);
@@ -304,7 +309,7 @@ function draw(now){
       const leg=Math.floor(fish.age/12)%2;
       if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
     }
-    swimmer.step(elapsed);studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.05);clock.value=fish.age;pose();}
+    swimmer.step(elapsed);studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.25);clock.value=fish.age;pose();}
   for(const {points,base,paired,pectoral,root:fallbackRoot,sign,geometry,pivots} of fins){
     const left=finActuation(visualFish,-1,pectoral),right=finActuation(visualFish,1,pectoral);
     for(let i=0;i<points.count;i++){
@@ -338,7 +343,7 @@ function draw(now){
     points.needsUpdate=true;geometry?.computeVertexNormals();
   }
   if(!state.paused){
-    const dt=Math.min(elapsed,.05);
+    const dt=Math.min(elapsed,.25);
     particleData.forEach((point,i)=>{
       const flow=waterFlow(point,fish.age);point.x+=flow.x*dt;point.z+=flow.z*dt;point.y-=.00025*dt;
       if(point.y<.04)point.y=1.7;
@@ -357,7 +362,12 @@ function draw(now){
   canvas.dataset.cameraPosition=camera.position.toArray().map(v=>v.toFixed(3)).join(',');
   canvas.dataset.cameraFov=camera.fov.toFixed(1);
   canvas.dataset.renderCalls=String(renderer.info.render.frameCalls);
-  if(recordingContext&&recording?.state==='recording')recordingContext.drawImage(canvas,0,0,recordingSurface.width,recordingSurface.height);
+  if(recordingContext&&recording?.state==='recording'){
+    const scale=Math.min(recordingSurface.width/canvas.width,recordingSurface.height/canvas.height);
+    const width=canvas.width*scale,height=canvas.height*scale;
+    recordingContext.fillStyle='#030b12';recordingContext.fillRect(0,0,recordingSurface.width,recordingSurface.height);
+    recordingContext.drawImage(canvas,(recordingSurface.width-width)/2,(recordingSurface.height-height)/2,width,height);
+  }
   if(elapsed>0&&elapsed<.25){frameTimes.push(elapsed*1000);if(frameTimes.length>180)frameTimes.shift();}
   if(now-metrics>1000&&frameTimes.length>20){
     const average=frameTimes.reduce((a,b)=>a+b,0)/frameTimes.length;
@@ -377,9 +387,16 @@ function setView(reference){
 }
 function cleanup(){
   disposed=true;renderer?.setAnimationLoop(null);window.removeEventListener('resize',size);
-  clearTimeout(recordingTimer);if(recording?.state==='recording')recording.stop();recordingStream?.getTracks().forEach(track=>track.stop());if(recordingUrl)URL.revokeObjectURL(recordingUrl);
+  if(recording?.state==='recording')recording.stop();releaseCapture();if(recordingUrl)URL.revokeObjectURL(recordingUrl);
   canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerCancel);canvas.removeEventListener('pointerleave',pointerLeave);canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('keydown',key);
   optics?.dispose();waterInterface?.dispose();ownedGeometries.forEach(g=>g.dispose());ownedMaterials.forEach(m=>m.dispose());ownedTextures.forEach(t=>t.dispose());environment?.dispose();renderer?.dispose();
+}
+
+function releaseCapture(){
+  clearTimeout(recordingTimer);recordingStream?.getTracks().forEach(track=>track.stop());recordingStream=null;
+  recordingContext=recordingSurface=recordingExtent=null;
+  frameTimes.length=0;
+  if(!disposed)size();
 }
 
 function record(){
@@ -389,21 +406,20 @@ function record(){
     if(!canvas.captureStream||!window.MediaRecorder)throw new Error('Canvas recording unavailable');
     const mimeType=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type));
     if(!mimeType)throw new Error('No supported video codec');
-    // A full-resolution canvas is costly to encode while inspecting motion.
-    // Export the real rendered frames at up to 1080p; live rendering stays native.
+    // Retain a fixed capture extent if the window changes size mid-recording.
     const exportRatio=Math.min(1,1920/canvas.width,1080/canvas.height);
-    if(exportRatio===1)recordingStream=canvas.captureStream(30);
-    else{
-      recordingSurface=document.createElement('canvas');recordingSurface.width=Math.round(canvas.width*exportRatio);
-      recordingSurface.height=Math.round(canvas.height*exportRatio);
-      recordingContext=recordingSurface.getContext('2d',{alpha:false});
-      recordingContext.drawImage(canvas,0,0,recordingSurface.width,recordingSurface.height);
-      recordingStream=recordingSurface.captureStream(30);
-    }
+    recordingSurface=document.createElement('canvas');recordingSurface.width=Math.round(canvas.width*exportRatio);
+    recordingSurface.height=Math.round(canvas.height*exportRatio);
+    recordingContext=recordingSurface.getContext('2d',{alpha:false});
+    recordingContext.drawImage(canvas,0,0,recordingSurface.width,recordingSurface.height);
+    recordingExtent={width:recordingSurface.width,height:recordingSurface.height};size();
+    recordingStream=recordingSurface.captureStream(30);
     recording=new MediaRecorder(recordingStream,{mimeType,videoBitsPerSecond:15000000});
-    const chunks=[];recording.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
+    let captureFailed=false;const chunks=[];
+    recording.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
     recording.onstop=async()=>{
-      recordingStream.getTracks().forEach(track=>track.stop());recordingContext=recordingSurface=null;if(disposed)return;
+      releaseCapture();if(disposed)return;
+      if(captureFailed){button.disabled=state.reference;return;}
       if(recordingUrl)URL.revokeObjectURL(recordingUrl);
       const blob=new Blob(chunks,{type:mimeType});
       recordingUrl=URL.createObjectURL(blob);link.href=recordingUrl;link.hidden=false;
@@ -413,10 +429,10 @@ function record(){
       }catch{/* Ordinary static servers retain the browser-download fallback. */}
       button.disabled=state.reference;button.textContent=`Record ${$('record-length').value} seconds (1080p)`;
     };
-    recording.onerror=event=>{button.textContent=`Recording failed: ${event.error?.message??'encoder error'}`;button.disabled=false;recordingStream.getTracks().forEach(track=>track.stop());};
-    link.hidden=true;button.disabled=true;button.textContent='Recording live frames';recording.start();
+    recording.onerror=event=>{captureFailed=true;releaseCapture();button.textContent=`Recording failed: ${event.error?.message??'encoder error'}`;button.disabled=true;};
+    link.hidden=true;button.disabled=true;button.textContent='Recording live frames';frameTimes.length=0;recording.start();
     recordingTimer=setTimeout(()=>{if(recording.state==='recording')recording.stop();},seconds*1000);
-  }catch(error){button.textContent=error.message;button.disabled=true;}
+  }catch(error){releaseCapture();button.textContent=error.message;button.disabled=true;}
 }
 
 async function start(){
@@ -438,7 +454,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=57');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=63');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -481,12 +497,12 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=57').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=63').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
   $('motion').addEventListener('click',()=>setPause(!state.paused));
-  $('reset').addEventListener('click',()=>{swimmer.reset();state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
+  $('reset').addEventListener('click',()=>{swimmer.reset();state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';$('hint').textContent='Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
   $('wireframe').addEventListener('click',()=>{
     state.wireframe=!state.wireframe;skeleton.visible=state.wireframe;
     [...finSupports,...anatomicalMeshes].forEach(mesh=>{mesh.visible=state.wireframe;});scaleMeshes.forEach(mesh=>{mesh.visible=!state.wireframe;});

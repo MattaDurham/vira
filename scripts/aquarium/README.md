@@ -24,7 +24,7 @@ brew install webp
 From the feature worktree:
 
 ```sh
-blender --background --factory-startup --python scripts/aquarium/build.py -- --samples 64
+blender --background --factory-startup --python-exit-code 1 --python scripts/aquarium/build.py -- --samples 64
 node tests/aquarium_benchmark.mjs
 ```
 
@@ -38,7 +38,11 @@ Blender and cwebp are authoring tools; the Vira server does not require them.
 
 All geometry is authored by this repository's Blender script. The skin source
 `static/aquarium/side-projection.png` was created with the built-in imagegen
-tool and calibrated onto the volumetric body. Fins have separate generated
+tool and calibrated onto the volumetric body. The current `skin-dermis.png`
+removes its printed eye, nostril and gill markings so real facial surfaces do
+not duplicate a photograph or stretch adjacent pigmentation into a radial halo.
+The original is preserved; both edit prompts are in `skin-dermis-prompt.txt`.
+Fins have separate generated
 root-to-tip membrane textures, with translucent tissue and fibres aligned to
 their modeled branched rays; they do not reuse the body photograph. The skin's
 production prompt is preserved in `projection-prompt.txt`. The earlier atlas
@@ -69,6 +73,11 @@ the notochord bridges remain flexible. These are species-informed simplified
 structures, not a complete CT reconstruction. The four anterior Weberian
 segments are held rigid, and the remaining joints follow an arched rest spine. Motion approximates propulsion and resistance rather than solving
 fluid dynamics. Depth moves the fish through the tank; it never changes scale.
+The water volume is 4 m wide, 2.5 m front to back and 1.77 m high. Shared live
+bounds in `aquarium-space.js` keep navigation, collision and optics together;
+the exported reference manifest records the matching authoring bounds.
+The extra turning room permits broad arcs instead of forcing the large fish
+to pivot slowly inside a nearly body-length enclosure.
 WebGPURenderer uses WebGL 2 if WebGPU is unavailable, and reports the backend.
 Append `?renderer=webgl` to force that backend for compatibility testing.
 A startup failure stays visible as a named error.
@@ -90,6 +99,9 @@ function against actual skinned vertices to catch a tail that rolls instead of b
 pitched climbing, pointer curiosity, startle acceleration and five minutes of
 bounded swimming. Three repeatable behavior runs exercise cruising, inspection,
 quiet pauses, heading stability during relaxed glides and pointer habituation.
+Identical elapsed-time runs at 15, 30, 60 and 120 fps check the 120 Hz physics
+substeps. Six seeded runs reject accidental low-speed cruising that lasts six
+seconds; new cruise choices favour travel along the tank's long axis.
 A joined navigation/asset check tests a minute of routine swimming against the
 actual articulated body and fins, catching visible collision corrections at
 the glass. Its unittest wrapper runs in CI without Blender or a GPU.
@@ -124,7 +136,11 @@ interaction; it does not run the paper's Navier-Stokes solver.
 
 The recording control offers 8 or 30 seconds and copies real live frames at up to
 1920 x 1080 into a 30 fps recording canvas, preserving the view's aspect ratio.
-It adds no interpolated frames. With the
+It adds no interpolated frames. During capture the renderer uses the export's
+pixel extent, rather than drawing a native 7M-pixel image only to downsample it.
+Native resolution returns as soon as recording stops or fails. Resizing the
+window during capture letterboxes the real frames into a fixed-size video.
+With the
 engineering preview server, its WebM is saved to
 `.aquarium-build/recordings/latest.webm` and available through Review recording.
 On an ordinary static server it offers a browser download. No microphone,
@@ -147,6 +163,22 @@ jaw, upper jaw, paired opercular and ocular controls move the exported tissue an
 corresponding schematic bones. Respiratory sequencing is an artistic
 approximation informed by [Gidmark et al.'s common-carp XROMM study](https://xromm.org/projects/fish-feeding/),
 not a reconstructed measured trial or a full jaw linkage simulation.
+
+The two narial apertures on each side are cut through the actual head mesh,
+with recessed cups, a raised anterior inlet and a dividing crest. The slightly
+larger, elongated posterior opening follows the adult common-carp description
+in [Pashchenko and Kasumyan (2017)](https://doi.org/10.1134/S0032945217010088).
+The inset iris has its own continuous polar pigment atlas, rather than body
+projection UVs. Its subdued pale reflectance approximates a guanine reflector;
+[Gur et al. (2018)](https://doi.org/10.1002/advs.201800338) measured that mechanism
+in zebrafish, not a carp reconstruction. Real exported-surface ray tests check
+that skin does not fill the narial openings and that eyes sit within six
+millimetres of the surrounding head.
+
+The opercular cover replaces an opening in the actual head skin. Its closed
+thin shell and integrated posterior edge move over a recessed, skull-bound
+chamber; the ventral seal blends between stationary and moving tissue. Attached
+and dorsal/ventral margins stay flush with the curved head envelope.
 
 The study selector isolates lateral bending, vertical bending and axial twist.
 The head stays level in the isolated vertical/twist studies; those two modes

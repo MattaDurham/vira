@@ -2,6 +2,7 @@
 import * as THREE from './vendor/three.webgpu.js';
 import {texture,screenUV,vec2,vec3,vec4,cameraPosition,positionWorld,normalWorld,
   abs,min,max,step,select,exp} from './vendor/three.tsl.js';
+import {waterMin,waterMax} from './aquarium-space.js?v=63';
 
 export const waterAbsorption=Object.freeze([.26,.085,.065]);
 export const waterScattering=Object.freeze([.004,.008,.010]);
@@ -30,7 +31,7 @@ export function fresnelTable(size=1024){
 }
 
 const direction=new THREE.Vector3(),plane=new THREE.Plane(),clip=new THREE.Vector4(),corner=new THREE.Vector4();
-export function updateReflectionCamera(source,mirror,height=1.79){
+export function updateReflectionCamera(source,mirror,height=waterMax[1]){
   source.updateMatrixWorld();source.getWorldDirection(direction);direction.y=-direction.y;
   mirror.position.copy(source.position);mirror.position.y=2*height-source.position.y;
   mirror.up.copy(source.up);mirror.up.y=-mirror.up.y;
@@ -57,7 +58,8 @@ export function createWaterInterface(scene,camera){
   const mirror=camera.clone();mirror.layers.set(1);
   const dimensions=new THREE.Vector2();
   const frustum=new THREE.Frustum(),viewProjection=new THREE.Matrix4();
-  const surfaceBounds=new THREE.Box3(new THREE.Vector3(-2,1.787,-1.1),new THREE.Vector3(2,1.793,.69));
+  const surfaceBounds=new THREE.Box3(new THREE.Vector3(waterMin[0],waterMax[1]-.003,waterMin[2]),
+    new THREE.Vector3(waterMax[0],waterMax[1]+.003,waterMax[2]));
   const previousEye=new THREE.Vector3(),previousProjection=new THREE.Matrix4();
   let refresh=0;
   let shadows;
@@ -66,13 +68,13 @@ export function createWaterInterface(scene,camera){
   const ray=positionWorld.sub(cameraPosition);
   const cosine=abs(normalWorld.dot(ray.normalize()));
   const f=texture(lookup,vec2(cosine,.5));
-  const reflectance=select(cameraPosition.y.lessThan(1.79),f.g,f.r);
+  const reflectance=select(cameraPosition.y.lessThan(waterMax[1]),f.g,f.r);
   const reflected=texture(target.texture,screenUV.flipX().add(normalWorld.xz.mul(.035)));
   // Extinction on the observer-to-interface leg. The mirrored scene's tissue
   // shaders handle its interface-to-fish leg; volume scattering is added later.
   const safeRay=max(abs(ray),vec3(.000001)).mul(step(vec3(0),ray).mul(2).sub(1));
-  const a=vec3(-2,.02,-1.1).sub(cameraPosition).div(safeRay);
-  const b=vec3(2,1.79,.69).sub(cameraPosition).div(safeRay);
+  const a=vec3(...waterMin).sub(cameraPosition).div(safeRay);
+  const b=vec3(...waterMax).sub(cameraPosition).div(safeRay);
   const enter=min(a,b),leave=max(a,b);
   const begin=max(max(enter.x,enter.y),max(enter.z,0));
   const finish=min(min(leave.x,leave.y),min(leave.z,1));

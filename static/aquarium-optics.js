@@ -1,7 +1,8 @@
 /* Single-scattering water, integrated along the actual camera ray to scene
  * depth. The participating medium shares the aquarium's metre coordinates. */
 import {PostProcessing} from './vendor/three.webgpu.js';
-import {waterAbsorption,waterScattering} from './aquarium-water.js?v=57';
+import {waterAbsorption,waterScattering} from './aquarium-water.js?v=63';
+import {waterMin,waterMax} from './aquarium-space.js?v=63';
 import {Fn,Loop,pass,screenUV,uniform,
   getViewPosition,vec3,vec4,float,min,max,exp,pow,select} from './vendor/three.tsl.js';
 
@@ -13,7 +14,7 @@ export function waterOptics(renderer,scene,camera){
   const image=scenePass.getTextureNode('output'),depth=scenePass.getTextureNode('depth');
   const absorption=vec3(...waterAbsorption),scattering=vec3(...waterScattering);
   const extinction=absorption.add(scattering);
-  const boxMin=vec3(-2,.02,-1.1),boxMax=vec3(2,1.79,.69);
+  const boxMin=vec3(...waterMin),boxMax=vec3(...waterMax);
   const lights=[
     {position:vec3(.1,1.70,.4),radiance:vec3(8,7.44,6.56)},
     {position:vec3(1,1.60,-.8),radiance:vec3(2.5,3.6,4.0)},

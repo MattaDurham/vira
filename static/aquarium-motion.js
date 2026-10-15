@@ -1,14 +1,18 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=63';
+
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a));
 export const referencePose=Object.freeze({x:.30,y:.77,z:.14,yaw:-.12,pitch:0,phase:0});
+const rootBounds=[['x','vx',waterMin[0]+.84,waterMax[0]-.84],
+  ['y','vy',waterMin[1]+.45,waterMax[1]-.52],['z','vz',waterMin[2]+.43,waterMax[2]-.38]];
 
 export function waterFlow(point,time){
   // A weak, divergence-free circulation. Its normal velocity is zero at the
   // tank walls; both swimmers and suspended particles share this same water.
-  const kx=Math.PI/4,kz=Math.PI/1.79;
-  const x=kx*(point.x+2),z=kz*(point.z+1.1),strength=.005*(.8+.2*Math.sin(time*.17));
+  const kx=Math.PI/tankWidth,kz=Math.PI/tankDepth;
+  const x=kx*(point.x-waterMin[0]),z=kz*(point.z-waterMin[2]),strength=.005*(.8+.2*Math.sin(time*.17));
   return {x:strength*kz*Math.sin(x)*Math.cos(z),y:0,z:-strength*kx*Math.cos(x)*Math.sin(z)};
 }
 
@@ -24,7 +28,7 @@ export function createSwimmer(random=Math.random){
   const duration=(lo,hi)=>lo+(hi-lo)*random();
   function chooseIntent(next){
     intent=next;intentTime=next==='hover'?duration(2.5,5):next==='inspect'?duration(5,9):duration(7,13);
-    if(next==='cruise')heading=wrap(fish.yaw+duration(-.45,.45));
+    if(next==='cruise')heading=wrap((Math.cos(fish.yaw)>=0?0:Math.PI)+duration(-.35,.35));
     if(next==='inspect')depth=duration(.52,.66);
     decisions++;
   }
@@ -51,7 +55,7 @@ export function createSwimmer(random=Math.random){
       // Choose and hold an escape direction. Do not reverse the turn on the
       // next frame because a cursor happens to cross the fish's centre.
       const length=Math.hypot(dx,dz);
-      heading=length>.06?Math.atan2(dz,-dx):wrap(fish.yaw+(Math.sign(-.205-fish.z)||1)*.8);
+      heading=length>.06?Math.atan2(dz,-dx):wrap(fish.yaw+(Math.sign(tankCenterZ-fish.z)||1)*.8);
       depth=clamp(fish.y+dy*.35,.55,1.16);goal=null;
       intent='escape';intentTime=2.6;escapeTime=.95;gait='stroke';gaitTime=1.1;
       turnTime=.9;turnSign=Math.sign(wrap(heading-fish.yaw))||1;
@@ -77,9 +81,8 @@ export function createSwimmer(random=Math.random){
     wallTime=2;fish.brake=1;
     return true;
   }
-  function step(dt){
-    if(!Number.isFinite(dt)||dt<=0)return;
-    dt=Math.min(dt,.05);fish.age+=dt;intentTime-=dt;depthTime-=dt;cursorAge+=dt;
+  function integrate(dt){
+    fish.age+=dt;intentTime-=dt;depthTime-=dt;cursorAge+=dt;
     escapeTime=Math.max(0,escapeTime-dt);wallTime=Math.max(0,wallTime-dt);
     turnCooldown=Math.max(0,turnCooldown-dt);turnTime=Math.max(0,turnTime-dt);
     if(intentTime<=0){
@@ -125,31 +128,31 @@ export function createSwimmer(random=Math.random){
     // the straight body. Otherwise a safe-looking root still clips a pane.
     const ez=Math.hypot(.81*Math.sin(fish.yaw),.29*Math.cos(fish.yaw))
       +.19*Math.abs(Math.cos(fish.yaw))*clamp(Math.abs(fish.yawRate)/.65,0,1);
-    const dangerX=Math.max(0,Math.abs(px)+ex+.24-2);
-    const dangerZ=Math.max(0,Math.abs(pz+.205-.065*Math.sin(fish.yaw))+ez+.045-.895);
+    const dangerX=Math.max(0,Math.abs(px)+ex+.24-tankWidth/2);
+    const dangerZ=Math.max(0,Math.abs(pz-tankCenterZ-.065*Math.sin(fish.yaw))+ez+.045-tankDepth/2);
     if(dangerX>0&&wallTime===0)wallTime=3.4;
     let avoiding=dangerX>0||dangerZ>0||wallTime>0;
     if(wallTime>0){
-      wantedYaw=fish.x<0?(fish.z>-.205?-Math.PI:Math.PI):0;
+      wantedYaw=fish.x<0?(fish.z>tankCenterZ?-Math.PI:Math.PI):0;
       if(!goal&&intent!=='escape')heading=wantedYaw;
     }
     // The centre of the longer tail half is behind the rig origin. Keeping that
     // occupied centre in the return lane gives both ends room during a turn.
-    const laneZ=-.205+.065*Math.sin(wantedYaw);
+    const laneZ=tankCenterZ+.065*Math.sin(wantedYaw);
     if(!target||avoiding){
       const d=directionOf(wantedYaw,0);
       wantedYaw=Math.atan2(d.z+clamp((laneZ-fish.z)*1.6,-.55,.55),-d.x);
     }
     const desiredEz=Math.hypot(.81*Math.sin(wantedYaw),.29*Math.cos(wantedYaw))
       +.19*Math.abs(Math.cos(wantedYaw))*clamp(Math.abs(wrap(wantedYaw-fish.yaw))/.7,0,1);
-    const turningNearPane=Math.abs(fish.z+.205-.065*Math.sin(wantedYaw))+desiredEz>.845;
+    const turningNearPane=Math.abs(fish.z-tankCenterZ-.065*Math.sin(wantedYaw))+desiredEz>tankDepth/2-.05;
     if(avoiding){
       desiredSpeed=Math.min(desiredSpeed,escapeTime>0?.45:.11);wantedPitch*=.65;
       if(dangerX>.09||dangerZ>.04)desiredSpeed=Math.min(desiredSpeed,.025);
     }
     const verticalExtent=.24+.72*Math.abs(Math.sin(fish.pitch));
-    if(fish.y+verticalExtent+fish.vy*lead>1.71)wantedPitch=Math.min(wantedPitch,-.10);
-    if(fish.y-verticalExtent+fish.vy*lead<.10)wantedPitch=Math.max(wantedPitch,.10);
+    if(fish.y+verticalExtent+fish.vy*lead>waterMax[1]-.08)wantedPitch=Math.min(wantedPitch,-.10);
+    if(fish.y-verticalExtent+fish.vy*lead<waterMin[1]+.08)wantedPitch=Math.max(wantedPitch,.10);
 
     const yawError=wrap(wantedYaw-fish.yaw),pitchError=wantedPitch-fish.pitch;
     if(Math.abs(yawError)>.16&&turnCooldown===0&&turnTime===0&&!arrive){
@@ -169,12 +172,12 @@ export function createSwimmer(random=Math.random){
     let safeRate=turnRate,blocked=false;
     // A short angular forecast lets fins centre the animal before a tail-first
     // collision. It constrains torque, never teleports the animal away.
-    const occupiedDepth=Math.abs(fish.z+.205-.065*Math.sin(fish.yaw))+ez;
+    const occupiedDepth=Math.abs(fish.z-tankCenterZ-.065*Math.sin(fish.yaw))+ez;
     const fits=rate=>{
       const yaw=fish.yaw+rate*.30,extent=Math.hypot(.81*Math.sin(yaw),.29*Math.cos(yaw))
         +.19*Math.abs(Math.cos(yaw))*clamp(Math.max(Math.abs(fish.yawRate),Math.abs(rate))/.65,0,1);
-      const projected=Math.abs(fish.z+fish.vz*.3+.205-.065*Math.sin(yaw))+extent;
-      return projected<.85||projected<occupiedDepth;
+      const projected=Math.abs(fish.z+fish.vz*.3-tankCenterZ-.065*Math.sin(yaw))+extent;
+      return projected<tankDepth/2-.045||projected<occupiedDepth;
     };
     if(!fits(safeRate)){
       safeRate=0;
@@ -188,7 +191,7 @@ export function createSwimmer(random=Math.random){
     fish.brake=approach(fish.brake,braking?1:0,4,dt);
     fish.maneuver=approach(fish.maneuver,turning&&!blocked?turnSign:0,5,dt);
     fish.drive=approach(fish.drive,desiredSpeed,escapeTime?6:2.3,dt);
-    const safeEscape=escapeTime>0&&occupiedDepth<.86&&Math.sin(fish.yaw)*(laneZ-fish.z)>0;
+    const safeEscape=escapeTime>0&&occupiedDepth<tankDepth/2-.035&&Math.sin(fish.yaw)*(laneZ-fish.z)>0;
     const propel=active&&(!blocked||safeEscape);
     // During a coast the tail straightens and stops driving. Heading then holds
     // apart from small fin corrections; the next deliberate stroke turns it.
@@ -215,11 +218,18 @@ export function createSwimmer(random=Math.random){
     }
     // Last-resort root guard; the renderer also checks the actual articulated
     // surface. Navigation is responsible for turning before either is needed.
-    for(const [p,v,lo,hi] of [['x','vx',-1.16,1.16],['y','vy',.47,1.27],['z','vz',-.67,.31]]){
+    for(const [p,v,lo,hi] of rootBounds){
       if(fish[p]<lo||fish[p]>hi){fish[p]=clamp(fish[p],lo,hi);fish[v]=0;wallTime=2;}
     }
     fish.speed=Math.hypot(fish.vx,fish.vy,fish.vz);
     fish.bank=approach(fish.bank,clamp(-fish.yawRate*fish.speed*.36,-.13,.13),3,dt);
+  }
+  function step(elapsed){
+    if(!Number.isFinite(elapsed)||elapsed<=0)return;
+    // Integrate all ordinary elapsed time with stable, short water-force steps.
+    // A quarter-second cap prevents a jump after a suspended tab resumes.
+    const dt=Math.min(elapsed,.25),pieces=Math.max(1,Math.ceil(dt*120-1e-9));
+    for(let i=0;i<pieces;i++)integrate(dt/pieces);
   }
   return {fish,follow,flick,navigate,reset,contain,step,
     get behavior(){return {intent:attention>.12&&intent!=='escape'&&intent!=='navigate'?'curious':intent,
