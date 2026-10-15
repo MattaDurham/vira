@@ -12,6 +12,34 @@ from pathlib import Path
 
 
 class AquariumBenchmarkTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin detail harness")
+    def test_subpixel_fin_detail_follows_the_render_projection(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fin_detail.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin history harness")
+    def test_fin_response_follows_observed_commands(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fin_history.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin normal harness")
+    def test_fin_rays_retain_smooth_authored_seams(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fin_normals.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin geometry harness")
+    def test_fin_tissue_and_rays_deform_together(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fins.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the research overlay harness")
     def test_research_tracks_the_rendered_rig(self):
         root = Path(__file__).resolve().parents[1]

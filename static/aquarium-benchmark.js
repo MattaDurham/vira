@@ -3,16 +3,21 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow,finActuation} from './aquarium-motion.js?v=64';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=64';
-import {waterOptics} from './aquarium-optics.js?v=64';
-import {createContainment} from './aquarium-collision.js?v=64';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=64';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=64';
-import {createResearchLayer} from './aquarium-research.js?v=64';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=68';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=68';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=68';
+import {finRayContrast} from './aquarium-fin-detail.js?v=68';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=68';
+import {waterOptics} from './aquarium-optics.js?v=68';
+import {createContainment} from './aquarium-collision.js?v=68';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=68';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=68';
+import {createResearchLayer} from './aquarium-research.js?v=68';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const swimmer=createSwimmer(),fish=swimmer.fish,clock=uniform(0);
+const rayDetail=uniform(1),rayDetailPosition=new THREE.Vector3();
+const fullRayDetail=new URLSearchParams(location.search).get('ray-detail')==='full';
 const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front',research:false};
 let renderer,scene,camera,asset,environment,disposed=false,previous=0,metrics=0;
 let liveEngine='Starting renderer',referenceMetadata=null;
@@ -35,6 +40,10 @@ const target=new THREE.Vector3(0,.86,-.2);
 const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2(),interactionPlane=new THREE.Plane(new THREE.Vector3(0,0,1),-.14),hit=new THREE.Vector3();
 const deformable=[];
 const fins=[];
+const pairedFinControllers={
+  pectoral:{'-1':createFinController(-1,true),'1':createFinController(1,true)},
+  pelvic:{'-1':createFinController(-1,false),'1':createFinController(1,false)},
+};
 const barbels=[];
 const finSupports=[];
 const anatomicalMeshes=[];
@@ -93,6 +102,12 @@ function setCamera(){
   }
   camera.fov=canvas.clientWidth<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
   camera.updateProjectionMatrix();
+  if(state.cameraAngle==='fish'&&asset){
+    const focus=asset.localToWorld(new THREE.Vector3(-.15,.02,0));
+    const orientation=asset.getWorldQuaternion(new THREE.Quaternion());
+    camera.position.copy(focus).add(new THREE.Vector3(-distance*.7,.10+elevation,orbit*distance).applyQuaternion(orientation));
+    camera.lookAt(focus);camera.updateMatrixWorld();return;
+  }
   const bearing=orbit+(state.cameraAngle==='quarter'?-.55:0);
   if(state.cameraAngle==='top')camera.position.set(Math.sin(orbit)*distance*.55,3.35+elevation,1.75);
   else camera.position.set(Math.sin(bearing)*distance,1.02+elevation,Math.cos(bearing)*distance);
@@ -129,9 +144,10 @@ function immerse(mat){
     material.castShadowNode=vec4(.50,.56,.42,texture(material.map).a.mul(.18));
   }
   if(mat.name==='Fin rays'){
-    material.transmission=0;material.transparent=true;material.opacity=.32;material.depthWrite=false;
+    material.transmission=0;material.transparent=true;material.opacity=1;material.depthWrite=false;
+    material.opacityNode=rayDetail.mul(.32);
     material.ior=1.04;material.clearcoat=.02;material.roughness=.42;
-    material.castShadowNode=vec4(.7,.72,.58,.04);
+    material.castShadowNode=vec4(.7,.72,.58,rayDetail.mul(.04));
   }
   if(mat.name==='Pearl skin'){
     material.normalNode=bumpMap(mx_noise_float(positionGeometry.mul(900)).mul(.00009),.65);
@@ -294,6 +310,8 @@ function pose(){
     held.twistGain=axis==='lateral'||axis==='vertical'?0:1;
     if(axis==='vertical'||axis==='combined')held.pitchRate=.38*Math.sin(studyPhase*.32);
     if(axis==='twist'||axis==='combined')held.torsionDrive=.28*Math.sin(studyPhase*.27);
+    if(axis==='fins')Object.assign(held,{lateralGain:0,verticalGain:0,twistGain:0,stroke:0,
+      speed:.10,forwardSpeed:.10,brake:.75,finPhase:fish.age*Math.PI*2*(.55+.35*.75),muscle1:0,muscle2:0,muscle3:0});
   }
   const sample=state.study?held:fish;
   visualFish=sample;
@@ -321,24 +339,27 @@ function draw(now){
       if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
     }
     swimmer.step(elapsed);studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.25);clock.value=fish.age;pose();}
-  for(const {points,base,paired,pectoral,root:fallbackRoot,sign,geometry,pivots} of fins){
-    const left=finActuation(visualFish,-1,pectoral),right=finActuation(visualFish,1,pectoral);
-    for(let i=0;i<points.count;i++){
+  const finPoseKey=state.study?state.studyAxis:'live';
+  const pairedMotion={
+    pectoral:{'-1':pairedFinControllers.pectoral[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pectoral[1].sample(visualFish,finPoseKey)},
+    pelvic:{'-1':pairedFinControllers.pelvic[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pelvic[1].sample(visualFish,finPoseKey)},
+  };
+  for(const fin of fins){
+    const {points,base,paired,pectoral,geometry,pivots}=fin;
+    if(paired){
+      // Tissue and the combined bilateral ray mesh use the same membrane
+      // frames and Cartesian field, including distal cup and feathering lag.
+      pivots.frames??=Object.fromEntries(fins.filter(item=>item.paired&&item.pectoral===pectoral&&item.name.includes('_membrane'))
+        .map(item=>[item.sign,createFinFrame(item.base,item.geometry.attributes.uv.array)]));
+      fin.binding??=bindFinGeometry(base,pivots.frames);
+      deformFinGeometry(fin.binding,pairedMotion[pectoral?'pectoral':'pelvic'],points.array);
+    }else for(let i=0;i<points.count;i++){
       const x=base[i*3],y=base[i*3+1],z=base[i*3+2];
-      if(paired){
-        const side=Math.sign(z)||sign,root=pivots[side]??fallbackRoot,rz=root.z;
-        const actuation=side<0?left:right;
-        const a=-(actuation.spread+actuation.paddle)*side,dy=y-root.y,dz=z-rz;
-        const flex=Math.min(1,Math.hypot(dy,dz)/.15);
-        const bend=a*Math.pow(flex,.8);
-        const trail=side*THREE.MathUtils.clamp(visualFish.speed*.95,0,.32)*flex;
-        const stretchedZ=dy*Math.sin(bend)+dz*Math.cos(bend);
-        points.setXYZ(i,root.x+(x-root.x)*Math.cos(trail)+stretchedZ*Math.sin(trail)+actuation.sweep*flex,
-          root.y+dy*Math.cos(bend)-dz*Math.sin(bend),rz+stretchedZ*Math.cos(trail)-(x-root.x)*Math.sin(trail));
-      }else points.setXYZ(i,x,y,z+.035*(visualFish.stroke??1)*Math.sin(x*12-visualFish.phase-1.1)*Math.max(0,x-.48));
+      points.setXYZ(i,x,y,z+.035*(visualFish.stroke??1)*Math.sin(x*12-visualFish.phase-1.1)*Math.max(0,x-.48));
     }
     points.needsUpdate=true;
     geometry.computeVertexNormals();
+    fin.reconcileNormals?.();
   }
   for(const {points,base} of barbels){
     const rootX=base[0],extent=Math.max(.001,Math.abs(base[(points.count-16)*3]-rootX));
@@ -365,7 +386,12 @@ function draw(now){
   if(!state.study)for(let i=0;i<3;i++){
     if(!swimmer.contain(containment.correction()))break;pose();
   }
-  if(state.closeup)setCamera();
+  if(state.closeup||state.cameraAngle==='fish')setCamera();
+  // The combined ray sets include 0.26 mm branches. Hand their contrast to
+  // the filtered membrane map when unresolved; retain topology and full
+  // inspection materials. This is authored detail LOD, not exact coverage AA.
+  const cameraDepth=-asset.getWorldPosition(rayDetailPosition).applyMatrix4(camera.matrixWorldInverse).z;
+  rayDetail.value=fullRayDetail?1:finRayContrast({renderHeight:canvas.height,projectionScaleY:camera.projectionMatrix.elements[5],cameraDepth});
   const renderStarted=performance.now();
   waterInterface.update(renderer);optics.render();
   research?.update(now);
@@ -468,7 +494,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=64');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=68');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -486,6 +512,7 @@ async function start(){
         let z=0;for(let i=0;i<points.count;i++)z+=points.getZ(i);
         const sign=Math.sign(z)||1;
         fins.push({name:object.name,points,base,paired,pectoral:object.name.startsWith('Pectoral'),sign,geometry:object.geometry,
+          reconcileNormals:object.name.includes('branched_rays')?createFinNormalSmoother(object.geometry):null,
           root:{x:points.getX(0),y:points.getY(0),z:points.getZ(0)}});
       }
       if(object.name.includes('sensory_barbel')){const points=object.geometry.attributes.position;barbels.push({points,base:Float32Array.from(points.array)});}
@@ -511,7 +538,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=64').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=68').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
@@ -540,7 +567,7 @@ async function start(){
   $('study-axis').addEventListener('change',()=>{
     state.studyAxis=$('study-axis').value;state.study=state.studyAxis!=='swim';
     if(!state.study){swimmer.reset();Object.assign(fish,{x:.65,y:.58,z:.12,yaw:0});navigationLeg=-1;}
-    $('hint').textContent=state.study?'Held orientation: vertical flexion and twist are amplified for inspection. Change camera angle to inspect in 3D.':'Ascent and descent come from nose-up and nose-down propulsion through the water.';
+    $('hint').textContent=state.studyAxis==='fins'?'Held fin-control study: inspect cupping, feathered recovery and independent sides. Timing is authored for inspection.':state.study?'Held orientation: vertical flexion and twist are amplified for inspection. Change camera angle to inspect in 3D.':'Ascent and descent come from nose-up and nose-down propulsion through the water.';
     $('study').setAttribute('aria-pressed',String(state.study));pose();setPause(false);
   });
   $('camera-angle').addEventListener('change',()=>{state.cameraAngle=$('camera-angle').value;state.closeup=false;$('closeup').setAttribute('aria-pressed','false');setCamera();});

@@ -1,6 +1,6 @@
 import {Vector3} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=64';
-import {waterMax} from './aquarium-space.js?v=64';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=68';
+import {waterMax} from './aquarium-space.js?v=68';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));

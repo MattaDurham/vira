@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=64';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=68';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -176,7 +176,11 @@ export function createSwimmer(random=Math.random){
     const turning=turnTime>0&&Math.sign(yawError)===turnSign;
     const finAuthority=intent==='hover'||arrive?.18:.10;
     const rateLimit=intent==='escape'?1.65:avoiding?.95:.76;
-    const turnRate=turning?clamp(yawError*2.0,-rateLimit,rateLimit):clamp(yawError*.55,-finAuthority,finAuthority);
+    const finRate=clamp(yawError*.55,-finAuthority,finAuthority);
+    // Turning effort builds and releases with the same activation envelope
+    // that bends the body. Low-authority fin trim can lead that loaded stroke.
+    const turnEffort=clamp(fish.maneuver*Math.sign(yawError),0,1);
+    const turnRate=finRate+turnEffort*(clamp(yawError*2.0,-rateLimit,rateLimit)-finRate);
     let safeRate=turnRate,blocked=false;
     // A short angular forecast lets fins centre the animal before a tail-first
     // collision. It constrains torque, never teleports the animal away.

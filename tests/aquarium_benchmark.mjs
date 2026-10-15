@@ -363,13 +363,43 @@ joints.forEach((bone,i)=>assert.ok(bone.getWorldQuaternion(new Quaternion()).ang
 const afterWrapTail=body.getVertexPosition(peduncle,new Vector3()).applyMatrix4(body.matrixWorld);
 assert.ok(beforeWrapTail.distanceTo(afterWrapTail)<.005,'heading wrap cannot throw the skinned tail through the water');
 
+function assertTurnTorqueEnvelope(create){
+  // Compare each gesture with its own peak acceleration, not a biological
+  // jerk limit. Both broad turns and smaller course changes must load and
+  // release gradually instead of switching full torque at a timer boundary.
+  for(const target of [{x:0,y:.8,z:.24},{x:0,y:.8,z:-.55},{x:-.65,y:.8,z:.2},{x:-.85,y:.8,z:-.5}]){
+    const swimmer=create(()=>.5);
+    Object.assign(swimmer.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});swimmer.navigate(target);
+    let previousRate=0,previousAcceleration=0,previousActivation=0,initial=null,peak=0,releaseJump=null;
+    for(let frame=0;frame<240;frame++){
+      swimmer.step(1/120);
+      const fish=swimmer.fish,acceleration=(fish.yawRate-previousRate)*120,activation=Math.abs(fish.maneuver);
+      if(initial===null&&activation>.001)initial=Math.abs(acceleration);
+      if(releaseJump===null&&previousActivation>.5&&activation<previousActivation){
+        releaseJump=Math.abs(acceleration-previousAcceleration);
+      }
+      if(initial!==null&&releaseJump===null)peak=Math.max(peak,Math.abs(acceleration));
+      previousRate=fish.yawRate;previousAcceleration=acceleration;previousActivation=activation;
+    }
+    assert.ok(initial!==null&&releaseJump!==null&&peak>.1,'the probe includes an actual loaded turn and its release');
+    assert.ok(initial<peak/3,'turn acceleration builds with activation instead of beginning at full stroke torque');
+    assert.ok(releaseJump<peak/3,'releasing a turn changes acceleration gradually instead of stepping to the trim rate');
+  }
+}
+assertTurnTorqueEnvelope(createSwimmer);
+
 const ascent=createSwimmer(()=>.5);
 Object.assign(ascent.fish,{x:.65,y:.58,z:.12,yaw:0});ascent.navigate({x:-.85,y:1.17,z:-.1});
-for(let i=0;i<720;i++)ascent.step(1/60);
+const assertPitchedSwimmingClear=()=>{
+  applySwimPose(asset,joints,rest,ascent.fish);
+  const c=containment.correction();
+  assert.ok(Math.hypot(c.x,c.y,c.z)<.001,'the actual fish clears the tank while climbing, turning and descending');
+};
+for(let i=0;i<720;i++){ascent.step(1/60);if(i%12===0)assertPitchedSwimmingClear();}
 const elevated=ascent.fish.y;
 assert.ok(elevated>.85,'the depth study swims upward through actual forward propulsion');
 ascent.navigate({x:.85,y:.50,z:-.1});
-for(let i=0;i<1200;i++)ascent.step(1/60);
+for(let i=0;i<1200;i++){ascent.step(1/60);if(i%12===0)assertPitchedSwimmingClear();}
 assert.ok(ascent.fish.y<elevated-.15,'the same animal swims back down after turning');
 
 const idle=createSwimmer(()=>.5),curious=createSwimmer(()=>.5),startled=createSwimmer(()=>.5);

@@ -1,5 +1,5 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {spinalField} from './aquarium-motion.js?v=64';
+import {spinalField} from './aquarium-motion.js?v=68';
 
 const up=new Vector3(0,1,0),side=new Vector3(0,0,1),axis=new Vector3(1,0,0);
 const turn=new Quaternion(),bend=new Quaternion(),twist=new Quaternion(),center=new Vector3();

@@ -76,7 +76,7 @@ Three.js and its loader utilities are vendored with provenance in
 | Motion | Frozen reference pose | 34 axial and 6 facial controls, lateral/vertical curvature and axial torsion, a travelling trunk wave, burst-and-coast propulsion, flexing paired fins and articulated respiratory jaw/gill motion |
 | Water | Separate closed dielectric boundary and absorption/scattering volume, with path-traced refraction | Beer-Lambert extinction and camera-ray single scattering, with a moving planar reflection, exact dielectric Fresnel lookup and underwater total internal reflection |
 | Glass | Solid thin pane, path-traced refraction | Thin reflective pane approximation at near-normal incidence |
-| Fins | Separate translucent membrane maps and branched ray geometry | Same membrane UVs and rays, alpha-blended tissue and approximate subsurface backlighting |
+| Fins | Separate translucent membrane maps; fine ray tubes omitted from the still | Same membrane UVs plus visible ray tubes, alpha-blended tissue and approximate subsurface backlighting |
 | Resolution | 4K still, sample count recorded in manifest | Native pixels up to 16,777,216 total pixels and device ratio 2 |
 | Timing | Offline render | Rolling browser frame cadence; milliseconds are frame intervals, not GPU timestamps |
 
@@ -122,6 +122,12 @@ travelling drive envelope allows the tail to settle during a coast. Paired-fin
 checks cover quiet gliding, sparse hover bouts, braking, turn/depth corrections
 and separate pelvic timing. These tests reject regression variants; their
 passing does not establish measured biological timing.
+Turning torque builds and releases with the manoeuvre envelope, rather than
+switching between a full turn and fin trim at each bout boundary. Gesture
+regressions reject abrupt onset and release during broad and small turns.
+`tests/aquarium_fins.mjs` checks the actual paired membranes and ray geometry
+through a shared field: fixed attachments, close ray-to-tissue alignment,
+continuous phases, local volume preservation and unfolded surface triangles.
 A joined navigation/asset check tests a minute of routine swimming against the
 actual articulated body and fins, catching visible collision corrections at
 the glass. Its unittest wrapper runs in CI without Blender or a GPU.
@@ -201,6 +207,10 @@ chamber; the ventral seal blends between stationary and moving tissue. Attached
 and dorsal/ventral margins stay flush with the curved head envelope.
 
 The study selector isolates lateral bending, vertical bending and axial twist.
+Paired fin control holds the trunk while exposing cupping and feathered
+recovery under an authored braking load. Head-on study follows the same fish
+from in front; it can be combined with the side and quarter views to judge
+surface shape rather than just a side silhouette.
 The head stays level in the isolated vertical/twist studies; those two modes
 amplify the deformation for inspection. Normal swimming uses modest vertical
 compliance and bank-related trunk torsion, keeping carp propulsion primarily
@@ -245,6 +255,33 @@ small experimental specimen or derived by solving its fluid equations.
 Paired fins paddle independently at low speed, open for braking and trail during
 a propulsive burst. Their phase is independent of the tail; merged ray geometry
 uses each membrane's basal pivot and the corresponding side's paddle phase.
+A shared bind-space field curves each membrane and its embedded rays together.
+Loaded surfaces cup, the distal sheet feathers through recovery, and span and
+ray position introduce a short compliance delay. Static glides acquire no
+extra decorative oscillation. Four bounded controllers retain actual observed
+paddle commands for the delayed response; a new control demand is not copied
+into an invented earlier carrier phase. Pauses preserve the response, and a
+reset discards future command history. Frozen fixtures retain an explicitly
+stateless authored-cycle function. Smooth ray normals are reconciled only across
+the original smooth UV seams after deformation; intentional creases, skin
+influences and topology stay separate. These bounded deformations approximate the modes
+described in [Wang et al.'s koi study](https://doi.org/10.1016/S1672-6529(13)60217-6)
+and [active ray-curvature mechanics](https://doi.org/10.1098/rsif.2006.0181);
+they do not solve the two sliding ray halves or recover measured tissue forces.
+Comparisons include the Lauder Laboratory's original
+[front-view bluegill footage](https://www.youtube.com/watch?v=36Of7uj9naA),
+whose labriform swimming differs from carp, and
+[trout fin-control experiments](https://doi.org/10.1242/jeb.246275), which
+distinguish actively held braking surfaces from passive motion in a wake.
+The live renderer also hands unresolved ray-tube contrast to the filtered fin
+map. A conservative whole-set fade uses the 0.26 mm branch diameter, actual
+drawing-buffer height, camera projection and fish-root camera depth, fading
+between 0.5 and 1.5 pixels. These thresholds are authored contrast LOD, not
+exact pixel coverage or a tissue measurement. Geometry remains intact, and
+skeleton inspection replaces the faded material. The reflection shares the
+main camera's detail level. `?ray-detail=full` retains full ray contrast for
+visual comparison. [Sampling theory](https://pbr-book.org/4ed/Sampling_and_Reconstruction/Sampling_Theory)
+explains the aliasing problem; it does not prescribe these thresholds.
 A body-envelope
 forecast reserves room for tail sweep and constrains turning torque before a
 pane is reached. Small paired-fin forces can centre the fish or briefly scull
