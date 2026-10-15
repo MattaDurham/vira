@@ -587,6 +587,10 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                 st["done"].discard(top)
                 st["low"] = top[0]
 
+    def ending():
+        with lock:
+            return st["stop"] is not None or st["full"]
+
     def run():
         con = _db()
         if con is None:
@@ -594,9 +598,7 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                 st["stop"] = st["stop"] or OSError(f"archive root unreachable: {root()}")
             return
         store = _Store(con)
-        fails = 0
-        reconnects = 0
-        imap = None
+        state = {"fails": 0, "reconnects": 0, "imap": None}
 
         def connect():
             c = imaplib.IMAP4_SSL(host, timeout=60)
@@ -604,87 +606,118 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
             c.select(f'"{box}"', readonly=True)
             return c
 
-        def fetch(c, uid):
-            typ, md = c.uid("fetch", str(uid), "(BODY.PEEK[])")
+        def fetch(uid):
+            typ, md = state["imap"].uid("fetch", str(uid), "(BODY.PEEK[])")
             raw = (md[0][1] if typ == "OK" and md and
                    isinstance(md[0], tuple) else None)
-            if raw is not None:
-                got = store.put(account=addr, raw=raw,
-                                fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
-                with lock:
-                    st["n"] += got
+            # seen first, so the message and its mark land in put's one
+            # commit: two commits per message were two fsyncs for each of
+            # eight walkers.
             store.mark_seen(addr, validity, uid)
-            store.commit()
+            if raw is None:
+                store.commit()
+                return
+            got = store.put(account=addr, raw=raw,
+                            fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
+            with lock:
+                st["n"] += got
 
+        def search(lo, hi):
+            typ, data = state["imap"].uid("search", None, "UID", f"{lo}:{hi}")
+            if typ == "OK" and data and data[0]:
+                return sorted((int(u) for u in data[0].split()
+                               if lo <= int(u) <= hi), reverse=True)
+            return []
+
+        def reconnect(where):
+            """Four stalls in a row are the connection, not the mail: Gmail
+            stalls one a few times a day. Replace it, within the budget;
+            past it the walker ends, its span incomplete and holding the
+            mark. Returns False when the budget is spent."""
+            if state["reconnects"] >= WORKER_RECONNECTS:
+                log(f"  imap {addr}: walker ended after repeated failures at "
+                    f"{where} and {state['reconnects']} reconnects")
+                return False
+            state["reconnects"] += 1
+            log(f"  imap {addr}: connection stalled at {where}; reconnecting "
+                f"({state['reconnects']} of {WORKER_RECONNECTS})")
+            try:
+                state["imap"].logout()
+            except Exception:  # noqa: BLE001
+                pass
+            state["imap"] = connect()
+            state["fails"] = 0
+            return True
+
+        why = "no spans left"
         try:
-            imap = connect()
+            state["imap"] = connect()
             while True:
+                if ending():
+                    why = "the pass is ending"
+                    return
                 span = take()
                 if span is None:
                     return
                 lo, hi = span
-                typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
-                uids = []
-                if typ == "OK" and data and data[0]:
-                    uids = sorted((int(u) for u in data[0].split()
-                                   if lo <= int(u) <= hi), reverse=True)
+                try:
+                    uids = search(lo, hi)
+                except Exception as e:  # noqa: BLE001 - a stalled SEARCH is
+                    if not reconnect(f"uid {lo}:{hi}"):   # the connection too
+                        why = f"repeated failures ({e})"
+                        return
+                    uids = search(lo, hi)
+                abandoned = False
                 for uid in uids:
+                    if ending():
+                        abandoned = True
+                        break
                     if store.seen(addr, validity, uid):
                         continue
                     try:
-                        fetch(imap, uid)
-                        fails = 0
+                        fetch(uid)
+                        state["fails"] = 0
                         continue
                     except (ArchiveFull, sqlite3.OperationalError):
                         raise
                     except Exception as e:  # noqa: BLE001
-                        fails += 1
-                        if fails <= MAX_CONSECUTIVE_FAILURES:
+                        state["fails"] += 1
+                        if state["fails"] <= MAX_CONSECUTIVE_FAILURES:
                             # A lone failure: recorded for the next sweep,
                             # and the walk steps past it.
                             store.failed(addr, uid, e)
                             store.commit()
                             log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
                             continue
-                    # Four in a row is the connection, not the mail: Gmail
-                    # stalls a connection a few times a day. Replace it and
-                    # try this uid once more; a walker that stopped here
-                    # left the pass one connection poorer each time
-                    # (2026-10-15). Only past the budget does it end, its
-                    # span incomplete and holding the mark.
-                    if reconnects >= WORKER_RECONNECTS:
-                        log(f"  imap {addr}: a connection ended after repeated "
-                            f"failures at uid {uid} and {reconnects} reconnects")
+                    if not reconnect(f"uid {uid}"):
+                        why = "repeated failures"
                         return
-                    reconnects += 1
-                    log(f"  imap {addr}: connection stalled at uid {uid}; "
-                        f"reconnecting ({reconnects} of {WORKER_RECONNECTS})")
                     try:
-                        imap.logout()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    imap = connect()
-                    fails = 0
-                    try:
-                        fetch(imap, uid)
+                        fetch(uid)
                     except (ArchiveFull, sqlite3.OperationalError):
                         raise
                     except Exception as e:  # noqa: BLE001 - poison after all
                         store.failed(addr, uid, e)
                         store.commit()
                         log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                if abandoned:
+                    why = "the pass is ending; span abandoned"
+                    return
                 set_state(con, f"low:{addr}", finish(lo, hi))
                 con.commit()
         except ArchiveFull as e:
+            why = "the cap"
             with lock:
                 st["full"] = str(e)
         except Exception as e:  # noqa: BLE001 - a busy index, or a connection
-            with lock:                          # that cannot even log in
+            why = f"{type(e).__name__}: {e}"        # that cannot even log in
+            with lock:
                 st["stop"] = st["stop"] or e
         finally:
-            if imap is not None:
+            log(f"  imap {addr}: walker done: {why}")
+            if state["imap"] is not None:
                 try:
-                    imap.logout()
+                    state["imap"].logout()
                 except Exception:  # noqa: BLE001 - best-effort close
                     pass
             con.close()
