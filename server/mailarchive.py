@@ -67,6 +67,7 @@ GRAPH_PAGE = 50
 SWEEP_LIMIT = 200            # messages per account per background tick;
                              # the backlog is the CLI's job
 MAX_CONSECUTIVE_FAILURES = 3
+WORKER_RECONNECTS = 5        # stalled connections a history walker replaces per pass
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
@@ -594,68 +595,98 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
             return
         store = _Store(con)
         fails = 0
+        reconnects = 0
+        imap = None
+
+        def connect():
+            c = imaplib.IMAP4_SSL(host, timeout=60)
+            c.login(addr, pw)
+            c.select(f'"{box}"', readonly=True)
+            return c
+
+        def fetch(c, uid):
+            typ, md = c.uid("fetch", str(uid), "(BODY.PEEK[])")
+            raw = (md[0][1] if typ == "OK" and md and
+                   isinstance(md[0], tuple) else None)
+            if raw is not None:
+                got = store.put(account=addr, raw=raw,
+                                fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
+                with lock:
+                    st["n"] += got
+            store.mark_seen(addr, validity, uid)
+            store.commit()
+
         try:
-            imap = imaplib.IMAP4_SSL(host, timeout=60)
-            try:
-                imap.login(addr, pw)
-                imap.select(f'"{box}"', readonly=True)
-                while True:
-                    span = take()
-                    if span is None:
-                        return
-                    lo, hi = span
-                    typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
-                    uids = []
-                    if typ == "OK" and data and data[0]:
-                        uids = sorted((int(u) for u in data[0].split()
-                                       if lo <= int(u) <= hi), reverse=True)
-                    for uid in uids:
-                        if store.seen(addr, validity, uid):
-                            continue
-                        try:
-                            typ, md = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
-                            raw = (md[0][1] if typ == "OK" and md and
-                                   isinstance(md[0], tuple) else None)
-                            if raw is not None:
-                                got = store.put(account=addr, raw=raw,
-                                                fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
-                                with lock:
-                                    st["n"] += got
-                            store.mark_seen(addr, validity, uid)
-                            store.commit()
-                            fails = 0
-                        except ArchiveFull as e:
-                            with lock:
-                                st["full"] = str(e)
-                            return
-                        except sqlite3.OperationalError as e:
-                            with lock:
-                                st["stop"] = st["stop"] or e
-                            return
-                        except Exception as e:  # noqa: BLE001
-                            fails += 1
-                            if fails > MAX_CONSECUTIVE_FAILURES:
-                                # This connection is dying: its span stays
-                                # incomplete and holds the mark; the others
-                                # go on, and the next pass meets the span
-                                # again at the cost of a SEARCH.
-                                log(f"  imap {addr}: a connection ended after "
-                                    f"repeated failures at uid {uid}")
-                                return
+            imap = connect()
+            while True:
+                span = take()
+                if span is None:
+                    return
+                lo, hi = span
+                typ, data = imap.uid("search", None, "UID", f"{lo}:{hi}")
+                uids = []
+                if typ == "OK" and data and data[0]:
+                    uids = sorted((int(u) for u in data[0].split()
+                                   if lo <= int(u) <= hi), reverse=True)
+                for uid in uids:
+                    if store.seen(addr, validity, uid):
+                        continue
+                    try:
+                        fetch(imap, uid)
+                        fails = 0
+                        continue
+                    except (ArchiveFull, sqlite3.OperationalError):
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        fails += 1
+                        if fails <= MAX_CONSECUTIVE_FAILURES:
+                            # A lone failure: recorded for the next sweep,
+                            # and the walk steps past it.
                             store.failed(addr, uid, e)
                             store.commit()
                             log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
-                    set_state(con, f"low:{addr}", finish(lo, hi))
-                    con.commit()
-            finally:
+                            continue
+                    # Four in a row is the connection, not the mail: Gmail
+                    # stalls a connection a few times a day. Replace it and
+                    # try this uid once more; a walker that stopped here
+                    # left the pass one connection poorer each time
+                    # (2026-10-15). Only past the budget does it end, its
+                    # span incomplete and holding the mark.
+                    if reconnects >= WORKER_RECONNECTS:
+                        log(f"  imap {addr}: a connection ended after repeated "
+                            f"failures at uid {uid} and {reconnects} reconnects")
+                        return
+                    reconnects += 1
+                    log(f"  imap {addr}: connection stalled at uid {uid}; "
+                        f"reconnecting ({reconnects} of {WORKER_RECONNECTS})")
+                    try:
+                        imap.logout()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    imap = connect()
+                    fails = 0
+                    try:
+                        fetch(imap, uid)
+                    except (ArchiveFull, sqlite3.OperationalError):
+                        raise
+                    except Exception as e:  # noqa: BLE001 - poison after all
+                        store.failed(addr, uid, e)
+                        store.commit()
+                        log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                set_state(con, f"low:{addr}", finish(lo, hi))
+                con.commit()
+        except ArchiveFull as e:
+            with lock:
+                st["full"] = str(e)
+        except Exception as e:  # noqa: BLE001 - a busy index, or a connection
+            with lock:                          # that cannot even log in
+                st["stop"] = st["stop"] or e
+        finally:
+            if imap is not None:
                 try:
                     imap.logout()
                 except Exception:  # noqa: BLE001 - best-effort close
                     pass
-        except Exception as e:  # noqa: BLE001 - a connection that cannot log in
-            with lock:
-                st["stop"] = st["stop"] or e
-        finally:
             con.close()
 
     threads = [threading.Thread(target=run, name=f"mailarchive-{i}", daemon=True)

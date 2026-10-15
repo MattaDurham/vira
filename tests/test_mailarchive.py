@@ -311,26 +311,35 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(sum(len(c.fetched) for c in made), before)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
-    def test_a_dying_connection_holds_the_mark_and_the_others_finish(self):
+    def test_a_stalled_connection_is_replaced_and_the_walk_completes(self):
         mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1001)}
         poison = {999: 9, 998: 9, 997: 9, 996: 9}
+        made = self.connections(mailbox, poison=poison)
+        said = []
+        # Three failures are recorded as messages; the fourth in a row reads
+        # as the connection, which is replaced, and uid 996 is tried once
+        # more on the new one (still poison: recorded). The span completes.
+        self.assertEqual(mailarchive.sweep(log=said.append, workers=2), 996)
+        self.assertEqual(len(made), 1 + 2 + 1)            # one reconnect
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+        self.assertEqual(mailarchive.stats()["failed"], 4)
+        self.assertTrue(any("reconnecting (1 of" in m for m in said), said)
+        poison.clear()
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 4)
+        self.assertEqual(mailarchive.stats()["messages"], 1000)
+
+    def test_past_the_reconnect_budget_a_walker_ends_and_holds_the_mark(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 601)}
+        poison = {u: 9 for u in range(576, 601)}      # 25 uids: five reconnects, then one more
         self.connections(mailbox, poison=poison)
         said = []
-        # The top span (501..1000) dies at its fourth failure; the bottom
-        # span completes on another connection but cannot move the mark
-        # past the broken span above it.
-        self.assertEqual(mailarchive.sweep(log=said.append, workers=2), 501)
-        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1001")
-        self.assertEqual(mailarchive.stats()["failed"], 3)
-        self.assertTrue(any("a connection ended after repeated failures" in m for m in said), said)
-        # The next pass retries the three recorded failures, then meets the
-        # top span again: uid 1000 is seen and costs nothing, uid 996 and
-        # the 495 the dying connection never reached are fetched, and the
-        # bottom span is all seen.
-        poison.clear()
-        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 499)
-        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
-        self.assertEqual(mailarchive.stats()["messages"], 1000)
+        # The top span (101..600) burns its five reconnects; the bottom span
+        # completes on the other connection but the mark cannot pass the
+        # broken span above it.
+        self.assertEqual(mailarchive.sweep(log=said.append, workers=2), 100)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "601")
+        self.assertEqual(mailarchive.stats()["failed"], 23)
+        self.assertTrue(any("and 5 reconnects" in m for m in said), said)
 
     def test_a_busy_index_in_a_walker_ends_the_pass_as_an_error(self):
         mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 11)}
