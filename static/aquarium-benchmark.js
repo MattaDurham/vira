@@ -3,16 +3,16 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=68';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=68';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=68';
-import {finRayContrast} from './aquarium-fin-detail.js?v=68';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=68';
-import {waterOptics} from './aquarium-optics.js?v=68';
-import {createContainment} from './aquarium-collision.js?v=68';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=68';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=68';
-import {createResearchLayer} from './aquarium-research.js?v=68';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=72';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=72';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=72';
+import {finRayContrast} from './aquarium-fin-detail.js?v=72';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=72';
+import {waterOptics} from './aquarium-optics.js?v=72';
+import {createContainment} from './aquarium-collision.js?v=72';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=72';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=72';
+import {createResearchLayer} from './aquarium-research.js?v=72';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const swimmer=createSwimmer(),fish=swimmer.fish,clock=uniform(0);
@@ -37,6 +37,7 @@ const ownGeometry=g=>{ownedGeometries.add(g);return g;},ownMaterial=m=>{ownedMat
 const ownTexture=t=>{ownedTextures.add(t);return t;};
 let orbit=0,elevation=0,distance=4.1;
 const target=new THREE.Vector3(0,.86,-.2);
+const researchFocus=target.clone(),focusPoint=new THREE.Vector3();
 const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2(),interactionPlane=new THREE.Plane(new THREE.Vector3(0,0,1),-.14),hit=new THREE.Vector3();
 const deformable=[];
 const fins=[];
@@ -111,7 +112,8 @@ function setCamera(){
   const bearing=orbit+(state.cameraAngle==='quarter'?-.55:0);
   if(state.cameraAngle==='top')camera.position.set(Math.sin(orbit)*distance*.55,3.35+elevation,1.75);
   else camera.position.set(Math.sin(bearing)*distance,1.02+elevation,Math.cos(bearing)*distance);
-  camera.lookAt(target.x,canvas.clientWidth<650?.20:target.y,target.z);camera.updateMatrixWorld();
+  const focus=state.research?researchFocus:target;
+  camera.lookAt(focus.x,state.research?focus.y:canvas.clientWidth<650?.20:focus.y,focus.z);camera.updateMatrixWorld();
 }
 function immerse(mat){
   const finTissue=mat.name.startsWith('Ivory fin membrane');
@@ -386,7 +388,8 @@ function draw(now){
   if(!state.study)for(let i=0;i<3;i++){
     if(!swimmer.contain(containment.correction()))break;pose();
   }
-  if(state.closeup||state.cameraAngle==='fish')setCamera();
+  if(state.research)researchFocus.lerp(asset.getWorldPosition(focusPoint),1-Math.exp(-4*Math.min(elapsed,.25)));
+  if(state.closeup||state.cameraAngle==='fish'||state.research)setCamera();
   // The combined ray sets include 0.26 mm branches. Hand their contrast to
   // the filtered membrane map when unresolved; retain topology and full
   // inspection materials. This is authored detail LOD, not exact coverage AA.
@@ -494,7 +497,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=68');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=72');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -538,7 +541,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=68').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=72').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
@@ -578,7 +581,7 @@ async function start(){
   $('light').addEventListener('input',()=>{renderer.toneMappingExposure=Number($('light').value);$('light-value').value=`${Math.round(Number($('light').value)*100)}%`;});
   research=createResearchLayer({root:$('tank'),canvas,toggle:$('research-toggle'),storyButton:$('build-story'),asset,joints,camera,
     getState:()=>state,getFish:()=>visualFish,onAction:action=>$(action==='pause'?'motion':'wireframe').click(),
-    onVisibility:open=>{state.research=open;frameResearchCamera();}});
+    onVisibility:open=>{state.research=open;if(open)asset.getWorldPosition(researchFocus);frameResearchCamera();setCamera();}});
   await renderer.setAnimationLoop(draw);
 }
 start().catch(error=>{console.error('Aquarium benchmark:',error);loading.textContent=`Aquarium unavailable: ${error.message}`;canvas.dataset.ready='error';cleanup();});

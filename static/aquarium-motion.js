@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=68';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=72';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -30,6 +30,7 @@ export function createSwimmer(random=Math.random){
   const fish={};
   let intent,intentTime,heading,depth,depthTime,cursor,cursorAge,attention,goal;
   let gait,gaitTime,turnTime,turnCooldown,turnSign,escapeTime,wallTime;
+  let bendTime,bendDuration,bendStrength,bendStart;
   let decisions=0,contacts=0;
   const duration=(lo,hi)=>lo+(hi-lo)*random();
   function chooseIntent(next){
@@ -42,13 +43,22 @@ export function createSwimmer(random=Math.random){
     Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,bank:0,
       age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
       yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
-      muscle1:0,muscle2:0,muscle3:0});
+      muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0});
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
     cursor=goal=null;cursorAge=attention=escapeTime=wallTime=0;
     gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=.4;turnSign=1;
+    bendTime=bendDuration=1;bendStrength=bendStart=0;
     decisions=contacts=0;
   }
   reset();
+  function beginTurnBend(angle,duration){
+    // Fin trim needs no conspicuous C bend. Larger intended turns recruit a
+    // bounded, one-sided stroke; these magnitudes are authored for this rig.
+    const q=clamp((Math.abs(angle)-.16)/(Math.PI/2-.16),0,1);
+    bendStrength=Math.sign(angle)*.22*q*q*(3-2*q);
+    bendStart=fish.turnBend;
+    bendTime=0;bendDuration=duration;
+  }
   function follow(point){
     if(!validPoint(point)){cursor=null;return;}
     // New motion attracts attention; a motionless pointer is gradually ignored.
@@ -67,6 +77,7 @@ export function createSwimmer(random=Math.random){
       depth=clamp(fish.y+dy*.35,.55,1.16);goal=null;
       intent='escape';intentTime=2.6;escapeTime=.95;gait='stroke';gaitTime=1.1;
       turnTime=.9;turnSign=Math.sign(wrap(heading-fish.yaw))||1;
+      beginTurnBend(wrap(heading-fish.yaw),turnTime);
     }else {
       goal={x:clamp(point.x,-1.0,1.0),y:clamp(point.y,.55,1.17),z:clamp(point.z,-.42,.20)};
       intent='investigate';intentTime=5.5;
@@ -93,6 +104,7 @@ export function createSwimmer(random=Math.random){
     fish.age+=dt;intentTime-=dt;depthTime-=dt;cursorAge+=dt;
     escapeTime=Math.max(0,escapeTime-dt);wallTime=Math.max(0,wallTime-dt);
     turnCooldown=Math.max(0,turnCooldown-dt);turnTime=Math.max(0,turnTime-dt);
+    bendTime+=dt;
     if(intentTime<=0){
       goal=null;
       const choice=random();
@@ -165,6 +177,7 @@ export function createSwimmer(random=Math.random){
     const yawError=wrap(wantedYaw-fish.yaw),pitchError=wantedPitch-fish.pitch;
     if(Math.abs(yawError)>.16&&turnCooldown===0&&turnTime===0&&!arrive){
       turnTime=intent==='escape'?.9:.65;turnSign=Math.sign(yawError);turnCooldown=1.05;
+      beginTurnBend(yawError,turnTime);
       gait='stroke';gaitTime=Math.max(gaitTime,turnTime);
     }
     gaitTime-=dt;
@@ -225,6 +238,17 @@ export function createSwimmer(random=Math.random){
     });
     fish.phase+=TAU*(.70+fish.drive*2.4)*fish.stroke*dt;
     fish.finPhase+=TAU*(.55+.35*fish.brake+.18*Math.abs(fish.yawRate))*dt;
+    // A finite loading stroke returns toward straight before the next bout.
+    // Regional response carries both loading and release toward the peduncle;
+    // it does not reset or borrow the independent propulsive carrier phase.
+    const u=clamp(bendTime/bendDuration,0,1),pulse=u<.3?u/.3:(1-u)/.7;
+    const shaped=pulse*pulse*(3-2*pulse);
+    fish.turnBend=u<.3?bendStart+(bendStrength-bendStart)*shaped:bendStrength*shaped;
+    let bending=fish.turnBend;
+    axialRates.forEach((rate,i)=>{
+      const key='turnBend'+(i+1);
+      fish[key]=approach(fish[key],bending,rate,dt);bending=fish[key];
+    });
     const direction=directionOf(fish.yaw,fish.pitch),flow=waterFlow(fish,fish.age);
     const forward=(fish.vx-flow.x)*direction.x+(fish.vy-flow.y)*direction.y+(fish.vz-flow.z)*direction.z;
     fish.forwardSpeed=forward;
@@ -295,6 +319,8 @@ export function spinalField(fish,axial){
     axialDelays.map(delay=>-rate*delay):[0,fish[prefix+'1'],fish[prefix+'2'],fish[prefix+'3']];
   const yawHistory=history('yawLag',clamp(fish.yawRate??0,-1.3,1.3));
   const pitchHistory=history('pitchLag',clamp(fish.pitchRate??0,-.5,.5));
+  const turnHistory=fish.poseHistory===false?[0,0,0,0]:
+    [fish.turnBend??0,fish.turnBend1??0,fish.turnBend2??0,fish.turnBend3??0];
   // Authored studies have no elapsed history: show a steady bend at the given
   // angular rate and a full travelling stroke, rather than borrowing live state.
   const muscleHistory=fish.poseHistory===false||!Number.isFinite(fish.muscle1)?
@@ -305,7 +331,7 @@ export function spinalField(fish,axial){
     const muscle=alongBody(muscleHistory,s);
     const amplitude=(.09+drive*.10)*muscle*(1-.45*Math.min(1,Math.abs(fish.maneuver??0)));
     const lateral=(Math.atan(amplitude/length*(2*s*Math.sin(phase)-4.8*s*s*Math.cos(phase)))
-      +alongBody(yawHistory,s))*lateralGain;
+      +alongBody(yawHistory,s)-alongBody(turnHistory,s)*s*s*(3-2*s))*lateralGain;
     // Carp propulsion remains predominantly lateral. Vertical flexion follows
     // pitch manoeuvres; the small secondary wave is compliance, not a dolphin kick.
     const vertical=(-alongBody(pitchHistory,s)+.018*muscle*s*s*Math.sin(phase+.7))*verticalGain;

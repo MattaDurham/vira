@@ -1,6 +1,7 @@
 import {Vector3} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=68';
-import {waterMax} from './aquarium-space.js?v=68';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=72';
+import {waterMax} from './aquarium-space.js?v=72';
+import {spinalField} from './aquarium-motion.js?v=72';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -40,8 +41,8 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   diagram.append(ray,spine,leader);
   const dots=joints.map(()=>{const dot=svg('circle',{r:2.5,'class':'research-joint'});diagram.append(dot);return dot;});
   const pins=Array.from({length:3},()=>{
-    const group=svg('g'),halo=svg('circle',{r:8,'class':'research-pin-halo'}),point=svg('circle',{r:2.5,'class':'research-pin'}),label=svg('text',{'class':'research-pin-label',x:14,y:-12});
-    group.append(halo,point,label);diagram.append(group);return {group,label};
+    const group=svg('g'),line=svg('path',{fill:'none',stroke:'rgba(150,210,190,.35)','stroke-width':.7}),halo=svg('circle',{r:8,'class':'research-pin-halo'}),point=svg('circle',{r:2.5,'class':'research-pin'}),label=svg('text',{'class':'research-pin-label',x:14,y:-12});
+    group.append(line,halo,point,label);diagram.append(group);return {group,label,line};
   });
   const card=element('aside','research-card');card.setAttribute('aria-label','Research notes');
   const top=element('div','research-card-top'),eyebrow=element('span','research-eyebrow','FIELD NOTES / 01');
@@ -59,7 +60,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const notes=element('div','research-notes'),topicTitle=element('h3'),claim=element('p','research-claim');
   const mini=svg('svg',{'class':'research-sequence',viewBox:'0 0 300 83','role':'img','aria-label':'Live steering and activation diagram'});
   const miniPath=svg('path',{'class':'research-sequence-path'});mini.append(miniPath);
-  const miniCaption=element('p','research-diagram-caption','Steering lag / circle size: authored activation');
+  const miniCaption=element('p','research-diagram-caption','Axial bend / circle size: authored activation');
   const miniDots=Array.from({length:4},(_,i)=>{
     const circle=svg('circle',{cx:24+i*84,cy:26,r:4,'class':'research-sequence-dot'});
     const text=svg('text',{x:24+i*84,y:65,'text-anchor':'middle'});text.textContent=['Head','Shoulder','Trunk','Tail'][i];mini.append(circle,text);return circle;
@@ -155,24 +156,38 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       ray.setAttribute('d',a.visible&&b.visible?`M${a.x},${a.y}L${b.x},${b.y}`:'');
     }else labels=[[local(-.53,.015,.09),'Modeled facial tissue'],[points[15],'Overlapping scales'],[projectResearchPoint(pectoralAnchor(),camera,width,height),'Branched fin rays']];
     if(active!=='optics')ray.setAttribute('d','');
+    const box=card.getBoundingClientRect(),bounds=root.getBoundingClientRect(),placed=[];
     labels.forEach(([p,text],i)=>{
       const pin=pins[i];pin.group.style.display=p?.visible?'':'none';if(!p?.visible)return;
       pin.group.setAttribute('transform',`translate(${p.x},${p.y})`);pin.label.textContent=text;
-      const left=p.x>width*.57;pin.label.setAttribute('x',left?-14:14);pin.label.setAttribute('text-anchor',left?'end':'start');
-      pin.label.setAttribute('y',i===1?28:-14);
+      const labelWidth=pin.label.getComputedTextLength(),right=width>650?box.left-bounds.left-20:width-16;
+      const left=clamp(p.x>width*.57?p.x-14-labelWidth:p.x+14,16,Math.max(16,right-labelWidth));
+      const candidates=[i===1?28:-14,-36,36,-58,58,-80,80];
+      let baseline;
+      for(const offset of candidates){
+        const y=clamp(p.y+offset,190,width>650?height-90:box.top-bounds.top-36);
+        const overlaps=placed.some(b=>left<b.right+6&&left+labelWidth>b.left-6&&y-11<b.bottom+6&&y+3>b.top-6);
+        if(!overlaps){baseline=y;break;}
+      }
+      baseline??=p.y+candidates.at(-1);
+      placed.push({left,right:left+labelWidth,top:baseline-11,bottom:baseline+3});
+      pin.label.setAttribute('x',left-p.x);pin.label.setAttribute('text-anchor','start');pin.label.setAttribute('y',baseline-p.y);
+      pin.line.setAttribute('d',`M0,0L${clamp(p.x,left,left+labelWidth)-p.x},${baseline-p.y-4}`);
     });
-    const anchor=labels.find(([p])=>p?.visible)?.[0],box=card.getBoundingClientRect(),bounds=root.getBoundingClientRect();
+    const anchor=labels.find(([p])=>p?.visible)?.[0];
     const sx=box.left-bounds.left,sy=box.top-bounds.top+85;
     // On narrow screens the notes sit below the animal. Keep connectors in
     // the visible water rather than drawing through the reading surface.
     leader.setAttribute('d',anchor&&width>650?`M${sx},${sy}H${sx-22}L${anchor.x},${anchor.y}`:'');
-    const vertical=Math.abs(fish.pitchRate??0)>Math.abs(fish.yawRate??0),prefix=vertical?'pitchLag':'yawLag',rate=vertical?(fish.pitchRate??0):(fish.yawRate??0);
-    const lag=steady?[0,-rate/14,-rate*(1/14+1/12),-rate*(1/14+1/12+1/10)]:[0,fish[prefix+'1']??0,fish[prefix+'2']??0,fish[prefix+'3']??0];
-    const ys=lag.map(value=>26+clamp(value,-.35,.35)*50);
+    const vertical=Math.abs(fish.pitchRate??0)>Math.abs(fish.yawRate??0);
+    // Read the same axial field that poses the rig, including the finite
+    // turning stroke. An orientation-lag estimate alone misses that bend.
+    const field=spinalField(fish,joints.map(joint=>joint.userData.axial));
+    const ys=[4,14,24,33].map(i=>26+clamp(field[i][vertical?'vertical':'lateral'],-.7,.7)*25);
     miniPath.setAttribute('d',ys.map((y,i)=>`${i?'L':'M'}${24+i*84},${y}`).join(' '));
     miniDots.forEach((dot,i)=>{dot.setAttribute('cy',ys[i]);dot.setAttribute('r',3+activation[i]*5);dot.setAttribute('opacity',.3+.7*activation[i]);});
-    miniCaption.textContent=`${steady?'Steady study':vertical?'Pitch lag':'Yaw lag'} / circle size: authored activation`;
-    mini.setAttribute('aria-label','Live diagram: steering lag bends the line; circle size shows the authored muscle activation envelope, not measured EMG.');
+    miniCaption.textContent=`${steady?'Authored study':vertical?'Vertical axial bend':'Lateral axial bend'} / circle size: authored activation`;
+    mini.setAttribute('aria-label','Live diagram: the line shows the rendered axial bend relative to the head; circle size shows the authored muscle activation envelope, not measured EMG.');
     liveValue.textContent=active==='optics'?`${Math.max(0,waterMax[1]-fish.y).toFixed(2)} m below surface`:
       active==='fins'?`${(fish.speed??0).toFixed(2)} m/s / ${fish.brake>.2?'braking':fish.stroke>.2?'propulsive bout':'glide / trim'}`:
       `${(fish.pitch*180/Math.PI).toFixed(1)}° pitch / ${(fish.speed??0).toFixed(2)} m/s`;

@@ -1,6 +1,6 @@
 /* Paired-fin tissue and its embedded rays share this bind-space deformation.
  * It preserves the authored attachment and skeleton; it does not add thrust. */
-import {finActuation} from './aquarium-motion.js?v=68';
+import {finActuation} from './aquarium-motion.js?v=72';
 
 const TAU=Math.PI*2,tableSize=33,maxDelay=.24;
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));

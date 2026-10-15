@@ -15,11 +15,14 @@ Drag, scroll or use the focused canvas's arrow keys to inspect the tank.
 The optional **Research layer** follows the rendered skeleton with projected
 labels for head-led steering, the travelling muscle envelope, fin control,
 anatomy, water depth and authored surfaces. Its live diagram displays the
-controller's steering lag and activation envelope, not recorded EMG. Six
+rendered axial bend and authored activation envelope, not recorded EMG. Six
 research notes distinguish observations, implementation and the limits of each
 comparison; linked papers and original footage retain their species context.
 **How this was built** connects observation, geometry, controls and lighting,
-with a complete source index and links back into the live notes. Append
+with a complete source index and links back into the live notes. While the
+notes are open, a smoothed camera focus follows the fish so it stays beside
+the reading panel; projection, reflections and annotation anchors share that
+camera. Closing the layer restores the normal aquarium view. Append
 `?research=1` or `?research=story` to open either view directly. Annotations
 project actual world-space rig positions through the current camera, update at
 up to 20 Hz only while visible, and stop over the offline reference.
@@ -128,6 +131,11 @@ regressions reject abrupt onset and release during broad and small turns.
 `tests/aquarium_fins.mjs` checks the actual paired membranes and ray geometry
 through a shared field: fixed attachments, close ray-to-tissue alignment,
 continuous phases, local volume preservation and unfolded surface triangles.
+`tests/aquarium_turn_bend.mjs` reads the actual head, trunk and peduncle to
+check separate loading, peak and return times, quiet settling and small-turn
+restraint. It also exercises flicks and two minutes of deformed swimming for
+each of six deterministic seeds. These are regression bounds for the authored
+fish, not fitted biological reaction times or curvature measurements.
 A joined navigation/asset check tests a minute of routine swimming against the
 actual articulated body and fins, catching visible collision corrections at
 the glass. Its unittest wrapper runs in CI without Blender or a GPU.
@@ -247,10 +255,21 @@ The observational references are original [pond footage](https://www.youtube.com
 and [underwater koi footage](https://www.youtube.com/watch?v=zhLm3EsDDqc).
 [Yang et al. (2009), Flow Physics of Routine Turns of Koi Carp](https://doi.org/10.1299/jbse.4.67)
 describes a single-sided stroke, return toward straight, and a subsequent coast.
-The controller approximates that separation through short turning bouts,
-relaxing the tail and holding the course during the glide. Its rates and forces
+The controller approximates that separation through short turning bouts. A
+bounded signed bend loads during the first part of a bout, then releases
+through successive trunk regions. Small course corrections recruit very little
+of this bend; routine return turns recruit more. The skull remains rigid and
+the existing orientation lag remains separate from that finite stroke.
+The tail relaxes and the course holds during the glide. Its rates and forces
 are tuned for this large authored fish; they are not copied from the paper's
 small experimental specimen or derived by solving its fluid equations.
+The original [slow](https://doi.org/10.7717/peerj.21161/supp-1) and
+[fast](https://doi.org/10.7717/peerj.21161/supp-2) bluegill videos show separate
+head rotation and tail follow-through from bottom and side views. Those
+apparatus-elicited 180-degree turns are comparative evidence, not spontaneous
+koi calibration. [Howe and Astley](https://doi.org/10.1002/jez.2398) measured
+localized curvature pulses in giant danios; head-led reorientation does not
+imply that curvature must originate at the nose.
 
 Paired fins paddle independently at low speed, open for braking and trail during
 a propulsive burst. Their phase is independent of the tail; merged ray geometry
