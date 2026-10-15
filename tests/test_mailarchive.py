@@ -341,6 +341,32 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(mailarchive.stats()["failed"], 23)
         self.assertTrue(any("and 5 reconnects" in m for m in said), said)
 
+    def test_a_stalled_search_reconnects_and_the_span_is_still_walked(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 701)}
+        stalls = {"201:700": 1}
+
+        class StallingSearch(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "search" and stalls.get(args[-1]):
+                    stalls[args[-1]] -= 1
+                    raise OSError("read timed out")
+                return super().uid(cmd, *args)
+        made = []
+
+        def factory(*a, **k):
+            c = StallingSearch(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        said = []
+        self.assertEqual(mailarchive.sweep(log=said.append, workers=2), 700)
+        self.assertTrue(any("stalled at uid 201:700; reconnecting" in m for m in said), said)
+        self.assertEqual(len(made), 1 + 2 + 1)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
     def test_a_busy_index_in_a_walker_ends_the_pass_as_an_error(self):
         mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 11)}
         self.connections(mailbox)
@@ -358,6 +384,12 @@ class ParallelHistoryTests(_Base):
         self.assertTrue(errored)
         self.assertTrue(any("walk ended early" in m for m in said), said)
         self.assertEqual(archived, 2)            # the walker stopped at the lock
+        # Every walker says why it left: the one that hit the lock names
+        # it, the other saw the pass ending.
+        exits = [m for m in said if "walker done" in m]
+        self.assertEqual(len(exits), 2, said)
+        self.assertTrue(any("OperationalError" in m for m in exits), exits)
+        self.assertTrue(any("pass is ending" in m or "no spans left" in m for m in exits), exits)
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 8)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
