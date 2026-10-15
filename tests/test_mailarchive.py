@@ -367,6 +367,53 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(len(made), 1 + 2 + 1)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
+    def limited_connections(self, mailbox, allow):
+        """Gmail refuses connections past its limit: the factory raises its
+        alert once `allow` connections are open."""
+        made = []
+        open_count = [0]
+        outer = self
+
+        class Limited(FakeIMAP):
+            def logout(self):
+                open_count[0] -= 1
+                return super().logout()
+
+        def factory(*a, **k):
+            if open_count[0] >= allow:
+                raise imaplib.IMAP4.error("[ALERT] Too many simultaneous connections. (Failure)")
+            open_count[0] += 1
+            c = Limited(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        return made
+
+    def test_a_walker_refused_at_the_connection_limit_steps_aside(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        made = self.limited_connections(mailbox, allow=2)      # the sweep's own, plus one
+        said = []
+        self.assertEqual(mailarchive.sweep(log=said.append, workers=3), 1200)
+        self.assertEqual(len(made), 2)
+        self.assertEqual(sum("connection limit; walking with fewer" in m for m in said), 2, said)
+        self.assertTrue(any("2 of 3 walkers refused" in m for m in said), said)
+        self.assertFalse(any("walk ended early" in m for m in said), said)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
+    def test_no_walker_connecting_makes_the_backfill_retry_with_fewer(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 301)}
+        self.limited_connections(mailbox, allow=1)              # only the sweep's own
+        said = []
+        with mock.patch.object(mailarchive.time, "sleep", lambda s: None):
+            self.assertEqual(mailarchive.backfill(log=said.append, workers=4), 300)
+        retries = [m for m in said if "retrying with" in m]
+        self.assertEqual(retries, ["mail archive backlog: Gmail's connection limit; retrying with 2 connection(s)",
+                                   "mail archive backlog: Gmail's connection limit; retrying with 1 connection(s)"])
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
     def test_a_busy_index_in_a_walker_ends_the_pass_as_an_error(self):
         mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 11)}
         self.connections(mailbox)
@@ -380,7 +427,7 @@ class ParallelHistoryTests(_Base):
             return real(store, **kw)
         said = []
         with mock.patch.object(mailarchive._Store, "put", put):
-            archived, errored = mailarchive._sweep(said.append, None, None, 2)
+            archived, errored, _ = mailarchive._sweep(said.append, None, None, 2)
         self.assertTrue(errored)
         self.assertTrue(any("walk ended early" in m for m in said), said)
         self.assertEqual(archived, 2)            # the walker stopped at the lock

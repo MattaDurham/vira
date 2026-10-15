@@ -417,8 +417,9 @@ SCHEMA = [
       "Connections for the mail archive backfill",
       "IMAP connections walking the history at once when the CLI backfill "
       "runs; the background sweep uses one. One message per round trip per "
-      "connection is the rate, so four is about four times faster. Gmail "
-      "allows 15 per account.", advanced=True, range=(1, 8)),
+      "connection is the rate. Gmail allows 15 per account, shared with "
+      "your mail apps; a walker refused at the limit steps aside, and the "
+      "backfill retries with fewer.", advanced=True, range=(1, 8)),
     S("receipts_sweep_days", "workers", "int", 7, "Days between receipt sweeps",
       "The receipts pass sweeps mailboxes and indexed attachments for invoice "
       "and receipt evidence, flagged merchants first. Dormant until a mail "
