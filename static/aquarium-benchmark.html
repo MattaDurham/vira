@@ -4,18 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vira - Aquarium study</title>
-  <link rel="stylesheet" href="aquarium-benchmark.css">
+  <link rel="stylesheet" href="aquarium-benchmark.css?v=64">
 </head>
 <body>
   <main id="tank" aria-label="Interactive aquarium benchmark">
     <canvas id="aquarium" tabindex="0" aria-label="Aquarium. Move to draw the koi closer, click to tap the glass, drag or use arrow keys to look around."></canvas>
-    <img id="reference" src="aquarium/reference.webp?v=63" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
+    <img id="reference" src="aquarium/reference.webp?v=64" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
     <div class="loading" id="loading" role="status">Preparing the aquarium</div>
     <header>
       <div class="wordmark">VIRA <span>/ AQUARIUM STUDY</span></div>
       <h1>A little world behind the glass.</h1>
       <p>One koi. Real scales. Light through water.</p>
     </header>
+    <nav class="research-launch" aria-label="Behind the aquarium">
+      <button id="research-toggle" aria-expanded="false" aria-pressed="false" aria-controls="research-layer" disabled><span class="research-orbit" aria-hidden="true"></span>Research layer</button>
+      <button id="build-story" disabled>How this was built</button>
+    </nav>
     <aside class="panel" aria-label="Aquarium controls">
       <div class="view-controls" role="group" aria-label="Rendering comparison">
         <button id="live-view" aria-pressed="true">Live aquarium</button>
@@ -45,6 +49,6 @@
   <script>
     if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
   </script>
-  <script type="module" src="aquarium-benchmark.js?v=63"></script>
+  <script type="module" src="aquarium-benchmark.js?v=64"></script>
 </body>
 </html>

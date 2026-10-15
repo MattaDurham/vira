@@ -12,6 +12,20 @@ Attention has a short delay and fades when the pointer remains still, so the
 animal can resume its own activity instead of chasing indefinitely.
 Drag, scroll or use the focused canvas's arrow keys to inspect the tank.
 
+The optional **Research layer** follows the rendered skeleton with projected
+labels for head-led steering, the travelling muscle envelope, fin control,
+anatomy, water depth and authored surfaces. Its live diagram displays the
+controller's steering lag and activation envelope, not recorded EMG. Six
+research notes distinguish observations, implementation and the limits of each
+comparison; linked papers and original footage retain their species context.
+**How this was built** connects observation, geometry, controls and lighting,
+with a complete source index and links back into the live notes. Append
+`?research=1` or `?research=story` to open either view directly. Annotations
+project actual world-space rig positions through the current camera, update at
+up to 20 Hz only while visible, and stop over the offline reference.
+The research camera reserves space beside or below the animal for its notes;
+the fish, reflections and annotation points all share that off-axis projection.
+
 ## Authoring
 
 Install Blender and the WebP command-line encoder. On macOS:
@@ -102,6 +116,12 @@ quiet pauses, heading stability during relaxed glides and pointer habituation.
 Identical elapsed-time runs at 15, 30, 60 and 120 fps check the 120 Hz physics
 substeps. Six seeded runs reject accidental low-speed cruising that lasts six
 seconds; new cruise choices favour travel along the tank's long axis.
+Actual-bone onset checks require skull, shoulder, trunk and tail to turn in
+that order in both yaw and pitch, without impulses across heading wrap. A
+travelling drive envelope allows the tail to settle during a coast. Paired-fin
+checks cover quiet gliding, sparse hover bouts, braking, turn/depth corrections
+and separate pelvic timing. These tests reject regression variants; their
+passing does not establish measured biological timing.
 A joined navigation/asset check tests a minute of routine swimming against the
 actual articulated body and fins, catching visible collision corrections at
 the glass. Its unittest wrapper runs in CI without Blender or a GPU.

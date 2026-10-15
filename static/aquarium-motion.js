@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=63';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=64';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -19,6 +19,12 @@ export function waterFlow(point,time){
 const validPoint=point=>point&&[point.x,point.y,point.z].every(Number.isFinite);
 const directionOf=(yaw,pitch)=>({x:-Math.cos(yaw)*Math.cos(pitch),y:Math.sin(pitch),z:Math.sin(yaw)*Math.cos(pitch)});
 const approach=(value,target,rate,dt)=>value+(target-value)*(1-Math.exp(-rate*dt));
+const axialRates=[14,12,10],axialDelays=[0];
+axialRates.forEach(rate=>axialDelays.push(axialDelays.at(-1)+1/rate));
+const alongBody=(values,s)=>{
+  const t=clamp(s,0,1)*3,i=Math.min(2,Math.floor(t));
+  return values[i]+(values[i+1]-values[i])*(t-i);
+};
 
 export function createSwimmer(random=Math.random){
   const fish={};
@@ -34,7 +40,9 @@ export function createSwimmer(random=Math.random){
   }
   function reset(){
     Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,bank:0,
-      age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0});
+      age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
+      yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
+      muscle1:0,muscle2:0,muscle3:0});
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
     cursor=goal=null;cursorAge=attention=escapeTime=wallTime=0;
     gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=.4;turnSign=1;
@@ -186,7 +194,17 @@ export function createSwimmer(random=Math.random){
     }
     fish.yawRate=approach(fish.yawRate,safeRate,turning?5.5:7,dt);
     fish.pitchRate=approach(fish.pitchRate,clamp(pitchError*1.7,-.33,.33),3,dt);
-    fish.yaw=wrap(fish.yaw+fish.yawRate*dt);fish.pitch=clamp(fish.pitch+fish.pitchRate*dt,-.45,.45);
+    const yawDelta=fish.yawRate*dt,pitchDelta=clamp(fish.pitch+fish.pitchRate*dt,-.45,.45)-fish.pitch;
+    fish.yaw=wrap(fish.yaw+yawDelta);fish.pitch+=pitchDelta;
+    // The stiff anterior frame leads; successive axial regions follow it.
+    // Relative offsets survive a heading wrap without a two-pi tail impulse.
+    for(const [prefix,delta] of [['yawLag',yawDelta],['pitchLag',pitchDelta]]){
+      let previous=0;
+      axialRates.forEach((rate,i)=>{
+        const name=prefix+(i+1);
+        fish[name]=approach(fish[name]-delta,previous,rate,dt);previous=fish[name];
+      });
+    }
     const braking=arrive||(intent==='hover'&&!curious)||avoiding||turningNearPane||Math.abs(yawError)>1.15;
     fish.brake=approach(fish.brake,braking?1:0,4,dt);
     fish.maneuver=approach(fish.maneuver,turning&&!blocked?turnSign:0,5,dt);
@@ -196,6 +214,11 @@ export function createSwimmer(random=Math.random){
     // During a coast the tail straightens and stops driving. Heading then holds
     // apart from small fin corrections; the next deliberate stroke turns it.
     fish.stroke=approach(fish.stroke,propel?(intent==='inspect'?.42:1):turning&&!blocked?.5:0,propel?7:9,dt);
+    let activation=fish.stroke;
+    axialRates.forEach((rate,i)=>{
+      const name='muscle'+(i+1);
+      fish[name]=approach(fish[name],activation,rate,dt);activation=fish[name];
+    });
     fish.phase+=TAU*(.70+fish.drive*2.4)*fish.stroke*dt;
     fish.finPhase+=TAU*(.55+.35*fish.brake+.18*Math.abs(fish.yawRate))*dt;
     const direction=directionOf(fish.yaw,fish.pitch),flow=waterFlow(fish,fish.age);
@@ -237,33 +260,54 @@ export function createSwimmer(random=Math.random){
 }
 
 export function finActuation(fish,side,pectoral=true){
-  const speed=fish.forwardSpeed??fish.speed??0,brake=fish.brake??0;
-  const turn=clamp(((fish.yawRate??0)+(fish.finSteer??0)*.45)*side,-1,1);
-  const slow=clamp(1-speed/.24,0,1),phase=fish.finPhase??fish.age*TAU*.65;
-  // Independently paddling paired fins open for braking and low-speed balance;
-  // they trail closer to the body during a forward propulsive burst.
-  return {spread:(.035+.24*slow+.16*brake+Math.max(0,turn)*.13)*(pectoral?1:.45),
-    paddle:(.035+.16*slow+.08*brake)*Math.sin(phase+(side<0?.75:0))*(pectoral?1:.40),
-    sweep:-.018*speed+.008*slow*Math.sin(phase-.7+(side<0?.75:0))};
+  const speed=Math.abs(fish.forwardSpeed??fish.speed??0),brake=clamp(fish.brake??0,0,1),age=fish.age??0;
+  const slow=clamp(1-speed/.18,0,1);
+  const turn=clamp((fish.yawRate??0)*.9+(fish.finSteer??0)*.35,-1,1);
+  const trim=clamp((fish.pitchRate??0)*2+(fish.pitch??0)*.15,-.6,.6);
+  // A stopped fish still has its brake flag set. Deploy against actual flow;
+  // that flag alone must not produce perpetual paddling during a quiet hover.
+  const stopping=brake*clamp((speed-.025)/.075,0,1);
+  const control=clamp(.65*stopping+.75*Math.abs(turn)+.65*Math.abs(trim),0,1);
+  // Occasional balance corrections have long quiet intervals and independently
+  // timed sides. Their restrained timing is authored, not measured carp data.
+  const hover=clamp(1-speed/.065,0,1)*(1-clamp((fish.stroke??0)/.3,0,1))
+    *Math.max(0,Math.sin(age*.79+1.1*Math.sin(age*.173)+(side<0?1.65:0)+(pectoral?0:1.15)))**10;
+  const phase=(fish.finPhase??age*TAU*.65)+(side<0?.75:0)+(pectoral?0:1.35);
+  const cycle=((phase/TAU)%1+1)%1;
+  // A short loaded excursion and a weaker feathered return replace the equal
+  // sine-wave strokes. With no control demand, forward glides hold the fins.
+  const beat=cycle<.38?Math.sin(Math.PI*cycle/.38)**2:-.28*Math.sin(Math.PI*(cycle-.38)/.62)**2;
+  const gain=pectoral?1:.35;
+  return {spread:(.035+.07*slow+.18*stopping+.12*Math.max(0,turn*side)+.05*Math.abs(trim))*gain,
+    paddle:(.085*control+.14*hover)*beat*gain,
+    sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain};
 }
 
 export function spinalField(fish,axial){
   const length=axial.at(-1)-axial[5];
   const stroke=fish.stroke??1,drive=clamp(fish.drive??fish.speed??0,0,.5);
   const lateralGain=fish.lateralGain??1,verticalGain=fish.verticalGain??1,twistGain=fish.twistGain??1;
+  const history=(prefix,rate)=>fish.poseHistory===false||!Number.isFinite(fish[prefix+'1'])?
+    axialDelays.map(delay=>-rate*delay):[0,fish[prefix+'1'],fish[prefix+'2'],fish[prefix+'3']];
+  const yawHistory=history('yawLag',clamp(fish.yawRate??0,-1.3,1.3));
+  const pitchHistory=history('pitchLag',clamp(fish.pitchRate??0,-.5,.5));
+  // Authored studies have no elapsed history: show a steady bend at the given
+  // angular rate and a full travelling stroke, rather than borrowing live state.
+  const muscleHistory=fish.poseHistory===false||!Number.isFinite(fish.muscle1)?
+    [stroke,stroke,stroke,stroke]:[stroke,fish.muscle1,fish.muscle2,fish.muscle3];
   return axial.map((x,i)=>{
     if(i<=4)return {lateral:0,vertical:0,twist:0};
     const s=clamp((x-axial[5])/length,0,1),phase=fish.phase-4.8*s;
-    const amplitude=(.09+drive*.10)*stroke*(1-.45*Math.min(1,Math.abs(fish.maneuver??0)));
+    const muscle=alongBody(muscleHistory,s);
+    const amplitude=(.09+drive*.10)*muscle*(1-.45*Math.min(1,Math.abs(fish.maneuver??0)));
     const lateral=(Math.atan(amplitude/length*(2*s*Math.sin(phase)-4.8*s*s*Math.cos(phase)))
-      +clamp(fish.yawRate??0,-1.3,1.3)*(.18*s+.42*s*s))*lateralGain;
+      +alongBody(yawHistory,s))*lateralGain;
     // Carp propulsion remains predominantly lateral. Vertical flexion follows
     // pitch manoeuvres; the small secondary wave is compliance, not a dolphin kick.
-    const vertical=(clamp(fish.pitchRate??0,-.5,.5)*(.70*s-.20*s*s)
-      +(fish.pitch??0)*.08*s+.018*stroke*s*s*Math.sin(phase+.7))*verticalGain;
+    const vertical=(-alongBody(pitchHistory,s)+.018*muscle*s*s*Math.sin(phase+.7))*verticalGain;
     // A banking head and lagging tail put a small torsion into the trunk.
     const torsion=(-clamp(fish.bank??0,-.3,.3)*.55*s
-      +clamp(fish.yawRate??0,-1.3,1.3)*.045*s*s+(fish.torsionDrive??0)*s+.022*stroke*s*s*Math.sin(phase-1))*twistGain;
+      +clamp(fish.yawRate??0,-1.3,1.3)*.045*s*s+(fish.torsionDrive??0)*s+.022*muscle*s*s*Math.sin(phase-1))*twistGain;
     return {lateral,vertical,twist:torsion};
   });
 }

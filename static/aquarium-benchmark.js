@@ -3,22 +3,24 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow,finActuation} from './aquarium-motion.js?v=63';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=63';
-import {waterOptics} from './aquarium-optics.js?v=63';
-import {createContainment} from './aquarium-collision.js?v=63';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=63';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=63';
+import {createSwimmer,waterFlow,finActuation} from './aquarium-motion.js?v=64';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=64';
+import {waterOptics} from './aquarium-optics.js?v=64';
+import {createContainment} from './aquarium-collision.js?v=64';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=64';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=64';
+import {createResearchLayer} from './aquarium-research.js?v=64';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const swimmer=createSwimmer(),fish=swimmer.fish,clock=uniform(0);
-const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front'};
+const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front',research:false};
 let renderer,scene,camera,asset,environment,disposed=false,previous=0,metrics=0;
 let liveEngine='Starting renderer',referenceMetadata=null;
 let skeleton;
 let optics;
 let waterInterface;
 let containment,facialRig;
+let research;
 let recording,recordingStream,recordingTimer,recordingUrl,recordingSurface,recordingContext;
 let recordingExtent=null;
 let studyPhase=0,visualFish=fish,navigationLeg=-1;
@@ -70,9 +72,18 @@ function size(){
   renderer.setPixelRatio(ratio);renderer.setSize(width,height,false);
   camera.aspect=width/height;
   camera.fov=state.closeup?10:width<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
-  camera.updateProjectionMatrix();
+  frameResearchCamera();
   $('pixels').textContent=`${canvas.width.toLocaleString()} × ${canvas.height.toLocaleString()}`;
   canvas.dataset.renderWidth=String(canvas.width);canvas.dataset.renderHeight=String(canvas.height);
+}
+function frameResearchCamera(){
+  const width=canvas.clientWidth,height=canvas.clientHeight;
+  if(state.research){
+    // Reserve reading space with an off-axis camera, not fish translation or
+    // a diagram-space offset. Reflections and extinction use this projection.
+    const side=width>650?(width>1150?396:358)/2:0;
+    camera.setViewOffset(width,height,side,width<=650?Math.min(100,height*.12):0,width,height);
+  }else camera.clearViewOffset();
 }
 function setCamera(){
   if(state.closeup&&asset){
@@ -275,7 +286,7 @@ function key(event){
 }
 function pose(){
   const held={...fish,x:.3,y:.77,z:-.15,yaw:-.40,yawRate:0,pitch:0,pitchRate:0,bank:0,
-    drive:.2,speed:.2,forwardSpeed:.2,stroke:1,brake:0,maneuver:0,finSteer:0,finPhase:studyPhase*.55,phase:studyPhase};
+    drive:.2,speed:.2,forwardSpeed:.2,stroke:1,brake:0,maneuver:0,finSteer:0,finPhase:studyPhase*.55,phase:studyPhase,poseHistory:false};
   if(state.study){
     const axis=state.studyAxis;
     held.lateralGain=axis==='vertical'||axis==='twist'?0:1;
@@ -357,6 +368,7 @@ function draw(now){
   if(state.closeup)setCamera();
   const renderStarted=performance.now();
   waterInterface.update(renderer);optics.render();
+  research?.update(now);
   canvas.dataset.motionMs=(renderStarted-motionStarted).toFixed(1);
   canvas.dataset.submitMs=(performance.now()-renderStarted).toFixed(1);
   canvas.dataset.cameraPosition=camera.position.toArray().map(v=>v.toFixed(3)).join(',');
@@ -378,6 +390,7 @@ function draw(now){
 function setPause(paused){state.paused=paused;$('motion').textContent=paused?'Resume motion':'Pause motion';$('motion').setAttribute('aria-pressed',String(paused));}
 function setView(reference){
   state.reference=reference;$('reference').hidden=!reference;$('live-view').setAttribute('aria-pressed',String(!reference));$('reference-view').setAttribute('aria-pressed',String(reference));
+  research?.setReference(reference);
   $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=$('record-length').disabled=reference;
   $('record').disabled=reference||recording?.state==='recording';
   $('hint').textContent=reference?'Cycles reference: the same authored fish, rendered offline through glass and volumetric water.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';
@@ -387,6 +400,7 @@ function setView(reference){
 }
 function cleanup(){
   disposed=true;renderer?.setAnimationLoop(null);window.removeEventListener('resize',size);
+  research?.dispose();
   if(recording?.state==='recording')recording.stop();releaseCapture();if(recordingUrl)URL.revokeObjectURL(recordingUrl);
   canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerCancel);canvas.removeEventListener('pointerleave',pointerLeave);canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('keydown',key);
   optics?.dispose();waterInterface?.dispose();ownedGeometries.forEach(g=>g.dispose());ownedMaterials.forEach(m=>m.dispose());ownedTextures.forEach(t=>t.dispose());environment?.dispose();renderer?.dispose();
@@ -454,7 +468,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=63');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=64');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -497,7 +511,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=63').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=64').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
@@ -535,6 +549,9 @@ async function start(){
   $('record-length').addEventListener('change',()=>{if(recording?.state!=='recording')$('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;});
   $('reference-view').addEventListener('click',()=>setView(true));$('live-view').addEventListener('click',()=>setView(false));
   $('light').addEventListener('input',()=>{renderer.toneMappingExposure=Number($('light').value);$('light-value').value=`${Math.round(Number($('light').value)*100)}%`;});
+  research=createResearchLayer({root:$('tank'),canvas,toggle:$('research-toggle'),storyButton:$('build-story'),asset,joints,camera,
+    getState:()=>state,getFish:()=>visualFish,onAction:action=>$(action==='pause'?'motion':'wireframe').click(),
+    onVisibility:open=>{state.research=open;frameResearchCamera();}});
   await renderer.setAnimationLoop(draw);
 }
 start().catch(error=>{console.error('Aquarium benchmark:',error);loading.textContent=`Aquarium unavailable: ${error.message}`;canvas.dataset.ready='error';cleanup();});

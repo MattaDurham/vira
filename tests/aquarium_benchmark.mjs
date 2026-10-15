@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
-import {Vector3,Texture,PerspectiveCamera,WebGPUCoordinateSystem,WebGLCoordinateSystem,Raycaster,Matrix3,DoubleSide} from '../static/vendor/three.webgpu.js';
+import {Vector3,Quaternion,Texture,PerspectiveCamera,WebGPUCoordinateSystem,WebGLCoordinateSystem,Raycaster,Matrix3,DoubleSide} from '../static/vendor/three.webgpu.js';
 import {createSwimmer,referencePose,finActuation,waterFlow} from '../static/aquarium-motion.js';
 import {applySwimPose,createFacialRig} from '../static/aquarium-rig.js';
 import {createContainment} from '../static/aquarium-collision.js';
@@ -301,6 +301,68 @@ for(const z of [rootMin[2],rootMax[2]-.02]){
   assert.ok(Math.hypot(correction.x,correction.y,correction.z)<1e-6,'the real fish can occupy both ends of the wider water volume');
 }
 
+function assertHeadLeadsSteering(create,pose=applySwimPose){
+  const swimmer=create(()=>.5);
+  Object.assign(swimmer.fish,{x:0,y:.7,z:tankCenterZ,yaw:0,pitch:0});
+  // Isolate steering from the much larger propulsive oscillation. Read actual
+  // exported bone frames, so changing a diagnostic lag field alone cannot pass.
+  const steeringSample=fish=>({...fish,drive:0,stroke:0,muscle1:0,muscle2:0,muscle3:0,bank:0});
+  const stations=[0,14,24,33];
+  pose(asset,joints,rest,steeringSample(swimmer.fish));
+  const origins=stations.map(i=>joints[i].getWorldQuaternion(new Quaternion()).invert());
+  const angles=()=>stations.map((i,j)=>{
+    const q=joints[i].getWorldQuaternion(new Quaternion()).multiply(origins[j]);
+    const direction=new Vector3(1,0,0).applyQuaternion(q);
+    return {yaw:Math.atan2(-direction.z,direction.x),pitch:-Math.asin(direction.y)};
+  });
+  const onsets=stations.map(()=>({yaw:null,pitch:null}));
+  swimmer.navigate({x:-.85,y:1.17,z:-.5});
+  for(let frame=0;frame<120;frame++){
+    swimmer.step(1/120);pose(asset,joints,rest,steeringSample(swimmer.fish));
+    angles().forEach((sample,i)=>{
+      for(const axis of ['yaw','pitch'])if(onsets[i][axis]===null&&Math.abs(sample[axis])>.005)onsets[i][axis]=(frame+1)/120;
+    });
+  }
+  for(const axis of ['yaw','pitch']){
+    assert.ok(onsets.every(sample=>Number.isFinite(sample[axis])),`all axial regions eventually follow the head in ${axis}`);
+    for(let i=1;i<onsets.length;i++)assert.ok(onsets[i][axis]>onsets[i-1][axis]+1/120,
+      `actual ${axis} follows skull, shoulder, trunk and tail in order: ${onsets.map(sample=>sample[axis].toFixed(3)).join(', ')} s`);
+  }
+  const turning=angles();
+  swimmer.navigate({...swimmer.fish});
+  for(let frame=0;frame<360;frame++)swimmer.step(1/120);
+  pose(asset,joints,rest,steeringSample(swimmer.fish));
+  const settled=angles();
+  for(const axis of ['yaw','pitch']){
+    const before=Math.abs(turning.at(-1)[axis]-turning[0][axis]),after=Math.abs(settled.at(-1)[axis]-settled[0][axis]);
+    assert.ok(before>.05&&after<.015&&after<before*.2,`the actual posterior ${axis} bend relaxes after the manoeuvre`);
+  }
+  // A completed stroke can finish propagating during the start of a glide;
+  // after settling, changing its carrier phase must not keep waving the tail.
+  const quiet={...swimmer.fish,x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0,yawRate:0,pitchRate:0,bank:0,
+    yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0};
+  const tail=[];
+  for(const phase of [0,Math.PI]){
+    pose(asset,joints,rest,{...quiet,phase});body.skeleton.update();
+    tail.push(body.getVertexPosition(peduncle,new Vector3()).applyMatrix4(body.matrixWorld));
+  }
+  assert.ok(tail[0].distanceTo(tail[1])<1e-5,'settled axial muscles leave the actual tail quiet during a glide');
+}
+assertHeadLeadsSteering(createSwimmer);
+
+const crossing=createSwimmer(()=>.5);
+Object.assign(crossing.fish,{x:0,y:.8,z:tankCenterZ,yaw:Math.PI-.00001,yawRate:.3,pitch:.18,bank:.08});
+applySwimPose(asset,joints,rest,crossing.fish);body.skeleton.update();
+const beforeWrap=joints.map(b=>b.getWorldQuaternion(new Quaternion()));
+const beforeWrapTail=body.getVertexPosition(peduncle,new Vector3()).applyMatrix4(body.matrixWorld);
+crossing.step(1/120);
+assert.ok(crossing.fish.yaw<0,'the continuity test actually crosses the positive-pi heading boundary');
+applySwimPose(asset,joints,rest,crossing.fish);body.skeleton.update();
+joints.forEach((bone,i)=>assert.ok(bone.getWorldQuaternion(new Quaternion()).angleTo(beforeWrap[i])<.02,
+  'every actual bone remains continuous through a wrapped heading at nonzero pitch and bank'));
+const afterWrapTail=body.getVertexPosition(peduncle,new Vector3()).applyMatrix4(body.matrixWorld);
+assert.ok(beforeWrapTail.distanceTo(afterWrapTail)<.005,'heading wrap cannot throw the skinned tail through the water');
+
 const ascent=createSwimmer(()=>.5);
 Object.assign(ascent.fish,{x:.65,y:.58,z:.12,yaw:0});ascent.navigate({x:-.85,y:1.17,z:-.1});
 for(let i=0;i<720;i++)ascent.step(1/60);
@@ -371,10 +433,47 @@ assert.deepEqual([...modes].sort(),['cruise','hover','inspect'],'routine choices
 assert.ok(coasts>600&&heldCourses/coasts>.85,'most relaxed glides hold a course instead of continuously homing toward a random point');
 assert.ok(quietFrames>600&&quietFrames<30000,'the repertoire includes quiet intervals without getting stuck for most of the runs');
 assert.ok(levelFrames>18000&&maxDepth-minDepth>.20,'the fish mostly swims level but also makes slower, substantial depth excursions');
-const finHover=finActuation({speed:0,brake:1,finPhase:0},1);
-const finCruise=finActuation({speed:.25,brake:0,finPhase:0},1);
-assert.ok(finHover.spread>finCruise.spread+.25,'paired fins open for hovering and braking, and trail in a forward burst');
-assert.notEqual(finActuation({speed:0,brake:1,finPhase:0},-1).paddle,finHover.paddle,'paired fins need not paddle in mechanical synchrony');
+function assertPairedFinBehavior(actuate){
+  const steady={speed:.14,forwardSpeed:.14,brake:0,stroke:0,yawRate:0,finSteer:0,pitchRate:0,pitch:0};
+  const peakPhase=Math.PI*.38;
+  const cruise=actuate({...steady,finPhase:peakPhase},1);
+  const braking=actuate({...steady,brake:1,finPhase:peakPhase},1);
+  const resting=actuate({...steady,speed:0,forwardSpeed:0,brake:1,finPhase:peakPhase},1);
+  assert.ok(braking.spread>cruise.spread+.14,'fins deploy against moving water during braking');
+  assert.ok(braking.spread>resting.spread+.10,'a stopped brake flag alone does not hold the fins fully flared');
+  const turning=actuate({...steady,stroke:1,yawRate:.45,finSteer:.2,finPhase:peakPhase},1);
+  const otherSide=actuate({...steady,stroke:1,yawRate:.45,finSteer:.2,finPhase:peakPhase},-1);
+  const reverseTurn=actuate({...steady,stroke:1,yawRate:-.45,finSteer:-.2,finPhase:peakPhase},-1);
+  assert.ok(turning.spread>otherSide.spread+.025,'a purposeful turn creates a modest bilateral control-surface difference');
+  assert.ok(Math.abs(reverseTurn.spread-turning.spread)<1e-10,'the control-surface bias follows the turn direction');
+  const pelvic=actuate({...steady,brake:1,finPhase:peakPhase},1,false);
+  assert.ok(pelvic.spread<braking.spread*.6,'pelvic control remains smaller than pectoral deployment');
+  assert.ok(braking.paddle>0&&pelvic.paddle<0,'pelvic recovery is timed separately from the pectoral loaded excursion');
+  const recovery=actuate({...steady,brake:1,finPhase:Math.PI*2*.69},1);
+  assert.ok(recovery.paddle<0&&Math.abs(recovery.paddle)<braking.paddle*.5,'a feathered return does not duplicate the loaded excursion');
+  const trimming=actuate({...steady,stroke:1,pitchRate:.08,pitch:.12,finPhase:peakPhase},1);
+  assert.ok(trimming.paddle>cruise.paddle+.005,'paired-fin corrections respond to depth-trim demand');
+  for(const side of [-1,1]){
+    let hoverMin=Infinity,hoverMax=-Infinity,paddleMin=Infinity,paddleMax=-Infinity;
+    let quiet=0,quietRun=0,longestQuiet=0;
+    for(let frame=0;frame<60*120;frame++){
+      const age=frame/120,finPhase=age*Math.PI*2*.9;
+      const coast=actuate({...steady,age,finPhase},side);
+      assert.ok(Math.abs(coast.paddle)<.004,'an undisturbed forward glide does not keep rowing its paired fins');
+      const hover=actuate({...steady,speed:.004,forwardSpeed:.004,brake:1,age,finPhase},side);
+      const angle=hover.spread+hover.paddle;
+      hoverMin=Math.min(hoverMin,angle);hoverMax=Math.max(hoverMax,angle);
+      paddleMin=Math.min(paddleMin,hover.paddle);paddleMax=Math.max(paddleMax,hover.paddle);
+      if(Math.abs(hover.paddle)<.004){quiet++;quietRun++;longestQuiet=Math.max(longestQuiet,quietRun);}else quietRun=0;
+      assert.ok([hover.spread,hover.paddle,hover.sweep].every(Number.isFinite),'hover corrections stay finite');
+      assert.ok(Math.abs(hover.sweep)<.005,'soft fin compliance remains small relative to the attached membrane');
+    }
+    assert.ok(hoverMin>0&&hoverMax<.30,'hover corrections stay restrained instead of continuously flaring through forty degrees');
+    assert.ok(paddleMax-paddleMin>.075&&paddleMax-paddleMin<.20,'hover includes visible but occasional correction bouts');
+    assert.ok(quiet>60*120*.7&&longestQuiet>3*120,'hover includes several-second rests between corrective bouts');
+  }
+}
+assertPairedFinBehavior(finActuation);
 
 const attentive=createSwimmer(seeded(481));
 attentive.follow({x:-.9,y:1.1,z:.2});
