@@ -654,3 +654,43 @@ files. It has a compressed body, species-specific face and fin structure. It
 is not included in the live aquarium yet. The strong koi bend also exposes
 remaining scale-plate stretching; passing geometry checks does not establish
 photographic or biological accuracy.
+
+
+## Fin-led gentle corrections
+
+Small course errors no longer rotate the root from a desired yaw-rate term.
+A finite trim stroke presents the pectoral foil, loads it, reorients it, and
+retrieves more slowly. The same clearance-scaled paddle and fore/aft commands
+used by the rendered fins enter `aquarium-fin-yaw.js` before head integration.
+Positive actual paddle rate with signed presentation supplies an authored
+angular acceleration; retrieval adds nonnegative yaw damping. Held controls
+and quiet motors supply no active impulse. This is a basal motor-response
+approximation, not a pressure, lift, wake or added-mass solver. The existing
+0.24-second distal tissue histories remain intact. A change between trim and
+body-turn tasks uses the same smooth handoff as other task changes.
+
+**Gentle course changes** issues five navigation destinations over 16 seconds,
+including small relative left/right corrections and an 80 mm higher target.
+It does not prescribe body poses or force the path through those targets. Each
+new bearing is computed once from the actual current heading. The real
+swimmer decides its thrust, attitude and glides. The finite study stops after
+1,920 observed physics ticks and restarts deterministically on restart or
+recording. It isolates the primary fish, preserves pause and camera controls,
+and offers a matching 16-second recording length.
+
+The joined test suppresses all eight issued fin motor fields before any
+response or renderer consumes them. Fin-only steering must then disappear;
+small positive and negative commands must move actual GLB membranes and rays
+before the skull turns. It also checks quiet intervals, low flow, mirrored
+progress, full histories, reset, frame cadence and containment. This causal
+check does not establish a measured hydrodynamic model.
+
+The research notes distinguish filtered bluegill body-region orientation from
+rigid-skull onset, and anterior reorientation from the origin of curvature.
+The versioned filtering code and the small-carp turning study are linked in
+the head note. The skeleton note includes the scale-pocket and material
+research behind the remaining authoring limitation: current plates stretch
+in strong bends. Surface-following scale prototypes remain authoring
+experiments because coverage and neighboring contact still fail. The
+comparative scale models and destructive carp tests are not routine-koi
+strain calibration.

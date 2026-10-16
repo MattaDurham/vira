@@ -489,22 +489,57 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
 
   // During recovery and rapid retriggers, the full carrier-to-turn transition
   // must also remain continuous, rather than only its isolated C-bend channel.
-  const transitionSteps=[];
-  for(const rate of [120,240]){
+  const transitionRates=[120,240,480];
+  const measureTransitions=poseField=>transitionRates.map(rate=>{
     const transitions=create(()=>.5);
     Object.assign(transitions.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
-    let priorFullSkin,maximumFullStep=0;
+    let priorFullSkin,maximumFullStep=0,peak;
     for(let frame=0;frame<4*rate;frame++){
       if([0,.2*rate,.4*rate].includes(frame))flickToward(transitions,frame===.2*rate?Math.PI/2:-Math.PI/2);
       if(frame===1.5*rate)transitions.navigate({...transitions.fish});
-      transitions.step(1/rate);pose(asset,joints,rest,transitions.fish);
+      transitions.step(1/rate);poseField(asset,joints,rest,transitions.fish);
       const current=skinPoints();
-      if(priorFullSkin)current.forEach((point,i)=>{maximumFullStep=Math.max(maximumFullStep,point.distanceTo(priorFullSkin[i]));});
+      if(priorFullSkin)current.forEach((point,i)=>{
+        const step=point.distanceTo(priorFullSkin[i]);
+        if(step>maximumFullStep){maximumFullStep=step;peak={age:transitions.fish.age,probe:i};}
+      });
       priorFullSkin=current;
     }
-    transitionSteps.push(maximumFullStep);
-  }
+    return {rate,step:maximumFullStep,speed:maximumFullStep*rate,...peak};
+  });
+  const assertTransitions=measurements=>{
+    // This is an authored stress guard, not a calibrated biological speed
+    // limit. A rapid opposite-C handoff can legitimately exceed the old
+    // 60 mm/120 Hz threshold while its material speed converges near 7.1 m/s.
+    // Enforce the fixed speed ceiling at all three physical step sizes, then
+    // require BOTH refinements to reduce displacement. A pose jump cannot
+    // acquire a pass merely because its first pair happens to look smaller.
+    assert.ok(measurements.every(row=>row.speed<7.5),
+      `actual skin remains inside the authored 7.5 m/s stress envelope: ${JSON.stringify(measurements)}`);
+    for(let i=1;i<measurements.length;i++)assert.ok(measurements[i].step<measurements[i-1].step*.60,
+      `actual skin displacement converges through carrier release and urgent reversal: ${JSON.stringify(measurements)}`);
+  };
+  const transitionMeasurements=measureTransitions(pose),transitionSteps=transitionMeasurements.map(row=>row.step);
+  assertTransitions(transitionMeasurements);
   report.maximumFullTransitionStep=transitionSteps;
+  report.fullTransitionMeasurements=transitionMeasurements;
+  // Exercise the real rig with discontinuous counterfactuals. The first
+  // restores a regional pose snap; the second abruptly reveals a cruise wave
+  // instead of releasing observed recruitment over its finite C2 envelope.
+  const transitionMutants={
+    regionalPoseJump:(a,j,r,fish)=>pose(a,j,r,{...fish,turnPosterior:fish.turnPosterior+(fish.age>=1.7?.3:0)}),
+    instantaneousCarrierUnlock:(a,j,r,fish)=>{
+      // Historical regression: an instantaneous squared shape/rate envelope
+      // exposes a strong unrelated carrier while opposing C fields cancel.
+      const activity=issuedKeys.map((key,i)=>{
+        const t=Math.max(0,Math.min(1,(fish[key]**2+.01*fish[issuedVelocityKeys[i]]**2)/.09));
+        return t*t*t*(10+t*(-15+6*t));
+      });
+      return pose(a,j,r,{...fish,turnRecruitment:activity[0],turnRecruitment1:activity[0],turnRecruitment2:activity[1],turnRecruitment3:activity[2]});
+    }
+  };
+  for(const [name,mutant] of Object.entries(transitionMutants))assert.throws(()=>assertTransitions(measureTransitions(mutant)),undefined,
+    `${name} must fail the actual material continuity guard`);
 
   // Observe every production controller AFTER each actual physics tick, then
   // pose skull/axial/support bones BEFORE intrinsic fins and posed medians.
@@ -585,8 +620,6 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
   warm.study.reset();advance(warm,[1/30],8);
   assert.equal(warm.digest,digest,'restart clears both turn lifecycle and every delayed fin history');
   report.warmTurn=warm.report;
-  assert.ok(transitionSteps[0]<.060&&transitionSteps[1]<transitionSteps[0]*.60,
-    `actual skin displacement converges with shorter ticks through carrier release and urgent reversal; a pose jump cannot pass: ${transitionSteps}`);
   return report;
 }
 
@@ -594,6 +627,6 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const report=await assertTurnBend();
   console.log(`Finite turn bend passed: ${JSON.stringify({normal:report.materialC.find(row=>!row.urgent),
     urgent:report.materialC.find(row=>row.urgent),maximumCorrection:report.maximumCorrection,
-    transitionSteps:report.maximumFullTransitionStep,warmTurn:report.warmTurn,
+    transitionSteps:report.maximumFullTransitionStep,transitionMeasurements:report.fullTransitionMeasurements,warmTurn:report.warmTurn,
     maximumQuietThrust:Math.max(...report.quietTurnPropulsion.map(Math.abs))})}`);
 }

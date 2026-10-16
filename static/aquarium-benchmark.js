@@ -3,30 +3,31 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=86';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=86';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=86';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=86';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=86';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=86';
-import {finRayContrast} from './aquarium-fin-detail.js?v=86';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=86';
-import {waterOptics} from './aquarium-optics.js?v=86';
-import {createContainment} from './aquarium-collision.js?v=86';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=86';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=86';
-import {createResearchLayer} from './aquarium-research.js?v=86';
-import {createResearchShape} from './aquarium-research-shape.js?v=86';
-import {createKoiInstance} from './aquarium-fish-instance.js?v=86';
-import {pigmentColorNode,pigmentFinPalette} from './aquarium-pigment.js?v=86';
-import {createSupportArticulation} from './aquarium-supports.js?v=86';
-import {createManeuverFootprint} from './aquarium-footprint.js?v=86';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=88';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=88';
+import {createGentleStudy} from './aquarium-gentle-study.js?v=88';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=88';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=88';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=88';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=88';
+import {finRayContrast} from './aquarium-fin-detail.js?v=88';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=88';
+import {waterOptics} from './aquarium-optics.js?v=88';
+import {createContainment} from './aquarium-collision.js?v=88';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=88';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=88';
+import {createResearchLayer} from './aquarium-research.js?v=88';
+import {createResearchShape} from './aquarium-research-shape.js?v=88';
+import {createKoiInstance} from './aquarium-fish-instance.js?v=88';
+import {pigmentColorNode,pigmentFinPalette} from './aquarium-pigment.js?v=88';
+import {createSupportArticulation} from './aquarium-supports.js?v=88';
+import {createManeuverFootprint} from './aquarium-footprint.js?v=88';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
 const studyRandom=createStudyRandom(requestedStudySeed===null?913:Number(requestedStudySeed));
-let turnReplay=false,turnPoseKey=0;
-const swimmer=createSwimmer(()=>turnReplay?studyRandom():Math.random()),fish=swimmer.fish,clock=uniform(0);
+let navigationReplay=false,navigationPoseKey=0;
+const swimmer=createSwimmer(()=>navigationReplay?studyRandom():Math.random()),fish=swimmer.fish,clock=uniform(0);
 const rayDetail=uniform(1),rayDetailPosition=new THREE.Vector3();
 const fullRayDetail=new URLSearchParams(location.search).get('ray-detail')==='full';
 const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front',research:false,community:true};
@@ -35,7 +36,7 @@ const companionSpecs=[
   {kind:'showa',scale:.46,initialPose:{x:-.75,y:1.16,z:-.65,yaw:2.7,phase:1.1}},
   {kind:'ogon',scale:.34,initialPose:{x:.85,y:.40,z:-.45,yaw:.20,phase:3.3}},
 ];
-const communityVisible=()=>state.community&&!state.study&&!state.closeup&&!turnReplay;
+const communityVisible=()=>state.community&&!state.study&&!state.closeup&&!navigationReplay;
 function allSwimmers(action){action(swimmer);for(const companion of companions)action(companion.swimmer);}
 function observeCommunity(){
   const actors=[swimmer,...companions.map(companion=>companion.swimmer)];
@@ -86,9 +87,17 @@ function observeFins(sample,key){
 // display frames. Held inspection poses keep their own separate history key.
 const observeLiveFins=sample=>observeFins(sample,'live');
 const turnStudy=createTurnStudy(swimmer,{random:studyRandom,
-  onReset:sample=>{turnPoseKey++;observeFins(sample,`turn:${turnPoseKey}`);},
-  onTick:sample=>observeFins(sample,`turn:${turnPoseKey}`),
+  onReset:sample=>{navigationPoseKey++;observeFins(sample,`navigation:${navigationPoseKey}`);},
+  onTick:sample=>observeFins(sample,`navigation:${navigationPoseKey}`),
 });
+const gentleStudy=createGentleStudy(swimmer,{random:studyRandom,
+  onReset:sample=>{navigationPoseKey++;observeFins(sample,`navigation:${navigationPoseKey}`);},
+  onTick:sample=>observeFins(sample,`navigation:${navigationPoseKey}`),
+});
+const activeNavigationStudy=()=>state.studyAxis==='gentle'?gentleStudy:turnStudy;
+const navigationHint=()=>state.studyAxis==='gentle'
+  ?'A 16-second sequence of small course changes and a climb, using live swimming controls. Restart or record to replay; drag to inspect.'
+  :'The same swimming turn replays on restart and recording. Drag to inspect it from another angle.';
 const barbels=[];
 const finSupports=[];
 const anatomicalMeshes=[];
@@ -342,9 +351,9 @@ function pointerMove(event){
     if(Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>5)drag.moved=true;
     if(drag.moved){orbit=THREE.MathUtils.clamp(orbit+(event.clientX-drag.lastX)*.0015,-.28,.28);elevation=THREE.MathUtils.clamp(elevation+(event.clientY-drag.lastY)*.001,-.15,.20);setCamera();}
     drag.lastX=event.clientX;drag.lastY=event.clientY;
-  }else if(!turnReplay)allSwimmers(actor=>actor.follow(pointerPoint(event)));
+  }else if(!navigationReplay)allSwimmers(actor=>actor.follow(pointerPoint(event)));
 }
-function pointerUp(event){if(drag&&event.pointerId===drag.id){if(!drag.moved&&!turnReplay)allSwimmers(actor=>actor.flick(pointerPoint(event)));drag=null;}}
+function pointerUp(event){if(drag&&event.pointerId===drag.id){if(!drag.moved&&!navigationReplay)allSwimmers(actor=>actor.flick(pointerPoint(event)));drag=null;}}
 function pointerCancel(){drag=null;}
 function pointerLeave(){if(!drag)allSwimmers(actor=>actor.follow(null));}
 function wheel(event){if(state.reference)return;event.preventDefault();distance=THREE.MathUtils.clamp(distance+event.deltaY*.002,3.3,4.7);setCamera();}
@@ -381,7 +390,8 @@ function pose(){
   canvas.dataset.tailPosition=[p.x,p.y,p.z].map(v=>v.toFixed(4)).join(',');
   canvas.dataset.phase=sample.phase.toFixed(4);
   canvas.dataset.age=fish.age.toFixed(2);canvas.dataset.pitch=sample.pitch.toFixed(3);
-  canvas.dataset.studyTick=turnReplay?String(turnStudy.tick):'';
+  canvas.dataset.studyTick=navigationReplay?String(activeNavigationStudy().tick):'';
+  canvas.dataset.studyStage=navigationReplay&&state.studyAxis==='gentle'?gentleStudy.stage:'';
   canvas.dataset.rootPosition=[sample.x,sample.y,sample.z].map(v=>v.toFixed(3)).join(',');
   const behavior=swimmer.behavior;
   canvas.dataset.behavior=state.study?'held study':behavior.intent;
@@ -400,13 +410,13 @@ function draw(now){
       const leg=Math.floor(fish.age/12)%2;
       if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
     }
-    if(turnReplay)turnStudy.step(elapsed);else swimmer.step(elapsed,state.study?undefined:observeLiveFins);
+    if(navigationReplay)activeNavigationStudy().step(elapsed);else swimmer.step(elapsed,state.study?undefined:observeLiveFins);
     if(communityVisible())for(const companion of companions)companion.step(elapsed);
     studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.25);clock.value=fish.age;pose();}
   for(const companion of companions)companion.asset.visible=communityVisible();
   canvas.dataset.fishCount=String(1+(communityVisible()?companions.length:0));
   canvas.dataset.fishVarieties=communityVisible()?'kohaku,showa,ogon':'kohaku';
-  const finPoseKey=turnReplay?`turn:${turnPoseKey}`:state.study?state.studyAxis:'live';
+  const finPoseKey=navigationReplay?`navigation:${navigationPoseKey}`:state.study?state.studyAxis:'live';
   const pairedMotion={
     pectoral:{'-1':pairedFinControllers.pectoral[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pectoral[1].sample(visualFish,finPoseKey)},
     pelvic:{'-1':pairedFinControllers.pelvic[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pelvic[1].sample(visualFish,finPoseKey)},
@@ -488,11 +498,11 @@ function draw(now){
   }
 }
 function setPause(paused){state.paused=paused;$('motion').textContent=paused?'Resume motion':'Pause motion';$('motion').setAttribute('aria-pressed',String(paused));}
-function restartTurnStudy(){
-  turnReplay=true;state.study=false;state.closeup=false;studyPhase=0;navigationLeg=-1;
-  turnStudy.reset();previous=0;clock.value=fish.age;frameTimes.length=0;
+function restartNavigationStudy(){
+  navigationReplay=true;state.study=false;state.closeup=false;studyPhase=0;navigationLeg=-1;
+  activeNavigationStudy().reset();previous=0;clock.value=fish.age;frameTimes.length=0;
   $('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');
-  $('hint').textContent='The same swimming turn replays on restart and recording. Drag to inspect it from another angle.';
+  $('hint').textContent=navigationHint();
   pose();if(state.research)asset.getWorldPosition(researchFocus);setCamera();setPause(false);
 }
 function setView(reference){
@@ -500,7 +510,7 @@ function setView(reference){
   research?.setReference(reference);
   $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=$('record-length').disabled=$('community').disabled=reference;
   $('record').disabled=reference||recording?.state==='recording';
-  $('hint').textContent=reference?'Cycles reference: the same authored fish, rendered offline through glass and volumetric water.':turnReplay?'The same swimming turn replays on restart and recording. Drag to inspect it from another angle.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';
+  $('hint').textContent=reference?'Cycles reference: the same authored fish, rendered offline through glass and volumetric water.':navigationReplay?navigationHint():'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';
   $('engine').textContent=reference?'Cycles / offline':liveEngine;
   $('performance').textContent=reference&&referenceMetadata?`${referenceMetadata.samples} samples / ${referenceMetadata.resolution.join(' × ')} still`:reference?'Offline still':'Measuring';
   previous=0;frameTimes.length=0;
@@ -523,12 +533,13 @@ function releaseCapture(){
 
 function record(){
   if(state.reference||recording?.state==='recording')return;
-  const button=$('record'),link=$('download-recording'),seconds=$('record-length').value==='30'?30:8;
+  const button=$('record'),link=$('download-recording'),requestedSeconds=Number($('record-length').value);
+  const seconds=[8,16,30].includes(requestedSeconds)?requestedSeconds:8;
   try{
     if(!canvas.captureStream||!window.MediaRecorder)throw new Error('Canvas recording unavailable');
     const mimeType=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type));
     if(!mimeType)throw new Error('No supported video codec');
-    if(turnReplay){restartTurnStudy();draw(performance.now());}
+    if(navigationReplay){restartNavigationStudy();draw(performance.now());}
     // Retain a fixed capture extent if the window changes size mid-recording.
     const exportRatio=Math.min(1,1920/canvas.width,1080/canvas.height);
     recordingSurface=document.createElement('canvas');recordingSurface.width=Math.round(canvas.width*exportRatio);
@@ -554,7 +565,7 @@ function record(){
     };
     recording.onerror=event=>{captureFailed=true;releaseCapture();button.textContent=`Recording failed: ${event.error?.message??'encoder error'}`;button.disabled=true;};
     link.hidden=true;button.disabled=true;button.textContent='Recording live frames';frameTimes.length=0;recording.start();
-    if(turnReplay)previous=performance.now();
+    if(navigationReplay)previous=performance.now();
     recordingTimer=setTimeout(()=>{if(recording.state==='recording')recording.stop();},seconds*1000);
   }catch(error){releaseCapture();button.textContent=error.message;button.disabled=true;}
 }
@@ -578,7 +589,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=86');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=88');asset=gltf.scene;scene.add(asset);
   const maneuverFootprint=createManeuverFootprint(asset);swimmer.footprint(maneuverFootprint.bounds);
   for(const spec of companionSpecs){
     const detail=uniform(1),materials=new Map();
@@ -647,12 +658,12 @@ async function start(){
   $('study-axis').value=state.studyAxis;$('camera-angle').value=state.cameraAngle;
   $('light').value='1';$('light-value').value='100%';
   $('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;
-  fetch('aquarium/manifest.json?v=86').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=88').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
   $('motion').addEventListener('click',()=>setPause(!state.paused));
-  $('reset').addEventListener('click',()=>{if(turnReplay){restartTurnStudy();return;}swimmer.reset();companions.forEach(companion=>companion.reset());state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';$('hint').textContent='Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
+  $('reset').addEventListener('click',()=>{if(navigationReplay){restartNavigationStudy();return;}swimmer.reset();companions.forEach(companion=>companion.reset());state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';$('hint').textContent='Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
   $('community').addEventListener('click',()=>{state.community=!state.community;$('community').setAttribute('aria-pressed',String(state.community));});
   $('wireframe').addEventListener('click',()=>{
     state.wireframe=!state.wireframe;skeleton.visible=state.wireframe;
@@ -674,17 +685,17 @@ async function start(){
     finSupports.forEach(mesh=>{mesh.visible=true;});
     companions.forEach(companion=>companion.setInspection(state.wireframe,wireMaterial));
   });
-  $('study').addEventListener('click',()=>{if(state.studyAxis==='swim'||state.studyAxis==='turn'){state.studyAxis='combined';$('study-axis').value='combined';}turnReplay=false;state.study=!state.study;studyPhase=fish.phase;$('study').setAttribute('aria-pressed',String(state.study));$('hint').textContent=state.study?'Held position reveals the spine. Choose an axis to isolate it; vertical flexion and twist are amplified for inspection.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';pose();});
+  $('study').addEventListener('click',()=>{if(['swim','turn','gentle'].includes(state.studyAxis)){state.studyAxis='combined';$('study-axis').value='combined';}navigationReplay=false;state.study=!state.study;studyPhase=fish.phase;$('study').setAttribute('aria-pressed',String(state.study));$('hint').textContent=state.study?'Held position reveals the spine. Choose an axis to isolate it; vertical flexion and twist are amplified for inspection.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';pose();});
   $('study-axis').addEventListener('change',()=>{
-    state.studyAxis=$('study-axis').value;turnReplay=state.studyAxis==='turn';
-    if(turnReplay){state.cameraAngle='quarter';$('camera-angle').value='quarter';orbit=elevation=0;distance=4.1;restartTurnStudy();return;}
+    state.studyAxis=$('study-axis').value;navigationReplay=state.studyAxis==='turn'||state.studyAxis==='gentle';
+    if(navigationReplay){state.cameraAngle='quarter';$('camera-angle').value='quarter';orbit=elevation=0;distance=4.1;restartNavigationStudy();return;}
     state.study=state.studyAxis!=='swim';
     if(!state.study){swimmer.reset();Object.assign(fish,{x:.65,y:.58,z:.12,yaw:0});navigationLeg=-1;}
     $('hint').textContent=state.studyAxis==='steering'?'Held fin-correction study: small steering reversals and changing pitch trim. The body stays fixed for inspection; inputs and timing are authored.':state.studyAxis==='fins'?'Held fin-control study: inspect cupping, feathered recovery and independent sides. Timing is authored for inspection.':state.study?'Held orientation: vertical flexion and twist are amplified for inspection. Change camera angle to inspect in 3D.':'Ascent and descent come from nose-up and nose-down propulsion through the water.';
     $('study').setAttribute('aria-pressed',String(state.study));pose();setPause(false);
   });
   $('camera-angle').addEventListener('change',()=>{state.cameraAngle=$('camera-angle').value;state.closeup=false;$('closeup').setAttribute('aria-pressed','false');setCamera();});
-  $('closeup').addEventListener('click',()=>{state.closeup=!state.closeup;if(state.closeup){if(state.studyAxis==='swim'||state.studyAxis==='turn'){state.studyAxis='combined';$('study-axis').value='combined';}turnReplay=false;state.study=true;$('study').setAttribute('aria-pressed','true');pose();}$('closeup').setAttribute('aria-pressed',String(state.closeup));setCamera();});
+  $('closeup').addEventListener('click',()=>{state.closeup=!state.closeup;if(state.closeup){if(['swim','turn','gentle'].includes(state.studyAxis)){state.studyAxis='combined';$('study-axis').value='combined';}navigationReplay=false;state.study=true;$('study').setAttribute('aria-pressed','true');pose();}$('closeup').setAttribute('aria-pressed',String(state.closeup));setCamera();});
   $('record').addEventListener('click',record);
   $('record-length').addEventListener('change',()=>{if(recording?.state!=='recording')$('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;});
   $('reference-view').addEventListener('click',()=>setView(true));$('live-view').addEventListener('click',()=>setView(false));

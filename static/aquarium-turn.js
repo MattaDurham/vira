@@ -126,7 +126,7 @@ export function regionalTurnAngle(s,b){
   const t=clamp(s,0,1),square=t*t,cube=square*t;
   return -(b[0]*(t-square+cube/3)+b[1]*(square-2*cube/3)+b[2]*cube/3);
 }
-export function turnResponse(gesture,yawRate,dt,{finRate=0,allowed=1,headingProgress,outgoingHeadingProgress}={}){
+export function turnResponse(gesture,yawRate,dt,{finMoment=0,finDamping=0,allowed=1,headingProgress,outgoingHeadingProgress}={}){
   // The same issued regional velocities used by the rig supply a bounded
   // authored angular impulse. Root motion and passive yaw lag cannot energize
   // this term. Recovery only removes actual angular momentum.
@@ -134,7 +134,7 @@ export function turnResponse(gesture,yawRate,dt,{finRate=0,allowed=1,headingProg
   const engagement=ease(clamp(energy/.36,0,1));
   const load=weights.reduce((sum,w,i)=>sum+w*regionalLoad(gesture.b[i],gesture.v[i]),0);
   const moment=3.6*load*engagement*clamp(allowed,0,1);
-  let damping=1.25+3.0*gesture.recovery,budgetBraking=0;
+  let damping=1.25+3.0*gesture.recovery+Math.max(0,finDamping),budgetBraking=0;
   const stop=(budget,progress,weight)=>{
     if(!weight||!Number.isFinite(progress))return 0;
     const sign=Math.sign(budget),remaining=Math.abs(budget)-progress*sign;
@@ -149,7 +149,7 @@ export function turnResponse(gesture,yawRate,dt,{finRate=0,allowed=1,headingProg
   budgetBraking=stop(gesture.budget,headingProgress,gesture.settleWeight??0)*mix
     +stop(gesture.outgoingBudget,outgoingHeadingProgress,gesture.outgoingSettleWeight??0)*(1-mix);
   damping+=budgetBraking;
-  const finMoment=.70*finRate;
-  const rate=(yawRate+(moment+finMoment)*dt)/(1+damping*dt);
-  return {yawRate:rate,moment,finMoment,recoveryMoment:-(3.0*gesture.recovery+budgetBraking)*rate,damping,budgetBraking};
+  const permittedFinMoment=finMoment*clamp(allowed,0,1);
+  const rate=(yawRate+(moment+permittedFinMoment)*dt)/(1+damping*dt);
+  return {yawRate:rate,moment,finMoment:permittedFinMoment,recoveryMoment:-(3.0*gesture.recovery+budgetBraking)*rate,damping,budgetBraking};
 }

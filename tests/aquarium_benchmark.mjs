@@ -586,7 +586,7 @@ for(let i=0;i<18000;i++){
   if(i%400===0)roam.flick({x:-1+2*(i%800)/800,y:1.1,z:.2});
   roam.step(1/60);
   for(const [name,value] of Object.entries(roam.fish)){
-    if(name==='finTaskMode')assert.ok(['swim','hover','retreat','steer','brake','balance'].includes(value),'the task label remains a known locomotor context');
+    if(name==='finTaskMode')assert.ok(['swim','hover','retreat','steer','trim','brake','balance'].includes(value),'the task label remains a known locomotor context');
     else if(name==='id')assert.ok(value===undefined||typeof value==='string'||Number.isFinite(value),'the optional fish identity remains a string or finite number');
     else if(name==='turnGestureActive'||name==='turnPreparing')assert.equal(typeof value,'boolean',`${name}: turn lifecycle flags remain boolean`);
     else assert.ok(Number.isFinite(value),`${name}: long runs stay finite`);

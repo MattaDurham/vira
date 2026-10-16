@@ -82,6 +82,13 @@ class AquariumBenchmarkTest(unittest.TestCase):
                              cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the gentle swimming harness")
+    def test_gentle_course_changes_use_live_swimming_and_geometry(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_gentle_study.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=90)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the rig axis harness")
     def test_twist_follows_each_vertebras_rest_tangent(self):
         root = Path(__file__).resolve().parents[1]

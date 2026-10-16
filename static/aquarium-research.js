@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=86';
-import {waterMax} from './aquarium-space.js?v=86';
-import {spinalField} from './aquarium-motion.js?v=86';
-import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=86';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=88';
+import {waterMax} from './aquarium-space.js?v=88';
+import {spinalField} from './aquarium-motion.js?v=88';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=88';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -340,7 +340,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     miniDots.forEach((dot,i)=>{dot.setAttribute('cy',ys[i]);dot.setAttribute('r',3+activation[i]*5);dot.setAttribute('opacity',.3+.7*activation[i]);});
     miniCaption.textContent=`${vertical?'Vertical':'Sideways'} pose offsets / ±40° / dot size: authored activation`;
     mini.setAttribute('aria-label','Four axial orientation offsets from rest in the animal frame, with a fixed plus or minus 40 degree scale. This is an orientation profile, not a centerline shape. Circle size shows the authored activation envelope, not measured EMG.');
-    const taskLabel={steer:'steering stroke',brake:'settling stroke',balance:'balance correction',swim:'fin hold',hover:'hover',retreat:'retreat'}[fish.finTaskMode]??'unavailable';
+    const taskLabel={trim:'fine trim stroke',steer:'steering stroke',brake:'settling stroke',balance:'balance correction',swim:'fin hold',hover:'hover',retreat:'retreat'}[fish.finTaskMode]??'unavailable';
     liveValue.textContent=active==='optics'?`${Math.max(0,waterMax[1]-joints[15].getWorldPosition(vector).y).toFixed(2)} m below surface`:
       active==='fins'?`${(fish.speed??0).toFixed(2)} m/s / ${attitudeAxis==='steering'?taskLabel:(fish.brake>.2?'braking':fish.stroke>.2?'propulsive bout':'glide / trim')}`:
       `${(fish.pitch*180/Math.PI).toFixed(1)}° pitch / ${(fish.speed??0).toFixed(2)} m/s`;

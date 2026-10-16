@@ -1,7 +1,8 @@
-import {finClearanceFactor,finClearanceFold} from './aquarium-fin-clearance.js?v=86';
-import {createTurnController,regionalTurnAngle,turnResponse} from './aquarium-turn.js?v=86';
+import {createFinYawController,trimFinAngles} from './aquarium-fin-yaw.js?v=88';
+import {finClearanceFactor,finClearanceFold} from './aquarium-fin-clearance.js?v=88';
+import {createTurnController,regionalTurnAngle,turnResponse} from './aquarium-turn.js?v=88';
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=86';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=88';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -68,7 +69,12 @@ export function createFinTaskController(){
   function trajectory(event,now,values){
     values.fill(0);if(!event)return;
     const t=now-event.start,{kind,direction,strength}=event;
-    if(kind==='steer'||kind==='brake'||kind==='balance'){
+    if(kind==='trim'){
+      for(const side of [1,-1]){
+        const motion=trimFinAngles(t,strength,side===direction),slot=side>0?0:1;
+        values[slot]=motion.paddle;values[slot+2]=motion.foreAft;
+      }
+    }else if(kind==='steer'||kind==='brake'||kind==='balance'){
       for(const side of [1,-1]){
         const leading=side===direction,delay=kind==='brake'?0:leading?0:.10;
         const stroke=finExcursion(t,delay),slot=side>0?0:1;
@@ -111,6 +117,10 @@ export function createFinTaskController(){
       },
       get current(){return current;},
       cancelQueued(kind){if(queued?.kind===kind)queued=null;},
+      reconcileSteering(kind,direction){
+        if((queued?.kind==='trim'||queued?.kind==='steer')&&
+          (queued.kind!==kind||queued.direction!==direction))queued=null;
+      },
       reset(){current=outgoing=queued=null;handoff=0;lastEnd=-Infinity;}};
   }
   const pectoral=track(),pelvic=track();
@@ -128,16 +138,23 @@ export function createFinTaskController(){
     if(age!==undefined&&(now<age||now-age>.25))reset();
     age=now;
     const turn=clamp(input.turn??0,-1,1),error=input.yawError??turn,rate=input.yawRate??0,stopping=clamp(input.stopping??0,0,1);
-    const significant=Math.abs(turn)>.04&&Math.abs(error)>.04;
-    const wanted=significant?Math.sign(turn):Math.abs(turn)<.025||Math.abs(error)<.025?0:requested;
-    const strength=clamp(.75*finDemandMagnitude(turn)+.65*stopping,0,1);
-    const changed=wanted!==requested;
-    if(changed){
+    const trim=input.steeringMode==='trim';
+    const significant=trim?Math.abs(error)>.04:Math.abs(turn)>.04&&Math.abs(error)>.04;
+    const wanted=significant?Math.sign(turn):(trim?Math.abs(error)<.025:Math.abs(turn)<.025||Math.abs(error)<.025)?0:requested;
+    const strength=trim?clamp(Math.abs(error)/.12,.35,1):clamp(.75*finDemandMagnitude(turn)+.65*stopping,0,1);
+    const kind=trim?'trim':'steer',changed=wanted!==requested;
+    pectoral.reconcileSteering(kind,wanted);
+    // A task changes its complete C2 trajectory when the same signed intent
+    // crosses between fin trim and a body manoeuvre. Direction alone cannot
+    // select presentation: retaining the old stroke would delay that join.
+    const presentationChanged=wanted&&pectoral.current&&
+      (pectoral.current.kind!==kind||pectoral.current.direction!==wanted);
+    if(changed||presentationChanged){
       requested=wanted;
       if(wanted){
-        pectoral.request({kind:'steer',direction:wanted,strength},now);
+        pectoral.request({kind,direction:wanted,strength},now);
         episode=wanted;peak=0;inside=outside=false;lastStrength=strength;
-      }else pectoral.cancelQueued('steer');
+      }else{pectoral.cancelQueued('steer');pectoral.cancelQueued('trim');}
     }
     // Reconcile the latest request before a completed handoff may drain its
     // queue, including a release observed exactly at that handoff boundary.
@@ -145,7 +162,7 @@ export function createFinTaskController(){
     if(input.mode!=='hover'&&input.mode!=='retreat')pectoral.cancelQueued('balance');
     pectoral.advance(now);pelvic.advance(now);
     if(!changed&&requested&&pectoral.ready(now)){
-      pectoral.request({kind:'steer',direction:requested,strength},now);lastStrength=strength;
+      pectoral.request({kind,direction:requested,strength},now);lastStrength=strength;
     }
     // A maintained braking surface need not paddle continuously. A later
     // brake episode rearms only after actual flow-weighted demand releases.
@@ -182,10 +199,10 @@ export function createFinTaskController(){
   }};
 }
 
-export function createSwimmer(random=Math.random,{bodyScale=1,id}={}){
+export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=createFinTaskController}={}){
   const fish={};let neighbors=[],forecastBounds=null;
   const ownScale=Number.isFinite(bodyScale)?clamp(bodyScale,.15,1.5):1;
-  const finTasks=createFinTaskController();
+  const finTasks=finTaskFactory(),finYaw=createFinYawController();
   const bodyTurns=createTurnController();let turnAuthority=1,totalTurnYaw=0,strokeYawStart=0,strokeSerial=0;const strokeStarts=new Map();
   let intent,intentTime,heading,depth,depthTime,cursor,cursorAge,attention,goal;
   let gait,gaitTime,turnTime,turnCooldown,turnSign,escapeTime,wallTime;
@@ -211,8 +228,8 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id}={}){
       bankLag1:0,bankLag2:0,bankLag3:0,
       muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
       turnRecruitment:0,turnRecruitment1:0,turnRecruitment2:0,turnRecruitment3:0});
-    Object.assign(fish,finTasks.reset());bodyTurns.reset();turnAuthority=1;totalTurnYaw=strokeYawStart=strokeSerial=0;strokeStarts.clear();
-    Object.assign(fish,{turnAnterior:0,turnTrunk:0,turnPosterior:0,turnAnteriorVelocity:0,turnTrunkVelocity:0,turnPosteriorVelocity:0,turnMoment:0,turnRecoveryMoment:0,turnGestureSerial:0,turnIntensity:0,turnHeadingBudget:0,turnProgress:0,turnGestureAge:0,turnGestureActive:false,turnFinClearance:1,turnPreparing:false,turnPower:0});
+    Object.assign(fish,finTasks.reset());finYaw.reset();bodyTurns.reset();turnAuthority=1;totalTurnYaw=strokeYawStart=strokeSerial=0;strokeStarts.clear();
+    Object.assign(fish,{turnAnterior:0,turnTrunk:0,turnPosterior:0,turnAnteriorVelocity:0,turnTrunkVelocity:0,turnPosteriorVelocity:0,turnMoment:0,turnRecoveryMoment:0,turnGestureSerial:0,turnIntensity:0,turnHeadingBudget:0,turnProgress:0,turnGestureAge:0,turnGestureActive:false,turnFinClearance:1,turnPreparing:false,turnPower:0,finYawMoment:0,finYawDamping:0});
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
     cursor=goal=null;neighbors=[];cursorAge=attention=escapeTime=wallTime=0;
     gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=0;turnSign=1;
@@ -441,15 +458,18 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id}={}){
       const projected=Math.abs(fish.z+fish.vz*.3-tankCenterZ-.065*Math.sin(yaw))+extent;
       return projected<tankDepth/2-.045||projected<occupiedDepth;
     };
-    const predicted=turnResponse(gesture,fish.yawRate,.30,{finRate,headingProgress,outgoingHeadingProgress}).yawRate;
+    Object.assign(fish,finTasks.sample({age:fish.age,turn:gesture.preparing?0:clamp(finRate+(gesture.active?gesture.budget*.35:0),-1,1),yawError,
+      steeringMode:gesture.active?'body':'trim',yawRate:fish.yawRate,stopping:fish.brake*clamp((Math.abs(fish.forwardSpeed)-.025)/.075,0,1),
+      mode:intent==='hover'&&!arrive?'hover':'swim'}));
+    const finReaction=finYaw.sample(fish.age,finActuation(fish,1,true),finActuation(fish,-1,true));
+    const finMoment=finReaction.moment,finDamping=finReaction.damping;
+    fish.finYawMoment=finMoment;fish.finYawDamping=finDamping;
+    const predicted=turnResponse(gesture,fish.yawRate,.30,{finMoment,finDamping,headingProgress,outgoingHeadingProgress}).yawRate;
     let allowed=1;
     if(!fits(predicted)){allowed=0;for(const part of [.75,.5,.25])if(fits(fish.yawRate+(predicted-fish.yawRate)*part)){allowed=part;break;}}
     const blocked=allowed===0;turnAuthority=approach(turnAuthority,allowed,12,dt);
-    const response=turnResponse(gesture,fish.yawRate,dt,{finRate,allowed:turnAuthority,headingProgress,outgoingHeadingProgress});
+    const response=turnResponse(gesture,fish.yawRate,dt,{finMoment,finDamping,allowed:turnAuthority,headingProgress,outgoingHeadingProgress});
     fish.turnMoment=response.moment;fish.turnRecoveryMoment=response.recoveryMoment;
-    Object.assign(fish,finTasks.sample({age:fish.age,turn:gesture.preparing?0:clamp(finRate+(gesture.active?gesture.budget*.35:0),-1,1),yawError,
-      yawRate:fish.yawRate,stopping:fish.brake*clamp((Math.abs(fish.forwardSpeed)-.025)/.075,0,1),
-      mode:intent==='hover'&&!arrive?'hover':'swim'}));
     fish.yawRate=response.yawRate;
     // A depth decision first changes the paired fins' signed basal incidence.
     // Their shared neutral-relative control moment then accelerates pitch;
