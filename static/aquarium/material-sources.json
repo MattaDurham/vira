@@ -1,0 +1,32 @@
+[
+  {
+    "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dark_rock/dark_rock_diff_2k.jpg",
+    "md5": "980167324d1d407197227619a80cfb71",
+    "size": 2159653,
+    "file": "stone-color.jpg",
+    "asset": "dark_rock",
+    "author": "Amal Kumar",
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/dark_rock"
+  },
+  {
+    "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dark_rock/dark_rock_disp_2k.jpg",
+    "md5": "cc8215577da08ea453fbff28bf48e35c",
+    "size": 693929,
+    "file": "stone-height.jpg",
+    "asset": "dark_rock",
+    "author": "Amal Kumar",
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/dark_rock"
+  },
+  {
+    "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dark_rock/dark_rock_arm_2k.jpg",
+    "md5": "43de6d1bf42e0fabd6aa69fa75d4976c",
+    "size": 2750758,
+    "file": "stone-arm.jpg",
+    "asset": "dark_rock",
+    "author": "Amal Kumar",
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/dark_rock"
+  }
+]
