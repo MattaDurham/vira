@@ -8,6 +8,7 @@ import {applySwimPose} from '../static/aquarium-rig.js';
 import {createContainment} from '../static/aquarium-collision.js';
 import {tankCenterZ} from '../static/aquarium-space.js';
 import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from '../static/aquarium-fins.js';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 
 const bendKeys=['turnBend','turnBend1','turnBend2','turnBend3'];
 const recruitmentKeys=['turnRecruitment','turnRecruitment1','turnRecruitment2','turnRecruitment3'];
@@ -54,6 +55,9 @@ async function geometry(){
       .map(fin=>[Math.sign(fin.base[2]),createFinFrame(fin.base,fin.mesh.geometry.attributes.uv.array)]));
     family.forEach(fin=>{fin.binding=bindFinGeometry(fin.base,frames);});
   }
+  const membrane=fins.find(fin=>fin.mesh.name.startsWith('Caudal_membrane'));
+  const caudalFrame=createCaudalFrame(membrane.base,membrane.mesh.geometry.attributes.uv.array);
+  fins.filter(fin=>!fin.paired).forEach(fin=>{fin.binding=bindCaudalGeometry(fin.base,caudalFrame);});
   const skinPoints=()=>{
     body.skeleton.update();
     return skinIndices.map(index=>asset.worldToLocal(body.getVertexPosition(index,new Vector3()).applyMatrix4(body.matrixWorld)));
@@ -195,6 +199,49 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
     }
   }
 
+  // Join the rendered material curve to the following physical impulse. If a
+  // loaded turn has replaced the cruise wave, changing that absent carrier
+  // must not accelerate the same body differently. Ordinary strokes retain
+  // both their visible wave and their phase-dependent forward effort.
+  report.carrierThrust=[];
+  for(const mode of ['cruise','loading','loaded','releasing']){
+    const frames={cruise:60,loading:60,loaded:87,releasing:132}[mode];
+    const samples=[];
+    for(let phase=0;phase<12;phase++){
+      const swimmer=create(()=>.5);
+      Object.assign(swimmer.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
+      swimmer.navigate(mode==='cruise'?{x:-.85,y:.8,z:tankCenterZ}:{x:.8,y:.8,z:tankCenterZ+.2});
+      for(let frame=0;frame<frames;frame++)swimmer.step(1/120);
+      const fish=swimmer.fish;
+      fish.phase=phase*Math.PI/6;
+      pose(asset,joints,rest,{...fish,x:0,y:0,z:0,yaw:0,pitch:0,bank:0,verticalGain:0,twistGain:0});
+      const beforeSag=trunkSag(),tailAngle=yaw(joints[32].getWorldQuaternion(new Quaternion()));
+      const velocity=new Vector3(fish.vx,fish.vy,fish.vz);
+      swimmer.step(1/120);
+      const direction=new Vector3(-Math.cos(fish.yaw)*Math.cos(fish.pitch),Math.sin(fish.pitch),Math.sin(fish.yaw)*Math.cos(fish.pitch));
+      const acceleration=new Vector3(fish.vx,fish.vy,fish.vz).sub(velocity).dot(direction)*120;
+      pose(asset,joints,rest,{...fish,x:0,y:0,z:0,yaw:0,pitch:0,bank:0,verticalGain:0,twistGain:0});
+      samples.push({beforeSag,tailAngle,afterSag:trunkSag(),acceleration});
+    }
+    const range=key=>Math.max(...samples.map(sample=>sample[key]))-Math.min(...samples.map(sample=>sample[key]));
+    const sagRange=range('beforeSag'),nextSagRange=range('afterSag'),tailRange=range('tailAngle'),accelerationRange=range('acceleration');
+    if(mode==='loaded'){
+      assert.ok(sagRange<1e-7&&nextSagRange<1e-7,'the loaded physical probe actually has the same material bend across carrier phases');
+      assert.ok(accelerationRange<1e-7,'an absent cruise carrier cannot surge the loaded turning body');
+    }else if(mode==='cruise'){
+      assert.ok(sagRange>.003&&nextSagRange>.003,'ordinary cruising retains its actual travelling material wave');
+      assert.ok(accelerationRange>.05,'ordinary cruising retains phase-dependent forward effort');
+    }else if(mode==='loading'){
+      assert.ok(sagRange>.001&&nextSagRange>.001,'partial loading retains some actual cruise motion');
+      assert.ok(accelerationRange>.001,'partial posterior loading retains some carrier effort');
+    }else {
+      assert.ok(sagRange>.001&&nextSagRange>.001,'the anterior material wave returns during progressive release');
+      assert.ok(tailRange<1e-7,'the posterior material remains recruited while the anterior carrier returns');
+      assert.ok(accelerationRange<1e-7,'the posterior drive stays phase-independent until its own release');
+    }
+    report.carrierThrust.push({mode,sagRange,nextSagRange,tailRange,accelerationRange});
+  }
+
   const tiny=create(()=>.5);
   Object.assign(tiny.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
   tiny.navigate({x:-.9*Math.cos(.2),y:.8,z:tankCenterZ+.9*Math.sin(.2)});
@@ -284,19 +331,19 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
     const swimmer=create(seeded(seed));
     const controllers={pectoral:{'-1':createFinController(-1,true),'1':createFinController(1,true)},
       pelvic:{'-1':createFinController(-1,false),'1':createFinController(1,false)}};
+    const caudalController=createCaudalController();
     let activeTurns=0;
     for(let frame=0;frame<120*120;frame++){
       swimmer.step(1/120);const fish=swimmer.fish;
       const motions=Object.fromEntries(Object.entries(controllers).map(([kind,sides])=>[kind,
         {'-1':sides[-1].sample(fish),'1':sides[1].sample(fish)}]));
+      const caudalMotion=caudalController.sample(fish);
       if(frame%24)continue;
       if(Math.abs(fish.turnBend)>.05)activeTurns++;
       for(const fin of fins){
         const output=fin.mesh.geometry.attributes.position.array;
         if(fin.paired)deformFinGeometry(fin.binding,motions[fin.pectoral?'pectoral':'pelvic'],output);
-        else for(let i=0;i<output.length/3;i++){
-          const x=fin.base[i*3];output[i*3+2]=fin.base[i*3+2]+.035*fish.stroke*Math.sin(x*12-fish.phase-1.1)*Math.max(0,x-.48);
-        }
+        else deformCaudalGeometry(fin.binding,caudalMotion,output);
       }
       pose(asset,joints,rest,fish);
       const correction=containment.correction(),length=Math.hypot(correction.x,correction.y,correction.z);

@@ -3,7 +3,8 @@ import {readFile} from 'node:fs/promises';
 import {Vector3,PerspectiveCamera,Texture,WebGPUCoordinateSystem,WebGLCoordinateSystem} from '../static/vendor/three.webgpu.js';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {applySwimPose} from '../static/aquarium-rig.js';
-import {projectResearchPoint,researchFinAnchor} from '../static/aquarium-research.js';
+import {projectResearchPoint,researchFinAnchor,researchCaudalContour} from '../static/aquarium-research.js';
+import {createCaudalFrame,createCaudalMotion,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 import {researchTopics,buildChapters} from '../static/aquarium-research-data.js';
 import {createResearchTrace,traceLimit} from '../static/aquarium-research-trace.js';
 
@@ -39,6 +40,20 @@ for(const system of [WebGPUCoordinateSystem,WebGLCoordinateSystem])for(const [wi
   assert.equal(above.inFront,true,'a true projected depth segment can continue toward the offscreen surface');
 }
 const ids=new Set(researchTopics.map(topic=>topic.id));
+const caudal=asset.getObjectByName('Caudal_membrane'),contour=researchCaudalContour(asset);
+const base=Float32Array.from(caudal.geometry.attributes.position.array),uv=caudal.geometry.attributes.uv;
+const binding=bindCaudalGeometry(base,createCaudalFrame(base,uv.array));
+const edge=Array.from({length:uv.count},(_,i)=>i).filter(i=>uv.getY(i)<.001).sort((a,b)=>uv.getX(a)-uv.getX(b));
+let previousContour;
+for(const controls of [{speed:.2,stroke:1,phase:1},{speed:.2,stroke:0,phase:1},{speed:.2,stroke:0,brake:1,phase:1}]){
+  deformCaudalGeometry(binding,createCaudalMotion({...controls,poseHistory:false}),caudal.geometry.attributes.position.array);
+  const actual=contour();assert.equal(actual.length,39,'the outline follows the complete exported distal tail edge');
+  actual.forEach((p,i)=>assert.ok(p.distanceTo(caudal.getVertexPosition(edge[i],new Vector3()).applyMatrix4(caudal.matrixWorld))<1e-12,
+    'tail annotations follow the same deformed and skinned membrane as rendering'));
+  if(previousContour)assert.ok(actual.some((p,i)=>p.distanceTo(previousContour[i])>.004),
+    'the research contour changes with actual kick, glide and braking shapes');
+  previousContour=actual;
+}
 assert.equal(ids.size,6);
 for(const topic of researchTopics){
   assert.ok(topic.claim&&topic.implementation&&topic.limitation&&topic.sources.length,'every observation has evidence and its implementation scope');

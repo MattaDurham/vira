@@ -8,6 +8,7 @@ import {createSwimmer} from '../static/aquarium-motion.js';
 import {applySwimPose,createFacialRig} from '../static/aquarium-rig.js';
 import {createContainment} from '../static/aquarium-collision.js';
 import {createFinController,createFinFrame,bindFinGeometry,deformFinGeometry} from '../static/aquarium-fins.js';
+import {createCaudalController,createCaudalFrame,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 import {createStudyRandom,createTurnStudy} from '../static/aquarium-study.js';
 import {tankCenterZ,waterMin,waterMax} from '../static/aquarium-space.js';
 
@@ -16,17 +17,19 @@ const checkpoints=new Set([1,120,239,240,241,360,480,720,1200,1800,2400,3000,las
 const copy=value=>ArrayBuffer.isView(value)?Array.from(value):value;
 
 function controllers(){
-  return Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
-    Object.fromEntries([-1,1].map(side=>[side,createFinController(side,kind==='pectoral')]))]));
+  return {...Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
+    Object.fromEntries([-1,1].map(side=>[side,createFinController(side,kind==='pectoral')]))])),
+  caudal:createCaudalController()};
 }
 
 function sampleFins(control,fish){
-  return Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
-    Object.fromEntries([-1,1].map(side=>[side,control[kind][side].sample(fish,'swimming turn')]))]));
+  return {...Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
+    Object.fromEntries([-1,1].map(side=>[side,control[kind][side].sample(fish,'swimming turn')]))])),
+  caudal:control.caudal.sample(fish,'swimming turn')};
 }
 
 function snapshot(fish,motions){
-  return {fish:{...fish},fins:Object.fromEntries(Object.entries(motions).map(([kind,sides])=>
+  return {fish:{...fish},caudal:{...motions.caudal},fins:Object.fromEntries(Object.entries(motions).filter(([kind])=>kind!=='caudal').map(([kind,sides])=>
     [kind,Object.fromEntries(Object.entries(sides).map(([side,motion])=>
       [side,Object.fromEntries(Object.entries(motion).map(([key,value])=>[key,copy(value)]))]))]))};
 }
@@ -52,6 +55,7 @@ function harness(seed,makeRandom,makeStudy,onGeometry){
     // Hash every observation, including transient fin history between the
     // readable checkpoint snapshots, without retaining millions of numbers.
     digest.update(JSON.stringify(fish));
+    digest.update(JSON.stringify(motions.caudal));
     for(const kind of ['pectoral','pelvic'])for(const side of [-1,1]){
       for(const value of Object.values(motions[kind][side])){
         if(ArrayBuffer.isView(value))digest.update(new Uint8Array(value.buffer,value.byteOffset,value.byteLength));
@@ -99,6 +103,9 @@ async function geometryReviewer(){
     }));
     for(const fin of family)fin.binding=bindFinGeometry(fin.base,frames);
   }
+  const membrane=fins.find(fin=>fin.mesh.name.startsWith('Caudal_membrane'));
+  const caudalFrame=createCaudalFrame(membrane.base,membrane.mesh.geometry.attributes.uv.array);
+  for(const fin of fins.filter(fin=>!fin.paired))fin.binding=bindCaudalGeometry(fin.base,caudalFrame);
   const report={measurements:0,maximumCorrection:0,minimumClearance:Infinity,minimumX:Infinity,
     maximumX:-Infinity,maximumYawRate:0,maximumTurnBend:0,maximumTailExcursion:0};
   return {report,review(fish,motions,tick){
@@ -106,12 +113,7 @@ async function geometryReviewer(){
     for(const fin of fins){
       const points=fin.mesh.geometry.attributes.position;
       if(fin.paired)deformFinGeometry(fin.binding,motions[fin.pectoral?'pectoral':'pelvic'],points.array);
-      else for(let i=0;i<points.count;i++){
-        const x=fin.base[i*3],y=fin.base[i*3+1],z=fin.base[i*3+2];
-        // The live caudal membrane shares the existing small distal tissue
-        // compliance, in addition to its skinned axial motion.
-        points.setXYZ(i,x,y,z+.035*(fish.stroke??1)*Math.sin(x*12-fish.phase-1.1)*Math.max(0,x-.48));
-      }
+      else deformCaudalGeometry(fin.binding,motions.caudal,points.array);
     }
     const correction=containment.correction();
     const magnitude=Math.max(...Object.values(correction).map(Math.abs));

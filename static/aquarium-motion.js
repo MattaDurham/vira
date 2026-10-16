@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=74';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=75';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -24,6 +24,10 @@ axialRates.forEach(rate=>axialDelays.push(axialDelays.at(-1)+1/rate));
 const alongBody=(values,s)=>{
   const t=clamp(s,0,1)*3,i=Math.min(2,Math.floor(t));
   return values[i]+(values[i+1]-values[i])*(t-i);
+};
+const turnCarrierShare=activity=>{
+  const load=clamp(activity/.25,0,1);
+  return 1-load*load*(3-2*load);
 };
 
 export function createSwimmer(random=Math.random){
@@ -261,7 +265,12 @@ export function createSwimmer(random=Math.random){
     const direction=directionOf(fish.yaw,fish.pitch),flow=waterFlow(fish,fish.age);
     const forward=(fish.vx-flow.x)*direction.x+(fish.vy-flow.y)*direction.y+(fish.vz-flow.z)*direction.z;
     fish.forwardSpeed=forward;
-    const powerStroke=fish.stroke*fish.stroke*(.30+1.4*Math.cos(fish.phase-4.8)**2);
+    // The loaded turn replaces the cruise carrier in the actual posterior
+    // body. Let the same regional blend replace its phase-dependent force
+    // with the carrier's mean effort; an invisible beat cannot surge the root.
+    // This preserves authored mean drive, not a measured hydrodynamic force.
+    const carrier=turnCarrierShare(fish.turnRecruitment3);
+    const powerStroke=fish.stroke*fish.stroke*((1-carrier)+carrier*(.30+1.4*Math.cos(fish.phase-4.8)**2));
     const thrust=propel?Math.max(0,(.55*fish.drive+1.0*fish.drive**2+(fish.drive-forward)*2.8)*powerStroke)*(escapeTime>0?1.9:1):0;
     const drag=(.38+fish.brake*.80)*forward+.95*forward*Math.abs(forward);
     const finForce=braking&&!arrive&&(intent!=='hover'||curious)?clamp((laneZ-fish.z)*2.0,-.12,.12)*Math.cos(fish.yaw):0;
@@ -343,9 +352,8 @@ export function spinalField(fish,axial){
     // A body-driven turn replaces the independent cruise wave where it loads.
     // Full recruitment at a quarter of maximum bend is an authored mode
     // policy, not a koi measurement; tiny fin-trim corrections recruit little.
-    const activity=clamp(alongBody(recruitmentHistory,s)/.25,0,1);
-    const recruitment=activity*activity*(3-2*activity);
-    const amplitude=(.09+drive*.10)*muscle*(1-recruitment);
+    const carrier=turnCarrierShare(alongBody(recruitmentHistory,s));
+    const amplitude=(.09+drive*.10)*muscle*carrier;
     const lateral=(Math.atan(amplitude/length*(2*s*Math.sin(phase)-4.8*s*s*Math.cos(phase)))
       +alongBody(yawHistory,s)-alongBody(turnHistory,s)*s*s*(3-2*s))*lateralGain;
     // Carp propulsion remains predominantly lateral. Vertical flexion follows

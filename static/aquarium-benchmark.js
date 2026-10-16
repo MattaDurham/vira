@@ -3,17 +3,18 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=74';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=74';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=74';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=74';
-import {finRayContrast} from './aquarium-fin-detail.js?v=74';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=74';
-import {waterOptics} from './aquarium-optics.js?v=74';
-import {createContainment} from './aquarium-collision.js?v=74';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=74';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=74';
-import {createResearchLayer} from './aquarium-research.js?v=74';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=75';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=75';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=75';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=75';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=75';
+import {finRayContrast} from './aquarium-fin-detail.js?v=75';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=75';
+import {waterOptics} from './aquarium-optics.js?v=75';
+import {createContainment} from './aquarium-collision.js?v=75';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=75';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=75';
+import {createResearchLayer} from './aquarium-research.js?v=75';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -49,12 +50,14 @@ const pairedFinControllers={
   pectoral:{'-1':createFinController(-1,true),'1':createFinController(1,true)},
   pelvic:{'-1':createFinController(-1,false),'1':createFinController(1,false)},
 };
-function observePairedFins(sample,key){
+const caudalController=createCaudalController();
+function observeFins(sample,key){
   for(const pair of Object.values(pairedFinControllers))for(const controller of Object.values(pair))controller.sample(sample,key);
+  caudalController.sample(sample,key);
 }
 const turnStudy=createTurnStudy(swimmer,{random:studyRandom,
-  onReset:sample=>{turnPoseKey++;observePairedFins(sample,`turn:${turnPoseKey}`);},
-  onTick:sample=>observePairedFins(sample,`turn:${turnPoseKey}`),
+  onReset:sample=>{turnPoseKey++;observeFins(sample,`turn:${turnPoseKey}`);},
+  onTick:sample=>observeFins(sample,`turn:${turnPoseKey}`),
 });
 const barbels=[];
 const finSupports=[];
@@ -114,10 +117,11 @@ function setCamera(){
   }
   camera.fov=canvas.clientWidth<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
   camera.updateProjectionMatrix();
-  if(state.cameraAngle==='fish'&&asset){
-    const focus=asset.localToWorld(new THREE.Vector3(-.15,.02,0));
+  if((state.cameraAngle==='fish'||state.cameraAngle==='tail')&&asset){
+    const rear=state.cameraAngle==='tail';
+    const focus=asset.localToWorld(new THREE.Vector3(rear?.70:-.15,.02,0));
     const orientation=asset.getWorldQuaternion(new THREE.Quaternion());
-    camera.position.copy(focus).add(new THREE.Vector3(-distance*.7,.10+elevation,orbit*distance).applyQuaternion(orientation));
+    camera.position.copy(focus).add(new THREE.Vector3(distance*(rear?.38:-.7),.10+elevation,orbit*distance).applyQuaternion(orientation));
     camera.lookAt(focus);camera.updateMatrixWorld();return;
   }
   const bearing=orbit+(state.cameraAngle==='quarter'?-.55:0);
@@ -361,6 +365,7 @@ function draw(now){
     pectoral:{'-1':pairedFinControllers.pectoral[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pectoral[1].sample(visualFish,finPoseKey)},
     pelvic:{'-1':pairedFinControllers.pelvic[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pelvic[1].sample(visualFish,finPoseKey)},
   };
+  const caudalMotion=caudalController.sample(visualFish,finPoseKey);
   for(const fin of fins){
     const {points,base,paired,pectoral,geometry,pivots}=fin;
     if(paired){
@@ -370,10 +375,7 @@ function draw(now){
         .map(item=>[item.sign,createFinFrame(item.base,item.geometry.attributes.uv.array)]));
       fin.binding??=bindFinGeometry(base,pivots.frames);
       deformFinGeometry(fin.binding,pairedMotion[pectoral?'pectoral':'pelvic'],points.array);
-    }else for(let i=0;i<points.count;i++){
-      const x=base[i*3],y=base[i*3+1],z=base[i*3+2];
-      points.setXYZ(i,x,y,z+.035*(visualFish.stroke??1)*Math.sin(x*12-visualFish.phase-1.1)*Math.max(0,x-.48));
-    }
+    }else deformCaudalGeometry(fin.binding,caudalMotion,points.array);
     points.needsUpdate=true;
     geometry.computeVertexNormals();
     fin.reconcileNormals?.();
@@ -404,7 +406,7 @@ function draw(now){
     if(!swimmer.contain(containment.correction()))break;pose();
   }
   if(state.research)researchFocus.lerp(asset.getWorldPosition(focusPoint),1-Math.exp(-4*Math.min(elapsed,.25)));
-  if(state.closeup||state.cameraAngle==='fish'||state.research)setCamera();
+  if(state.closeup||state.cameraAngle==='fish'||state.cameraAngle==='tail'||state.research)setCamera();
   // The combined ray sets include 0.26 mm branches. Hand their contrast to
   // the filtered membrane map when unresolved; retain topology and full
   // inspection materials. This is authored detail LOD, not exact coverage AA.
@@ -521,7 +523,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=74');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=75');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -552,6 +554,9 @@ async function start(){
   const pivots={pectoral:{},pelvic:{}};
   fins.filter(fin=>fin.paired&&fin.name.includes('_membrane')).forEach(fin=>{pivots[fin.pectoral?'pectoral':'pelvic'][fin.sign]=fin.root;});
   fins.filter(fin=>fin.paired).forEach(fin=>{fin.pivots=pivots[fin.pectoral?'pectoral':'pelvic'];});
+  const caudal=fins.find(fin=>!fin.paired&&fin.name.startsWith('Caudal_membrane'));
+  const caudalFrame=createCaudalFrame(caudal.base,caudal.geometry.attributes.uv.array);
+  fins.filter(fin=>!fin.paired).forEach(fin=>{fin.binding=bindCaudalGeometry(fin.base,caudalFrame);});
   joints.sort((a,b)=>a.name.localeCompare(b.name));joints.forEach(b=>rest.push(b.quaternion.clone()));pose();facialRig=createFacialRig(asset);pose();
   containment=createContainment(asset);
   skeleton=new THREE.SkeletonHelper(asset);
@@ -565,7 +570,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=74').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=75').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});

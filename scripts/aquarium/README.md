@@ -312,6 +312,39 @@ Comparisons include the Lauder Laboratory's original
 whose labriform swimming differs from carp, and
 [trout fin-control experiments](https://doi.org/10.1242/jeb.246275), which
 distinguish actively held braking surfaces from passive motion in a wake.
+The laboratory's [prey-capture and braking clip](https://www.youtube.com/watch?v=yauU364_Gz8)
+was also inspected at quarter speed: after capture the head translates little
+while the near pectoral changes from broad and oblique to a narrow edge.
+That is qualitative bluegill context, not a koi timing measurement.
+The author's [trout free-stream clip](https://www.youtube.com/watch?v=YI4lr8Z70VE)
+was inspected at quarter speed too. Its dorsal projection shows the tail edge
+counterposed to the bending peduncle while the head stays comparatively steady;
+that view supports local feathering, but cannot establish independent lobe motion.
+
+The caudal fan now has its own shared membrane-and-ray field in
+`aquarium-caudal.js`, in addition to the articulated tail attachment. The entire
+basal line stays fixed. During a moving glide the fan narrows gently; braking
+opens it and curves the dorsal and ventral lobes in opposite lateral directions
+around a relatively quiet fork. Power adds restrained distal compliance and
+cupping. A critically damped controller retains observed control changes;
+paused frames are idempotent, and reset or missing history starts a new response.
+The field has a positive triangular Jacobian, with no folding or detached rays.
+[Flammang and Lauder's bluegill measurements](https://doi.org/10.1242/jeb.021360)
+motivate these distinct modes; [Esposito et al.](https://doi.org/10.1242/jeb.062711)
+compare live tail kinematics with a robotic fan. The amplitudes and response
+times here are authored koi animation controls, not measured koi anatomy or
+fluid forces. The tail field adds no extra propulsion force. The research layer
+traces the actual deformed, skinned distal membrane edge through the live camera.
+The Tail-on study camera follows the fish from behind to inspect this field
+without replacing the active swimming controls with a prescribed fan pose.
+
+Loaded turning regions suppress the ordinary cruise carrier. Root propulsion
+uses the same posterior recruitment blend: its phase modulation yields to the
+authored mean effort while the tail loads, then returns as that region releases.
+This removes phase-dependent acceleration from a cruise wave that is no longer
+visible. It remains reduced-order propulsion, not a force reconstruction from
+tail shape or a solved wake.
+
 The live renderer also hands unresolved ray-tube contrast to the filtered fin
 map. A conservative whole-set fade uses the 0.26 mm branch diameter, actual
 drawing-buffer height, camera projection and fish-root camera depth, fading

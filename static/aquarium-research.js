@@ -1,8 +1,8 @@
 import {Vector3} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=74';
-import {waterMax} from './aquarium-space.js?v=74';
-import {spinalField} from './aquarium-motion.js?v=74';
-import {createResearchTrace,traceAxes} from './aquarium-research-trace.js?v=74';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=75';
+import {waterMax} from './aquarium-space.js?v=75';
+import {spinalField} from './aquarium-motion.js?v=75';
+import {createResearchTrace,traceAxes} from './aquarium-research-trace.js?v=75';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -32,15 +32,28 @@ export function researchFinAnchor(asset,prefix){
   return ()=>mesh.getVertexPosition(0,new Vector3()).applyMatrix4(mesh.matrixWorld);
 }
 
+// Sample the exported distal boundary after its live deformation and skinning.
+// The outline therefore follows the same fan, attachment and camera as the fish.
+export function researchCaudalContour(asset){
+  let mesh;asset.traverse(object=>{if(!mesh&&object.isSkinnedMesh&&object.name.startsWith('Caudal_membrane'))mesh=object;});
+  if(!mesh)throw new Error('Research anchor missing: Caudal_membrane');
+  const uv=mesh.geometry.attributes.uv,edge=[];
+  for(let i=0;i<uv.count;i++)if(uv.getY(i)<.001)edge.push(i);
+  edge.sort((a,b)=>uv.getX(a)-uv.getX(b));
+  return ()=>edge.map(i=>mesh.getVertexPosition(i,new Vector3()).applyMatrix4(mesh.matrixWorld));
+}
+
 export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints,camera,getState,getFish,onAction,onVisibility=()=>{}}){
   const events=new AbortController(),signal=events.signal;
   let open=false,mode='research',active='head',reference=false,previous=-Infinity,traceMode;
   const layer=element('section','research-layer');layer.id='research-layer';layer.hidden=true;
   const pectoralAnchor=researchFinAnchor(asset,'Pectoral_membrane'),pelvicAnchor=researchFinAnchor(asset,'Pelvic_membrane');
+  const caudalContour=researchCaudalContour(asset);
   layer.setAttribute('aria-label','Aquarium research layer');
   const diagram=svg('svg',{'class':'research-diagram','aria-hidden':'true'});
   const spine=svg('path',{'class':'research-spine'}),ray=svg('path',{'class':'research-ray'}),leader=svg('path',{'class':'research-leader'});
-  diagram.append(ray,spine,leader);
+  const tailOutline=svg('path',{'class':'research-spine'});
+  diagram.append(ray,spine,tailOutline,leader);
   const dots=joints.map(()=>{const dot=svg('circle',{r:2.5,'class':'research-joint'});diagram.append(dot);return dot;});
   const pins=Array.from({length:3},()=>{
     const group=svg('g'),line=svg('path',{fill:'none',stroke:'rgba(150,210,190,.35)','stroke-width':.7}),halo=svg('circle',{r:8,'class':'research-pin-halo'}),point=svg('circle',{r:2.5,'class':'research-pin'}),label=svg('text',{'class':'research-pin-label',x:14,y:-12});
@@ -160,6 +173,12 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       dot.setAttribute('r',active==='muscle'?2+value*2.5:2.3);dot.setAttribute('opacity',active==='muscle'?.25+.75*value:.7);
     });
     const axial=['head','muscle','anatomy'].includes(active);spine.setAttribute('d',axial?paths.join(' '):'');dots.forEach(dot=>{if(!axial)dot.style.display='none';});
+    const tailPoints=active==='fins'?caudalContour().map(p=>projectResearchPoint(p,camera,width,height)):[];
+    let tailPen=false;
+    tailOutline.setAttribute('d',tailPoints.map(p=>{
+      if(!p.visible){tailPen=false;return '';}
+      const command=`${tailPen?'L':'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`;tailPen=true;return command;
+    }).join(' '));
     let labels;
     if(active==='head')labels=state.study?[[points[1],'Rigid skull'],[points[10],'Trunk flexion'],[points[29],'Tail bend']]:[[points[1],'Skull leads'],[points[10],'Shoulder follows'],[points[29],'Tail releases']];
     else if(active==='muscle')labels=[[points[7],'Activation'],[points[18],'Travelling bend'],[points[31],'Propulsion']];
