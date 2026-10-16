@@ -39,7 +39,7 @@ function check(create){
 }
 const report=check(createSourceSteeringController);
 // Remove only the clock fix in memory; no tracked source is rewritten/stashed.
-const original=await readFile(file,'utf8'),block=/   if\(preparation&&preparation<handoffDuration\)\{\n[\s\S]*?\n   \}\n/;
+const original=(await readFile(file,'utf8')).replace(/\r\n/g,'\n'),block=/   if\(preparation&&preparation<handoffDuration\)\{\n[\s\S]*?\n   \}\n/;
 assert.ok(block.test(original),'counterfactual removes the warm preparation clock fix');
 const source=original.replace(block,'').replace(/from (['"])(\.[^'"]+)\1/g,(_,quote,path)=>`from ${quote}${new URL(path,file).href}${quote}`);
 const mutant=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
