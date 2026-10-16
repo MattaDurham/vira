@@ -2,7 +2,7 @@
 import * as THREE from './vendor/three.webgpu.js';
 import {texture,screenUV,vec2,vec3,vec4,cameraPosition,positionWorld,normalWorld,
   abs,min,max,step,select,exp} from './vendor/three.tsl.js';
-import {waterMin,waterMax} from './aquarium-space.js?v=76';
+import {waterMin,waterMax} from './aquarium-space.js?v=77';
 
 export const waterAbsorption=Object.freeze([.26,.085,.065]);
 export const waterScattering=Object.freeze([.004,.008,.010]);

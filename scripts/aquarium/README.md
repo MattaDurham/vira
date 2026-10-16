@@ -19,7 +19,12 @@ authored axial pose offsets and activation envelope, not recorded EMG or a
 reconstructed centerline. A four-second history traces trunk and tail offsets
 separately in lateral bending, vertical bending and twist, on fixed degree
 scales. Pausing preserves the observed samples; restarting clears the trail,
-and gaps are not joined into invented motion. Six
+and gaps are not joined into invented motion. The fin note has a separate
+causal pitch diagram: signed fin command on a fixed 8.6-degree scale, followed
+by actual head and tail frame attitudes on a shared 30-degree scale. It removes
+each joint's neutral arch before reading world pitch. Its arrows show authored
+trim direction, not measured fluid forces; pose-only studies hide this diagram.
+Six
 research notes distinguish observations, implementation and the limits of each
 comparison; linked papers and original footage retain their species context.
 **How this was built** connects observation, geometry, controls and lighting,
@@ -129,6 +134,13 @@ travelling drive envelope allows the tail to settle during a coast. Paired-fin
 checks cover quiet gliding, sparse hover bouts, braking, turn/depth corrections
 and separate pelvic timing. These tests reject regression variants; their
 passing does not establish measured biological timing.
+`aquarium_pitch.mjs` joins signed fin commands to actual membrane incidence,
+integrated pitch acceleration and skull/trunk/tail onset. Opposite commands,
+quiet glides and three repeated seeded climb/descent routes exercise the same
+deformed rays, tissue, face and caudal field used in the renderer. Disconnecting
+the fin presentation or moment, or restoring an independent head servo, fails
+these guards. The onset thresholds validate this authored sequence, not koi
+reaction times.
 Turning torque builds and releases with the manoeuvre envelope, rather than
 switching between a full turn and fin trim at each bout boundary. Gesture
 regressions reject abrupt onset and release during broad and small turns.
@@ -305,9 +317,19 @@ unrestricted three-dimensional swimming or establish fin-force timing.
 Nor is a head-first sequence universal: [Wilga and Lauder](https://doi.org/10.1242/jeb.202.18.2413)
 connect pectoral deformation with the initiation of rising and sinking in
 juvenile sturgeon. [Ehrlich and Schoppik](https://doi.org/10.7554/eLife.45839)
-show larval zebrafish combining body rotation with fin-generated lift. Those
+show larval zebrafish combining body rotation with fin-generated lift.
+[Ting and Yang](https://doi.org/10.1242/jeb.020263) measured opposing pectoral
+and caudal pitching moments during forward sinking in parrot cichlids. Those
 species and experimental conditions inform the causal questions, not adult
-koi timing, buoyancy or force magnitudes.
+koi timing, buoyancy, fin-incidence signs or force magnitudes.
+
+A depth decision now changes signed basal fin trim before integrating head
+rotation. The same returned pectoral and pelvic incidences drive a
+neutral-relative authored pitching moment, with angular damping and bounded
+rate and attitude. Basal span rotation preserves the fin attachment while
+remaining separate from distal cupping. Neutral rig normals are not a zero-lift
+calibration: no absolute lift coefficient, solved wake or koi EMG is inferred.
+The body still climbs or dives through pitched propulsion, not a height tween.
 
 Paired fins paddle independently at low speed, open for braking and trail during
 a propulsive burst. Their phase is independent of the tail; merged ray geometry

@@ -1,6 +1,6 @@
 /* Paired-fin tissue and its embedded rays share this bind-space deformation.
  * It preserves the authored attachment and skeleton; it does not add thrust. */
-import {finActuation} from './aquarium-motion.js?v=76';
+import {finActuation} from './aquarium-motion.js?v=77';
 
 const TAU=Math.PI*2,tableSize=33,maxDelay=.24;
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
@@ -53,7 +53,7 @@ function finMotion(fish,side,pectoral,samplePaddle,output){
   // envelope and speed, without a free-running decorative flutter.
   const activation=clamp(fish.poseHistory===false?fish.stroke??0:fish.muscle3??fish.stroke??0,0,1);
   const passive=.0015*clamp(speed/.25,0,1)*(.15+.85*activation)*(pectoral?1:.7);
-  return Object.assign(motion,{passive,flap,trail,flapCos:Math.cos(flap),flapSin:Math.sin(flap),
+  return Object.assign(motion,{passive,flap,trail,incidence:base.incidence??0,flapCos:Math.cos(flap),flapSin:Math.sin(flap),
     trailCos:Math.cos(trail),trailSin:Math.sin(trail)});
 }
 
@@ -125,7 +125,10 @@ function deform(values,offset,frame,motion,out,target){
   const cup=(sample(motion.samples,values[offset+5],0)+motion.passive)*values[offset+4];
   // Normal shear and a span-dependent twist are both invertible. Their
   // controls depend on a,b but never on the displaced normal coordinate c.
-  const twist=sample(motion.samples,values[offset+6],1)*values[offset+3];
+  // Signed basal feathering rotates the whole foil about its own span. The
+  // shared command is already filtered by the swimmer's authored pitch model;
+  // distal loading/recovery retains its separate observed-history delay.
+  const twist=(motion.incidence??0)+sample(motion.samples,values[offset+6],1)*values[offset+3];
   const cosine=Math.cos(twist),sine=Math.sin(twist);
   const chord=b*cosine-(c+cup)*sine,normal=b*sine+(c+cup)*cosine;
   const x=a*frame.span[0]+chord*frame.chord[0]+normal*frame.normal[0];

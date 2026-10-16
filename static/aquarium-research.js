@@ -1,8 +1,8 @@
-import {Vector3} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=76';
-import {waterMax} from './aquarium-space.js?v=76';
-import {spinalField} from './aquarium-motion.js?v=76';
-import {createResearchTrace,traceAxes} from './aquarium-research-trace.js?v=76';
+import {Vector3,Quaternion} from './vendor/three.webgpu.js';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=77';
+import {waterMax} from './aquarium-space.js?v=77';
+import {spinalField} from './aquarium-motion.js?v=77';
+import {createResearchTrace,traceAxes,createPitchResearchTrace} from './aquarium-research-trace.js?v=77';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -32,6 +32,13 @@ export function researchFinAnchor(asset,prefix){
   return ()=>mesh.getVertexPosition(0,new Vector3()).applyMatrix4(mesh.matrixWorld);
 }
 
+// Read a posed joint's world attitude with its authored rest arch removed.
+// Its local Y is the bone tangent, so a raw local-X rotation would be wrong.
+export function researchJointPitch(joint){
+  const orientation=joint.getWorldQuaternion(new Quaternion()).multiply(joint.userData.bodyRest.clone().invert()).normalize();
+  return Math.asin(clamp(new Vector3(-1,0,0).applyQuaternion(orientation).y,-1,1));
+}
+
 // Sample the exported distal boundary after its live deformation and skinning.
 // The outline therefore follows the same fan, attachment and camera as the fish.
 export function researchCaudalContour(asset){
@@ -53,7 +60,8 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const diagram=svg('svg',{'class':'research-diagram','aria-hidden':'true'});
   const spine=svg('path',{'class':'research-spine'}),ray=svg('path',{'class':'research-ray'}),leader=svg('path',{'class':'research-leader'});
   const tailOutline=svg('path',{'class':'research-spine'});
-  diagram.append(ray,spine,tailOutline,leader);
+  const trimArrows=[0,1].map(()=>svg('path',{'class':'research-trim-arrow'}));
+  diagram.append(ray,spine,tailOutline,leader,...trimArrows);
   const dots=joints.map(()=>{const dot=svg('circle',{r:2.5,'class':'research-joint'});diagram.append(dot);return dot;});
   const pins=Array.from({length:3},()=>{
     const group=svg('g'),line=svg('path',{fill:'none',stroke:'rgba(150,210,190,.35)','stroke-width':.7}),halo=svg('circle',{r:8,'class':'research-pin-halo'}),point=svg('circle',{r:2.5,'class':'research-pin'}),label=svg('text',{'class':'research-pin-label',x:14,y:-12});
@@ -93,10 +101,21 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const traceStart=svg('text',{x:58,y:106}),traceEnd=svg('text',{x:286,y:106,'text-anchor':'end'});
   traceStart.textContent='−4 s';traceEnd.textContent='Now';tracePlot.append(traceStart,traceEnd);
   traceBox.append(traceTitle,tracePlot,element('p','research-trace-caption','Trunk solid / tail dotted · ±45° · authored model'));
+  const pitchTrace=createPitchResearchTrace(),pitchBox=element('div','research-trace research-pitch');
+  const pitchPlot=svg('svg',{viewBox:'0 0 300 86',role:'img','aria-label':'Four seconds of authored nose-up fin command, and actual head and tail frame pitch with the neutral arch removed. Fin command uses plus or minus 8.6 degrees; body frames use plus or minus 30 degrees. Positive values point upward. These are model signals, not measured fish kinematics.'});
+  ['Fin trim','Pitch'].forEach((name,i)=>{
+    const label=svg('text',{x:0,y:28+i*36});label.textContent=name;
+    pitchPlot.append(label,svg('path',{d:`M58,${25+i*36}H286`,'class':'research-trace-baseline'}));
+  });
+  const pitchPaths=['fin','head','tail'].map(name=>svg('path',{'class':`research-trace-path research-pitch-${name}`}));pitchPlot.append(...pitchPaths);
+  const pitchStart=svg('text',{x:58,y:85}),pitchEnd=svg('text',{x:286,y:85,'text-anchor':'end'});
+  pitchStart.textContent='−4 s';pitchEnd.textContent='Now';pitchPlot.append(pitchStart,pitchEnd);
+  pitchBox.append(element('div','research-trace-title','FIN → HEAD → TAIL / LIVE PITCH'),pitchPlot,
+    element('p','research-trace-caption','Fin command ±8.6° / head solid, tail dotted ±30°. Rest arch removed. Arrows show authored trim direction, not measured force.'));
   const implementationLabel=element('h4','','In this build'),implementation=element('p');
   const limitationLabel=element('h4','','Scope of the evidence'),limitation=element('p','research-caveat');
   const sourceLabel=element('h4','','Sources & footage'),sources=element('ol','research-sources');
-  notes.append(topicTitle,claim,mini,miniCaption,traceBox,live,implementationLabel,implementation,limitationLabel,limitation,sourceLabel,sources);
+  notes.append(topicTitle,claim,mini,miniCaption,traceBox,pitchBox,live,implementationLabel,implementation,limitationLabel,limitation,sourceLabel,sources);
   const story=element('div','research-story');story.hidden=true;
   buildChapters.forEach((chapter,index)=>{
     const section=element('section','research-chapter'),number=element('span','research-chapter-number',String(index+1).padStart(2,'0'));
@@ -142,7 +161,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   function setOpen(value,view='research'){
     open=value;layer.hidden=!value;root.dataset.research=String(value);toggle.setAttribute('aria-expanded',String(value));toggle.setAttribute('aria-pressed',String(value));
     onVisibility(value);
-    if(value){trace.clear();setMode(view);update(performance.now());}else toggle.focus();
+    if(value){trace.clear();pitchTrace.clear();setMode(view);update(performance.now());}else toggle.focus();
   }
   toggle.addEventListener('click',()=>setOpen(!open),{signal});storyButton.addEventListener('click',()=>setOpen(true,'story'),{signal});
   toggle.disabled=storyButton.disabled=false;
@@ -158,6 +177,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     controls.hidden=reference;unavailable.hidden=!reference;
     mini.style.display=!reference&&['head','muscle','anatomy'].includes(active)?'':'none';miniCaption.hidden=reference||!['head','muscle','anatomy'].includes(active);live.hidden=reference;
     traceBox.hidden=reference||!['head','muscle','anatomy'].includes(active);
+    pitchBox.hidden=reference||active!=='fins'||fish.poseHistory===false;
     if(reference||mode==='story')return;
     const width=canvas.clientWidth,height=canvas.clientHeight;
     const steady=fish.poseHistory===false||!Number.isFinite(fish.muscle1);
@@ -180,7 +200,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       const command=`${tailPen?'L':'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`;tailPen=true;return command;
     }).join(' '));
     let labels;
-    if(active==='head')labels=state.study?[[points[1],'Rigid skull'],[points[10],'Trunk flexion'],[points[29],'Tail bend']]:[[points[1],'Skull leads'],[points[10],'Shoulder follows'],[points[29],'Tail releases']];
+    if(active==='head')labels=state.study?[[points[1],'Rigid skull'],[points[10],'Trunk flexion'],[points[29],'Tail bend']]:[[points[1],'Head attitude'],[points[10],'Shoulder response'],[points[29],'Tail follow-through']];
     else if(active==='muscle')labels=[[points[7],'Activation'],[points[18],'Travelling bend'],[points[31],'Propulsion']];
     else if(active==='fins')labels=[[projectResearchPoint(pectoralAnchor(),camera,width,height),'Pectoral control'],[projectResearchPoint(pelvicAnchor(),camera,width,height),'Pelvic trim'],[points[32],'Caudal drive']];
     else if(active==='anatomy')labels=[[points[3],'Rigid anterior'],[points[16],'Articulated centra'],[points[31],'Caudal complex']];
@@ -193,6 +213,15 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       ray.setAttribute('d',a.inFront&&b.visible?`M${a.x},${a.y}L${b.x},${b.y}`:'');
     }else labels=[[local(-.53,.015,.09),'Modeled facial tissue'],[points[15],'Overlapping scales'],[projectResearchPoint(pectoralAnchor(),camera,width,height),'Branched fin rays']];
     if(active!=='optics')ray.setAttribute('d','');
+    trimArrows.forEach((arrow,i)=>{
+      const point=active==='fins'?labels[i][0]:null,command=fish.pitchFin??0;
+      if(!point?.visible||fish.poseHistory===false){arrow.setAttribute('d','');return;}
+      const world=i===0?pectoralAnchor():pelvicAnchor();world.y+=clamp(command/.15,-1,1)*(i===0?.14:-.05);
+      const end=projectResearchPoint(world,camera,width,height),dx=end.x-point.x,dy=end.y-point.y,length=Math.hypot(dx,dy);
+      if(!end.visible||length<1){arrow.setAttribute('d','');return;}
+      const x=dx/length,y=dy/length;
+      arrow.setAttribute('d',`M${point.x},${point.y}L${end.x},${end.y}m${-x*4-y*3},${-y*4+x*3}l${x*4+y*3},${y*4-x*3}l${-x*4+y*3},${-y*4-x*3}`);
+    });
     const box=card.getBoundingClientRect(),bounds=root.getBoundingClientRect(),placed=[];
     labels.forEach(([p,text],i)=>{
       const pin=pins[i];pin.group.style.display=p?.visible?'':'none';if(!p?.visible)return;
@@ -221,9 +250,13 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     // turning stroke. An orientation-lag estimate alone misses that bend.
     const field=spinalField(fish,joints.map(joint=>joint.userData.axial));
     const currentTraceMode=state.study?state.studyAxis:'swimming';
-    if(traceMode!==currentTraceMode){trace.clear();traceMode=currentTraceMode;}
+    if(traceMode!==currentTraceMode){trace.clear();pitchTrace.clear();traceMode=currentTraceMode;}
     trace.record(fish.age,field);
     tracePaths.forEach((paths,axis)=>paths.forEach((path,station)=>path.setAttribute('d',trace.paths(axis,station,fish.age))));
+    if(fish.poseHistory!==false&&Number.isFinite(fish.pitchFin)){
+      pitchTrace.record(fish.age,fish.pitchFin,researchJointPitch(joints[1]),researchJointPitch(joints.at(-1)));
+      pitchPaths.forEach((path,station)=>path.setAttribute('d',pitchTrace.paths(station,fish.age)));
+    }
     const ys=[4,14,24,33].map(i=>26+clamp(field[i][vertical?'vertical':'lateral'],-.7,.7)*25);
     miniPath.setAttribute('d',ys.map((y,i)=>`${i?'L':'M'}${24+i*84},${y}`).join(' '));
     miniDots.forEach((dot,i)=>{dot.setAttribute('cy',ys[i]);dot.setAttribute('r',3+activation[i]*5);dot.setAttribute('opacity',.3+.7*activation[i]);});

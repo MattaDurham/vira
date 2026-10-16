@@ -3,6 +3,35 @@
 export const traceAxes=['lateral','vertical','twist'];
 export const traceLimit=Math.PI/4;
 
+// Fin control and body frame attitude use different fixed scales. These are
+// live authored controls and rig angles, never reconstructed biological data.
+export const pitchTraceLimits=[.15,Math.PI/6];
+export function createPitchResearchTrace(duration=4){
+  const samples=[];let previous=-Infinity;
+  return {
+    samples,
+    record(age,fin,head,tail){
+      if(![age,fin,head,tail].every(Number.isFinite))return;
+      if(age<previous){samples.length=0;previous=-Infinity;}
+      if(age===previous)return;
+      samples.push({age,gap:age-previous>.3,values:[fin,head,tail]});previous=age;
+      while(samples.length&&samples[0].age<age-duration)samples.shift();
+      while(samples.length>256)samples.shift();
+    },
+    clear(){samples.length=0;previous=-Infinity;},
+    paths(station,now){
+      let path='';
+      samples.forEach((sample,i)=>{
+        const x=58+Math.max(0,1-(now-sample.age)/duration)*228;
+        const row=station===0?0:1,limit=pitchTraceLimits[row];
+        const y=25+row*36-Math.max(-1,Math.min(1,sample.values[station]/limit))*12;
+        path+=`${i===0||sample.gap?'M':'L'}${x.toFixed(2)},${y.toFixed(2)}`;
+      });
+      return path;
+    },
+  };
+}
+
 export function createResearchTrace(duration=4){
   const samples=[];
   let previous=-Infinity;

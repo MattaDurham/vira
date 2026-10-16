@@ -3,10 +3,11 @@ import {readFile} from 'node:fs/promises';
 import {Vector3,PerspectiveCamera,Texture,WebGPUCoordinateSystem,WebGLCoordinateSystem} from '../static/vendor/three.webgpu.js';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {applySwimPose} from '../static/aquarium-rig.js';
-import {projectResearchPoint,researchFinAnchor,researchCaudalContour} from '../static/aquarium-research.js';
+import {projectResearchPoint,researchFinAnchor,researchCaudalContour,researchJointPitch} from '../static/aquarium-research.js';
+import {createSwimmer} from '../static/aquarium-motion.js';
 import {createCaudalFrame,createCaudalMotion,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 import {researchTopics,buildChapters} from '../static/aquarium-research-data.js';
-import {createResearchTrace,traceLimit} from '../static/aquarium-research-trace.js';
+import {createResearchTrace,traceLimit,createPitchResearchTrace} from '../static/aquarium-research-trace.js';
 
 const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url));
 const loader=new GLTFLoader().register(()=>({name:'GeometryOnlyImages',loadTexture:()=>Promise.resolve(new Texture())}));
@@ -22,6 +23,8 @@ for(const system of [WebGPUCoordinateSystem,WebGLCoordinateSystem])for(const [wi
   let previous;
   for(const pose of [{x:-.3,y:.9,z:-.1,yaw:.3,pitch:.2},{x:.4,y:.6,z:-.7,yaw:-.8,pitch:-.18}]){
     applySwimPose(asset,joints,rest,{...pose,phase:1.7,age:3,bank:.08,stroke:.6,speed:.2,yawRate:.12,pitchRate:.04});
+    assert.ok(Math.abs(researchJointPitch(joints[1])-pose.pitch)<1e-7,
+      'head pitch comes from the actual posed bone with neutral arch removed, independent of yaw and bank');
     const actualFin=pectoral.getVertexPosition(0,new Vector3()).applyMatrix4(pectoral.matrixWorld);
     assert.ok(anchor().distanceTo(actualFin)<1e-12,'the fin label follows its deformed membrane rather than an approximate local point');
     const world=joints[17].getWorldPosition(new Vector3()),screen=projectResearchPoint(world,camera,width,height);
@@ -76,4 +79,28 @@ assert.ok(history.samples.every(s=>s.age>=.1),'the history expires by simulation
 history.record(.01,sample);
 assert.equal(history.samples.length,1,'restarting the swimmer clears the previous trajectory');
 history.clear();assert.equal(history.paths(0,0,0),'','closing/reopening starts an honest new observation window');
+const pitchHistory=createPitchResearchTrace(),swimmer=createSwimmer(()=>.5);
+Object.assign(swimmer.fish,{x:.6,y:.84,z:-.205,yaw:0});swimmer.navigate({x:-.9,y:1.18,z:-.205});
+for(let tick=0;tick<60;tick++){
+  swimmer.step(1/120);
+  if(tick%6)continue;
+  const fish=swimmer.fish;applySwimPose(asset,joints,rest,fish);
+  const head=researchJointPitch(joints[1]),tail=researchJointPitch(joints.at(-1));
+  pitchHistory.record(fish.age,fish.pitchFin,head,tail);
+  assert.deepEqual(pitchHistory.samples.at(-1).values,[fish.pitchFin,head,tail],
+    'the causal chart retains the actual shared fin command and two separately posed world frames');
+  assert.ok(Math.abs(head-fish.pitch)<1e-7,'a rigid skull reports live head rotation, not its zero axial offset');
+}
+assert.ok(pitchHistory.samples.some(s=>Math.abs(s.values[1]-s.values[2])>.01),
+  'the chart exposes head and posterior follow-through as distinct real rig signals');
+const count=pitchHistory.samples.length,last=pitchHistory.samples.at(-1);
+pitchHistory.record(last.age,0,0,0);assert.equal(pitchHistory.samples.length,count,'pausing does not replace live pitch history with new values');
+pitchHistory.clear();pitchHistory.record(0,.15,Math.PI/6,-Math.PI/6);
+assert.equal(pitchHistory.paths(0,0),'M286.00,13.00','fin command has a distinct fixed 8.6-degree scale');
+assert.equal(pitchHistory.paths(1,0),'M286.00,49.00');
+assert.equal(pitchHistory.paths(2,0),'M286.00,73.00','head and tail use the same signed 30-degree attitude scale');
+pitchHistory.record(.05,0,0,0);pitchHistory.record(1,0,0,0);
+assert.equal((pitchHistory.paths(0,1).match(/M/g)||[]).length,2,'unobserved pitch gaps are not connected');
+pitchHistory.record(4.1,0,0,0);assert.ok(pitchHistory.samples.every(s=>s.age>=.1));
+pitchHistory.record(.01,0,0,0);assert.equal(pitchHistory.samples.length,1,'rewinding clears all three causal signals together');
 console.log('Research overlay: actual rig/camera attachment and cited story links passed.');

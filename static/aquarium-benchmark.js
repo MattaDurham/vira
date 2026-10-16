@@ -3,18 +3,18 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=76';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=76';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=76';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=76';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=76';
-import {finRayContrast} from './aquarium-fin-detail.js?v=76';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=76';
-import {waterOptics} from './aquarium-optics.js?v=76';
-import {createContainment} from './aquarium-collision.js?v=76';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=76';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=76';
-import {createResearchLayer} from './aquarium-research.js?v=76';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=77';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=77';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=77';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=77';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=77';
+import {finRayContrast} from './aquarium-fin-detail.js?v=77';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=77';
+import {waterOptics} from './aquarium-optics.js?v=77';
+import {createContainment} from './aquarium-collision.js?v=77';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=77';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=77';
+import {createResearchLayer} from './aquarium-research.js?v=77';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -320,7 +320,7 @@ function key(event){
   else return;event.preventDefault();setCamera();
 }
 function pose(){
-  const held={...fish,x:.3,y:.77,z:-.15,yaw:-.40,yawRate:0,pitch:0,pitchRate:0,bank:0,
+  const held={...fish,x:.3,y:.77,z:-.15,yaw:-.40,yawRate:0,pitch:0,pitchRate:0,pitchFin:undefined,pitchMoment:0,bank:0,
     drive:.2,speed:.2,forwardSpeed:.2,stroke:1,brake:0,maneuver:0,finSteer:0,finPhase:studyPhase*.55,phase:studyPhase,poseHistory:false};
   if(state.study){
     const axis=state.studyAxis;
@@ -523,7 +523,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=76');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=77');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -570,7 +570,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=76').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=77').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});

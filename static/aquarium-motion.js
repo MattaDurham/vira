@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=76';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=77';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -50,7 +50,7 @@ export function createSwimmer(random=Math.random){
     decisions++;
   }
   function reset(){
-    Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,bank:0,
+    Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,pitchFin:0,pitchMoment:0,bank:0,
       age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
       yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
       muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
@@ -221,7 +221,15 @@ export function createSwimmer(random=Math.random){
       blocked=safeRate===0;
     }
     fish.yawRate=approach(fish.yawRate,safeRate,turning?5.5:7,dt);
-    fish.pitchRate=approach(fish.pitchRate,clamp(pitchError*1.7,-.33,.33),3,dt);
+    // A depth decision first changes the paired fins' signed basal incidence.
+    // Their shared neutral-relative control moment then accelerates pitch;
+    // head rotation is the response, not the command used to decorate the fins.
+    // Limits retain the previous manoeuvre authority. Gain and damping remain
+    // authored proxies, not lift coefficients or measured koi muscle timing.
+    const pitchFinTarget=clamp(pitchError*1.7,-.33,.33)*.15/.33;
+    fish.pitchFin=approach(fish.pitchFin,pitchFinTarget,10,dt);
+    fish.pitchMoment=finPitchMoment(fish);
+    fish.pitchRate=clamp(fish.pitchRate+(fish.pitchMoment-3*fish.pitchRate)*dt,-.33,.33);
     const yawDelta=fish.yawRate*dt,pitchDelta=clamp(fish.pitch+fish.pitchRate*dt,-.45,.45)-fish.pitch;
     fish.yaw=wrap(fish.yaw+yawDelta);fish.pitch+=pitchDelta;
     // The stiff anterior frame leads; successive axial regions follow it.
@@ -320,7 +328,10 @@ export function finActuation(fish,side,pectoral=true){
   const speed=Math.abs(fish.forwardSpeed??fish.speed??0),brake=clamp(fish.brake??0,0,1),age=fish.age??0;
   const slow=clamp(1-speed/.18,0,1);
   const turn=clamp((fish.yawRate??0)*.9+(fish.finSteer??0)*.35,-1,1);
-  const trim=clamp((fish.pitchRate??0)*2+(fish.pitch??0)*.15,-.6,.6);
+  // Frozen inspection fixtures have no live control state. Their signed trim
+  // remains explicit; a live swimmer always supplies the causal basal state.
+  const trim=clamp(Number.isFinite(fish.pitchFin)?fish.pitchFin/.25:
+    (fish.pitchRate??0)*2+(fish.pitch??0)*.15,-.6,.6);
   // A stopped fish still has its brake flag set. Deploy against actual flow;
   // that flag alone must not produce perpetual paddling during a quiet hover.
   const stopping=brake*clamp((speed-.025)/.075,0,1);
@@ -337,7 +348,17 @@ export function finActuation(fish,side,pectoral=true){
   const gain=pectoral?1:.35;
   return {spread:(.035+.07*slow+.18*stopping+.12*Math.max(0,turn*side)+.05*Math.abs(trim))*gain,
     paddle:(.085*control+.14*hover)*beat*gain,
-    sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain};
+    sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain,
+    incidence:trim*.25*(pectoral?-1:.35)};
+}
+
+export function finPitchMoment(fish){
+  const incidence=pectoral=>(finActuation(fish,-1,pectoral).incidence+finActuation(fish,1,pectoral).incidence)/2;
+  // Fore and aft controls form a signed couple about the body. The reference
+  // fin is already cambered, so this is a change from neutral control rather
+  // than an absolute force inferred from a two-dimensional foil angle.
+  const effort=clamp((-incidence(true)+incidence(false))/(.15*1.35),-1,1);
+  return .99*effort;
 }
 
 export function spinalField(fish,axial){
