@@ -5,6 +5,36 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vira - Aquarium study</title>
   <script>if(new URLSearchParams(location.search).get('background')==='1')document.documentElement.dataset.background='true';</script>
+  <!-- Report dependency failures before the main module can install its bridge. -->
+  <script id="aquarium-startup">
+    (()=>{
+      if(new URLSearchParams(location.search).get('background')!=='1')return;
+      const origin=location.origin;
+      let closed=false;
+      const post=(action,detail)=>window.parent.postMessage({type:'vira-aquarium',action,...detail},origin);
+      const dispose=()=>{
+        if(closed)return;
+        closed=true;window.removeEventListener('error',failed,true);window.removeEventListener('unhandledrejection',rejected);window.removeEventListener('pagehide',dispose);
+        delete window.__viraAquariumStartup;
+      };
+      const report=message=>{
+        if(closed)return;
+        const detail=String(message||'Aquarium modules could not load').replace(/[\x00-\x1f\x7f]/g,' ').slice(0,240);
+        document.documentElement.dataset.aquariumError=detail;
+        const loading=document.getElementById('loading');if(loading)loading.textContent=`Aquarium unavailable: ${detail}`;
+        post('error',{message:detail});dispose();
+      };
+      const failed=event=>{
+        if(event.target?.id==='aquarium-module')report('Aquarium modules could not load');
+        else if(event.target===window&&event.message)report(event.message);
+      };
+      const rejected=event=>report(event.reason?.message||event.reason||'Aquarium startup failed');
+      window.__viraAquariumStartup={dispose};
+      window.addEventListener('error',failed,true);window.addEventListener('unhandledrejection',rejected);window.addEventListener('pagehide',dispose,{once:true});
+      document.documentElement.dataset.aquariumStage='module-loading';
+      post('progress',{stage:'module-loading',engine:'unknown',hidden:document.hidden===true});
+    })();
+  </script>
   <link rel="stylesheet" href="aquarium-benchmark.css?v=96">
 </head>
 <body>
@@ -51,6 +81,6 @@
   <script>
     if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
   </script>
-  <script type="module" src="aquarium-benchmark.js?v=96"></script>
+  <script id="aquarium-module" type="module" src="aquarium-benchmark.js?v=97"></script>
 </body>
 </html>

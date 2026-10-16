@@ -2,9 +2,11 @@
  * module does not register listeners or create a renderer. */
 const TYPE='vira-aquarium';
 const looks=new Set(['natural','wireframe']);
+const stages=new Set(['module-loading','module-ready','data','renderer','textures','model','rig','compile','optics','first-frame','ready']);
+const engines=new Set(['unknown','webgpu','webgl2']);
 const normalized=value=>Number.isFinite(value)&&value>=0&&value<=1;
 
-export function createAquariumEmbed({host=window,onConfigure=()=>{},onPointer=()=>{},onTap=()=>{},onActivity=()=>{}}={}){
+export function createAquariumEmbed({host=window,onConfigure=()=>{},onPointer=()=>{},onTap=()=>{},onActivity=()=>{},onVisible=()=>{}}={}){
   const origin=host.location.origin,document=host.document;
   const reduced=host.matchMedia('(prefers-reduced-motion: reduce)');
   let configuration={motion:false,look:'natural'},isReady=false,failed=false,closed=false,active=false;
@@ -12,7 +14,8 @@ export function createAquariumEmbed({host=window,onConfigure=()=>{},onPointer=()
   function activity(){
     const next=!closed&&!failed&&isReady&&configuration.motion&&!document.hidden&&!reduced.matches;
     if(next===active)return;
-    active=next;onActivity(next);
+    active=next;
+    try{onActivity(next);}catch(error){fail(error?.message??String(error));}
   }
   function post(action,detail){host.parent.postMessage({type:TYPE,action,...detail},origin);}
   function fail(message){
@@ -23,6 +26,12 @@ export function createAquariumEmbed({host=window,onConfigure=()=>{},onPointer=()
   function configure(){
     try{onConfigure(copy());return true;}
     catch(error){fail(error?.message??String(error));return false;}
+  }
+  function visibility(){
+    activity();
+    if(isReady&&!closed&&!failed&&!document.hidden){
+      try{onVisible();}catch(error){fail(error?.message??String(error));}
+    }
   }
   function message(event){
     if(closed||failed||event.origin!==origin||event.source!==host.parent)return;
@@ -45,11 +54,17 @@ export function createAquariumEmbed({host=window,onConfigure=()=>{},onPointer=()
     }else if(data.action==='tap'&&normalized(data.x)&&normalized(data.y))onTap({x:data.x,y:data.y});
   }
   host.addEventListener('message',message);
-  document.addEventListener('visibilitychange',activity);
+  document.addEventListener('visibilitychange',visibility);
   reduced.addEventListener('change',activity);
   return {
     get active(){return active;},
     get configuration(){return copy();},
+    progress(stage,detail={}){
+      if(closed||failed||!stages.has(stage)||!detail||typeof detail!=='object'||Array.isArray(detail))return false;
+      const engine=detail.engine===undefined?'unknown':detail.engine;
+      if(!engines.has(engine))return false;
+      post('progress',{stage,engine,hidden:document.hidden===true});return true;
+    },
     ready({model,engine}={}){
       if(closed||failed||isReady)return false;
       isReady=true;if(!configure())return false;
@@ -64,7 +79,7 @@ export function createAquariumEmbed({host=window,onConfigure=()=>{},onPointer=()
       if(closed)return;
       closed=true;isReady=false;
       host.removeEventListener('message',message);
-      document.removeEventListener('visibilitychange',activity);
+      document.removeEventListener('visibilitychange',visibility);
       reduced.removeEventListener('change',activity);
       activity();
     },

@@ -51,6 +51,15 @@ bridge.dispose();instance.dispose();
 let corrupt=true;
 const brokenFetch=async url=>{const buf=await readFile(url);if(corrupt&&new URL(url).pathname.endsWith('original.f64')){corrupt=false;buf[100]^=1;}return bytesResponse(buf);};
 const retry=await loadWaterStudy(base,{fetch:brokenFetch});await assert.rejects(retry.runs[0].load(),/integrity mismatch/);assert.equal((await retry.runs[0].load()).id,'original');
+// Checkout newline conversion is corruption of a byte-hashed sidecar even
+// though JSON.parse would accept it. Keep the public verifier strict.
+const crlfMetadataFetch=async url=>{
+  let bytes=await readFile(url);
+  if(new URL(url).pathname.endsWith('original.json'))bytes=Buffer.from(bytes.toString('utf8').replace(/\r?\n/g,'\r\n'));
+  return bytesResponse(bytes);
+};
+const crlfMetadata=await loadWaterStudy(base,{fetch:crlfMetadataFetch});
+await assert.rejects(crlfMetadata.runs[0].load(),/integrity mismatch/,'CRLF metadata cannot be silently normalized before verification');
 const badManifestFetch=async url=>{const bytes=await readFile(url);if(new URL(url).pathname.endsWith('manifest.json')){const value=JSON.parse(bytes);value.units.com='centimetres';return bytesResponse(Buffer.from(JSON.stringify(value)));}return bytesResponse(bytes);};
 await assert.rejects(loadWaterStudy(base,{fetch:badManifestFetch}),/manifest or units/);
 const descriptor=runs[0],metadata=JSON.parse(await readFile(new URL(descriptor.metadata.url,base),'utf8')),raw=await readFile(new URL(descriptor.poses.url,base));

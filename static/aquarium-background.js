@@ -7,6 +7,30 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
   frame.tabIndex=-1;frame.setAttribute('aria-hidden','true');frame.style.opacity='0';
   let closed=false,ready=false,attention=false;
   let requestedMotion=motion===true,currentLook=look==='wireframe'?'wireframe':'natural';
+  // Shader compilation may wait for animation callbacks, which browsers
+  // suspend in hidden tabs. Keep the same one-minute budget in visible time.
+  let remaining=60000,visibleSince=null,timeout=null,timeoutEpoch=0;
+  const stages={'module-loading':'loading the renderer','module-ready':'starting the renderer',data:'loading swim data',
+    renderer:'starting the GPU',textures:'loading materials',model:'loading the koi',rig:'preparing the rig',
+    compile:'compiling shaders',optics:'preparing water light','first-frame':'drawing the first frame',ready:'ready'};
+  let lastStage='',lastEngine='unknown',lastHidden=false;
+  const progressDetail=()=>lastStage?` (${stages[lastStage]}${lastEngine==='unknown'?'':lastEngine==='webgpu'?'; WebGPU':'; WebGL 2'}${lastHidden?'; hidden':''})`:'';
+  const stopDeadline=()=>{
+    window.clearTimeout(timeout);timeout=null;timeoutEpoch++;
+    if(visibleSince!==null){remaining=Math.max(0,remaining-(window.performance.now()-visibleSince));visibleSince=null;}
+  };
+  const deadline=()=>{
+    stopDeadline();
+    if(closed||ready||document.hidden)return;
+    if(remaining<=0){fail('The aquarium did not finish loading'+progressDetail());return;}
+    visibleSince=window.performance.now();const epoch=timeoutEpoch;
+    timeout=window.setTimeout(()=>{
+      // clearTimeout cannot retract a callback that is already queued. A
+      // previous visible interval must never expire a later resumed interval.
+      if(closed||ready||epoch!==timeoutEpoch||document.hidden)return;
+      deadline();
+    },remaining);
+  };
   const moving=()=>requestedMotion&&!document.hidden;
   const send=(action,fields={})=>{
     if(!closed&&ready)frame.contentWindow?.postMessage({type:'vira-aquarium',action,...fields},origin);
@@ -34,7 +58,11 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
     if(!data||typeof data!=='object'||Array.isArray(data)||data.type!=='vira-aquarium')return;
     if(data.action==='ready'){
       if(ready)return;
-      ready=true;window.clearTimeout(timeout);frame.style.opacity='1';dispose.message='';configure();onMessage?.('');
+      ready=true;stopDeadline();frame.style.opacity='1';dispose.message='';configure();onMessage?.('');
+    }else if(data.action==='progress'&&!ready&&typeof data.stage==='string'&&Object.hasOwn(stages,data.stage)&&
+      ['unknown','webgpu','webgl2'].includes(data.engine)&&typeof data.hidden==='boolean'){
+      lastStage=data.stage;lastEngine=data.engine;lastHidden=data.hidden;
+      dispose.message='Loading aquarium'+progressDetail()+'...';onMessage?.(dispose.message);
     }else if(data.action==='error'&&typeof data.message==='string'&&data.message.length<=240){
       fail(data.message);
     }
@@ -47,10 +75,10 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
     onMessage?.(dispose.message);
   };
   const failedNavigation=()=>fail('The aquarium could not load');
-  const visibility=()=>configure();
+  const visibility=()=>{deadline();configure();};
   const dispose=()=>{
     if(closed)return;
-    clear();closed=true;window.clearTimeout(timeout);
+    clear();closed=true;stopDeadline();
     window.removeEventListener('message',receive);window.removeEventListener('blur',clear);
     document.removeEventListener('visibilitychange',visibility);document.removeEventListener('pointermove',pointer);
     document.removeEventListener('pointerleave',clear);document.removeEventListener('click',tap);
@@ -64,9 +92,7 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
   document.addEventListener('visibilitychange',visibility);document.addEventListener('pointermove',pointer);
   document.addEventListener('pointerleave',clear);document.addEventListener('click',tap);
   frame.addEventListener('error',failedNavigation);
-  // Large local assets and shader compilation get one minute. A failed frame
-  // navigation must not leave the desktop permanently waiting for readiness.
-  const timeout=window.setTimeout(()=>fail('The aquarium did not finish loading'),60000);
+  deadline();
   frame.src='/aquarium-benchmark.html?background=1';node.appendChild(frame);
   return dispose;
 }

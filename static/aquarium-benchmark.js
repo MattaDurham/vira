@@ -26,7 +26,7 @@ import {createKoiInstance} from './aquarium-fish-instance.js?v=95';
 import {pigmentColorNode,pigmentFinPalette} from './aquarium-pigment.js?v=90';
 import {createSupportArticulation} from './aquarium-supports.js?v=90';
 import {createManeuverFootprint} from './aquarium-footprint.js?v=92';
-import {createAquariumEmbed,createFrameCadence,backgroundPixelRatio} from './aquarium-embed.js?v=2';
+import {createAquariumEmbed,createFrameCadence,backgroundPixelRatio} from './aquarium-embed.js?v=3';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const background=new URLSearchParams(location.search).get('background')==='1';
@@ -72,7 +72,14 @@ const embed=background?createAquariumEmbed({
   },
   onPointer:point=>{const clear=!point||(point.x===null&&point.y===null);if(clear||embed.active)allSwimmers(actor=>actor.follow(clear?null:normalizedPoint(point)));},
   onTap:point=>{if(embed.active)allSwimmers(actor=>actor.flick(normalizedPoint(point)));},
+  onVisible:()=>renderStill(),
 }):null;
+function startupProgress(stage){
+  if(!background)return;
+  document.documentElement.dataset.aquariumStage=stage;canvas.dataset.startupStage=stage;
+  embed.progress(stage,{engine:canvas.dataset.engine??'unknown'});
+}
+startupProgress('module-ready');
 let liveEngine='Starting renderer',referenceMetadata=null;
 let skeleton;
 let optics;
@@ -630,6 +637,7 @@ function record(){
 
 async function start(){
   const readJSON=async url=>{const response=await fetch(url);if(!response.ok)throw new Error(`${url}: HTTP ${response.status}`);return response.json();};
+  startupProgress('data');
   const [sourceTurn,massProfile]=await Promise.all([readJSON('aquarium/reference-turn.json?v=92'),readJSON(model.profile)]);
   if(disposed)return;
   const legacyTurn=new URLSearchParams(location.search).get('turn-controller')==='legacy';
@@ -637,9 +645,12 @@ async function start(){
   initializeSwimmer(turnControllerFactory);canvas.dataset.turnController=legacyTurn?'legacy':'source-sequence';
   const forceWebGL=new URLSearchParams(location.search).get('renderer')==='webgl';
   renderer=new THREE.WebGPURenderer({canvas,antialias:true,alpha:false,powerPreference:'high-performance',forceWebGL});
+  startupProgress('renderer');
   await renderer.init();
   rendererReady=true;
   if(disposed){cleanup();return;}
+  canvas.dataset.engine=renderer.backend.isWebGPUBackend?'webgpu':'webgl2';
+  startupProgress('renderer');
   RectAreaLightTexturesLib.init();THREE.RectAreaLightNode.setLTC(RectAreaLightTexturesLib);
   renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.toneMapping=new URLSearchParams(location.search).get('tone')==='agx'?THREE.AgXToneMapping:THREE.NeutralToneMapping;
@@ -649,6 +660,7 @@ async function start(){
   camera=new THREE.PerspectiveCamera(26,1,.06,25);setCamera();size();softboxEnvironment();
   const mapLoader=new THREE.TextureLoader();
   const mapFiles={color:'stone-color.jpg',height:'stone-height.jpg',arm:'stone-arm.jpg'},stoneMaps={};
+  startupProgress('textures');
   await Promise.all(Object.entries(mapFiles).map(async([key,file])=>{
     const map=ownTexture(await mapLoader.loadAsync(`aquarium/${file}`));
     if(disposed){map.dispose();return;}
@@ -657,7 +669,9 @@ async function start(){
   }));
   if(disposed){cleanup();return;}
   habitat(stoneMaps);
+  startupProgress('model');
   const gltf=await new GLTFLoader().loadAsync(model.asset);if(disposed)return;asset=gltf.scene;scene.add(asset);canvas.dataset.model=model.id;
+  startupProgress('rig');
   placement=createMassPlacement({...createAxialFrame(asset),profile:massProfile});
   const maneuverFootprint=createManeuverFootprint(asset,{massProfile});swimmer.footprint(maneuverFootprint.bounds);
   for(const spec of companionSpecs){
@@ -720,7 +734,10 @@ async function start(){
   canvas.dataset.optics='single-scattering-camera-volume';canvas.dataset.rig='three-axis-arched-centra';
   canvas.dataset.collisionProbes=String(containment.probeCount);canvas.dataset.anatomyMeshes=String(anatomicalMeshes.length);
   optics=waterOptics(renderer,scene,camera);
-  await renderer.compileAsync(scene,camera);if(disposed){cleanup();return;}await optics.prepare();if(disposed){cleanup();return;}loading.hidden=true;
+  startupProgress('compile');
+  await renderer.compileAsync(scene,camera);if(disposed){cleanup();return;}
+  startupProgress('optics');
+  await optics.prepare();if(disposed){cleanup();return;}loading.hidden=true;
   canvas.dataset.ready='true';
   // History can restore form values while the new GPU scene is loading.
   // Synchronize after that work, before attaching controls to the fresh rig.
@@ -753,9 +770,10 @@ async function start(){
   if(!background)research=createResearchLayer({root:$('tank'),canvas,toggle:$('research-toggle'),storyButton:$('build-story'),asset,joints,camera,shape:researchShape,
     getState:()=>state,getFish:()=>visualFish,onAction:action=>$(action==='pause'?'motion':'wireframe').click(),
     onVisibility:open=>{state.research=open;if(open)asset.getWorldPosition(researchFocus);frameResearchCamera();setCamera();}});
-  if(background){embeddedReady=true;renderStill();embed.ready({model:model.id,engine:canvas.dataset.engine});}
+  if(background){embeddedReady=true;startupProgress('first-frame');renderStill();startupProgress('ready');embed.ready({model:model.id,engine:canvas.dataset.engine});}
   else await renderer.setAnimationLoop(draw);
 }
 window.addEventListener('pagehide',cleanup,{once:true});
+window.__viraAquariumStartup?.dispose();
 start().catch(error=>{if(disposed)return;console.error('Aquarium benchmark:',error);loading.textContent=`Aquarium unavailable: ${error.message}`;canvas.dataset.ready='error';embed?.error(error.message);cleanup();});
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});

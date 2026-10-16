@@ -1,3 +1,19 @@
 * text=auto
 *.jpg binary
 *.ico binary
+
+# Aquarium integrity checks and reproduction provenance hash literal bytes.
+# Keep the reviewed text bytes stable even with core.autocrlf=true.
+/static/aquarium/water-study/*.json text eol=lf
+/static/aquarium/body-mass.json text eol=lf
+/scripts/aquarium/water-study/inputs.json text eol=lf
+/scripts/aquarium/water-study/*.mjs text eol=lf
+/static/aquarium-articulated.js text eol=lf
+/static/aquarium-axial-frame.js text eol=lf
+/static/aquarium-spine.js text eol=lf
+/static/aquarium-turn.js text eol=lf
+/static/vendor/three.webgpu.js text eol=lf
+/static/vendor/three.core.js text eol=lf
+/static/vendor/GLTFLoader.js text eol=lf
+/static/vendor/BufferGeometryUtils.js text eol=lf
+/static/vendor/rapier.mjs text eol=lf
