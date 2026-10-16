@@ -1,12 +1,21 @@
 /* Paired-fin tissue and its embedded rays share this bind-space deformation.
  * It preserves the authored attachment and skeleton; it does not add thrust. */
-import {finActuation,finPhaseRate} from './aquarium-motion.js?v=80';
+import {finActuation,finPhaseRate} from './aquarium-motion.js?v=82';
 
 const TAU=Math.PI*2,tableSize=33,maxDelay=.24;
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
 const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const normalize=a=>{const length=Math.hypot(...a);return a.map(value=>value/length);};
 const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+// Managed motor angles can cross zero during a reversal. This authored .003
+// radian engagement band keeps tissue compliance C2 at that crossing, while
+// retaining the original loaded/recovery response outside the band.
+const positivePaddle=value=>{
+  if(value<=0)return 0;
+  if(value>=.003)return value;
+  const t=value/.003;
+  return .003*t*t*t*(6+t*(-8+3*t));
+};
 
 export function createFinFrame(base,uv){
   const root={x:base[0],y:base[1],z:base[2]},side=Math.sign(root.z)||1;
@@ -33,6 +42,7 @@ function finMotion(fish,side,pectoral,samplePaddle,output){
   const phaseRate=fish.finPhase===undefined?TAU*.65:finPhaseRate(fish);
   const base=finActuation(fish,side,pectoral),motion=output??{samples:new Float64Array(tableSize*2)};
   const {samples}=motion,delayed=samplePaddle?null:{...fish};
+  const managed=fish.poseHistory!==false&&Number.isFinite(fish[(pectoral?'pectoral':'pelvic')+'Paddle'+(side>0?'Plus':'Minus')]);
   for(let i=0;i<tableSize;i++){
     const delay=i/(tableSize-1)*maxDelay;
     let paddle;
@@ -41,14 +51,18 @@ function finMotion(fish,side,pectoral,samplePaddle,output){
       delayed.age=age-delay;delayed.finPhase=phase-phaseRate*delay;
       paddle=finActuation(delayed,side,pectoral).paddle;
     }
-    const loaded=Math.max(0,paddle)/(.06+Math.abs(paddle));
-    const recovery=Math.max(0,-paddle)/(.025+Math.abs(paddle));
+    // Engage compliance after sampling actual observed motor history, rather
+    // than smoothing old controls and then interpolating through a new cusp.
+    const loaded=(managed?positivePaddle(paddle):Math.max(0,paddle))/(.06+Math.abs(paddle));
+    const recovery=(managed?positivePaddle(-paddle):Math.max(0,-paddle))/(.025+Math.abs(paddle));
     // The distal sheet cups under loading and feathers back toward edge-on
     // during recovery. These bounds describe this authored rig, not koi data.
     samples[i*2]=(.010*loaded-.003*recovery)*(pectoral?1:.7);
     samples[i*2+1]=(.50*loaded-.08*recovery)*(pectoral?1:.7);
   }
-  const flap=-(base.spread+base.paddle),trail=clamp(speed*.6,0,.22);
+  // Fore/aft is an explicit basal angle in radians. Its complete-foil rotation
+  // preserves attachment and material lengths; distal cup retains its history.
+  const flap=-(base.spread+base.paddle),trail=clamp(speed*.6,0,.22)+(base.foreAft??0);
   // Flow bends the relaxed distal tissue a little. It settles with the stroke
   // envelope and speed, without a free-running decorative flutter.
   const activation=clamp(fish.poseHistory===false?fish.stroke??0:fish.muscle3??fish.stroke??0,0,1);

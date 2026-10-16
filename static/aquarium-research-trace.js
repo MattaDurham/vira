@@ -9,15 +9,17 @@ export const pitchTraceLimits=[.15,Math.PI/6];
 export const rollTraceLimits=[.15,.13];
 export const createPitchResearchTrace=(duration=4)=>createAttitudeTrace(duration,pitchTraceLimits);
 export const createRollResearchTrace=(duration=4)=>createAttitudeTrace(duration,rollTraceLimits);
-function createAttitudeTrace(duration,limits){
+// Issued pectoral commands, not reconstructed fin kinematics or water forces.
+export const createSteeringResearchTrace=(duration=4)=>createAttitudeTrace(duration,[.15,.08],[0,0,1,1]);
+function createAttitudeTrace(duration,limits,rows=[0,1,1]){
   const samples=[];let previous=-Infinity;
   return {
     samples,
-    record(age,fin,head,tail){
-      if(![age,fin,head,tail].every(Number.isFinite))return;
+    record(age,...values){
+      if(values.length!==rows.length||![age,...values].every(Number.isFinite))return;
       if(age<previous){samples.length=0;previous=-Infinity;}
       if(age===previous)return;
-      samples.push({age,gap:age-previous>.3,values:[fin,head,tail]});previous=age;
+      samples.push({age,gap:age-previous>.3,values});previous=age;
       while(samples.length&&samples[0].age<age-duration)samples.shift();
       while(samples.length>256)samples.shift();
     },
@@ -26,7 +28,7 @@ function createAttitudeTrace(duration,limits){
       let path='';
       samples.forEach((sample,i)=>{
         const x=58+Math.max(0,1-(now-sample.age)/duration)*228;
-        const row=station===0?0:1,limit=limits[row];
+        const row=rows[station],limit=limits[row];
         const y=25+row*36-Math.max(-1,Math.min(1,sample.values[station]/limit))*12;
         path+=`${i===0||sample.gap?'M':'L'}${x.toFixed(2)},${y.toFixed(2)}`;
       });

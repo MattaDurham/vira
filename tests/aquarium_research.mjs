@@ -7,7 +7,7 @@ import {projectResearchPoint,researchFinAnchor,researchFinContour,researchCaudal
 import {createSwimmer} from '../static/aquarium-motion.js';
 import {createCaudalFrame,createCaudalMotion,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 import {researchTopics,buildChapters} from '../static/aquarium-research-data.js';
-import {createResearchTrace,traceLimit,createPitchResearchTrace,createRollResearchTrace} from '../static/aquarium-research-trace.js';
+import {createResearchTrace,traceLimit,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from '../static/aquarium-research-trace.js';
 
 const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url));
 const loader=new GLTFLoader().register(()=>({name:'GeometryOnlyImages',loadTexture:()=>Promise.resolve(new Texture())}));
@@ -134,4 +134,21 @@ for(const yaw of [-1.7,.6,2.4])for(const pitch of [-.35,.25])for(const bank of [
   rollHistory.record(1,bank,head,tail);
   assert.deepEqual(rollHistory.samples.at(-1).values,[bank,head,tail]);rollHistory.clear();
 }
+const steeringHistory=createSteeringResearchTrace(),turningFish=createSwimmer(()=>.5);
+Object.assign(turningFish.fish,{x:.55,y:.84,z:-.205,yaw:0});
+turningFish.navigate({x:-.85,y:.84,z:.20});
+for(let tick=0;tick<180;tick++){
+  turningFish.step(1/120);if(tick%6)continue;
+  const fish=turningFish.fish,commands=[fish.pectoralPaddlePlus,fish.pectoralPaddleMinus,fish.pectoralForeAftPlus,fish.pectoralForeAftMinus];
+  steeringHistory.record(fish.age,...commands);
+  assert.deepEqual(steeringHistory.samples.at(-1).values,commands,
+    'the steering chart records actual issued commands from the live swimmer, with separate sides and axes');
+}
+assert.ok(steeringHistory.samples.some(sample=>sample.values.some(value=>Math.abs(value)>.001)),
+  'the live route actually emits a finite fin stroke rather than testing an all-zero chart');
+steeringHistory.clear();steeringHistory.record(0,.15,-.15,.08,-.08);
+assert.deepEqual([0,1,2,3].map(i=>steeringHistory.paths(i,0)),['M286.00,13.00','M286.00,37.00','M286.00,49.00','M286.00,73.00'],
+  'paired commands share fixed axis-specific scales without combining left and right signals');
+steeringHistory.record(0,0,0,0,0);assert.equal(steeringHistory.samples.length,1,'paused observation cannot replace issued steering commands');
+assert.deepEqual(steeringHistory.samples[0].values,[.15,-.15,.08,-.08]);
 console.log('Research overlay: actual rig/camera attachment and cited story links passed.');

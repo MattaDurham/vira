@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=80';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=82';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -44,8 +44,145 @@ const turnCarrierShare=activity=>{
   return 1-load*load*(3-2*load);
 };
 
+const finEase=t=>t*t*t*(10+t*(-15+6*t));
+const finBump=(age,start,duration)=>{
+  const t=(age-start)/duration;
+  return t>0&&t<1?64*t*t*t*(1-t)*(1-t)*(1-t):0;
+};
+const finExcursion=(age,delay=0)=>finBump(age,delay,.28)-.28*finBump(age,delay+.30,.38);
+const finTaskFields=['pectoralPaddlePlus','pectoralPaddleMinus','pectoralForeAftPlus','pectoralForeAftMinus',
+  'pelvicPaddlePlus','pelvicPaddleMinus','pelvicForeAftPlus','pelvicForeAftMinus'];
+
+// Authored task repertoire, not measured koi timing or hydrodynamic forces.
+// sample({age,turn,yawError,yawRate,stopping,mode}) consumes seconds, normalized
+// signed steering REQUEST, heading error (rad), actual heading rate (rad/s),
+// flow-weighted brake demand [0,1], and swim/hover/retreat context. Output angles
+// are radians; Plus/Minus identify the authored +Z/-Z fin. Copy its scalar
+// fields when storing snapshots: this output object is deliberately reused.
+export function createFinTaskController(){
+  const output={},a=new Float64Array(8),b=new Float64Array(8);
+  let age,serial=0,requested=0,episode=0,peak=0,previousRate=0,inside=false,outside=false,brakeLatched=false,lastStrength=0;
+  let hoverSince,lastBalance=-Infinity,balanceSide=1;
+  function trajectory(event,now,values){
+    values.fill(0);if(!event)return;
+    const t=now-event.start,{kind,direction,strength}=event;
+    if(kind==='steer'||kind==='brake'||kind==='balance'){
+      for(const side of [1,-1]){
+        const leading=side===direction,delay=kind==='brake'?0:leading?0:.10;
+        const stroke=finExcursion(t,delay),slot=side>0?0:1;
+        values[slot]=.085*strength*stroke;
+        // Separate basal fore/aft presentation, not the unused legacy sweep.
+        values[slot+2]=(kind==='brake'?.02:(leading?1:-1)*(kind==='balance'?.02:.06))*strength*stroke;
+      }
+    }else{
+      const slot=direction>0?4:5,stroke=finExcursion(t);
+      values[slot]=.085*.35*strength*stroke;
+      values[slot+2]=(kind==='inside'?.04:-.04)*.35*strength*stroke;
+    }
+  }
+  function track(){
+    let current=null,outgoing=null,queued=null,handoff=0,lastEnd=-Infinity;
+    function request(descriptor,now){
+      if(outgoing){
+        queued=current.kind===descriptor.kind&&current.direction===descriptor.direction?null:descriptor;
+        return;
+      }
+      const next={...descriptor,start:now,serial:++serial};
+      if(current&&now<current.start+.78){outgoing=current;handoff=now;}
+      current=next;
+    }
+    return {request,
+      advance(now){
+        if(outgoing&&now-handoff>=.12){
+          outgoing=null;
+          if(queued){const next=queued;queued=null;request(next,now);}
+        }
+        if(!outgoing&&current&&now>=current.start+.78){lastEnd=current.start+.78;current=null;}
+      },
+      ready:now=>!current&&!outgoing&&now>=lastEnd+.10,
+      render(now,values){
+        trajectory(current,now,values);
+        if(outgoing){
+          trajectory(outgoing,now,b);const blend=finEase(clamp((now-handoff)/.12,0,1));
+          for(let i=0;i<8;i++)values[i]=b[i]*(1-blend)+values[i]*blend;
+        }
+      },
+      get current(){return current;},
+      cancelQueued(kind){if(queued?.kind===kind)queued=null;},
+      reset(){current=outgoing=queued=null;handoff=0;lastEnd=-Infinity;}};
+  }
+  const pectoral=track(),pelvic=track();
+  function reset(){
+    age=undefined;serial=requested=episode=peak=previousRate=lastStrength=0;
+    hoverSince=undefined;lastBalance=-Infinity;balanceSide=1;
+    inside=outside=brakeLatched=false;pectoral.reset();pelvic.reset();
+    for(const field of finTaskFields)output[field]=0;
+    Object.assign(output,{finTaskMode:'swim',finTaskSerial:0,finTaskAge:0,finTaskDirection:0});return output;
+  }
+  reset();
+  return {reset,sample(input){
+    const now=input.age??0;
+    if(now===age)return output;
+    if(age!==undefined&&(now<age||now-age>.25))reset();
+    age=now;
+    const turn=clamp(input.turn??0,-1,1),error=input.yawError??turn,rate=input.yawRate??0,stopping=clamp(input.stopping??0,0,1);
+    const significant=Math.abs(turn)>.04&&Math.abs(error)>.04;
+    const wanted=significant?Math.sign(turn):Math.abs(turn)<.025||Math.abs(error)<.025?0:requested;
+    const strength=clamp(.75*finDemandMagnitude(turn)+.65*stopping,0,1);
+    const changed=wanted!==requested;
+    if(changed){
+      requested=wanted;
+      if(wanted){
+        pectoral.request({kind:'steer',direction:wanted,strength},now);
+        episode=wanted;peak=0;inside=outside=false;lastStrength=strength;
+      }else pectoral.cancelQueued('steer');
+    }
+    // Reconcile the latest request before a completed handoff may drain its
+    // queue, including a release observed exactly at that handoff boundary.
+    if(stopping<.04){brakeLatched=false;pectoral.cancelQueued('brake');}
+    if(input.mode!=='hover'&&input.mode!=='retreat')pectoral.cancelQueued('balance');
+    pectoral.advance(now);pelvic.advance(now);
+    if(!changed&&requested&&pectoral.ready(now)){
+      pectoral.request({kind:'steer',direction:requested,strength},now);lastStrength=strength;
+    }
+    // A maintained braking surface need not paddle continuously. A later
+    // brake episode rearms only after actual flow-weighted demand releases.
+    if(!requested&&stopping>.12&&!brakeLatched){
+      pectoral.request({kind:'brake',direction:0,strength:clamp(.65*stopping,0,1)},now);brakeLatched=true;
+    }
+    // Explicit station-holding context permits sparse finite corrections.
+    // A neutral glide does not acquire an age-driven flutter. These quiet
+    // intervals and alternating leading sides are authored balance behavior.
+    if(input.mode==='hover'||input.mode==='retreat'){
+      if(requested||stopping>=.12||Math.abs(rate)>.025||pectoral.current||pelvic.current)hoverSince=now;
+      else hoverSince??=now;
+      if(!requested&&stopping<.12&&pectoral.ready(now)&&now-hoverSince>1.8&&now-lastBalance>2.4){
+        pectoral.request({kind:'balance',direction:balanceSide,strength:.12},now);
+        balanceSide=-balanceSide;lastBalance=now;
+      }
+    }else{hoverSince=undefined;pectoral.cancelQueued('balance');}
+    // Pelvics respond to the observed heading trajectory, not a fixed phase
+    // offset from the pectorals. The exact thresholds and gains are authored.
+    if(episode){
+      const signed=rate*episode;peak=Math.max(peak,signed);
+      if(!inside&&signed>.035){pelvic.request({kind:'inside',direction:episode,strength:lastStrength},now);inside=true;}
+      if(inside&&!outside&&peak>.055&&signed<peak*.8&&signed<previousRate*episode){
+        pelvic.request({kind:'outside',direction:-episode,strength:lastStrength},now);outside=true;
+      }
+    }
+    previousRate=rate;
+    pectoral.render(now,a);for(let i=0;i<4;i++)output[finTaskFields[i]]=a[i];
+    pelvic.render(now,a);for(let i=4;i<8;i++)output[finTaskFields[i]]=a[i];
+    const active=pectoral.current;
+    Object.assign(output,{finTaskMode:active?.kind??input.mode??'swim',finTaskSerial:serial,
+      finTaskAge:active?now-active.start:0,finTaskDirection:requested});
+    return output;
+  }};
+}
+
 export function createSwimmer(random=Math.random){
   const fish={};
+  const finTasks=createFinTaskController();
   let intent,intentTime,heading,depth,depthTime,cursor,cursorAge,attention,goal;
   let gait,gaitTime,turnTime,turnCooldown,turnSign,escapeTime,wallTime;
   let bendTime,bendDuration,bendStrength,bendStart;
@@ -71,6 +208,7 @@ export function createSwimmer(random=Math.random){
       bankLag1:0,bankLag2:0,bankLag3:0,
       muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
       turnRecruitment:0,turnRecruitment1:0,turnRecruitment2:0,turnRecruitment3:0});
+    Object.assign(fish,finTasks.reset());
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
     cursor=goal=null;cursorAge=attention=escapeTime=wallTime=0;
     gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=.4;turnSign=1;
@@ -236,6 +374,9 @@ export function createSwimmer(random=Math.random){
       for(const fraction of [.75,.5,.25])if(fits(turnRate*fraction)){safeRate=turnRate*fraction;break;}
       blocked=safeRate===0;
     }
+    Object.assign(fish,finTasks.sample({age:fish.age,turn:clamp(safeRate*.9+fish.finSteer*.35,-1,1),yawError,
+      yawRate:fish.yawRate,stopping:fish.brake*clamp((Math.abs(fish.forwardSpeed)-.025)/.075,0,1),
+      mode:intent==='hover'&&!arrive?'hover':'swim'}));
     fish.yawRate=approach(fish.yawRate,safeRate,turning?5.5:7,dt);
     // A depth decision first changes the paired fins' signed basal incidence.
     // Their shared neutral-relative control moment then accelerates pitch;
@@ -342,12 +483,12 @@ export function createSwimmer(random=Math.random){
       fish[key]=approach(fish[key]-(fish.bank-previousBank),previousLag,rate,dt);previousLag=fish[key];
     });
   }
-  function step(elapsed){
+  function step(elapsed,onTick){
     if(!Number.isFinite(elapsed)||elapsed<=0)return;
     // Integrate all ordinary elapsed time with stable, short water-force steps.
     // A quarter-second cap prevents a jump after a suspended tab resumes.
     const dt=Math.min(elapsed,.25),pieces=Math.max(1,Math.ceil(dt*120-1e-9));
-    for(let i=0;i<pieces;i++)integrate(dt/pieces);
+    for(let i=0;i<pieces;i++){integrate(dt/pieces);onTick?.(fish);}
   }
   return {fish,follow,flick,navigate,reset,contain,step,
     get behavior(){return {intent:attention>.12&&intent!=='escape'&&intent!=='navigate'?'curious':intent,
@@ -376,8 +517,12 @@ export function finActuation(fish,side,pectoral=true){
   // sine-wave strokes. With no control demand, forward glides hold the fins.
   const beat=cycle<.38?Math.sin(Math.PI*cycle/.38)**2:-.28*Math.sin(Math.PI*(cycle-.38)/.62)**2;
   const gain=pectoral?1:.35;
+  const family=pectoral?'pectoral':'pelvic',suffix=side>0?'Plus':'Minus';
+  const taskPaddle=fish[family+'Paddle'+suffix],taskForeAft=fish[family+'ForeAft'+suffix];
+  const tasked=fish.poseHistory!==false&&Number.isFinite(taskPaddle);
   return {spread:(.035+.07*slow+.18*stopping+.12*positiveFinDemand(turn*side)+.05*finDemandMagnitude(trim))*gain,
-    paddle:(.085*control+.14*hover)*beat*gain,
+    paddle:tasked?taskPaddle:(.085*control+.14*hover)*beat*gain,
+    foreAft:tasked?taskForeAft??0:0,
     sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain,
     incidence:trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35)};
 }

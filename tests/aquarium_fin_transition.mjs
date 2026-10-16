@@ -120,7 +120,7 @@ function loadedActuation(fish,side,pectoral){
   const beat=cycle<.38?Math.sin(Math.PI*cycle/.38)**2:-.28*Math.sin(Math.PI*(cycle-.38)/.62)**2,gain=pectoral?1:.35;
   return {spread:(.035+.07*slow+.18*stopping+.12*Math.max(0,turn*side)+.05*Math.abs(trim))*gain,
     paddle:(.085*control+.14*hover)*beat*gain,sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain,
-    incidence:trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35)};
+    incidence:trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35),foreAft:0};
 }
 
 function loadedMotion(fish,side,pectoral){

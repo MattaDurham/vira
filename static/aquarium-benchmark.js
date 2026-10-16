@@ -3,19 +3,19 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=80';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=80';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=80';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=80';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=80';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=80';
-import {finRayContrast} from './aquarium-fin-detail.js?v=80';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=80';
-import {waterOptics} from './aquarium-optics.js?v=80';
-import {createContainment} from './aquarium-collision.js?v=80';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=80';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=80';
-import {createResearchLayer} from './aquarium-research.js?v=80';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=82';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=82';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=82';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=82';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=82';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=82';
+import {finRayContrast} from './aquarium-fin-detail.js?v=82';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=82';
+import {waterOptics} from './aquarium-optics.js?v=82';
+import {createContainment} from './aquarium-collision.js?v=82';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=82';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=82';
+import {createResearchLayer} from './aquarium-research.js?v=82';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -59,6 +59,9 @@ function observeFins(sample,key){
   caudalController.sample(sample,key);
   for(const controller of Object.values(medianControllers))controller.sample(sample,key);
 }
+// Fin compliance observes each completed physics step, including between
+// display frames. Held inspection poses keep their own separate history key.
+const observeLiveFins=sample=>observeFins(sample,'live');
 const turnStudy=createTurnStudy(swimmer,{random:studyRandom,
   onReset:sample=>{turnPoseKey++;observeFins(sample,`turn:${turnPoseKey}`);},
   onTick:sample=>observeFins(sample,`turn:${turnPoseKey}`),
@@ -370,7 +373,7 @@ function draw(now){
       const leg=Math.floor(fish.age/12)%2;
       if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
     }
-    if(turnReplay)turnStudy.step(elapsed);else swimmer.step(elapsed);
+    if(turnReplay)turnStudy.step(elapsed);else swimmer.step(elapsed,state.study?undefined:observeLiveFins);
     studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.25);clock.value=fish.age;pose();}
   const finPoseKey=turnReplay?`turn:${turnPoseKey}`:state.study?state.studyAxis:'live';
   const pairedMotion={
@@ -539,7 +542,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=80');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=82');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -590,7 +593,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=80').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=82').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});

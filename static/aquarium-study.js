@@ -1,4 +1,4 @@
-import {tankCenterZ} from './aquarium-space.js?v=80';
+import {tankCenterZ} from './aquarium-space.js?v=82';
 
 const tickDuration=1/120;
 

@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=80';
-import {waterMax} from './aquarium-space.js?v=80';
-import {spinalField} from './aquarium-motion.js?v=80';
-import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace} from './aquarium-research-trace.js?v=80';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=82';
+import {waterMax} from './aquarium-space.js?v=82';
+import {spinalField} from './aquarium-motion.js?v=82';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=82';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -113,30 +113,42 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const traceStart=svg('text',{x:58,y:106}),traceEnd=svg('text',{x:286,y:106,'text-anchor':'end'});
   traceStart.textContent='−4 s';traceEnd.textContent='Now';tracePlot.append(traceStart,traceEnd);
   traceBox.append(traceTitle,tracePlot,element('p','research-trace-caption','Trunk solid / tail dotted · ±45° · authored model'));
-  const pitchTrace=createPitchResearchTrace(),rollTrace=createRollResearchTrace(),pitchBox=element('div','research-trace research-pitch');
+  const pitchTrace=createPitchResearchTrace(),rollTrace=createRollResearchTrace(),steeringTrace=createSteeringResearchTrace(),pitchBox=element('div','research-trace research-pitch');
   const attitudeTitle=element('div','research-trace-title'),attitudeCaption=element('p','research-trace-caption');
-  const attitudeControls=element('div','research-attitude-controls');attitudeControls.setAttribute('role','group');attitudeControls.setAttribute('aria-label','Fin attitude diagram');
-  const attitudeButtons=['pitch','roll'].map(axis=>{
-    const button=element('button','',axis==='pitch'?'Pitch':'Roll');button.type='button';
+  const attitudeControls=element('div','research-attitude-controls');attitudeControls.setAttribute('role','group');attitudeControls.setAttribute('aria-label','Fin motion diagram');
+  const attitudeAxes=['pitch','roll','steering'];
+  const attitudeButtons=attitudeAxes.map(axis=>{
+    const button=element('button','',axis[0].toUpperCase()+axis.slice(1));button.type='button';
     button.addEventListener('click',()=>{attitudeAxis=axis;setAttitudeLabels();previous=-Infinity;update(performance.now());},{signal});
     attitudeControls.append(button);return button;
   });
   const pitchPlot=svg('svg',{viewBox:'0 0 300 86',role:'img','aria-label':'Four seconds of authored nose-up fin command, and actual head and tail frame pitch with the neutral arch removed. Fin command uses plus or minus 8.6 degrees; body frames use plus or minus 30 degrees. Positive values point upward. These are model signals, not measured fish kinematics.'});
-  let attitudeAngleLabel;
+  let attitudeFinLabel,attitudeAngleLabel;
   ['Fin trim','Pitch'].forEach((name,i)=>{
     const label=svg('text',{x:0,y:28+i*36});label.textContent=name;
-    if(i===1)attitudeAngleLabel=label;
+    if(i===0)attitudeFinLabel=label;else attitudeAngleLabel=label;
     pitchPlot.append(label,svg('path',{d:`M58,${25+i*36}H286`,'class':'research-trace-baseline'}));
   });
   const pitchPaths=['fin','head','tail'].map(name=>svg('path',{'class':`research-trace-path research-pitch-${name}`}));pitchPlot.append(...pitchPaths);
+  const steeringPaths=Array.from({length:4},(_,i)=>svg('path',{'class':`research-trace-path research-pitch-${i<2?'fin':'head'}${i%2?' research-trace-tail':''}`}));pitchPlot.append(...steeringPaths);
   const pitchStart=svg('text',{x:58,y:85}),pitchEnd=svg('text',{x:286,y:85,'text-anchor':'end'});
   pitchStart.textContent='−4 s';pitchEnd.textContent='Now';pitchPlot.append(pitchStart,pitchEnd);
   pitchBox.append(attitudeTitle,attitudeControls,pitchPlot,attitudeCaption);
   function setAttitudeLabels(){
-    const roll=attitudeAxis==='roll';pitchBox.dataset.axis=attitudeAxis;
+    const roll=attitudeAxis==='roll',steering=attitudeAxis==='steering';pitchBox.dataset.axis=attitudeAxis;
+    attitudeButtons.forEach((button,i)=>button.setAttribute('aria-pressed',String(attitudeAxes[i]===attitudeAxis)));
+    pitchPaths.forEach(path=>{path.style.display=steering?'none':'';});
+    steeringPaths.forEach(path=>{path.style.display=steering?'':'none';});
+    attitudeFinLabel.textContent=steering?'Paddle':'Fin trim';
+    if(steering){
+      attitudeAngleLabel.textContent='Fore / aft';
+      attitudeTitle.textContent='FINITE FIN STROKES / LIVE STEERING';
+      attitudeCaption.textContent='Pectoral commands: paddle ±8.6° / fore-aft ±4.6°. Left solid, right dotted. Issued model angles, not measured fin kinematics or water forces.';
+      pitchPlot.setAttribute('aria-label','Four seconds of actual issued left and right pectoral paddle and fore-aft commands. Left is solid and right dotted. Paddle uses plus or minus 8.6 degrees; fore-aft uses plus or minus 4.6 degrees. Values are clipped beyond those fixed scales. Timing and angles are authored, not measurements from a biological fish.');
+      return;
+    }
     attitudeAngleLabel.textContent=roll?'Roll':'Pitch';
     attitudeTitle.textContent=`FIN → HEAD → TAIL / LIVE ${roll?'ROLL':'PITCH'}`;
-    attitudeButtons.forEach((button,i)=>button.setAttribute('aria-pressed',String((i===1)===roll)));
     attitudeCaption.textContent=roll?'Fin command ±8.6° / head solid, tail dotted ±7.4°. Rest arch removed. Bank direction, gains and recovery are authored.':
       'Fin command ±8.6° / head solid, tail dotted ±30°. Rest arch removed. Arrows show authored trim direction, not measured force.';
     pitchPlot.setAttribute('aria-label',roll?'Four seconds of authored signed fin roll command, and actual head and tail frame roll with neutral arch removed. Fin command uses plus or minus 8.6 degrees; body roll uses plus or minus 7.4 degrees, clipped beyond those limits. Positive roll follows the caudal axis. These are model signals, not measured fish kinematics.':
@@ -192,7 +204,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   function setOpen(value,view='research'){
     open=value;layer.hidden=!value;root.dataset.research=String(value);toggle.setAttribute('aria-expanded',String(value));toggle.setAttribute('aria-pressed',String(value));
     onVisibility(value);
-    if(value){trace.clear();pitchTrace.clear();rollTrace.clear();setMode(view);update(performance.now());}else toggle.focus();
+    if(value){trace.clear();pitchTrace.clear();rollTrace.clear();steeringTrace.clear();setMode(view);update(performance.now());}else toggle.focus();
   }
   toggle.addEventListener('click',()=>setOpen(!open),{signal});storyButton.addEventListener('click',()=>setOpen(true,'story'),{signal});
   toggle.disabled=storyButton.disabled=false;
@@ -286,22 +298,25 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     // turning stroke. An orientation-lag estimate alone misses that bend.
     const field=spinalField(fish,joints.map(joint=>joint.userData.axial));
     const currentTraceMode=state.study?state.studyAxis:'swimming';
-    if(traceMode!==currentTraceMode){trace.clear();pitchTrace.clear();rollTrace.clear();traceMode=currentTraceMode;}
+    if(traceMode!==currentTraceMode){trace.clear();pitchTrace.clear();rollTrace.clear();steeringTrace.clear();traceMode=currentTraceMode;}
     trace.record(fish.age,field);
     tracePaths.forEach((paths,axis)=>paths.forEach((path,station)=>path.setAttribute('d',trace.paths(axis,station,fish.age))));
     if(fish.poseHistory!==false&&Number.isFinite(fish.pitchFin)){
       pitchTrace.record(fish.age,fish.pitchFin,researchJointPitch(joints[1]),researchJointPitch(joints.at(-1)));
       rollTrace.record(fish.age,fish.rollFin??0,researchJointRoll(joints[1]),researchJointRoll(joints.at(-1)));
+      steeringTrace.record(fish.age,fish.pectoralPaddlePlus,fish.pectoralPaddleMinus,fish.pectoralForeAftPlus,fish.pectoralForeAftMinus);
       const attitudeTrace=attitudeAxis==='roll'?rollTrace:pitchTrace;
       pitchPaths.forEach((path,station)=>path.setAttribute('d',attitudeTrace.paths(station,fish.age)));
+      steeringPaths.forEach((path,station)=>path.setAttribute('d',steeringTrace.paths(station,fish.age)));
     }
     const ys=[4,14,24,33].map(i=>26+clamp(field[i][vertical?'vertical':'lateral'],-.7,.7)*25);
     miniPath.setAttribute('d',ys.map((y,i)=>`${i?'L':'M'}${24+i*84},${y}`).join(' '));
     miniDots.forEach((dot,i)=>{dot.setAttribute('cy',ys[i]);dot.setAttribute('r',3+activation[i]*5);dot.setAttribute('opacity',.3+.7*activation[i]);});
     miniCaption.textContent=`${vertical?'Vertical':'Sideways'} pose offsets / ±40° / dot size: authored activation`;
     mini.setAttribute('aria-label','Four axial orientation offsets from rest in the animal frame, with a fixed plus or minus 40 degree scale. This is an orientation profile, not a centerline shape. Circle size shows the authored activation envelope, not measured EMG.');
+    const taskLabel={steer:'steering stroke',brake:'settling stroke',balance:'balance correction',swim:'fin hold',hover:'hover',retreat:'retreat'}[fish.finTaskMode]??'unavailable';
     liveValue.textContent=active==='optics'?`${Math.max(0,waterMax[1]-joints[15].getWorldPosition(vector).y).toFixed(2)} m below surface`:
-      active==='fins'?`${(fish.speed??0).toFixed(2)} m/s / ${fish.brake>.2?'braking':fish.stroke>.2?'propulsive bout':'glide / trim'}`:
+      active==='fins'?`${(fish.speed??0).toFixed(2)} m/s / ${attitudeAxis==='steering'?taskLabel:(fish.brake>.2?'braking':fish.stroke>.2?'propulsive bout':'glide / trim')}`:
       `${(fish.pitch*180/Math.PI).toFixed(1)}° pitch / ${(fish.speed??0).toFixed(2)} m/s`;
     canvas.dataset.researchAnchor=anchor?`${anchor.x.toFixed(1)},${anchor.y.toFixed(1)}`:'';
   }

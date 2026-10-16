@@ -43,12 +43,13 @@ export const researchTopics = [
     id: 'fins',
     navLabel: 'Fins',
     title: 'Fins change jobs',
-    claim: 'Koi pectorals cup and undulate during hovering and retreat. Bluegill use different pectoral strokes for turning; their dorsal and anal inclination and tail shape also change with the task.',
-    implementation: 'Rays and membrane bend together. Paired-fin deployment eases through neutral steering; signed trim drives pitch and roll, followed by axial response. Dorsal and anal fins retain their posed attachments and ray lengths while flexing independently. Three outlines trace the actual moving edges.',
-    limitation: 'Angles, moments, timing and bank direction are authored, not calibrated adult-koi mechanics. Paired-fin cycles do not reconstruct the observed turn-specific timing. Constrained rays approximate elastic tissue. Median shape adds no simulated force and settles toward neutral during a glide; the sources establish no koi glide-collapse rule.',
+    claim: 'Koi pectorals cup and undulate during hovering and retreat. Slow bluegill turns use several strokes with similar bilateral amplitudes; faster turns change that balance. Trout pelvic corrections follow a variable sequence. Dorsal, anal and tail shapes also change with the task.',
+    implementation: 'Live steering issues finite strokes with separate fore-aft rotations and a feathered return. Pelvic actions respond to actual yaw and settling. Rays and tissue follow observed commands; signed trim drives pitch and roll. The diagrams expose issued commands, actual rig attitudes and moving fin edges.',
+    limitation: 'Timing, angles, side choices and moments are authored. Koi hover data reconstruct one fin; comparative bluegill and trout studies do not calibrate bilateral koi turns. These strokes do not supply a measured yaw-force model. Median-fin deformation preserves attachments and ray lengths but adds no simulated force.',
     sources: [
       { label: 'Wang et al. 2013: three-dimensional koi fin motion', url: 'https://doi.org/10.1016/S1672-6529(13)60217-6' },
       { label: 'Drucker and Lauder 2001: different pectoral strokes and turning wakes', url: 'https://doi.org/10.1242/jeb.204.3.431' },
+      { label: 'Clark and Tytell 2026: pectoral strokes change with turning speed', url: 'https://doi.org/10.7717/peerj.21161' },
       { label: 'Standen 2008: staged pelvic corrections during trout turns', url: 'https://doi.org/10.1242/jeb.018572' },
       { label: 'Wilga and Lauder 1999: pectoral action initiates sturgeon rise and sink', url: 'https://doi.org/10.1242/jeb.202.18.2413' },
       { label: 'Ting and Yang 2008: opposing fin moments during cichlid descent', url: 'https://doi.org/10.1242/jeb.020263' },
@@ -131,7 +132,7 @@ export const buildChapters = [
   {
     id: 'controls',
     title: 'Connect cause and motion',
-    text: 'A chosen course loads a head-led yaw turn. Shared fin trim drives authored pitch and roll moments; body rotation and axial follow-through result. The tail follows actual bank changes rather than receiving a separate yaw-driven twist. Strokes accelerate the fish, while momentum and drag carry the glide. The live diagrams expose those separate signals.',
+    text: 'A chosen course loads a head-led yaw turn and finite paired-fin strokes. Unresolved steering can request another stroke; recovery and settling finish the gesture. Shared fin trim drives authored pitch and roll moments, with axial follow-through. Tail strokes accelerate the fish, while momentum and drag carry the glide. The diagrams expose the separate commands and actual rig response.',
     topics: ['head', 'muscle', 'fins'],
   },
   {

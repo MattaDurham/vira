@@ -536,7 +536,10 @@ const roam=createSwimmer(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;retu
 for(let i=0;i<18000;i++){
   if(i%400===0)roam.flick({x:-1+2*(i%800)/800,y:1.1,z:.2});
   roam.step(1/60);
-  for(const v of Object.values(roam.fish))assert.ok(Number.isFinite(v),'long runs stay finite');
+  for(const [name,value] of Object.entries(roam.fish)){
+    if(name==='finTaskMode')assert.ok(['swim','hover','retreat','steer','brake','balance'].includes(value),'the task label remains a known locomotor context');
+    else assert.ok(Number.isFinite(value),`${name}: long runs stay finite`);
+  }
   const f=roam.fish;
   assert.ok(['x','y','z'].every((axis,j)=>f[axis]>=rootMin[j]&&f[axis]<=rootMax[j]),'the whole fish has room inside the glass');
 }

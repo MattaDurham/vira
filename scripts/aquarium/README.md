@@ -24,13 +24,17 @@ causal pitch diagram: signed fin command on a fixed 8.6-degree scale, followed
 by actual head and tail frame attitudes on a shared 30-degree scale. It removes
 each joint's neutral arch before reading world pitch. Its arrows show authored
 trim direction, not measured fluid forces; pose-only studies hide this diagram.
-The Pitch/Roll switch also exposes differential fin trim and actual material
-roll on a fixed 7.4-degree body scale. The roll measurement removes heading and
+The Pitch/Roll/Steering switch also exposes differential fin trim and actual
+material roll on a fixed 7.4-degree body scale. The roll measurement removes heading and
 pitch geometrically, rather than using an Euler component or axial-offset
-estimate. Both histories remain live while switching; pausing invents no new
-samples.
-Six
-research notes distinguish observations, implementation and the limits of each
+estimate. Steering plots the four issued left/right pectoral paddle and
+fore-aft angles, on fixed scales of +/-0.15 radians (8.6 degrees) and +/-0.08
+radians (4.6 degrees). Left is solid and right is dotted; values outside the
+scales are clipped. Its mode label identifies the active pectoral task or
+swimming context, not a combined stage for all four fins. These are model
+commands, not measured fish kinematics or fluid forces. Histories remain live
+while switching; pausing invents no new samples.
+Six research notes distinguish observations, implementation and the limits of each
 comparison; linked papers and original footage retain their species context.
 **How this was built** connects observation, geometry, controls and lighting,
 with a complete source index and links back into the live notes. While the
@@ -317,11 +321,26 @@ the existing orientation lag remains separate from that finite stroke.
 The tail relaxes and the course holds during the glide. Its rates and forces
 are tuned for this large authored fish; they are not copied from the paper's
 small experimental specimen or derived by solving its fluid equations.
+[Clark and Tytell's bluegill experiments](https://doi.org/10.7717/peerj.21161)
+use a moving flow-through chamber to elicit 180-degree turns at controlled
+rates and a constrained radius. Five fish each contributed at least 15 slow
+and 15 fast turns. All used pectoral fins; slower turns involved more strokes,
+while faster turns had higher mean stroke frequency. Inside and outside
+pectoral amplitudes did not differ significantly in slow turns (P=0.378),
+whereas the inside amplitude was greater in fast turns (P<0.001). A universal
+rule that the inside fin is always larger is therefore unsupported. These
+apparatus-elicited turns do not calibrate spontaneous koi corrections,
+continuous yaw reversals or return-to-glide timing.
 The original [slow](https://doi.org/10.7717/peerj.21161/supp-1) and
-[fast](https://doi.org/10.7717/peerj.21161/supp-2) bluegill videos show separate
-head rotation and tail follow-through from bottom and side views. Those
-apparatus-elicited 180-degree turns are comparative evidence, not spontaneous
-koi calibration. [Howe and Astley](https://doi.org/10.1002/jez.2398) measured
+[fast](https://doi.org/10.7717/peerj.21161/supp-2) movies present views from below
+(top) and the side (bottom). The slow movie was inspected at normal and half
+speed through its 6.933333-second end, including media times 1.368716,
+3.645563, 4.153059 and 5.629192 seconds. The body starts comparatively
+straight; the head turns laterally as the tail follows into a C-shaped bend,
+the fins present differently during the turn, and the body unbends as it
+moves out. These are qualitative observations, not measured stroke chronology,
+fluid forces or control coefficients.
+[Howe and Astley](https://doi.org/10.1002/jez.2398) measured
 localized curvature pulses in giant danios; head-led reorientation does not
 imply that curvature must originate at the nose.
 
@@ -416,39 +435,67 @@ the other directs it posteriorly to translate. In
 foraging turns at 0.21-0.84 body lengths per second have no regular pelvic fin
 cycle. Heading change precedes inside-fin abduction; outside-fin abduction
 follows as heading change reduces, sometimes followed by another inside-fin
-correction. The proposed trimming forces are inferred from kinematics, not
-measured in that study. These species and conditions inform separate steering
+correction. As the body straightens, both fins weakly adduct and pronate but
+remain fairly extended; settling does not imply that every fin folds flat.
+The proposed trimming forces are inferred from kinematics, not measured in
+that study. These species and conditions inform separate steering
 and settling actions, not adult-koi gains, continuous direction-reversal timing
 or quiet-glide relaxation constants.
 
-Paired fins use separate side phases at low speed, open for braking and trail during
-a propulsive burst. Their phase is independent of the tail; merged ray geometry
-uses each membrane's basal pivot and the corresponding side's paddle phase.
+Live paired-fin control issues finite steering and braking strokes with a
+loaded excursion and weaker recovery. Ordinary bilateral pectoral steering
+uses the same strength on both sides, with different onsets and fore-aft
+presentation. Direction changes blend from the still-evolving outgoing
+trajectory; later requests queue, and releasing a direction cancels stale
+queued steering. Braking retains deployment without continuously repeating a
+paddle, and rearms after flow-weighted brake demand releases. Explicit hover
+context permits sparse, finite balance strokes after a quiet interval;
+neutral gliding does not acquire that activity. Pelvic inside/outside actions
+respond to actual heading rate and its subsequent reduction, rather than a
+fixed offset from a pectoral carrier. All thresholds, timings and gains are
+authored; this repertoire neither reconstructs a koi motor program nor solves
+its fluid forces. Signed pitch and roll incidence retain their existing
+neutral-relative moment coupling.
+
+Merged ray geometry uses each membrane's basal pivot and the corresponding
+side's issued paddle and fore-aft angles. The fins still open for braking and
+trail with forward flow.
 A shared bind-space field curves each membrane and its embedded rays together.
 Loaded surfaces cup, the distal sheet feathers through recovery, and span and
 ray position introduce a short compliance delay. Static glides acquire no
 extra decorative oscillation. Four bounded controllers retain actual observed
 paddle commands for the delayed response; a new control demand is not copied
-into an invented earlier carrier phase. Pauses preserve the response, and a
-reset discards future command history. Frozen fixtures retain an explicitly
-stateless authored-cycle function. Smooth ray normals are reconciled only across
-the original smooth UV seams after deformation; intentional creases, skin
+into an invented earlier carrier phase. Observation occurs after every
+completed physics substep, at intervals no larger than 1/120 second, in free
+swimming, ascent/descent and the deterministic turn replay. Render cadence
+therefore does not discard intermediate issued commands. Pauses preserve the
+response, and a reset discards future command history. Frozen fixtures retain
+an explicitly stateless authored-cycle function. Smooth ray normals are
+reconciled only across the original smooth UV seams after deformation; intentional creases, skin
 influences and topology stay separate.
 The unsigned fin-demand map uses a compact C2 transition through neutral, with
 an authored width of 0.04 in normalized demand, or radians per second for the
-yaw-rate contribution to phase speed. `finPhaseRate` is shared by live phase
-integration and stateless delayed-phase evaluation. Signed pitch and roll
-incidence retain their existing moment coupling. The C2 claim applies to this
-demand map; existing speed clamps and other motion branches retain their own
-regularity.
+yaw-rate contribution to the retained inspection carrier. Managed tissue uses
+a separate 0.003-radian C2 positive-part engagement band for loading and
+recovery, applied after sampling observed paddle history. This does not make
+the whole controller C2: history interpolation remains linear, and existing
+speed clamps and other branches retain their own joins. `finPhaseRate` remains
+shared by carrier integration and stateless delayed-phase evaluation.
 The held `Fine fin corrections` study varies small steering and signed pitch
 trim while the body stays fixed. Its carrier is an authored fixed clock;
 the `Oblique front` camera exposes both fin surfaces for inspection. The
-ordinary swimming studies retain the live variable clock and moving body.
+ordinary swimming studies move the body and use the finite paired-fin task
+controller described above.
 These bounded deformations approximate the modes
 described in [Wang et al.'s koi study](https://doi.org/10.1016/S1672-6529(13)60217-6)
 and [active ray-curvature mechanics](https://doi.org/10.1098/rsif.2006.0181);
 they do not solve the two sliding ray halves or recover measured tissue forces.
+Wang's direct and mirror views reconstruct one observed pectoral fin, not
+simultaneous left-right coordination. Hovering and retreating use different
+expansion and contraction sequences, with delays across rays. Continuous fin
+activity in those tasks does not establish continuous paddling during a
+cruise. Cruising and turning are identified as future work, so the study does
+not establish bilateral turn timing, reversal hand-offs or glide release.
 Comparisons include the Lauder Laboratory's original
 [front-view bluegill footage](https://www.youtube.com/watch?v=36Of7uj9naA),
 reviewed at quarter speed at media times 8.528094, 11.248222, 15.241736 and
