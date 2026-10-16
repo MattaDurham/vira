@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
 import {createAquariumEmbed,createFrameCadence,backgroundPixelRatio} from '../static/aquarium-embed.js';
 
 class Events{
@@ -9,10 +11,10 @@ class Events{
   get listenerCount(){return [...this.listeners.values()].reduce((sum,set)=>sum+set.size,0);}
 }
 function fixture(callbacks={}){
-  const host=new Events(),document=new Events(),media=new Events(),posts=[],calls={configure:[],pointer:[],tap:[],activity:[]},order=[];
+  const host=new Events(),document=new Events(),media=new Events(),posts=[],calls={configure:[],pointer:[],tap:[],activity:[],visible:[]},order=[];
   document.hidden=false;media.matches=false;
   Object.assign(host,{location:{origin:'https://aquarium.example'},document,matchMedia:query=>{assert.equal(query,'(prefers-reduced-motion: reduce)');return media;},parent:{postMessage:(packet,origin)=>{posts.push({packet,origin});order.push(packet.action);}}});
-  const embed=createAquariumEmbed({host,...Object.fromEntries(['Configure','Pointer','Tap','Activity'].map(name=>['on'+name,value=>{calls[name.toLowerCase()].push(value);order.push(name.toLowerCase());callbacks['on'+name]?.(value);}]))});
+  const embed=createAquariumEmbed({host,...Object.fromEntries(['Configure','Pointer','Tap','Activity','Visible'].map(name=>['on'+name,value=>{calls[name.toLowerCase()].push(value);order.push(name.toLowerCase());callbacks['on'+name]?.(value);}]))});
   const send=(action,detail={},overrides={})=>host.emit('message',{origin:host.location.origin,source:host.parent,data:{type:'vira-aquarium',action,...detail},...overrides});
   return {host,document,media,posts,calls,order,embed,send};
 }
@@ -54,6 +56,75 @@ function assertPointerClear(){
   f.send('pointer',{x:null,y:null});assert.equal(projected,1);assert.equal(followed.at(-1),null,'paused clear bypasses coordinate projection');
   assert.deepEqual(followed,[{x:2,y:4},null,null]);f.embed.dispose();
 }
+function assertProgress(){
+  const f=fixture();f.send('configure',{motion:true,look:'wireframe'});
+  const stages=['module-loading','module-ready','data','renderer','textures','model','rig','compile','optics','first-frame','ready'];
+  for(const stage of stages){
+    const before=f.posts.length;assert.equal(f.embed.progress(stage),true);assert.equal(f.posts.length,before+1);
+    assert.deepEqual(f.posts.at(-1),{origin:f.host.location.origin,packet:{type:'vira-aquarium',action:'progress',stage,engine:'unknown',hidden:false}});
+  }
+  f.document.hidden=true;
+  for(const engine of ['webgpu','webgl2']){assert.equal(f.embed.progress('compile',{engine,ignored:'not transmitted'}),true);assert.deepEqual(f.posts.at(-1).packet,{type:'vira-aquarium',action:'progress',stage:'compile',engine,hidden:true});}
+  const before=f.posts.length;
+  for(const stage of [undefined,null,'','loading','COMPiLE',{},42])assert.equal(f.embed.progress(stage),false);
+  for(const engine of [null,'','WebGPU','webgl',false,{},42])assert.equal(f.embed.progress('data',{engine}),false);
+  for(const detail of [null,false,42,'webgpu',[]])assert.equal(f.embed.progress('data',detail),false);
+  assert.equal(f.posts.length,before);assert.equal(f.embed.active,false);assert.deepEqual(f.embed.configuration,{motion:true,look:'wireframe'});assert.deepEqual(f.calls.configure,[]);assert.deepEqual(f.calls.activity,[],'progress cannot activate or consume queued configuration');
+  f.document.hidden=false;f.embed.ready();assert.equal(f.embed.active,true);const activity=f.calls.activity.slice();
+  assert.equal(f.embed.progress('ready',{engine:'webgpu'}),true);assert.equal(f.embed.active,true);assert.deepEqual(f.calls.activity,activity,'progress leaves active motion untouched');
+  f.embed.error('failed');const failedPosts=f.posts.length;assert.equal(f.embed.progress('compile'),false);assert.equal(f.posts.length,failedPosts);f.embed.dispose();
+  const disposed=fixture();disposed.embed.dispose();assert.equal(disposed.embed.progress('module-loading'),false);assert.deepEqual(disposed.posts,[]);
+}
+function assertVisibilityStill(){
+  const f=fixture();f.document.emit('visibilitychange');assert.equal(f.calls.visible.length,0,'a visible child before readiness cannot draw');
+  f.document.hidden=true;f.embed.ready({model:'refined',engine:'webgpu'});assert.equal(f.embed.active,false);assert.equal(f.calls.visible.length,0);
+  f.document.hidden=false;f.document.emit('visibilitychange');assert.equal(f.calls.visible.length,1,'a paused child must draw its first still after hidden startup');assert.deepEqual(f.calls.activity,[],'revealing a paused child never advances motion');assert.equal(f.embed.configuration.motion,false);
+  f.document.hidden=true;f.document.emit('visibilitychange');assert.equal(f.calls.visible.length,1,'hiding never requests a still');
+  f.embed.dispose();f.document.hidden=false;f.document.emit('visibilitychange');assert.equal(f.calls.visible.length,1);assert.equal(f.host.listenerCount+f.document.listenerCount+f.media.listenerCount,0);
+  const reduced=fixture();reduced.media.matches=true;reduced.document.hidden=true;reduced.send('configure',{motion:true,look:'natural'});reduced.embed.ready();reduced.document.hidden=false;reduced.document.emit('visibilitychange');assert.equal(reduced.calls.visible.length,1);assert.deepEqual(reduced.calls.activity,[],'reduced motion can reveal a still without activating simulation');reduced.embed.error('failed');reduced.document.emit('visibilitychange');assert.equal(reduced.calls.visible.length,1);reduced.embed.dispose();
+  const throwing=fixture({onVisible:()=>{throw new Error('still failed');}});throwing.document.hidden=true;throwing.embed.ready();throwing.document.hidden=false;throwing.document.emit('visibilitychange');assert.equal(throwing.embed.active,false);assert.deepEqual(throwing.posts.map(post=>post.packet.action),['ready','error']);assert.equal(throwing.posts.at(-1).packet.message,'still failed');throwing.document.emit('visibilitychange');assert.equal(throwing.calls.visible.length,1);throwing.embed.dispose();
+}
+function assertEarlyHTMLReporter(){
+  const html=readFileSync(new URL('../static/aquarium-benchmark.html',import.meta.url),'utf8');
+  const source=html.match(/<script\b[^>]*\bid=["']aquarium-startup["'][^>]*>([\s\S]*?)<\/script>/i)?.[1];
+  assert.ok(source,'exercise the actual HTML bootstrap before its module graph runs');
+  function startup({search='?background=1',hidden=false}={}){
+    const host=new Events(),document=new Events(),media=new Events(),posts=[],registration=[],removal=[],loading={textContent:'Preparing the aquarium'};
+    document.hidden=hidden;document.documentElement={dataset:{}};document.getElementById=id=>id==='loading'?loading:null;media.matches=false;
+    Object.assign(host,{location:{origin:'https://aquarium.example',search},document,matchMedia:()=>media,parent:{postMessage:(packet,origin)=>posts.push({packet:JSON.parse(JSON.stringify(packet)),origin})}});
+    const add=host.addEventListener.bind(host),remove=host.removeEventListener.bind(host);
+    host.addEventListener=(type,fn,options)=>{registration.push({type,fn,options});add(type,fn);};
+    host.removeEventListener=(type,fn,options)=>{removal.push({type,fn,options});remove(type,fn);};
+    runInNewContext(source,{window:host,document,location:host.location,URLSearchParams},{timeout:1000});
+    return {host,document,media,posts,registration,removal,loading};
+  }
+  function initial(f,hidden){
+    assert.deepEqual(f.posts,[{origin:f.host.location.origin,packet:{type:'vira-aquarium',action:'progress',stage:'module-loading',engine:'unknown',hidden}}]);
+    assert.equal(f.document.documentElement.dataset.aquariumStage,'module-loading');
+    assert.equal(f.registration.find(record=>record.type==='error')?.options,true,'module resource errors require capture');
+  }
+  function failed(f,event,type='error'){
+    const handler=f.registration.find(record=>record.type===type).fn;f.host.emit(type,event);
+    assert.equal(f.posts.length,2);assert.equal(f.posts[1].origin,f.host.location.origin);const packet=f.posts[1].packet;
+    assert.equal(packet.type,'vira-aquarium');assert.equal(packet.action,'error');assert.deepEqual(Object.keys(packet).sort(),['action','message','type']);assert.ok(packet.message.length>0&&packet.message.length<=240);assert.ok(!/[\x00-\x1f\x7f]/.test(packet.message));
+    assert.equal(f.document.documentElement.dataset.aquariumError,packet.message);assert.equal(f.loading.textContent,`Aquarium unavailable: ${packet.message}`);
+    assert.equal(f.host.listenerCount,0);assert.equal(f.host.__viraAquariumStartup,undefined);
+    assert.equal(f.removal.find(record=>record.type==='error')?.options,true,'cleanup must match capture registration');
+    f.host.emit(type,event);handler(event);assert.equal(f.posts.length,2,'terminal reporting ignores queued and repeated failures');
+    return packet.message;
+  }
+  const module=startup({hidden:true});initial(module,true);module.host.emit('error',{target:{id:'unrelated-image'}});assert.equal(module.posts.length,1);
+  assert.equal(failed(module,{target:{id:'aquarium-module'}}),'Aquarium modules could not load');
+  const windowError=startup();initial(windowError,false);const message=failed(windowError,{target:windowError.host,message:'GPU\nstartup\u0000failed\u007f '+'.'.repeat(300)});assert.equal(message.length,240);assert.ok(message.startsWith('GPU startup failed  '));
+  const rejection=startup();initial(rejection,false);assert.equal(failed(rejection,{reason:new Error('Import\tfailed\rnow')},'unhandledrejection'),'Import failed now');
+  const longRejection=startup();assert.equal(failed(longRejection,{reason:'Rejected\n'+'.'.repeat(300)},'unhandledrejection').length,240);
+  const departed=startup(),lateError=departed.registration.find(record=>record.type==='error').fn;
+  departed.host.emit('pagehide');assert.equal(departed.host.listenerCount,0);lateError({target:{id:'aquarium-module'}});departed.host.emit('unhandledrejection',{reason:'late'});assert.equal(departed.posts.length,1);assert.equal(departed.host.__viraAquariumStartup,undefined);
+  const handoff=startup();handoff.host.__viraAquariumStartup.dispose();assert.equal(handoff.host.listenerCount,0);
+  const embed=createAquariumEmbed({host:handoff.host});assert.equal(embed.progress('module-ready'),true);assert.equal(embed.ready({model:'refined',engine:'webgpu'}),true);handoff.host.emit('error',{target:{id:'aquarium-module'}});
+  assert.deepEqual(handoff.posts.map(post=>post.packet.action),['progress','progress','ready'],'the runtime helper owns reporting after explicit bootstrap disposal');embed.dispose();
+  const standalone=startup({search:'?research=1'});assert.deepEqual(standalone.posts,[]);assert.equal(standalone.host.listenerCount,0);assert.equal(standalone.host.__viraAquariumStartup,undefined);assert.deepEqual(standalone.document.documentElement.dataset,{});
+}
 function assertActivity(){
   const f=fixture();f.document.hidden=true;f.media.matches=true;f.send('configure',{motion:true,look:'natural'});f.embed.ready({model:'refined',engine:'WebGL'});
   assert.equal(f.embed.active,false);assert.deepEqual(f.calls.activity,[]);f.document.hidden=false;f.document.emit('visibilitychange');assert.deepEqual(f.calls.activity,[],'reduced motion still suppresses the now-visible child');
@@ -82,6 +153,13 @@ function assertFailures(){
   const pauseThrow=fixture({onConfigure:()=>{if(++configured>1)throw new Error('pause configuration failed');}});
   pauseThrow.send('configure',{motion:true,look:'natural'});assert.equal(pauseThrow.embed.ready(),true);assert.equal(pauseThrow.embed.active,true);
   pauseThrow.send('configure',{motion:false,look:'natural'});assert.equal(pauseThrow.embed.active,false);assert.deepEqual(pauseThrow.calls.activity,[true,false]);assert.deepEqual(pauseThrow.posts.map(p=>p.packet.action),['ready','error']);assert.equal(pauseThrow.posts[1].packet.message,'pause configuration failed');pauseThrow.send('configure',{motion:true,look:'natural'});assert.equal(pauseThrow.embed.ready(),false);assert.equal(pauseThrow.posts.length,2);pauseThrow.embed.dispose();
+  const redrawThrow=fixture({onActivity:value=>{if(!value)throw new Error('secondary still redraw failure');}});
+  redrawThrow.send('configure',{motion:true,look:'natural'});assert.equal(redrawThrow.embed.ready(),true);assert.equal(redrawThrow.embed.active,true);
+  assert.equal(redrawThrow.embed.error('original render failure'),true,'an activity callback must not interrupt the original terminal report');assert.equal(redrawThrow.embed.active,false);assert.deepEqual(redrawThrow.calls.activity,[true,false]);assert.deepEqual(redrawThrow.posts.map(post=>post.packet.action),['ready','error']);assert.equal(redrawThrow.posts.at(-1).packet.message,'original render failure');assert.equal(redrawThrow.embed.error('late'),false);redrawThrow.embed.dispose();
+  const startThrow=fixture({onActivity:value=>{throw new Error(value?'initial activity failure':'secondary stop failure');}});
+  startThrow.send('configure',{motion:true,look:'natural'});assert.equal(startThrow.embed.ready(),false);assert.equal(startThrow.embed.active,false);assert.deepEqual(startThrow.calls.activity,[true,false]);assert.deepEqual(startThrow.posts.map(post=>post.packet.action),['error']);assert.equal(startThrow.posts[0].packet.message,'initial activity failure','recursive stop failure cannot replace the first failure');assert.equal(startThrow.embed.ready(),false);startThrow.embed.dispose();
+  const disposeThrow=fixture({onActivity:value=>{if(!value)throw new Error('teardown redraw failure');}});
+  disposeThrow.send('configure',{motion:true,look:'natural'});assert.equal(disposeThrow.embed.ready(),true);assert.doesNotThrow(()=>disposeThrow.embed.dispose());assert.equal(disposeThrow.embed.active,false);assert.equal(disposeThrow.host.listenerCount+disposeThrow.document.listenerCount+disposeThrow.media.listenerCount,0);assert.deepEqual(disposeThrow.posts.map(post=>post.packet.action),['ready'],'disposing cannot emit a late failure');assert.doesNotThrow(()=>disposeThrow.embed.dispose());
 }
 function frameClock(sourceRate){
   const cadence=createFrameCadence(30);let frames=0,time=0,position=0,accumulator=0,ticks=0;
@@ -111,5 +189,5 @@ function assertPixels(){
   }
   assert.equal(backgroundPixelRatio(2000,1000,2,NaN),backgroundPixelRatio(2000,1000,2));
 }
-assertMessaging();assertPointerClear();assertActivity();assertFailures();const cadence=assertCadence();assertPixels();
-console.log(JSON.stringify({messaging:true,activity:true,terminalErrors:true,cleanup:true,cadence,pixelBudget:true}));
+assertMessaging();assertPointerClear();assertProgress();assertVisibilityStill();assertEarlyHTMLReporter();assertActivity();assertFailures();const cadence=assertCadence();assertPixels();
+console.log(JSON.stringify({messaging:true,progress:true,visibilityStill:true,earlyHTMLReporter:true,activity:true,terminalErrors:true,cleanup:true,cadence,pixelBudget:true}));
