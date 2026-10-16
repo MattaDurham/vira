@@ -3,7 +3,7 @@
  * Rays retain their material lengths after the actual skeletal deformation.
  * This reduced-order animation field does not calculate water forces. */
 import {Matrix4} from './vendor/three.webgpu.js';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=82';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=83';
 
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
 const smooth=value=>value*value*(3-2*value);

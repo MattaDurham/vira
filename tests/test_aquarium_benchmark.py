@@ -12,6 +12,13 @@ from pathlib import Path
 
 
 class AquariumBenchmarkTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the research shape harness")
+    def test_research_shape_observes_actual_material_geometry(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_research_shape.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the finite fin task harness")
     def test_finite_fin_tasks_follow_navigation_and_settle_quietly(self):
         root = Path(__file__).resolve().parents[1]

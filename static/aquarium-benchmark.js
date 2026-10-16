@@ -3,19 +3,20 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=82';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=82';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=82';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=82';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=82';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=82';
-import {finRayContrast} from './aquarium-fin-detail.js?v=82';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=82';
-import {waterOptics} from './aquarium-optics.js?v=82';
-import {createContainment} from './aquarium-collision.js?v=82';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=82';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=82';
-import {createResearchLayer} from './aquarium-research.js?v=82';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=83';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=83';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=83';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=83';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=83';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=83';
+import {finRayContrast} from './aquarium-fin-detail.js?v=83';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=83';
+import {waterOptics} from './aquarium-optics.js?v=83';
+import {createContainment} from './aquarium-collision.js?v=83';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=83';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=83';
+import {createResearchLayer} from './aquarium-research.js?v=83';
+import {createResearchShape} from './aquarium-research-shape.js?v=83';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -542,7 +543,9 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=82');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=83');asset=gltf.scene;scene.add(asset);
+  // Bind material landmarks before live fin deformation overwrites positions.
+  const researchShape=createResearchShape(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -593,7 +596,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=82').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=83').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
@@ -633,7 +636,7 @@ async function start(){
   $('record-length').addEventListener('change',()=>{if(recording?.state!=='recording')$('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;});
   $('reference-view').addEventListener('click',()=>setView(true));$('live-view').addEventListener('click',()=>setView(false));
   $('light').addEventListener('input',()=>{renderer.toneMappingExposure=Number($('light').value);$('light-value').value=`${Math.round(Number($('light').value)*100)}%`;});
-  research=createResearchLayer({root:$('tank'),canvas,toggle:$('research-toggle'),storyButton:$('build-story'),asset,joints,camera,
+  research=createResearchLayer({root:$('tank'),canvas,toggle:$('research-toggle'),storyButton:$('build-story'),asset,joints,camera,shape:researchShape,
     getState:()=>state,getFish:()=>visualFish,onAction:action=>$(action==='pause'?'motion':'wireframe').click(),
     onVisibility:open=>{state.research=open;if(open)asset.getWorldPosition(researchFocus);frameResearchCamera();setCamera();}});
   await renderer.setAnimationLoop(draw);

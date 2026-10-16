@@ -575,3 +575,19 @@ photographic projection. The authoring script records reprojected UV samples;
 the asset regression test decodes the embedded PNG and checks the exported UVs.
 This prevents transparent-border RGB from becoming dark patches on real 3D
 skin. Membranes retain their separate translucent material and alpha contour.
+
+The research layer's **Read a turn** diagram measures actual posed material
+rings in `Koi_skin`, with duplicated seam vertices counted once. Samples are
+spaced by neutral material arc length, so dense facial rings do not dominate
+the anterior-half axis fit. The diagram removes the skull's rigid attitude;
+it keeps a fixed neutral snout-to-caudal-tip length, including the visible tail
+and excluding barbels. Both lobe-tip offsets are shown. This adapts the
+measurement idea in [Wu et al.](https://doi.org/10.1242/jeb.009787), using an
+orthogonal fit in the skull horizontal plane rather than reproducing their
+image-analysis pipeline. The live quantity is an instantaneous offset `d(t)/L`,
+not a bout maximum, a fluid force, or a measurement of an animal. An S-shaped
+cruise wave can produce a large offset without a coherent C-shaped turn, so
+the complete curve remains visible alongside the number. The build story
+links this inspection to the [archived bluegill data and code](https://doi.org/10.5281/zenodo.19102452)
+and the original slow/fast supplementary movies. Those apparatus-elicited
+bluegill turns provide comparative context, not adult-koi calibration.

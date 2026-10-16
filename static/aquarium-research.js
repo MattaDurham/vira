@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=82';
-import {waterMax} from './aquarium-space.js?v=82';
-import {spinalField} from './aquarium-motion.js?v=82';
-import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=82';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=83';
+import {waterMax} from './aquarium-space.js?v=83';
+import {spinalField} from './aquarium-motion.js?v=83';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=83';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -60,7 +60,7 @@ export function researchFinContour(asset,prefix){
 }
 export function researchCaudalContour(asset){return researchFinContour(asset,'Caudal_membrane');}
 
-export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints,camera,getState,getFish,onAction,onVisibility=()=>{}}){
+export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints,camera,shape,getState,getFish,onAction,onVisibility=()=>{}}){
   const events=new AbortController(),signal=events.signal;
   let open=false,mode='research',active='head',reference=false,previous=-Infinity,traceMode,attitudeAxis='pitch';
   const layer=element('section','research-layer');layer.id='research-layer';layer.hidden=true;
@@ -101,6 +101,17 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     const text=svg('text',{x:24+i*84,y:65,'text-anchor':'middle'});text.textContent=['Head','Shoulder','Trunk','Tail'][i];mini.append(circle,text);return circle;
   });
   const live=element('div','research-live'),liveTag=element('span','','LIVE MODEL'),liveValue=element('span');live.append(liveTag,liveValue);
+  const shapeBox=element('div','research-trace research-shape');
+  const shapeTitle=element('div','research-trace-title','READ A TURN / LIVE SKIN');
+  const shapePlot=svg('svg',{viewBox:'0 0 300 164',role:'img','aria-label':'Live rendered skin midline in the skull horizontal plane. Dashed line is an orthogonal fit through its anterior half. Brackets show perpendicular offsets of both caudal lobe tips. Fixed rest-length scale; this is a model diagnostic adapted from Wu and colleagues, not a recording of a fish.'});
+  const shapeAxis=svg('path',{'class':'research-shape-axis'}),shapeCurve=svg('path',{'class':'research-shape-curve'});
+  const shapeOffsets=[0,1].map(()=>svg('path',{'class':'research-shape-offset'}));
+  const shapeTips=[0,1].map(()=>svg('circle',{r:2.5,'class':'research-shape-tip'}));
+  const shapeNose=svg('circle',{r:2.5,'class':'research-shape-nose'});
+  const shapeReadout=svg('text',{x:12,y:149,'class':'research-shape-value'}),shapeScale=svg('text',{x:288,y:149,'text-anchor':'end'});
+  shapeScale.textContent='0.25 L';
+  shapePlot.append(shapeAxis,shapeCurve,...shapeOffsets,...shapeTips,shapeNose,svg('path',{d:'M228,132H288m-60,-3v6m60,-6v6','class':'research-shape-scale'}),shapeReadout,shapeScale);
+  shapeBox.append(shapeTitle,shapePlot,element('p','research-trace-caption','Solid: posed skin midline. Dashed: fitted anterior axis. Gold: caudal-tip offsets d(t)/L. Skull frame; fixed rest length L. Both lobes are shown.'));
   const trace=createResearchTrace(),traceBox=element('div','research-trace');
   const traceTitle=element('div','research-trace-title','BEND HISTORY / 4 SECONDS');
   const tracePlot=svg('svg',{viewBox:'0 0 300 108',role:'img','aria-label':'Authored trunk and tail pose offsets from rest over the last four simulation seconds, in three axes. Each row uses a fixed scale of minus to plus 45 degrees; values outside that range are clipped.'});
@@ -158,7 +169,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const implementationLabel=element('h4','','In this build'),implementation=element('p');
   const limitationLabel=element('h4','','Scope of the evidence'),limitation=element('p','research-caveat');
   const sourceLabel=element('h4','','Sources & footage'),sources=element('ol','research-sources');
-  notes.append(topicTitle,claim,mini,miniCaption,traceBox,pitchBox,live,implementationLabel,implementation,limitationLabel,limitation,sourceLabel,sources);
+  notes.append(topicTitle,claim,shapeBox,mini,miniCaption,traceBox,pitchBox,live,implementationLabel,implementation,limitationLabel,limitation,sourceLabel,sources);
   const story=element('div','research-story');story.hidden=true;
   buildChapters.forEach((chapter,index)=>{
     const section=element('section','research-chapter'),number=element('span','research-chapter-number',String(index+1).padStart(2,'0'));
@@ -190,12 +201,12 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     topicButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.topic===id)));
     topicTitle.textContent=topic.title;claim.textContent=topic.claim;implementation.textContent=topic.implementation;limitation.textContent=topic.limitation;
     sources.replaceChildren(...topic.sources.map(sourceItem));eyebrow.textContent=`FIELD NOTES / ${String(researchTopics.indexOf(topic)+1).padStart(2,'0')}`;
-    mini.style.display=!reference&&['head','muscle','anatomy'].includes(active)?'':'none';miniCaption.hidden=reference||!['head','muscle','anatomy'].includes(active);live.hidden=reference;previous=-Infinity;
+    mini.style.display=!reference&&['muscle','anatomy'].includes(active)?'':'none';miniCaption.hidden=reference||!['muscle','anatomy'].includes(active);live.hidden=reference;previous=-Infinity;
     layer.dataset.topic=id;
   }
   function setMode(value){
     mode=value;card.scrollTop=0;notes.hidden=topics.hidden=mode!=='research';story.hidden=mode!=='story';
-    eyebrow.textContent=mode==='story'?'BUILD JOURNAL / 04 STEPS':`FIELD NOTES / ${String(researchTopics.findIndex(topic=>topic.id===active)+1).padStart(2,'0')}`;
+    eyebrow.textContent=mode==='story'?`BUILD JOURNAL / ${String(buildChapters.length).padStart(2,'0')} STEPS`:`FIELD NOTES / ${String(researchTopics.findIndex(topic=>topic.id===active)+1).padStart(2,'0')}`;
     notesButton.setAttribute('aria-pressed',String(mode==='research'));buildButton.setAttribute('aria-pressed',String(mode==='story'));
     title.textContent=mode==='story'?'How this was built':'The living mechanics';
     intro.textContent=mode==='story'?'From real animals to a living desktop.':'Follow the animal. Trace the evidence.';
@@ -218,10 +229,25 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     const state=getState(),fish=getFish();pause.textContent=state.paused?'Resume fish':'Pause fish';pause.setAttribute('aria-pressed',String(state.paused));
     bones.textContent=state.wireframe?'Hide skeleton':'Show skeleton';bones.setAttribute('aria-pressed',String(state.wireframe));
     controls.hidden=reference;unavailable.hidden=!reference;
-    mini.style.display=!reference&&['head','muscle','anatomy'].includes(active)?'':'none';miniCaption.hidden=reference||!['head','muscle','anatomy'].includes(active);live.hidden=reference;
+    mini.style.display=!reference&&['muscle','anatomy'].includes(active)?'':'none';miniCaption.hidden=reference||!['muscle','anatomy'].includes(active);live.hidden=reference;
     traceBox.hidden=reference||!['head','muscle','anatomy'].includes(active);
+    shapeBox.hidden=reference||active!=='head';
     pitchBox.hidden=reference||active!=='fins'||fish.poseHistory===false;
     if(reference||mode==='story')return;
+    if(active==='head'){
+      const sample=shape.sample(),L=sample.length,point=p=>({x:16+p.x/L*240,y:67+p.y/L*240});
+      const path=points=>points.map((p,i)=>{const q=point(p);return `${i?'L':'M'}${q.x.toFixed(2)},${q.y.toFixed(2)}`;}).join(' ');
+      shapeCurve.setAttribute('d',path(sample.diagram.curve));shapeAxis.setAttribute('d',path([sample.diagram.axis.start,sample.diagram.axis.end]));
+      const keys=['upper','lower'];
+      keys.forEach((key,i)=>{
+        const tip=point(sample.diagram.tips[key]),foot=point(sample.diagram.feet[key]);
+        shapeOffsets[i].setAttribute('d',`M${tip.x},${tip.y}L${foot.x},${foot.y}`);
+        shapeTips[i].setAttribute('cx',tip.x);shapeTips[i].setAttribute('cy',tip.y);
+      });
+      const nose=point(sample.diagram.curve[0]);shapeNose.setAttribute('cx',nose.x);shapeNose.setAttribute('cy',nose.y);
+      shapeReadout.textContent=`Largest tip offset: ${sample.maximumDOverL.toFixed(3)} L`;
+      shapePlot.dataset.offset=sample.maximumDOverL.toFixed(6);shapePlot.dataset.restLength=L.toFixed(6);
+    }
     const width=canvas.clientWidth,height=canvas.clientHeight;
     const steady=fish.poseHistory===false||!Number.isFinite(fish.muscle1);
     const activation=steady?Array(4).fill(fish.stroke??0):[fish.stroke??0,fish.muscle1,fish.muscle2,fish.muscle3];
