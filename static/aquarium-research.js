@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=89';
-import {waterMax} from './aquarium-space.js?v=89';
-import {spinalField} from './aquarium-motion.js?v=89';
-import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=89';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=90';
+import {waterMax} from './aquarium-space.js?v=90';
+import {spinalField} from './aquarium-motion.js?v=90';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=90';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));

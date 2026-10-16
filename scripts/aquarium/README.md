@@ -740,6 +740,29 @@ The ordinary aquarium retains its existing swimming controller. An ignored
 water-resistance experiment is dissipative but its stiff loading response
 still changes materially under timestep refinement, so it is not enabled.
 
+`createRapierChain` accepts optional `jointLimits: {x, y, z}` positive angular
+half-ranges in radians. These authored mechanical ranges are disabled when
+omitted; they are not measured anatomical limits. Each axis bounds the pinned
+solver's quaternion twist coordinate, forming a box rather than a cone. Its
+angular motor coordinates use a different mapping, which remains unchanged.
+Finite integration and solver iterations can permit temporary range overshoot
+under load. The actual asset and isolated mirrored, compound and rotated-frame
+tests exercise the constraint impulses, rather than correcting the rendered
+pose after simulation.
+
+Current wet tests expose a wrong-sign bend near the caudal attachment. Limiting
+it improves the distribution of curvature but does not establish a completed
+U-turn. A simultaneous resistance solve with frozen anchor-velocity constraints
+passes its signed-work checks; it still does not resolve the wet motor response's
+timestep sensitivity. That experiment remains outside ordinary swimming.
+
+[Wakeling and Johnston (1999)](https://doi.org/10.1007/s003600050235) measured
+maximum isometric stress of 229.72 +/- 18.58 kPa (mean +/- SEM, n=6) at 15 C
+in isolated caudal white muscle from small common carp. This suggests separating
+active torque capacity, muscle area and moment arm from rigid-segment inertia.
+It supplies neither passive bending stiffness nor routine activation or a
+calibrated capacity for this much larger koi; those model choices remain open.
+
 `tests/aquarium_articulated_motion.mjs` exercises the actual motor timeline,
 loaded-bend timing, timestep refinement, motor-off momentum/energy, root-rate
 metadata isolation and all three bending axes. The independent rendered-skin

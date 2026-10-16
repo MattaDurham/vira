@@ -1,8 +1,8 @@
 /* A finite mechanics experiment, not the aquarium navigation controller.
  * All displayed axial states come from the same constrained body simulation. */
 import {Vector3} from './vendor/three.webgpu.js';
-import {createRapierChain} from './aquarium-articulated.js?v=89';
-import {headAngles,eulerRatesFromBodyOmega} from './aquarium-attitude.js?v=89';
+import {createRapierChain} from './aquarium-articulated.js?v=90';
+import {headAngles,eulerRatesFromBodyOmega} from './aquarium-attitude.js?v=90';
 export const mechanicsSettings=Object.freeze({naturalFrequency:360,dampingRatio:16,motorImplementation:'sdk'});
 export const mechanicsDuration=4;
 export const mechanicsPresets=Object.freeze(['turn','passive','vertical','twist','compound','roll-impulse','pitch-impulse','yaw-impulse']);

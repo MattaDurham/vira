@@ -2,15 +2,15 @@
  * geometry is uniformly scaled; the navigation gains remain the authored
  * adult-koi controller, not a calibrated juvenile or second-species model. */
 import {Skeleton,Vector3} from './vendor/three.webgpu.js';
-import {createSwimmer} from './aquarium-motion.js?v=89';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=89';
-import {createContainment} from './aquarium-collision.js?v=89';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=89';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=89';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=89';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=89';
-import {createSupportArticulation} from './aquarium-supports.js?v=89';
-import {createManeuverFootprint} from './aquarium-footprint.js?v=89';
+import {createSwimmer} from './aquarium-motion.js?v=90';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=90';
+import {createContainment} from './aquarium-collision.js?v=90';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=90';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=90';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=90';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=90';
+import {createSupportArticulation} from './aquarium-supports.js?v=90';
+import {createManeuverFootprint} from './aquarium-footprint.js?v=90';
 
 const mutableGeometry=name=>/^(Caudal|Pectoral|Pelvic|Dorsal|Anal)_/.test(name)||name.includes('sensory_barbel');
 

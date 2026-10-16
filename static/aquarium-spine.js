@@ -1,4 +1,4 @@
-import {regionalTurnAngle} from './aquarium-turn.js?v=89';
+import {regionalTurnAngle} from './aquarium-turn.js?v=90';
 
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 export const axialRates=Object.freeze([14,12,10]),axialDelays=[0];

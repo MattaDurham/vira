@@ -3,7 +3,7 @@
  * applied here. Use a dedicated createKoiInstance; its local bone translations
  * become the solver's positions until restore()/dispose() is called. */
 import {Matrix4,Quaternion,Vector3} from './vendor/three.webgpu.js';
-import {headAngles,eulerRatesFromBodyOmega} from './aquarium-attitude.js?v=89';
+import {headAngles,eulerRatesFromBodyOmega} from './aquarium-attitude.js?v=90';
 
 const finiteVector=v=>v&&[v.x,v.y,v.z].every(Number.isFinite);
 const finiteQuaternion=q=>q&&[q.x,q.y,q.z,q.w].every(Number.isFinite)&&q.lengthSq()>1e-20;

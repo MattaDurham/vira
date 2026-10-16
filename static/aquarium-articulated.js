@@ -31,11 +31,14 @@ export function principalInertia(input){
 function logQuaternion(value){const a=value.clone().normalize();if(a.w<0)a.set(-a.x,-a.y,-a.z,-a.w);const n=Math.hypot(a.x,a.y,a.z),k=n<1e-12?2:2*Math.atan2(n,a.w)/n;return new Vector3(a.x*k,a.y*k,a.z*k);}
 const zeroFish={phase:0,drive:0,stroke:0,muscle1:0,muscle2:0,muscle3:0,turnAnterior:0,turnTrunk:0,turnPosterior:0};
 const lagKeys=['yaw','pitch','bank'].flatMap(p=>[1,2,3].map(i=>p+'Lag'+i));
-export async function createRapierChain(sampler,profile,{dt=1/240,iterations=16,internalIterations=2,naturalFrequency=15,dampingRatio=1,capAngle=.15,initialFish=zeroFish,motorImplementation='torque',externalForces}={}){
+export async function createRapierChain(sampler,profile,{dt=1/240,iterations=16,internalIterations=2,naturalFrequency=15,dampingRatio=1,capAngle=.15,initialFish=zeroFish,motorImplementation='torque',externalForces,jointLimits}={}){
  if(!['torque','sdk'].includes(motorImplementation))throw new Error('Unknown joint motor implementation');
  if(![dt,naturalFrequency,dampingRatio,capAngle].every(Number.isFinite)||dt<=0||naturalFrequency<=0||dampingRatio<0||capAngle<=0)throw new Error('Invalid articulated body parameters');
+ const ranges=jointLimits===undefined?null:[jointLimits?.x,jointLimits?.y,jointLimits?.z];
+ if(ranges?.some(value=>!Number.isFinite(value)||!(Math.fround(value)>0)||Math.fround(value)>=Math.PI))throw new Error('Joint limits require positive finite x/y/z half-ranges below pi radians');
  await initRapier();
  const world=new RAPIER.World({x:0,y:0,z:0});world.timestep=dt;world.integrationParameters.numSolverIterations=iterations;world.integrationParameters.numInternalPgsIterations=internalIterations;
+ if(ranges&&['jointSetLimits','jointLimitsEnabled','jointLimitsMin','jointLimitsMax'].some(name=>typeof world.impulseJoints.raw[name]!=='function')){world.free();throw new Error('Rapier angular joint limits are unavailable');}
  const source=profile.bodies29;if(source?.length!==29)throw new Error('Expected29 refined mass bodies (cranial0..4, then5..32)');
  const bodies=[],records=[],links=[],desired=sampler.createFrame();sampler.capture({...zeroFish,...initialFish},desired);
  const deformation=panel=>desired.rotations[panel].clone().multiply(sampler.rest[panel].clone().invert()).normalize();
@@ -54,6 +57,21 @@ export async function createRapierChain(sampler,profile,{dt=1/240,iterations=16,
   // public typed wrapper exposes its documented angular motor methods.
   const joint=typeof generic.configureMotor==='function'?generic:new RAPIER.SphericalImpulseJoint(world.impulseJoints.raw,world.bodies,generic.handle);
   joint.setLocalFrame1(a,identity);joint.setLocalFrame2(b,identity);joint.setContactsEnabled(false);
+  if(ranges){
+   // Optional authored mechanical ranges, not measured koi calibration. In
+   // Rapier0.21 each symmetric angular limit bounds wrap(2*atan2(q_axis,q_w))
+   // in the two local joint frames. Three limits form a box, not a cone;
+   // finite-step solver error can temporarily exceed them under strong load.
+   // The exposed raw set supplies the setter missing from the spherical wrapper.
+   // https://github.com/dimforge/rapier/blob/b716d375efc0201003f0cd9ef7168eee0b62c177/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs#L422-L458
+   try{
+    const raw=world.impulseJoints.raw;
+    axes.forEach((axis,i)=>{
+     raw.jointSetLimits(joint.handle,axis,-ranges[i],ranges[i]);
+     if(!raw.jointLimitsEnabled(joint.handle,axis)||Math.abs(raw.jointLimitsMin(joint.handle,axis)+ranges[i])>1e-6||Math.abs(raw.jointLimitsMax(joint.handle,axis)-ranges[i])>1e-6)throw new Error('Rapier did not retain the requested angular joint limits');
+    });
+   }catch(error){world.free();throw error;}
+  }
   const inertiaAt=(record,offset)=>[0,1,2].map(axis=>record.region.inertia[axis*3+axis]+record.region.mass*(offset.lengthSq()-offset.getComponent(axis)**2));
   const P=inertiaAt(records[parent],a),C=inertiaAt(records[child],b),effective=P.map((x,i)=>1/(1/x+1/C[i]));
   const reference=effective[1],stiffness=reference*naturalFrequency**2,damping=2*dampingRatio*Math.sqrt(stiffness*Math.min(...effective)),cap=stiffness*capAngle;
@@ -65,6 +83,9 @@ export async function createRapierChain(sampler,profile,{dt=1/240,iterations=16,
   const commands={...zeroFish,...fish,poseHistory:true,yawRate:0,pitchRate:0,bankRate:0,...Object.fromEntries(lagKeys.map(k=>[k,0]))};sampler.capture(commands,desired);
   for(const link of links){
    const A=deformation(records[link.parent].panel),B=deformation(records[link.child].panel);link.target.copy(A.invert()).multiply(B).normalize();if(link.target.w<0)link.target.set(-link.target.x,-link.target.y,-link.target.z,-link.target.w);
+   // SDK motor coordinates differ from the limit coordinates above. Keep
+   // 2*asin(q_axis), including compound rotations, as used by the pinned solver:
+   // https://github.com/dimforge/rapier/blob/b716d375efc0201003f0cd9ef7168eee0b62c177/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs#L542-L550
    link.targetAngles=[link.target.x,link.target.y,link.target.z].map(x=>2*Math.asin(Math.max(-1,Math.min(1,x))));
   }
  }
@@ -117,5 +138,6 @@ export async function createRapierChain(sampler,profile,{dt=1/240,iterations=16,
   for(let i=0;i<34;i++){const index=i<=4?0:Math.min(28,i-4),R=q(bodies[index].rotation());out.positions[i].copy(sampler.centers[i]).sub(records[index].restCenter).applyQuaternion(R).add(v(bodies[index].translation()));out.rotations[i].copy(R).multiply(sampler.rest[i]);}return out;
  }
  return {world,bodies,links,records,sampler,profile,dt,setTargets,boneTransforms,configure,step,measure,setWholeVelocity,decompositionError,
+  jointLimits:ranges?Object.freeze({x:ranges[0],y:ranges[1],z:ranges[2]}):null,
   get mode(){return mode;},get age(){return age;},free:()=>world.free(),RAPIER};
 }

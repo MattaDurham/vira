@@ -1,10 +1,10 @@
-import {axialRates,turnCarrierShare} from './aquarium-spine.js?v=89';
-export {spinalField} from './aquarium-spine.js?v=89';
-import {createFinYawController,trimFinAngles} from './aquarium-fin-yaw.js?v=89';
-import {finClearanceFactor,finClearanceFold} from './aquarium-fin-clearance.js?v=89';
-import {createTurnController,turnResponse} from './aquarium-turn.js?v=89';
+import {axialRates,turnCarrierShare} from './aquarium-spine.js?v=90';
+export {spinalField} from './aquarium-spine.js?v=90';
+import {createFinYawController,trimFinAngles} from './aquarium-fin-yaw.js?v=90';
+import {finClearanceFactor,finClearanceFold} from './aquarium-fin-clearance.js?v=90';
+import {createTurnController,turnResponse} from './aquarium-turn.js?v=90';
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=89';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=90';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));

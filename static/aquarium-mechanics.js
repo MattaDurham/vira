@@ -1,9 +1,9 @@
 import * as THREE from './vendor/three.webgpu.js';
 import {GLTFLoader} from './vendor/GLTFLoader.js';
-import {createKoiInstance} from './aquarium-fish-instance.js?v=89';
-import {createAxialFrame} from './aquarium-axial-frame.js?v=89';
-import {createMechanicsTimeline,mechanicsSettings} from './aquarium-mechanics-study.js?v=89';
-import {createRapierRenderBridge} from './aquarium-articulated-render.js?v=89';
+import {createKoiInstance} from './aquarium-fish-instance.js?v=90';
+import {createAxialFrame} from './aquarium-axial-frame.js?v=90';
+import {createMechanicsTimeline,mechanicsSettings} from './aquarium-mechanics-study.js?v=90';
+import {createRapierRenderBridge} from './aquarium-articulated-render.js?v=90';
 const $=id=>document.getElementById(id),dt=1/240,duration=4,lastTick=duration/dt,deg=180/Math.PI;
 const state={time:0,index:0,playing:false,speed:.5,preset:'turn',camera:'quarter',anatomy:false,last:0};
 let renderer,source,sampler,profile,scene,instance,bridge,frames=[],observed=-1,epoch=0,building=false,originals=new Map(),floor;

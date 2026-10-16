@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vira - Aquarium study</title>
-  <link rel="stylesheet" href="aquarium-benchmark.css?v=89">
+  <link rel="stylesheet" href="aquarium-benchmark.css?v=90">
 </head>
 <body>
   <main id="tank" aria-label="Interactive aquarium benchmark">
     <canvas id="aquarium" tabindex="0" aria-label="Aquarium. Move to draw the koi closer, click to tap the glass, drag or use arrow keys to look around."></canvas>
-    <img id="reference" src="aquarium/reference.webp?v=89" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
+    <img id="reference" src="aquarium/reference.webp?v=90" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
     <div class="loading" id="loading" role="status">Preparing the aquarium</div>
     <header>
       <div class="wordmark">VIRA <span>/ AQUARIUM STUDY</span></div>
@@ -50,6 +50,6 @@
   <script>
     if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
   </script>
-  <script type="module" src="aquarium-benchmark.js?v=89"></script>
+  <script type="module" src="aquarium-benchmark.js?v=90"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@ import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {createAxialFrame} from '../static/aquarium-axial-frame.js';
 import {createRapierChain} from '../static/aquarium-articulated.js';
 import {createMechanicsTimeline,mechanicsSettings,neutralMechanicsFish} from '../static/aquarium-mechanics-study.js';
+import {testArticulatedLimits} from './aquarium_articulated_limits.mjs';
 const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url));
 const asset=(await new GLTFLoader().register(()=>({name:'ArticulatedMotionGeometry',loadTexture:()=>Promise.resolve(new Texture())})).parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'')).scene;
 const sampler=createAxialFrame(asset),profile=JSON.parse(await readFile(new URL('../static/aquarium/body-mass.json',import.meta.url),'utf8'));
@@ -70,4 +71,5 @@ for(const frame of compound.frames){
  }
 }
 assert.ok(maxima[0]>.02&&maxima[1]>.2&&maxima[2]>.02,'compound experiment must physically bend and twist on every axis');
+await testArticulatedLimits(sampler,profile);
 console.log(JSON.stringify({turns:reports,compoundQuaternionComponents:maxima,checks:'Actual joint motion, timing, refinement, energy scope, and rate-metadata isolation passed.'}));

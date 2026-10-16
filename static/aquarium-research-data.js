@@ -33,13 +33,15 @@ export const researchTopics = [
     id: 'muscle',
     navLabel: 'Muscle wave',
     title: 'Drive, bend, release, glide',
-    claim: 'Koi and carp muscle activation preceded body movement in steady flow. Koi also alternate propulsive strokes with coasting.',
+    claim: 'Koi and carp muscle activation preceded body movement in steady flow. Koi also alternate propulsive strokes with coasting. Isolated carp muscle experiments show that shortening speed changes the force produced.',
     implementation: 'Drive travels through the articulated spine. Propulsive effort follows posterior activation and stroke rate, allowing the tail to finish its stroke before the glide. Water resistance slows the fish.',
-    limitation: 'This reduced-order rig does not simulate muscle tissue, measured EMG or fluid dynamics. Real flow can also bend a fish before its muscles respond.',
+    limitation: 'This reduced-order rig does not simulate muscle tissue, measured EMG or fluid dynamics. Real flow can also bend a fish before its muscles respond. Isolated small-carp white-muscle measurements do not calibrate this model’s joint torques or routine swimming.',
     sources: [
       { label: 'Afridi et al. 2025: synchronized muscle activity and motion', url: 'https://doi.org/10.1098/rspb.2025.0474' },
       { label: 'Source video M1: real fish with synchronized EMG', url: 'https://ndownloader.figshare.com/files/58032227' },
       { label: 'Yang et al. 2010: koi burst and coast', url: 'https://doi.org/10.5226/jabmech.1.30' },
+      { label: 'Wakeling and Johnston 1999: carp white-muscle force during shortening', url: 'https://doi.org/10.1007/s003600050235' },
+      { label: 'Pineirua et al. 2015: resistive and reactive contributions to propulsion', url: 'https://arxiv.org/abs/1507.04952' },
       { label: 'Wardle et al. 1995: comparative review of activation and bending phase', url: 'https://pubmed.ncbi.nlm.nih.gov/9319534/' },
     ],
   },
@@ -116,6 +118,7 @@ export const researchTopics = [
     sources: [
       { label: 'Blender: glTF geometry, materials and skinning', url: 'https://docs.blender.org/manual/en/5.1/addons/import_export/scene_gltf2.html' },
       { label: 'Three.js: WebGPU renderer and WebGL fallback', url: 'https://threejs.org/docs/pages/WebGPURenderer.html' },
+      { label: 'Rapier 0.21: pinned angular motor and range-constraint implementation', url: 'https://github.com/dimforge/rapier/blob/b716d375efc0201003f0cd9ef7168eee0b62c177/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs' },
       { label: 'Physically Based Rendering: sampling and aliasing', url: 'https://pbr-book.org/4ed/Sampling_and_Reconstruction/Sampling_Theory' },
       { label: 'Dark Rock by Amal Kumar: original stone material, CC0', url: 'https://polyhaven.com/a/dark_rock' },
       { label: 'Poly Haven: CC0 asset license', url: 'https://polyhaven.com/license' },
@@ -147,6 +150,12 @@ export const buildChapters = [
     title: 'Connect cause and motion',
     text: 'A chosen course loads a continuous bend through front, middle and rear regions. The front releases before the rear, making the return different from the loading path. Issued regional motion drives an authored angular response, and recovery damps it. Small corrections receive yaw response from the actual clearance-scaled fin commands, with a slow retrieval and quiet intervals. Signed trim drives pitch and roll with axial follow-through. These are authored responses, not solved pressures. Each fish has its own history and observes nearby animals. The diagrams expose commands beside the actual rig response.',
     topics: ['head', 'muscle', 'fins'],
+  },
+  {
+    id: 'mechanics',
+    title: 'Test the body under load',
+    text: 'The separate joint study lets motor commands act on 29 connected physical bodies, then renders their actual bone transforms. Water tests exposed a tail joint folding against the intended curve. Optional angular ranges spread that bend, but the wet response still changes with simulation step size. This remains an experiment: a stable calculation and a convincing swimming animal are separate checks.',
+    topics: ['head', 'muscle', 'anatomy'],
   },
   {
     id: 'verification',
