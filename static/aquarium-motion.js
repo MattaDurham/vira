@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=75';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=76';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -39,7 +39,13 @@ export function createSwimmer(random=Math.random){
   const duration=(lo,hi)=>lo+(hi-lo)*random();
   function chooseIntent(next){
     intent=next;intentTime=next==='hover'?duration(2.5,5):next==='inspect'?duration(5,9):duration(7,13);
-    if(next==='cruise')heading=wrap((Math.cos(fish.yaw)>=0?0:Math.PI)+duration(-.35,.35));
+    if(next==='cruise'){
+      heading=wrap((Math.cos(fish.yaw)>=0?0:Math.PI)+duration(-.35,.35));
+      // A new travel decision starts its own stroke. Reusing an inspection's
+      // nearly finished stroke can leave the fish coasting before its delayed
+      // posterior activation has had time to propel the new course.
+      gait='stroke';gaitTime=duration(.8,1.5);
+    }
     if(next==='inspect')depth=duration(.52,.66);
     decisions++;
   }
@@ -270,8 +276,13 @@ export function createSwimmer(random=Math.random){
     // with the carrier's mean effort; an invisible beat cannot surge the root.
     // This preserves authored mean drive, not a measured hydrodynamic force.
     const carrier=turnCarrierShare(fish.turnRecruitment3);
-    const powerStroke=fish.stroke*fish.stroke*((1-carrier)+carrier*(.30+1.4*Math.cos(fish.phase-4.8)**2));
-    const thrust=propel?Math.max(0,(.55*fish.drive+1.0*fish.drive**2+(fish.drive-forward)*2.8)*powerStroke)*(escapeTime>0?1.9:1):0;
+    // Tail amplitude follows the observed posterior activation, while carrier
+    // frequency follows stroke. Their product lets a finishing visible stroke
+    // release its effort smoothly after the gait requests a coast. This is an
+    // authored force proxy, not tissue mechanics or a fitted EMG relationship.
+    const tailDrive=fish.muscle3*fish.stroke;
+    const powerStroke=tailDrive*tailDrive*((1-carrier)+carrier*(.30+1.4*Math.cos(fish.phase-4.8)**2));
+    const thrust=(!blocked||safeEscape)?Math.max(0,(.55*fish.drive+1.0*fish.drive**2+(fish.drive-forward)*2.8)*powerStroke)*(escapeTime>0?1.9:1):0;
     const drag=(.38+fish.brake*.80)*forward+.95*forward*Math.abs(forward);
     const finForce=braking&&!arrive&&(intent!=='hover'||curious)?clamp((laneZ-fish.z)*2.0,-.12,.12)*Math.cos(fish.yaw):0;
     // Near a pane, paired-fin sculling can briefly back the fish out of a tight

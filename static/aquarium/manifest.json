@@ -37,7 +37,7 @@
   "scale_count": 1330,
   "source": "scripts/aquarium/build.py",
   "license": "Original Vira benchmark asset; repository license applies",
-  "geometry_sha256": "0fab3bc9516396f804ea545cd4ea893a37c3453ec0ae531b138be123c8b7e592",
+  "geometry_sha256": "1066a43d881f7baea9ef451a8529c870544043b6a8d06bf905ccb417111ccdf6",
   "reference": {
     "engine": "Cycles",
     "samples": 32,
@@ -45,7 +45,7 @@
       3840,
       2160
     ],
-    "geometry_sha256": "0fab3bc9516396f804ea545cd4ea893a37c3453ec0ae531b138be123c8b7e592"
+    "geometry_sha256": "1066a43d881f7baea9ef451a8529c870544043b6a8d06bf905ccb417111ccdf6"
   },
   "reference_matches_asset": true
 }

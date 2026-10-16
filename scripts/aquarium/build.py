@@ -443,7 +443,10 @@ def build():
                 curve(name+" ray branch", [vertices[i*(rings+1)+10], tip], 0.00013, fin_ray)
         return obj
 
-    fin_mesh("Caudal membrane", (0.54, 0, 0.028), [(0.59, 0, 0.051), (0.74, 0, 0.17), (0.81, 0, 0.175), (0.835, 0, 0.15), (0.77, 0, 0.055), (0.70, 0, 0.016), (0.77, 0, -0.055), (0.835, 0, -0.16), (0.81, 0, -0.19), (0.74, 0, -0.18), (0.59, 0, -0.028)], base_end=(0.54,0,-.024))
+    # Radial endpoints follow the distal lobes and fork. Proximal leading-edge
+    # margins belong to the root-to-lobe outline, not extra rays whose paths
+    # would cross the neighbouring distal rays near their basal attachments.
+    fin_mesh("Caudal membrane", (0.54, 0, 0.028), [(0.74, 0, 0.17), (0.81, 0, 0.175), (0.835, 0, 0.15), (0.77, 0, 0.055), (0.70, 0, 0.016), (0.77, 0, -0.055), (0.835, 0, -0.16), (0.81, 0, -0.19), (0.74, 0, -0.18)], base_end=(0.54,0,-.024))
     fin_mesh("Dorsal membrane", (-0.08, 0, 0.19), [(-0.08, 0, 0.193), (-0.04, 0, 0.245), (0.0, 0, 0.254), (0.08, 0, 0.224), (0.18, 0, 0.209), (0.30, 0, 0.15), (0.43, 0, 0.091)], base_end=(0.43, 0, 0.08))
     for sign in [-1, 1]:
         fin_mesh("Pectoral membrane", surface(-.35,-.73 if sign>0 else math.pi+.73,.001), [(-0.28, sign*0.22, -0.15), (-0.20, sign*0.27, -0.208), (-0.15, sign*0.24, -0.21), (-0.12, sign*0.17, -0.14), (-0.20, sign*0.14, -0.10)])

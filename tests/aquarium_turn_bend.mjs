@@ -242,6 +242,94 @@ export async function assertTurnBend(create=createSwimmer,pose=applySwimPose){
     report.carrierThrust.push({mode,sagRange,nextSagRange,tailRange,accelerationRange});
   }
 
+  // Read the actual posterior skin and infer the propulsive contribution from
+  // the following velocity step after accounting for the production drag.
+  // These straight routes avoid the wall sculling force. Bounds describe this
+  // authored motor/shape join; they are not measured carp force or EMG timings.
+  const pitchedSwimmer=sign=>{
+    const swimmer=create(()=>.5);
+    Object.assign(swimmer.fish,{x:.65,y:sign>0?.58:1.13,z:tankCenterZ,yaw:0,pitch:0});
+    swimmer.navigate({x:-.85,y:sign>0?1.17:.50,z:tankCenterZ});
+    return swimmer;
+  };
+  const inferredThrust=(before,after)=>{
+    const direction=new Vector3(-Math.cos(after.yaw)*Math.cos(after.pitch),Math.sin(after.pitch),Math.sin(after.yaw)*Math.cos(after.pitch));
+    const acceleration=new Vector3(after.vx-before.vx,after.vy-before.vy,after.vz-before.vz).dot(direction)*120;
+    const drag=(.38+.80*after.brake)*after.forwardSpeed+.95*after.forwardSpeed*Math.abs(after.forwardSpeed);
+    return acceleration+drag;
+  };
+  const localTail=fish=>{
+    pose(asset,joints,rest,{...fish,x:0,y:0,z:0,yaw:0,pitch:0,bank:0,verticalGain:0,twistGain:0});
+    return skinPoints().at(-1);
+  };
+  const carrierExcursion=fish=>{
+    const positions=Array.from({length:12},(_,i)=>localTail({...fish,phase:i*Math.PI/6}).z);
+    return Math.max(...positions)-Math.min(...positions);
+  };
+  report.posteriorPropulsion=[];
+  for(const sign of [-1,1]){
+    const natural=pitchedSwimmer(sign),primed=pitchedSwimmer(sign);
+    for(const swimmer of [natural,primed]){
+      for(let frame=0;frame<12;frame++)swimmer.step(1/120);
+      swimmer.fish.phase=4.8;
+    }
+    Object.assign(primed.fish,{muscle1:1,muscle2:1,muscle3:1});
+    const excursion=carrierExcursion(natural.fish),primedExcursion=carrierExcursion(primed.fish);
+    assert.ok(excursion<primedExcursion*.15,'natural stroke onset has less actual posterior material motion than an already loaded tail');
+    const beforeNatural={...natural.fish},beforePrimed={...primed.fish};
+    natural.step(1/120);primed.step(1/120);
+    const onsetThrust=inferredThrust(beforeNatural,natural.fish),primedThrust=inferredThrust(beforePrimed,primed.fish);
+    assert.ok(primedThrust>.01&&onsetThrust>=0&&onsetThrust<primedThrust*.05,
+      'root propulsion waits for the observed posterior activation instead of the anterior stroke request alone');
+
+    const swimmer=pitchedSwimmer(sign);
+    let previousTail,previousSpeed=0,previousThrust=0,transition,quiet;
+    for(let frame=0;frame<300;frame++){
+      const before={...swimmer.fish},gait=swimmer.behavior.gait;
+      swimmer.step(1/120);
+      const fish=swimmer.fish,tail=localTail(fish),tailSpeed=previousTail?(tail.z-previousTail.z)*120:0;
+      const thrust=inferredThrust(before,fish);
+      if(gait==='stroke'&&swimmer.behavior.gait==='coast'){
+        assert.ok(fish.pitch*sign>.15,'the finishing-stroke probe is actually climbing or descending');
+        assert.ok(fish.muscle3>.9&&Math.abs(tailSpeed)>.1,'the actual posterior material is still finishing a substantial stroke');
+        assert.ok(Math.abs(tailSpeed-previousSpeed)<.10,'the actual tail passes continuously into the coast request');
+        assert.ok(previousThrust>.01&&thrust>previousThrust*.5&&Math.abs(thrust-previousThrust)<.04,
+          'a coast request cannot cut off force in one tick while its actual posterior stroke continues');
+        transition={age:fish.age,previousThrust,thrust,tailSpeed,previousTailSpeed:previousSpeed};
+      }
+      if(frame===299){
+        assert.equal(swimmer.behavior.gait,'coast','the quiet endpoint is inside the same uninterrupted coast');
+        assert.ok(Math.abs(tailSpeed)<.001&&Math.abs(thrust)<1e-6,
+          'the actual settling tail and its propulsive effort both become quiet during the glide');
+        quiet={thrust,tailSpeed};
+      }
+      previousTail=tail;previousSpeed=tailSpeed;previousThrust=thrust;
+    }
+    assert.ok(transition,'the real pitched route contains a stroke-to-coast transition');
+    report.posteriorPropulsion.push({sign,excursion,primedExcursion,onsetThrust,primedThrust,transition,quiet});
+  }
+
+  // Arrive at the current location, settle, and let the real intent chooser
+  // decide to travel again. A cruise cannot inherit the hover's remaining
+  // coast and report movement intent while its actual tail stays inactive.
+  const traveler=create(()=>.5);
+  Object.assign(traveler.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
+  traveler.navigate({...traveler.fish});
+  let travelOnset;
+  for(let frame=0;frame<6*120;frame++){
+    const before=traveler.behavior.intent;
+    traveler.step(1/120);
+    if(before==='hover'&&traveler.behavior.intent==='cruise'){travelOnset={...traveler.fish};break;}
+  }
+  assert.ok(travelOnset&&travelOnset.muscle3<.01,'the actual intent chooser selects travel from a settled hover');
+  for(let frame=0;frame<90;frame++)traveler.step(1/120);
+  const departure=traveler.fish;
+  const departureExcursion=carrierExcursion(departure);
+  const departureDistance=Math.hypot(departure.x-travelOnset.x,departure.y-travelOnset.y,departure.z-travelOnset.z);
+  assert.ok(departureExcursion>.10,'a new travel intent loads a real posterior stroke without inheriting a quiet gait timer');
+  assert.ok(departureDistance>.015&&departure.speed>.05,'the newly chosen cruise actually propels the fish after its causal posterior loading');
+  report.cruiseDeparture={age:travelOnset.age,departureExcursion,departureDistance,speed:departure.speed};
+
   const tiny=create(()=>.5);
   Object.assign(tiny.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});
   tiny.navigate({x:-.9*Math.cos(.2),y:.8,z:tankCenterZ+.9*Math.sin(.2)});

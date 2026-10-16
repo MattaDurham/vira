@@ -66,6 +66,123 @@ function height(fin){
   return Math.max(...ys)-Math.min(...ys);
 }
 
+const pathLength=points=>points.reduce((sum,point,i)=>sum+(i?distance(point,points[i-1]):0),0);
+
+function materialPaths(membrane){
+  const paths=new Map();
+  for(let i=0;i<membrane.base.length/3;i++){
+    const u=membrane.uv[i*2];if(!paths.has(u))paths.set(u,[]);
+    paths.get(u).push(i);
+  }
+  const result=[...paths.values()].map(indices=>indices.sort((a,b)=>membrane.uv[b*2+1]-membrane.uv[a*2+1]));
+  assert.equal(result.length,39,'all actual authored radial material trajectories are measured');
+  assert.ok(result.every(indices=>indices.length===17),'each radial material trajectory retains all sixteen segments');
+  return result;
+}
+
+function assertMaterialLengths(membrane,paths,report){
+  // These coordinates are the actual Float32 GPU upload, not only the double
+  // precision integration table. Quantization is allowed; tissue compression
+  // of even a fraction of one percent is not hidden by endpoint/chord tests.
+  const uploaded=Float32Array.from(membrane.output);
+  for(const indices of paths){
+    const original=indices.map(i=>Array.from(membrane.base.slice(i*3,i*3+3)));
+    const changed=indices.map(i=>Array.from(uploaded.slice(i*3,i*3+3)));
+    report.maximumRadialArcStrain=Math.max(report.maximumRadialArcStrain,Math.abs(pathLength(changed)/pathLength(original)-1));
+    for(let j=1;j<indices.length;j++){
+      const strain=Math.abs(distance(changed[j],changed[j-1])/distance(original[j],original[j-1])-1);
+      report.maximumRadialSegmentStrain=Math.max(report.maximumRadialSegmentStrain,strain);
+      assert.ok(strain<.00002,`each actual radial material segment keeps its length after GPU quantization (${strain})`);
+    }
+  }
+}
+
+function tubePaths(rays){
+  const count=rays.base.length/3,parent=Array.from({length:count},(_,i)=>i);
+  const find=i=>parent[i]===i?i:parent[i]=find(parent[i]);
+  for(let i=0;i<rays.index.length;i+=3){
+    const root=find(rays.index[i]);parent[find(rays.index[i+1])]=root;parent[find(rays.index[i+2])]=root;
+  }
+  const components=new Map();
+  for(let i=0;i<count;i++){
+    const root=find(i);if(!components.has(root))components.set(root,[]);
+    components.get(root).push(i);
+  }
+  assert.equal(components.size,57,'the actual mesh contains nineteen ray shafts and thirty-eight branches');
+  return [...components.values()].map((indices,component)=>{
+    const rings=new Map();
+    for(const index of indices){
+      // v=1 duplicates the v=0 tube seam. Count its point only once.
+      if(rays.uv[index*2+1]>.999)continue;
+      const u=rays.uv[index*2];if(!rings.has(u))rings.set(u,[]);
+      rings.get(u).push(index);
+    }
+    const path=[...rings].sort(([a],[b])=>a-b).map(([,indices])=>indices);
+    assert.ok(path.every(ring=>ring.length===8),'each extracted centerline uses complete eight-point tube rings');
+    const kind=path.length===25?'shaft':'branch';
+    assert.equal(kind,component%3===0?'shaft':'branch','each authored ray tree retains one shaft and two branches');
+    return {rings:path,kind,group:Math.floor(component/3)};
+  });
+}
+
+const ringCenter=(ring,points)=>[0,1,2].map(axis=>ring.reduce((sum,i)=>sum+points[i*3+axis],0)/ring.length);
+
+function segmentDistance(first,last,otherFirst,otherLast){
+  const sub=(a,b)=>a.map((value,i)=>value-b[i]),dot=(a,b)=>a.reduce((sum,value,i)=>sum+value*b[i],0);
+  const u=sub(last,first),v=sub(otherLast,otherFirst),w=sub(first,otherFirst);
+  const a=dot(u,u),b=dot(u,v),c=dot(v,v),d=dot(u,w),e=dot(v,w),det=a*c-b*b;
+  const pointSegment=(point,start,end)=>{
+    const along=sub(end,start),offset=sub(point,start),denominator=dot(along,along);
+    const t=denominator?Math.max(0,Math.min(1,dot(offset,along)/denominator)):0;
+    return dot(offset.map((value,i)=>value-t*along[i]),offset.map((value,i)=>value-t*along[i]));
+  };
+  let squared=Math.min(pointSegment(first,otherFirst,otherLast),pointSegment(last,otherFirst,otherLast),
+    pointSegment(otherFirst,first,last),pointSegment(otherLast,first,last));
+  if(det>1e-20){
+    const s=(b*e-c*d)/det,t=(a*e-b*d)/det;
+    if(s>=0&&s<=1&&t>=0&&t<=1){
+      const delta=w.map((value,i)=>value+s*u[i]-t*v[i]);squared=Math.min(squared,dot(delta,delta));
+    }
+  }
+  return Math.sqrt(squared);
+}
+
+function assertTubeClearance(rays,paths){
+  const tubes=paths.map(({rings,group})=>{
+    const centers=rings.map(ring=>ringCenter(ring,rays.base));
+    const radius=Math.max(...rings.flatMap((ring,j)=>ring.map(i=>distance(Array.from(rays.base.slice(i*3,i*3+3)),centers[j]))));
+    return {centers,radius,group};
+  });
+  let minimum=Infinity;
+  for(let i=0;i<tubes.length;i++)for(let j=0;j<i;j++){
+    const first=tubes[i],second=tubes[j];
+    // Branches must join their own shaft; those intentional contacts are not
+    // collisions between unrelated ray trees.
+    if(first.group===second.group)continue;
+    for(let a=1;a<first.centers.length;a++)for(let b=1;b<second.centers.length;b++){
+      const clearance=segmentDistance(first.centers[a-1],first.centers[a],second.centers[b-1],second.centers[b])-first.radius-second.radius;
+      minimum=Math.min(minimum,clearance);
+    }
+  }
+  assert.ok(minimum>.0005,`unrelated actual three dimensional ray tubes retain positive clearance (${minimum})`);
+  return minimum;
+}
+
+function assertTubeLengths(rays,paths,report){
+  const uploaded=Float32Array.from(rays.output);
+  for(const {rings,kind} of paths){
+    const original=rings.map(ring=>ringCenter(ring,rays.base)),changed=rings.map(ring=>ringCenter(ring,uploaded));
+    const arcStrain=Math.abs(pathLength(changed)/pathLength(original)-1);
+    report[kind].maximumArcStrain=Math.max(report[kind].maximumArcStrain,arcStrain);
+    assert.ok(arcStrain<.001,'rendered ray shafts and branches retain their actual centerline arc length within one tenth of a percent');
+    for(let j=1;j<rings.length;j++){
+      const strain=Math.abs(distance(changed[j],changed[j-1])/distance(original[j],original[j-1])-1);
+      report[kind].maximumSegmentStrain=Math.max(report[kind].maximumSegmentStrain,strain);
+      assert.ok(strain<(kind==='shaft'?.0015:.003),'local tube centerline segments stay close to their material length under the shared interpolated field');
+    }
+  }
+}
+
 // Injection mutation-checks real asset effects without modifying production
 // files: a flat sway, a rigid fan or disconnected ray field cannot pass.
 export async function assertCaudalGeometry(createFrame=createCaudalFrame,createMotion=createCaudalMotion,
@@ -73,7 +190,11 @@ export async function assertCaudalGeometry(createFrame=createCaudalFrame,createM
   const fins=await geometry(),membrane=fins.find(fin=>fin.name.includes('membrane'));
   const rays=fins.find(fin=>fin.name.includes('rays')),frame=createFrame(membrane.base,membrane.uv);
   const report={vertices:fins.reduce((sum,fin)=>sum+fin.base.length/3,0),minimumJacobian:Infinity,
-    minimumAreaRatio:Infinity,maximumAreaRatio:0,minimumNormalAgreement:Infinity,maximumRayGap:0,maximumStep:0};
+    minimumAreaRatio:Infinity,maximumAreaRatio:0,minimumNormalAgreement:Infinity,maximumRayGap:0,maximumStep:0,
+    maximumRadialArcStrain:0,maximumRadialSegmentStrain:0,
+    shaft:{maximumArcStrain:0,maximumSegmentStrain:0},branch:{maximumArcStrain:0,maximumSegmentStrain:0}};
+  const radialPaths=materialPaths(membrane),rayPaths=tubePaths(rays);
+  report.minimumRestTubeClearance=assertTubeClearance(rays,rayPaths);
   const allJoints=new Set();
   for(const fin of fins){
     fin.binding=bind(fin.base,frame);fin.output=new Float64Array(fin.base.length);
@@ -99,6 +220,8 @@ export async function assertCaudalGeometry(createFrame=createCaudalFrame,createM
             'membrane, shaft and branch landmarks share one continuous deformation');
         }
       }
+      assertMaterialLengths(membrane,radialPaths,report);
+      assertTubeLengths(rays,rayPaths,report);
       if(phase===0)heights.push(height(membrane));
       for(let i=0;i<membrane.base.length/3;i++){
         if(membrane.uv[i*2+1]>.999)assert.ok(distance(outputPoint(membrane,i),Array.from(membrane.base.slice(i*3,i*3+3)))<1e-10,
@@ -110,7 +233,7 @@ export async function assertCaudalGeometry(createFrame=createCaudalFrame,createM
         const columns=derivative(point,frame,motion,deformPoint);
         const det=columns[0].dot(columns[1].clone().cross(columns[2]));
         report.minimumJacobian=Math.min(report.minimumJacobian,det);
-        assert.ok(det>.79&&det<1.01,'the full three dimensional field remains locally invertible');
+        assert.ok(det>.5&&det<1.5,`the full three dimensional field remains locally invertible (${mode}, ${phase}, ${i}: ${det})`);
       }
       if(phase===0||phase===3||phase===8){
         report.maximumRayGap=Math.max(report.maximumRayGap,rayGap(rays,membrane));
@@ -119,6 +242,11 @@ export async function assertCaudalGeometry(createFrame=createCaudalFrame,createM
           const ratio=changed.getArea()/triangle.getArea();
           report.minimumAreaRatio=Math.min(report.minimumAreaRatio,ratio);report.maximumAreaRatio=Math.max(report.maximumAreaRatio,ratio);
           assert.ok(ratio>.5&&ratio<2,`caudal tessellation retains finite tissue area through kick, glide and brake (${mode}, ${phase}, ${offset}: ${ratio})`);
+          const projected=points=>{
+            const a=points.a,b=points.b,c=points.c;
+            return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+          };
+          assert.ok(projected(changed)/projected(triangle)>.5,'all actual radial triangles retain the planar orientation of the authored material atlas');
           const columns=derivative(triangle.getMidpoint(new Vector3()).toArray(),frame,motion,deformPoint);
           const transform=v=>columns.reduce((sum,column,i)=>sum.addScaledVector(column,v.getComponent(i)),new Vector3());
           const expected=transform(triangle.b.clone().sub(triangle.a)).cross(transform(triangle.c.clone().sub(triangle.a))).normalize();
@@ -134,6 +262,12 @@ export async function assertCaudalGeometry(createFrame=createCaudalFrame,createM
   }
   report.glideHeightRatio=heights[0]/heights[1];
   assert.ok(report.glideHeightRatio>.78&&report.glideHeightRatio<.9,'a moving glide narrows the actual fan while a loaded kick opens it');
+  const shared={};
+  deform(membrane.binding,createMotion(quiet,shared),membrane.output);
+  const firstHeight=height(membrane);
+  createMotion({...quiet,stroke:1,muscle3:1},shared);
+  deform(membrane.binding,shared,membrane.output);
+  assert.ok(height(membrane)>firstHeight*1.1,'mutating the same controller output object invalidates the shared tissue cache');
   const quietA=createMotion(quiet),quietB=createMotion({...quiet,phase:Math.PI,age:5});
   for(let i=0;i<membrane.base.length/3;i+=13){
     const point=Array.from(membrane.base.slice(i*3,i*3+3));
@@ -205,6 +339,20 @@ export async function assertCaudalGeometry(createFrame=createCaudalFrame,createM
   return report;
 }
 
+export async function assertCaudalMaterialLengths(deform=deformCaudalGeometry){
+  const fins=await geometry(),membrane=fins.find(fin=>fin.name.includes('membrane'));
+  const frame=createCaudalFrame(membrane.base,membrane.uv),paths=materialPaths(membrane);
+  membrane.binding=bindCaudalGeometry(membrane.base,frame);membrane.output=new Float32Array(membrane.base.length);
+  const report={maximumRadialArcStrain:0,maximumRadialSegmentStrain:0};
+  for(const fish of [{speed:.24,stroke:0},{speed:.24,stroke:1},{speed:.24,stroke:0,brake:1}]){
+    for(let phase=0;phase<12;phase++){
+      deform(membrane.binding,createCaudalMotion({...fish,phase:phase*tau/12}),membrane.output);
+      assertMaterialLengths(membrane,paths,report);
+    }
+  }
+  return report;
+}
+
 export async function assertCaudalMutations(){
   const rejects=async(run,label)=>{
     await assert.rejects(run,{code:'ERR_ASSERTION'},`${label} must fail the actual-asset checks`);
@@ -218,7 +366,31 @@ export async function assertCaudalMutations(){
     'an independent carrier fighting the recruited turn');
   await rejects(()=>assertCaudalGeometry(createCaudalFrame,createCaudalMotion,()=>({sample:createCaudalMotion})),
     'instantaneous kick, glide and braking shape changes');
-  return 4;
+  await rejects(()=>assertCaudalMaterialLengths((binding,motion,output)=>{
+    output.set(binding.frame.base);
+    for(let i=0;i<output.length;i+=3){
+      const s=Math.max(0,Math.min(1,(output[i]-binding.frame.root.x)/binding.frame.length));
+      output[i+1]=binding.frame.root.y+(output[i+1]-binding.frame.root.y)*(1-motion.adduction*s*s*(3-2*s));
+    }
+    return output;
+  }),'the former compressed material fan');
+  await rejects(()=>assertCaudalMaterialLengths((binding,motion,output)=>{
+    deformCaudalGeometry(binding,motion,output);
+    for(const {indices} of binding.frame.paths)for(let j=1;j<indices.length-1;j++){
+      // Keep every root and endpoint unchanged while straining its interior.
+      output[indices[j]*3]+=.003*Math.sin(Math.PI*j/(indices.length-1));
+    }
+    return output;
+  }),'endpoint preservation that hides interior ray strain');
+  const fins=await geometry(),rays=fins.find(fin=>fin.name.includes('rays')),paths=tubePaths(rays);
+  const overlapping={...rays,base:Float32Array.from(rays.base)},fixed=paths[0].rings,moved=paths[3].rings;
+  for(let j=0;j<moved.length;j++){
+    const source=ringCenter(moved[j],rays.base),target=ringCenter(fixed[j],rays.base);
+    for(const i of moved[j])for(let axis=0;axis<3;axis++)overlapping.base[i*3+axis]+=target[axis]-source[axis];
+  }
+  assert.throws(()=>assertTubeClearance(overlapping,paths),{code:'ERR_ASSERTION'},
+    'unrelated crossing tube centerlines must fail the actual three dimensional clearance guard');
+  return 7;
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

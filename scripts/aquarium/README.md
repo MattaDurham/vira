@@ -139,6 +139,11 @@ a loaded turn. The recruitment threshold is authored, not a measured koi
 muscle parameter. Mirrored, phase-varied actual-skin checks distinguish loaded
 strokes from nascent loading and anterior recovery. Pure twist follows each
 vertebra's arched rest tangent without adding unintended centerline bending.
+Forward effort follows the same posterior activation that reaches the visible
+tail, combined with the stroke-dependent carrier rate. Asking for a coast
+lets that finishing stroke release its force gradually. A newly chosen cruise
+starts its own propulsive bout rather than inheriting an almost-finished
+inspection stroke. These are authored causal controls, not measured muscle forces.
 `tests/aquarium_fins.mjs` checks the actual paired membranes and ray geometry
 through a shared field: fixed attachments, close ray-to-tissue alignment,
 continuous phases, local volume preservation and unfolded surface triangles.
@@ -291,6 +296,19 @@ koi calibration. [Howe and Astley](https://doi.org/10.1002/jez.2398) measured
 localized curvature pulses in giant danios; head-led reorientation does not
 imply that curvature must originate at the nose.
 
+The [goldfish foraging video S2](https://ndownloader.figshare.com/files/51456824)
+was reviewed in its original player, including media times 3.52, 6.99 and
+11.37 seconds. Repeated nose-down dips interrupt slower recovery while the fish
+works along the feeding grate. The experiment constrains lateral turns with
+a narrow slot and tracks two head landmarks from one side; it does not measure
+unrestricted three-dimensional swimming or establish fin-force timing.
+Nor is a head-first sequence universal: [Wilga and Lauder](https://doi.org/10.1242/jeb.202.18.2413)
+connect pectoral deformation with the initiation of rising and sinking in
+juvenile sturgeon. [Ehrlich and Schoppik](https://doi.org/10.7554/eLife.45839)
+show larval zebrafish combining body rotation with fin-generated lift. Those
+species and experimental conditions inform the causal questions, not adult
+koi timing, buoyancy or force magnitudes.
+
 Paired fins paddle independently at low speed, open for braking and trail during
 a propulsive burst. Their phase is independent of the tail; merged ray geometry
 uses each membrane's basal pivot and the corresponding side's paddle phase.
@@ -328,7 +346,20 @@ opens it and curves the dorsal and ventral lobes in opposite lateral directions
 around a relatively quiet fork. Power adds restrained distal compliance and
 cupping. A critically damped controller retains observed control changes;
 paused frames are idempotent, and reset or missing history starts a new response.
-The field has a positive triangular Jacobian, with no folding or detached rays.
+The fan uses its material ray paths so narrowing comes from rotation and bending
+rather than shortening its support rays. A shared deformation keeps rays and
+membrane together; actual segment lengths and surface folds are checked.
+Each sampled ray rotates around its own basal attachment, then integrates
+three-dimensional tangent changes at its rest segment lengths. The exported
+membrane supplies a material atlas shared with the primary shafts and their
+branches. Their actual tube centerlines are checked separately from membrane
+paths. The authoring boundary follows distal ray tips; proximal edge margins
+no longer create crossing supports near the base. The rest of the fish's
+geometry, skin influences, facial detail and skeletal transforms are preserved.
+Fixed-length integration is a dominant kinematic constraint, not a claim that
+biological rays cannot stretch. [Das et al.'s rainbow-trout experiments](https://doi.org/10.1016/j.actbio.2023.06.029)
+retain finite axial elasticity; this field does not solve their nonlinear
+hemitrich and collagen mechanics or use their values to calibrate koi.
 [Flammang and Lauder's bluegill measurements](https://doi.org/10.1242/jeb.021360)
 motivate these distinct modes; [Esposito et al.](https://doi.org/10.1242/jeb.062711)
 compare live tail kinematics with a robotic fan. The amplitudes and response
