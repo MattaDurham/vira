@@ -349,7 +349,13 @@ speed through its 6.933333-second end, including media times 1.368716,
 straight; the head turns laterally as the tail follows into a C-shaped bend,
 the fins present differently during the turn, and the body unbends as it
 moves out. These are qualitative observations, not measured stroke chronology,
-fluid forces or control coefficients.
+fluid forces or control coefficients. The original fast-turn movie was also
+reviewed through its 4.544-second playback end. At approximately 2.69–2.74
+seconds, the view from below shows anterior reorientation with the posterior
+curved inward and a deployed pectoral; the simultaneous side view remains
+comparatively level. The paper separately quantifies a near-stationary tail
+when snout angular velocity peaks, and the converse later in the turn. These
+filtered regional axes are not rigid-skull measurements or koi calibration.
 [Howe and Astley](https://doi.org/10.1002/jez.2398) measured
 localized curvature pulses in giant danios; head-led reorientation does not
 imply that curvature must originate at the nose.
@@ -694,3 +700,50 @@ in strong bends. Surface-following scale prototypes remain authoring
 experiments because coverage and neighboring contact still fail. The
 comparative scale models and destructive carp tests are not routine-koi
 strain calibration.
+
+
+### Articulated mechanics study
+
+`static/aquarium-mechanics.html` is a separate inspection view, linked from
+**How this was built**. It uses vendored Rapier 0.21.0 to simulate 29 bodies
+connected by 28 spherical joints. The first five axial regions form one rigid
+head. The complete existing skin, facial rig, fins and supports consume all
+34 physical bone positions and orientations. Rendering adds no head turn,
+Gaussian recentering or forward-kinematic projection.
+
+`aquarium-mechanics-study.js` supplies the same finite motor experiment to
+both the browser and tests. Its selected stiffness/damping parameters are
+360 rad/s and 16; these are authored controller values, not measured koi
+muscle or cartilage properties. A 2.4-radian C target loads, holds and releases
+before the motors return toward neutral. At 240/480 Hz, actual head-to-tail
+bend peaks at approximately 145/141 degrees around 0.52 seconds, while the
+target is loaded. The former 30-rad/s trial peaked after the command ended
+and was rejected on timing even though it achieved a large bend.
+
+The SDK's independent angular position motors are active controllers. Their
+compound torque field is nonconservative: neither the radial geodesic nor
+componentwise quadratic estimate is a proven stored potential. The public
+API returns `potentialEnergy: null` and `energy: null` for those position
+motors; `energyDiagnostic` is explicitly an estimate. Actual kinetic energy,
+COM, linear/angular momentum and joint residuals are measured independently.
+The separate explicit geodesic torque branch has a defined capped potential
+and its own release checks. No claim of passive biological cartilage follows
+from the SDK controller's apparent settling.
+
+The neutral mass profile uses uniform 1000 kg/m³ density inside an explicitly
+capped body-skin envelope, not equal mesh-vertex mass or a measured tissue
+map. Regenerate it with `node scripts/aquarium/build_body_mass.mjs`; the
+asset hash guards against reusing masses after a geometry change. Fin mass,
+water pressure, added water mass, buoyancy and body self-contact are omitted.
+Vertical/twist inputs are inspection stress cases rather than koi gaits.
+The ordinary aquarium retains its existing swimming controller. An ignored
+water-resistance experiment is dissipative but its stiff loading response
+still changes materially under timestep refinement, so it is not enabled.
+
+`tests/aquarium_articulated_motion.mjs` exercises the actual motor timeline,
+loaded-bend timing, timestep refinement, motor-off momentum/energy, root-rate
+metadata isolation and all three bending axes. The independent rendered-skin
+test checks source bind-palette mapping, rigid cranial and facial motion,
+scaled instances, and preservation of a deliberately supplied joint gap.
+Five injected centering, rotation, projection, face and palette regressions
+must fail. Record 8s captures the actual GPU canvas at half playback speed.

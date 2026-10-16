@@ -69,7 +69,7 @@ export const researchTopics = [
       { label: 'Lauder Laboratory: primary fin-motion video collection', url: 'https://sites.harvard.edu/glauder/research-videos/bluegill-pectoral-fin-locomotion/' },
       { label: 'Source video: bluegill fins viewed from the front', url: 'https://www.youtube.com/watch?v=36Of7uj9naA' },
       { label: 'Source video: Lauder Laboratory posterior view of paired fin motion', url: 'https://www.youtube.com/watch?v=l7gtX7QIlLU' },
-      { label: 'Source video: Lauder Laboratory bluegill braking after prey capture', url: 'https://www.youtube.com/watch?v=yauU364_Gz8' },
+      { label: 'Source video: Lauder Laboratory bluegill slowing while feeding', url: 'https://www.youtube.com/watch?v=yauU364_Gz8' },
       { label: 'Source video: Lauder Laboratory trout in steady flow', url: 'https://www.youtube.com/watch?v=YI4lr8Z70VE' },
       { label: 'Source video: archerfish fin coordination, 250 fps', url: 'https://movie.biologists.com/video/10.1242/jeb.233718/video-1' },
     ],

@@ -1,5 +1,5 @@
 import {Box3,Matrix4,Vector3} from './vendor/three.webgpu.js';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=88';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=89';
 
 const dynamicFin=name=>/^(Pectoral|Pelvic|Caudal|Dorsal|Anal)_(membrane|branched_rays)/.test(name);
 const corners=box=>Array.from({length:8},(_,i)=>new Vector3(i&1?box.max.x:box.min.x,i&2?box.max.y:box.min.y,i&4?box.max.z:box.min.z));

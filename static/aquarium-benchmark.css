@@ -25,3 +25,5 @@ header{position:absolute;top:48px;left:48px;pointer-events:none;text-shadow:0 2p
 
 #tank[data-research=true] .panel{display:none}.research-layer>.research-controls{position:absolute;left:48px;bottom:72px;pointer-events:auto;margin:0;padding:0;border:0}.research-layer>.research-controls[hidden]{display:none}.research-controls button{background:#071923e8;backdrop-filter:blur(16px)}.research-legend{bottom:125px}
 @media(max-width:650px){.research-layer>.research-controls{left:20px;bottom:calc(42% + 60px)}.research-legend{bottom:calc(42% + 100px)}}
+
+.research-mechanics-link{display:block;margin:16px 0 24px;color:#b5e6d7;font-size:11px;text-underline-offset:4px}

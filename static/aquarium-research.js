@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=88';
-import {waterMax} from './aquarium-space.js?v=88';
-import {spinalField} from './aquarium-motion.js?v=88';
-import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=88';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=89';
+import {waterMax} from './aquarium-space.js?v=89';
+import {spinalField} from './aquarium-motion.js?v=89';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=89';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -181,6 +181,9 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       button.addEventListener('click',()=>{setMode('research');select(id);},{signal});links.append(button);
     });section.append(links);story.append(section);
   });
+  const mechanicsLink=element('a','research-mechanics-link','Inspect joint mechanics');
+  mechanicsLink.href='aquarium-mechanics.html';
+  story.append(element('p','','Watch the fish bend and twist from two cameras. This separate mechanics experiment develops the body response before water forces are coupled.'),mechanicsLink);
   const bibliography=element('details','research-bibliography'),summary=element('summary','','Complete source index');bibliography.append(summary);
   const allSources=element('ol','research-sources'),seen=new Set();
   researchTopics.flatMap(topic=>topic.sources).forEach(source=>{
