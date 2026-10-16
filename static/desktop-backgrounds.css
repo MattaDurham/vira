@@ -4,6 +4,9 @@
 #desktop-background canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #desktop-background iframe { position: absolute; inset: 0; width: 100%; height: 100%;
   border: 0; pointer-events: none; }
+#desktop-background .aquarium-background-cover { position: absolute; inset: 0;
+  pointer-events: none; background-color: #030b12;
+  background-position: inherit; background-size: inherit; }
 #desktop-background::after { content: ""; position: absolute; inset: 0;
   background: #050b0a; opacity: var(--scene-dim, .2); }
 body.focus-mode #desktop-background { z-index: 700; }

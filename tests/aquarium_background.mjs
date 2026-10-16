@@ -21,10 +21,10 @@ function environment({hidden=false}={}){
     if(run)for(const [id,at] of [...due])if(at<=now){const fn=timers.get(id);timers.delete(id);due.delete(id);fn?.();}
   };
   window.open=(...args)=>opened.push(args);document.defaultView=window;document.hidden=hidden;
-  const node={ownerDocument:document,children:[],appendChild(frame){this.children.push(frame);frame.parent=this;}};
+  const node={ownerDocument:document,children:[],style:{backgroundImage:'url("/aquarium/reference.webp")'},appendChild(frame){this.children.push(frame);frame.parent=this;}};
   const desktop={closest:()=>null},control={closest:()=>control};
   document.createElement=tag=>{
-    assert.equal(tag,'iframe');
+    assert.ok(tag==='iframe'||tag==='div');
     const frame=new Target();frame.attributes={};frame.style={};frame.setAttribute=(key,value)=>{frame.attributes[key]=value;};
     frame.getBoundingClientRect=()=>({left:10,top:20,width:1000,height:500});
     frame.contentWindow={postMessage:(data,origin)=>sent.push({data,origin})};
@@ -39,10 +39,12 @@ function environment({hidden=false}={}){
 
 const data=record=>record.data;
 {
-  const env=environment(),stop=env.start({motion:true}),frame=env.node.children[0];
+  const env=environment(),stop=env.start({motion:true}),[frame,cover]=env.node.children;
   assert.equal(frame.src,'/aquarium-benchmark.html?background=1','the real aquarium loads only after this adapter is selected');
   assert.equal(frame.tabIndex,-1);assert.equal(frame.attributes['aria-hidden'],'true');
-  assert.equal(frame.style.opacity,'0','the static poster covers booting study/loading content without changing frame bounds');
+  assert.equal(frame.style.opacity,'1','the loading iframe remains paintable so Chrome can prioritize its resources');
+  assert.equal(cover.className,'aquarium-background-cover');assert.equal(cover.style.backgroundImage,'inherit');
+  assert.deepEqual(env.node.children,[frame,cover],'an opaque poster layer follows the paintable frame until readiness');
   assert.equal(env.timers.size,1,'readiness has one finite deadline and no polling');
   env.document.emit('pointermove',env.event());assert.equal(env.sent.length,0,'no input enters a booting scene');
   stop.motion(false);stop.look('wireframe');
@@ -52,12 +54,13 @@ const data=record=>record.data;
   }
   env.message(frame,{type:'another-app',action:'ready'});env.message(frame,['vira-aquarium','ready']);
   assert.equal(env.sent.length,0,'only the expected origin, frame and message type can acknowledge readiness');
-  assert.equal(env.node.children.length,1);
-  assert.equal(frame.style.opacity,'0','untrusted readiness cannot reveal study chrome');
+  assert.deepEqual(env.node.children,[frame,cover],'untrusted readiness cannot remove the startup poster');
+  assert.equal(frame.style.opacity,'1','filtering untrusted readiness never makes the frame transparent');
   env.message(frame,{type:'vira-aquarium',action:'ready'});
   assert.deepEqual(data(env.sent.at(-1)),{type:'vira-aquarium',action:'configure',motion:false,look:'wireframe'},'readiness applies the latest preferences');
   assert.equal(env.sent.at(-1).origin,env.window.location.origin,'outgoing messages target the exact origin');
-  assert.equal(frame.style.opacity,'1','only the completed first-frame handshake reveals the aquarium');
+  assert.equal(frame.style.opacity,'1','the frame remains paintable after the completed first-frame handshake');
+  assert.deepEqual(env.node.children,[frame],'only the trusted first-frame handshake removes the cover');
   assert.equal(env.timers.size,0);assert.equal(env.messages.at(-1),'');
   const readyMessages=env.sent.length;env.message(frame,{type:'vira-aquarium',action:'ready'});
   assert.equal(env.sent.length,readyMessages,'duplicate readiness does not create another bridge');
@@ -89,6 +92,7 @@ const data=record=>record.data;
   stop();stop();
   assert.equal(env.node.children.length,0);assert.equal(env.document.count(),0);assert.equal(env.window.count(),0);assert.equal(frame.count(),0);
   assert.equal(env.timers.size,0,'disposal retires every timer and listener');
+  assert.equal(env.node.style.backgroundImage,'url("/aquarium/reference.webp")','the desktop static poster remains available after disposal');
   const retired=env.sent.length;env.message(frame,{type:'vira-aquarium',action:'ready'});stop.motion(true);stop.look('natural');
   assert.equal(env.sent.length,retired,'a removed frame cannot rejoin through a stale message');
 }
@@ -116,10 +120,10 @@ const data=record=>record.data;
 {
   const env=environment({hidden:true});env.start();const frame=env.node.children[0];
   assert.equal(env.timers.size,0,'a hidden start does not run down the startup budget');
-  env.advance(600000);assert.equal(env.node.children.length,1);
+  env.advance(600000);assert.ok(env.node.children.includes(frame));
   env.document.hidden=false;env.document.emit('visibilitychange');
   assert.equal(env.timers.size,1);
-  env.advance(59999);assert.equal(env.node.children.length,1,'hidden wall time does not shorten the first visible interval');
+  env.advance(59999);assert.ok(env.node.children.includes(frame),'hidden wall time does not shorten the first visible interval');
   env.message(frame,{type:'vira-aquarium',action:'ready'});
   assert.equal(frame.style.opacity,'1');assert.equal(env.timers.size,0,'readiness retires the remaining visible-time deadline');
   env.advance(600000);assert.equal(env.node.children.length,1,'a ready frame never times out later');
@@ -128,14 +132,14 @@ const data=record=>record.data;
   const env=environment();const stop=env.start(),frame=env.node.children[0],firstCallback=[...env.timers.values()][0];
   env.advance(10000);env.document.hidden=true;env.document.emit('visibilitychange');
   assert.equal(env.timers.size,0);env.advance(120000);
-  firstCallback();assert.equal(env.node.children.length,1,'an overdue queued callback cannot fail a hidden frame');
+  firstCallback();assert.ok(env.node.children.includes(frame),'an overdue queued callback cannot fail a hidden frame');
   env.document.hidden=false;env.document.emit('visibilitychange');
-  firstCallback();assert.equal(env.node.children.length,1,'an old callback also cannot expire a resumed interval');
+  firstCallback();assert.ok(env.node.children.includes(frame),'an old callback also cannot expire a resumed interval');
   env.advance(20000);const secondCallback=[...env.timers.values()][0];
   env.document.hidden=true;env.document.emit('visibilitychange');env.advance(300000);
   env.document.hidden=false;env.document.emit('visibilitychange');secondCallback();
-  assert.equal(env.timers.size,1);assert.equal(env.node.children.length,1);
-  env.advance(29999);assert.equal(env.node.children.length,1);
+  assert.equal(env.timers.size,1);assert.ok(env.node.children.includes(frame));
+  env.advance(29999);assert.ok(env.node.children.includes(frame));
   env.advance(1);assert.equal(env.node.children.length,0,'multiple hide/resume cycles preserve the original total60s visible budget');
   assert.match(env.messages.at(-1),/did not finish loading/);
   assert.equal(env.timers.size,0);assert.equal(env.document.count(),0);assert.equal(env.window.count(),0);stop();
@@ -165,7 +169,7 @@ const data=record=>record.data;
   assert.equal(env.messages.length,0,'progress uses the same trusted source and bounded fields');
   env.message(frame,progress);assert.match(env.messages.at(-1),/compiling shaders; WebGL 2/);
   assert.equal([...env.timers.values()][0],deadline,'progress reports do not restart the loading deadline');
-  env.advance(39999);assert.equal(env.node.children.length,1);
+  env.advance(39999);assert.ok(env.node.children.includes(frame));
   env.message(frame,{...progress,stage:'optics'});env.advance(1);
   assert.equal(env.node.children.length,0,'repeated progress cannot extend the visible budget');
   assert.match(env.messages.at(-1),/did not finish loading.*preparing water light; WebGL 2/,'timeout identifies the actual last startup stage');

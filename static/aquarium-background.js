@@ -4,7 +4,11 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
   const document=node.ownerDocument,window=document.defaultView,origin=window.location.origin;
   const frame=document.createElement('iframe');
   frame.className='aquarium-background-frame';frame.title='Aquarium desktop background';
-  frame.tabIndex=-1;frame.setAttribute('aria-hidden','true');frame.style.opacity='0';
+  frame.tabIndex=-1;frame.setAttribute('aria-hidden','true');frame.style.opacity='1';
+  // Chrome may deprioritize loading in a fully transparent frame. Keep it
+  // paintable and cover its startup document with the desktop's static plate.
+  const cover=document.createElement('div');cover.className='aquarium-background-cover';
+  cover.setAttribute('aria-hidden','true');cover.style.backgroundImage='inherit';
   let closed=false,ready=false,attention=false;
   let requestedMotion=motion===true,currentLook=look==='wireframe'?'wireframe':'natural';
   // Shader compilation may wait for animation callbacks, which browsers
@@ -58,7 +62,7 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
     if(!data||typeof data!=='object'||Array.isArray(data)||data.type!=='vira-aquarium')return;
     if(data.action==='ready'){
       if(ready)return;
-      ready=true;stopDeadline();frame.style.opacity='1';dispose.message='';configure();onMessage?.('');
+      ready=true;stopDeadline();cover.remove();dispose.message='';configure();onMessage?.('');
     }else if(data.action==='progress'&&!ready&&typeof data.stage==='string'&&Object.hasOwn(stages,data.stage)&&
       ['unknown','webgpu','webgl2'].includes(data.engine)&&typeof data.hidden==='boolean'){
       lastStage=data.stage;lastEngine=data.engine;lastHidden=data.hidden;
@@ -82,7 +86,7 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
     window.removeEventListener('message',receive);window.removeEventListener('blur',clear);
     document.removeEventListener('visibilitychange',visibility);document.removeEventListener('pointermove',pointer);
     document.removeEventListener('pointerleave',clear);document.removeEventListener('click',tap);
-    frame.removeEventListener('error',failedNavigation);frame.remove();
+    frame.removeEventListener('error',failedNavigation);frame.remove();cover.remove();
   };
   dispose.motion=enabled=>{if(closed||typeof enabled!=='boolean')return;requestedMotion=enabled;configure();};
   dispose.look=value=>{if(closed||!['natural','wireframe'].includes(value))return;currentLook=value;configure();};
@@ -93,6 +97,6 @@ export function create({node,canInteract,onMessage,look='natural',motion=false})
   document.addEventListener('pointerleave',clear);document.addEventListener('click',tap);
   frame.addEventListener('error',failedNavigation);
   deadline();
-  frame.src='/aquarium-benchmark.html?background=1';node.appendChild(frame);
+  frame.src='/aquarium-benchmark.html?background=1';node.appendChild(frame);node.appendChild(cover);
   return dispose;
 }
