@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=77';
-import {waterMax} from './aquarium-space.js?v=77';
-import {spinalField} from './aquarium-motion.js?v=77';
-import {createResearchTrace,traceAxes,createPitchResearchTrace} from './aquarium-research-trace.js?v=77';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=78';
+import {waterMax} from './aquarium-space.js?v=78';
+import {spinalField} from './aquarium-motion.js?v=78';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace} from './aquarium-research-trace.js?v=78';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -39,6 +39,15 @@ export function researchJointPitch(joint){
   return Math.asin(clamp(new Vector3(-1,0,0).applyQuaternion(orientation).y,-1,1));
 }
 
+export function researchJointRoll(joint){
+  const orientation=joint.getWorldQuaternion(new Quaternion()).multiply(joint.userData.bodyRest.clone().invert()).normalize();
+  const forward=new Vector3(-1,0,0).applyQuaternion(orientation),dorsal=new Vector3(0,1,0).applyQuaternion(orientation);
+  const upright=new Vector3(0,1,0).addScaledVector(forward,-forward.y).normalize();
+  // Positive roll follows the rig's caudal +X axis. Project gravity into the
+  // transverse plane so a heading or climb cannot masquerade as body roll.
+  return Math.atan2(-forward.dot(upright.clone().cross(dorsal)),upright.dot(dorsal));
+}
+
 // Sample the exported distal boundary after its live deformation and skinning.
 // The outline therefore follows the same fan, attachment and camera as the fish.
 export function researchCaudalContour(asset){
@@ -52,7 +61,7 @@ export function researchCaudalContour(asset){
 
 export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints,camera,getState,getFish,onAction,onVisibility=()=>{}}){
   const events=new AbortController(),signal=events.signal;
-  let open=false,mode='research',active='head',reference=false,previous=-Infinity,traceMode;
+  let open=false,mode='research',active='head',reference=false,previous=-Infinity,traceMode,attitudeAxis='pitch';
   const layer=element('section','research-layer');layer.id='research-layer';layer.hidden=true;
   const pectoralAnchor=researchFinAnchor(asset,'Pectoral_membrane'),pelvicAnchor=researchFinAnchor(asset,'Pelvic_membrane');
   const caudalContour=researchCaudalContour(asset);
@@ -101,17 +110,36 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const traceStart=svg('text',{x:58,y:106}),traceEnd=svg('text',{x:286,y:106,'text-anchor':'end'});
   traceStart.textContent='−4 s';traceEnd.textContent='Now';tracePlot.append(traceStart,traceEnd);
   traceBox.append(traceTitle,tracePlot,element('p','research-trace-caption','Trunk solid / tail dotted · ±45° · authored model'));
-  const pitchTrace=createPitchResearchTrace(),pitchBox=element('div','research-trace research-pitch');
+  const pitchTrace=createPitchResearchTrace(),rollTrace=createRollResearchTrace(),pitchBox=element('div','research-trace research-pitch');
+  const attitudeTitle=element('div','research-trace-title'),attitudeCaption=element('p','research-trace-caption');
+  const attitudeControls=element('div','research-attitude-controls');attitudeControls.setAttribute('role','group');attitudeControls.setAttribute('aria-label','Fin attitude diagram');
+  const attitudeButtons=['pitch','roll'].map(axis=>{
+    const button=element('button','',axis==='pitch'?'Pitch':'Roll');button.type='button';
+    button.addEventListener('click',()=>{attitudeAxis=axis;setAttitudeLabels();previous=-Infinity;update(performance.now());},{signal});
+    attitudeControls.append(button);return button;
+  });
   const pitchPlot=svg('svg',{viewBox:'0 0 300 86',role:'img','aria-label':'Four seconds of authored nose-up fin command, and actual head and tail frame pitch with the neutral arch removed. Fin command uses plus or minus 8.6 degrees; body frames use plus or minus 30 degrees. Positive values point upward. These are model signals, not measured fish kinematics.'});
+  let attitudeAngleLabel;
   ['Fin trim','Pitch'].forEach((name,i)=>{
     const label=svg('text',{x:0,y:28+i*36});label.textContent=name;
+    if(i===1)attitudeAngleLabel=label;
     pitchPlot.append(label,svg('path',{d:`M58,${25+i*36}H286`,'class':'research-trace-baseline'}));
   });
   const pitchPaths=['fin','head','tail'].map(name=>svg('path',{'class':`research-trace-path research-pitch-${name}`}));pitchPlot.append(...pitchPaths);
   const pitchStart=svg('text',{x:58,y:85}),pitchEnd=svg('text',{x:286,y:85,'text-anchor':'end'});
   pitchStart.textContent='−4 s';pitchEnd.textContent='Now';pitchPlot.append(pitchStart,pitchEnd);
-  pitchBox.append(element('div','research-trace-title','FIN → HEAD → TAIL / LIVE PITCH'),pitchPlot,
-    element('p','research-trace-caption','Fin command ±8.6° / head solid, tail dotted ±30°. Rest arch removed. Arrows show authored trim direction, not measured force.'));
+  pitchBox.append(attitudeTitle,attitudeControls,pitchPlot,attitudeCaption);
+  function setAttitudeLabels(){
+    const roll=attitudeAxis==='roll';pitchBox.dataset.axis=attitudeAxis;
+    attitudeAngleLabel.textContent=roll?'Roll':'Pitch';
+    attitudeTitle.textContent=`FIN → HEAD → TAIL / LIVE ${roll?'ROLL':'PITCH'}`;
+    attitudeButtons.forEach((button,i)=>button.setAttribute('aria-pressed',String((i===1)===roll)));
+    attitudeCaption.textContent=roll?'Fin command ±8.6° / head solid, tail dotted ±7.4°. Rest arch removed. Bank direction, gains and recovery are authored.':
+      'Fin command ±8.6° / head solid, tail dotted ±30°. Rest arch removed. Arrows show authored trim direction, not measured force.';
+    pitchPlot.setAttribute('aria-label',roll?'Four seconds of authored signed fin roll command, and actual head and tail frame roll with neutral arch removed. Fin command uses plus or minus 8.6 degrees; body roll uses plus or minus 7.4 degrees, clipped beyond those limits. Positive roll follows the caudal axis. These are model signals, not measured fish kinematics.':
+      'Four seconds of authored nose-up fin command, and actual head and tail frame pitch with the neutral arch removed. Fin command uses plus or minus 8.6 degrees; body frames use plus or minus 30 degrees. Positive values point upward. These are model signals, not measured fish kinematics.');
+  }
+  setAttitudeLabels();
   const implementationLabel=element('h4','','In this build'),implementation=element('p');
   const limitationLabel=element('h4','','Scope of the evidence'),limitation=element('p','research-caveat');
   const sourceLabel=element('h4','','Sources & footage'),sources=element('ol','research-sources');
@@ -161,7 +189,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   function setOpen(value,view='research'){
     open=value;layer.hidden=!value;root.dataset.research=String(value);toggle.setAttribute('aria-expanded',String(value));toggle.setAttribute('aria-pressed',String(value));
     onVisibility(value);
-    if(value){trace.clear();pitchTrace.clear();setMode(view);update(performance.now());}else toggle.focus();
+    if(value){trace.clear();pitchTrace.clear();rollTrace.clear();setMode(view);update(performance.now());}else toggle.focus();
   }
   toggle.addEventListener('click',()=>setOpen(!open),{signal});storyButton.addEventListener('click',()=>setOpen(true,'story'),{signal});
   toggle.disabled=storyButton.disabled=false;
@@ -214,7 +242,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     }else labels=[[local(-.53,.015,.09),'Modeled facial tissue'],[points[15],'Overlapping scales'],[projectResearchPoint(pectoralAnchor(),camera,width,height),'Branched fin rays']];
     if(active!=='optics')ray.setAttribute('d','');
     trimArrows.forEach((arrow,i)=>{
-      const point=active==='fins'?labels[i][0]:null,command=fish.pitchFin??0;
+      const point=active==='fins'&&attitudeAxis==='pitch'?labels[i][0]:null,command=fish.pitchFin??0;
       if(!point?.visible||fish.poseHistory===false){arrow.setAttribute('d','');return;}
       const world=i===0?pectoralAnchor():pelvicAnchor();world.y+=clamp(command/.15,-1,1)*(i===0?.14:-.05);
       const end=projectResearchPoint(world,camera,width,height),dx=end.x-point.x,dy=end.y-point.y,length=Math.hypot(dx,dy);
@@ -250,12 +278,14 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
     // turning stroke. An orientation-lag estimate alone misses that bend.
     const field=spinalField(fish,joints.map(joint=>joint.userData.axial));
     const currentTraceMode=state.study?state.studyAxis:'swimming';
-    if(traceMode!==currentTraceMode){trace.clear();pitchTrace.clear();traceMode=currentTraceMode;}
+    if(traceMode!==currentTraceMode){trace.clear();pitchTrace.clear();rollTrace.clear();traceMode=currentTraceMode;}
     trace.record(fish.age,field);
     tracePaths.forEach((paths,axis)=>paths.forEach((path,station)=>path.setAttribute('d',trace.paths(axis,station,fish.age))));
     if(fish.poseHistory!==false&&Number.isFinite(fish.pitchFin)){
       pitchTrace.record(fish.age,fish.pitchFin,researchJointPitch(joints[1]),researchJointPitch(joints.at(-1)));
-      pitchPaths.forEach((path,station)=>path.setAttribute('d',pitchTrace.paths(station,fish.age)));
+      rollTrace.record(fish.age,fish.rollFin??0,researchJointRoll(joints[1]),researchJointRoll(joints.at(-1)));
+      const attitudeTrace=attitudeAxis==='roll'?rollTrace:pitchTrace;
+      pitchPaths.forEach((path,station)=>path.setAttribute('d',attitudeTrace.paths(station,fish.age)));
     }
     const ys=[4,14,24,33].map(i=>26+clamp(field[i][vertical?'vertical':'lateral'],-.7,.7)*25);
     miniPath.setAttribute('d',ys.map((y,i)=>`${i?'L':'M'}${24+i*84},${y}`).join(' '));

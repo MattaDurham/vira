@@ -1,5 +1,5 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=77';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=78';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -50,9 +50,11 @@ export function createSwimmer(random=Math.random){
     decisions++;
   }
   function reset(){
-    Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,pitchFin:0,pitchMoment:0,bank:0,
+    Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,pitchFin:0,pitchMoment:0,
+      bank:0,bankRate:0,rollFin:0,rollMoment:0,
       age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
       yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
+      bankLag1:0,bankLag2:0,bankLag3:0,
       muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
       turnRecruitment:0,turnRecruitment1:0,turnRecruitment2:0,turnRecruitment3:0});
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
@@ -310,7 +312,21 @@ export function createSwimmer(random=Math.random){
       if(fish[p]<lo||fish[p]>hi){fish[p]=clamp(fish[p],lo,hi);fish[v]=0;wallTime=2;}
     }
     fish.speed=Math.hypot(fish.vx,fish.vy,fish.vz);
-    fish.bank=approach(fish.bank,clamp(-fish.yawRate*fish.speed*.36,-.13,.13),3,dt);
+    // Keep the existing restrained bank preference; it is an authored turn
+    // policy, not a claim that all fish lean in the same direction. Differential
+    // basal fin incidence now produces its neutral-relative control moment.
+    const bankTarget=clamp(-fish.yawRate*fish.speed*.36,-.13,.13);
+    fish.rollFin=approach(fish.rollFin,clamp((bankTarget-fish.bank)*3,-.15,.15),10,dt);
+    fish.rollMoment=finRollMoment(fish);
+    fish.bankRate=clamp(fish.bankRate+(fish.rollMoment-8*fish.bankRate)*dt,-.33,.33);
+    const previousBank=fish.bank;
+    fish.bank=clamp(fish.bank+fish.bankRate*dt,-.13,.13);
+    if(Math.abs(fish.bank)===.13&&fish.bankRate*fish.bank>0)fish.bankRate=0;
+    let previousLag=0;
+    axialRates.forEach((rate,i)=>{
+      const key='bankLag'+(i+1);
+      fish[key]=approach(fish[key]-(fish.bank-previousBank),previousLag,rate,dt);previousLag=fish[key];
+    });
   }
   function step(elapsed){
     if(!Number.isFinite(elapsed)||elapsed<=0)return;
@@ -349,7 +365,7 @@ export function finActuation(fish,side,pectoral=true){
   return {spread:(.035+.07*slow+.18*stopping+.12*Math.max(0,turn*side)+.05*Math.abs(trim))*gain,
     paddle:(.085*control+.14*hover)*beat*gain,
     sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain,
-    incidence:trim*.25*(pectoral?-1:.35)};
+    incidence:trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35)};
 }
 
 export function finPitchMoment(fish){
@@ -361,6 +377,15 @@ export function finPitchMoment(fish){
   return .99*effort;
 }
 
+export function finRollMoment(fish){
+  const difference=pectoral=>(finActuation(fish,1,pectoral).incidence-finActuation(fish,-1,pectoral).incidence)/2;
+  // Both fore and aft pairs contribute to the same roll couple. Common pitch
+  // trim cancels. This proxy is relative to each neutral fin, not an absolute
+  // pressure estimate from the asymmetric authored foil surfaces.
+  const effort=clamp((difference(true)+difference(false))/(.15*1.35),-1,1);
+  return .99*effort;
+}
+
 export function spinalField(fish,axial){
   const length=axial.at(-1)-axial[5];
   const stroke=fish.stroke??1,drive=clamp(fish.drive??fish.speed??0,0,.5);
@@ -369,6 +394,7 @@ export function spinalField(fish,axial){
     axialDelays.map(delay=>-rate*delay):[0,fish[prefix+'1'],fish[prefix+'2'],fish[prefix+'3']];
   const yawHistory=history('yawLag',clamp(fish.yawRate??0,-1.3,1.3));
   const pitchHistory=history('pitchLag',clamp(fish.pitchRate??0,-.5,.5));
+  const bankHistory=history('bankLag',clamp(fish.bankRate??0,-.5,.5));
   const turnHistory=fish.poseHistory===false?[0,0,0,0]:
     [fish.turnBend??0,fish.turnBend1??0,fish.turnBend2??0,fish.turnBend3??0];
   const recruitmentHistory=fish.poseHistory===false?[0,0,0,0]:
@@ -392,8 +418,8 @@ export function spinalField(fish,axial){
     // pitch manoeuvres; the small secondary wave is compliance, not a dolphin kick.
     const vertical=(-alongBody(pitchHistory,s)+.018*muscle*s*s*Math.sin(phase+.7))*verticalGain;
     // A banking head and lagging tail put a small torsion into the trunk.
-    const torsion=(-clamp(fish.bank??0,-.3,.3)*.55*s
-      +clamp(fish.yawRate??0,-1.3,1.3)*.045*s*s+(fish.torsionDrive??0)*s+.022*muscle*s*s*Math.sin(phase-1))*twistGain;
+    const torsion=(alongBody(bankHistory,s)+(fish.torsionDrive??0)*s
+      +.022*muscle*s*s*Math.sin(phase-1))*twistGain;
     return {lateral,vertical,twist:torsion};
   });
 }

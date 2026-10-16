@@ -44,12 +44,13 @@ export const researchTopics = [
     navLabel: 'Fins',
     title: 'Fins change jobs',
     claim: 'Measured koi pectorals expand, bend, cup and undulate during hovering and retreating. In bluegill, the tail fan narrows during gliding; its upper and lower lobes can curve in opposite directions while braking.',
-    implementation: 'Rays and membrane bend together. Signed fin trim initiates pitch through the same control moment that moves the head. The chart compares that command with actual head and tail frame angles. The outline traces the moving tail edge.',
-    limitation: 'Shape, moments and timing are authored. Signed trim is relative to this rig, not measured adult-koi lift. Ray lengths are constrained; real rays retain finite elasticity. Tail comparisons use bluegill and trout. Other footage includes archerfish.',
+    implementation: 'Rays and membrane bend together. Shared fin commands drive pitch and roll; the body responds, then axial follow-through carries the change toward the tail. Switch the chart between pitch and roll to inspect those signals. The outline follows the actual tail edge.',
+    limitation: 'Angles, moments, timing and bank direction are authored, not calibrated adult-koi mechanics. Ray lengths are constrained; real rays retain elasticity. The dorsal and anal fins still follow the spine, although bluegill can control them independently. Tail comparisons use bluegill and trout.',
     sources: [
       { label: 'Wang et al. 2013: three-dimensional koi fin motion', url: 'https://doi.org/10.1016/S1672-6529(13)60217-6' },
       { label: 'Wilga and Lauder 1999: pectoral action initiates sturgeon rise and sink', url: 'https://doi.org/10.1242/jeb.202.18.2413' },
       { label: 'Ting and Yang 2008: opposing fin moments during cichlid descent', url: 'https://doi.org/10.1242/jeb.020263' },
+      { label: 'Standen and Lauder 2005: independent dorsal and anal fin motion in bluegill', url: 'https://doi.org/10.1242/jeb.01706' },
       { label: 'Higham 2007: paired fins and braking', url: 'https://biomechanics.ucr.edu/Higham_2007_JEB.pdf' },
       { label: 'Alben et al. 2007: active ray curvature and stiffness', url: 'https://doi.org/10.1098/rsif.2006.0181' },
       { label: 'Das et al. 2023: finite elasticity and large ray deformations in trout', url: 'https://doi.org/10.1016/j.actbio.2023.06.029' },
@@ -58,6 +59,7 @@ export const researchTopics = [
       { label: 'Esposito et al. 2012: live bluegill and a robotic tail comparison', url: 'https://doi.org/10.1242/jeb.062711' },
       { label: 'Lauder Laboratory: primary fin-motion video collection', url: 'https://sites.harvard.edu/glauder/research-videos/bluegill-pectoral-fin-locomotion/' },
       { label: 'Source video: bluegill fins viewed from the front', url: 'https://www.youtube.com/watch?v=36Of7uj9naA' },
+      { label: 'Source video: Lauder Laboratory posterior view of paired fin motion', url: 'https://www.youtube.com/watch?v=l7gtX7QIlLU' },
       { label: 'Source video: Lauder Laboratory bluegill braking after prey capture', url: 'https://www.youtube.com/watch?v=yauU364_Gz8' },
       { label: 'Source video: Lauder Laboratory trout in steady flow', url: 'https://www.youtube.com/watch?v=YI4lr8Z70VE' },
       { label: 'Source video: archerfish fin coordination, 250 fps', url: 'https://movie.biologists.com/video/10.1242/jeb.233718/video-1' },
@@ -125,7 +127,7 @@ export const buildChapters = [
   {
     id: 'controls',
     title: 'Connect cause and motion',
-    text: 'A chosen course loads a head-led yaw turn. A climb or dive first changes signed fin trim, which drives an authored pitching moment; head rotation and posterior follow-through result. Strokes accelerate the fish, while momentum and drag carry the glide. The live diagrams expose those separate signals.',
+    text: 'A chosen course loads a head-led yaw turn. Shared fin trim drives authored pitch and roll moments; body rotation and axial follow-through result. The tail follows actual bank changes rather than receiving a separate yaw-driven twist. Strokes accelerate the fish, while momentum and drag carry the glide. The live diagrams expose those separate signals.',
     topics: ['head', 'muscle', 'fins'],
   },
   {

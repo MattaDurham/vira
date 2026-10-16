@@ -24,6 +24,11 @@ causal pitch diagram: signed fin command on a fixed 8.6-degree scale, followed
 by actual head and tail frame attitudes on a shared 30-degree scale. It removes
 each joint's neutral arch before reading world pitch. Its arrows show authored
 trim direction, not measured fluid forces; pose-only studies hide this diagram.
+The Pitch/Roll switch also exposes differential fin trim and actual material
+roll on a fixed 7.4-degree body scale. The roll measurement removes heading and
+pitch geometrically, rather than using an Euler component or axial-offset
+estimate. Both histories remain live while switching; pausing invents no new
+samples.
 Six
 research notes distinguish observations, implementation and the limits of each
 comparison; linked papers and original footage retain their species context.
@@ -141,6 +146,11 @@ deformed rays, tissue, face and caudal field used in the renderer. Disconnecting
 the fin presentation or moment, or restoring an independent head servo, fails
 these guards. The onset thresholds validate this authored sequence, not koi
 reaction times.
+`aquarium_roll.mjs` checks the shared differential-fin moment against actual
+skull acceleration, axial material-frame onset and release, quiet settling,
+and combined pitch/turn clearance. Mutations disconnecting the foil or moment,
+restoring the former bank servo, and injecting yaw directly into tail torsion
+are rejected.
 Turning torque builds and releases with the manoeuvre envelope, rather than
 switching between a full turn and fin trim at each bout boundary. Gesture
 regressions reject abrupt onset and release during broad and small turns.
@@ -330,6 +340,27 @@ rate and attitude. Basal span rotation preserves the fin attachment while
 remaining separate from distal cupping. Neutral rig normals are not a zero-lift
 calibration: no absolute lift coefficient, solved wake or koi EMG is inferred.
 The body still climbs or dives through pitched propulsion, not a height tween.
+
+Roll uses a separate signed differential incidence on the same paired fins.
+Common pitch trim and differential roll trim form separate neutral-relative
+authored moments. Angular damping carries bank toward its existing restrained
+turn preference, and actual bank changes propagate through the axial history.
+This replaces the direct yaw-rate twist that could roll the posterior before
+the head bank appeared; a held, quiet attitude no longer carries a permanent
+counter-twist. Bank sign, gains and response times remain authored, not an
+adult-koi banking law. A glide on a curved path can retain a bank preference;
+ending a propulsive stroke does not forcibly level the fish.
+
+[Standen and Lauder's bluegill study](https://doi.org/10.1242/jeb.01706)
+measures independent dorsal and anal fin shape changes. Its proposed roll
+torque balance is a hypothesis, not a measured koi moment calibration.
+Those median fins still follow axial skinning in this rig; independent control
+requires preserving each dorsal attachment and ray length after skinning.
+The [original posterior bluegill video](https://www.youtube.com/watch?v=l7gtX7QIlLU)
+was reviewed at quarter speed, including media times 3.03, 4.94 and 5.47 seconds.
+Paired fins change from broad sheets to narrow edge presentations while the
+body stays comparatively quiet. This qualitative view does not resolve fluid
+forces or calibrate the roll controller.
 
 Paired fins paddle independently at low speed, open for braking and trail during
 a propulsive burst. Their phase is independent of the tail; merged ray geometry

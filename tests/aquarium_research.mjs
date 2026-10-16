@@ -3,11 +3,11 @@ import {readFile} from 'node:fs/promises';
 import {Vector3,PerspectiveCamera,Texture,WebGPUCoordinateSystem,WebGLCoordinateSystem} from '../static/vendor/three.webgpu.js';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {applySwimPose} from '../static/aquarium-rig.js';
-import {projectResearchPoint,researchFinAnchor,researchCaudalContour,researchJointPitch} from '../static/aquarium-research.js';
+import {projectResearchPoint,researchFinAnchor,researchCaudalContour,researchJointPitch,researchJointRoll} from '../static/aquarium-research.js';
 import {createSwimmer} from '../static/aquarium-motion.js';
 import {createCaudalFrame,createCaudalMotion,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 import {researchTopics,buildChapters} from '../static/aquarium-research-data.js';
-import {createResearchTrace,traceLimit,createPitchResearchTrace} from '../static/aquarium-research-trace.js';
+import {createResearchTrace,traceLimit,createPitchResearchTrace,createRollResearchTrace} from '../static/aquarium-research-trace.js';
 
 const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url));
 const loader=new GLTFLoader().register(()=>({name:'GeometryOnlyImages',loadTexture:()=>Promise.resolve(new Texture())}));
@@ -25,6 +25,8 @@ for(const system of [WebGPUCoordinateSystem,WebGLCoordinateSystem])for(const [wi
     applySwimPose(asset,joints,rest,{...pose,phase:1.7,age:3,bank:.08,stroke:.6,speed:.2,yawRate:.12,pitchRate:.04});
     assert.ok(Math.abs(researchJointPitch(joints[1])-pose.pitch)<1e-7,
       'head pitch comes from the actual posed bone with neutral arch removed, independent of yaw and bank');
+    assert.ok(Math.abs(researchJointRoll(joints[1])-.08)<1e-7,
+      'actual head roll removes rest arch and heading/pitch instead of reading a fixed world-axis rotation');
     const actualFin=pectoral.getVertexPosition(0,new Vector3()).applyMatrix4(pectoral.matrixWorld);
     assert.ok(anchor().distanceTo(actualFin)<1e-12,'the fin label follows its deformed membrane rather than an approximate local point');
     const world=joints[17].getWorldPosition(new Vector3()),screen=projectResearchPoint(world,camera,width,height);
@@ -103,4 +105,17 @@ pitchHistory.record(.05,0,0,0);pitchHistory.record(1,0,0,0);
 assert.equal((pitchHistory.paths(0,1).match(/M/g)||[]).length,2,'unobserved pitch gaps are not connected');
 pitchHistory.record(4.1,0,0,0);assert.ok(pitchHistory.samples.every(s=>s.age>=.1));
 pitchHistory.record(.01,0,0,0);assert.equal(pitchHistory.samples.length,1,'rewinding clears all three causal signals together');
+const rollHistory=createRollResearchTrace();rollHistory.record(0,.15,.13,-.13);
+assert.equal(rollHistory.paths(0,0),'M286.00,13.00');
+assert.equal(rollHistory.paths(1,0),'M286.00,49.00');
+assert.equal(rollHistory.paths(2,0),'M286.00,73.00','roll uses its own restrained fixed attitude scale, not the larger pitch scale');
+for(const yaw of [-1.7,.6,2.4])for(const pitch of [-.35,.25])for(const bank of [-.12,.12]){
+  const fish={x:0,y:.8,z:0,yaw,pitch,bank,phase:0,stroke:0,yawRate:0,pitchRate:0,bankRate:0};
+  applySwimPose(asset,joints,rest,fish);
+  const head=researchJointRoll(joints[1]),tail=researchJointRoll(joints.at(-1));
+  assert.ok(Math.abs(head-bank)<1e-7,'mirrored bank signs survive combined world pitch and yaw');
+  assert.ok(Math.abs(tail-bank)<1e-7,'a quiet straight rig does not invent a posterior counter-roll');
+  rollHistory.record(1,bank,head,tail);
+  assert.deepEqual(rollHistory.samples.at(-1).values,[bank,head,tail]);rollHistory.clear();
+}
 console.log('Research overlay: actual rig/camera attachment and cited story links passed.');
