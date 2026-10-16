@@ -43,14 +43,16 @@ export const researchTopics = [
     id: 'fins',
     navLabel: 'Fins',
     title: 'Fins change jobs',
-    claim: 'Measured koi pectorals expand, bend, cup and undulate during hovering and retreating. In bluegill, the tail fan narrows during gliding; its upper and lower lobes can curve in opposite directions while braking.',
-    implementation: 'Rays and membrane bend together. Shared fin commands drive pitch and roll; the body responds, then axial follow-through carries the change toward the tail. Switch the chart between pitch and roll to inspect those signals. The outline follows the actual tail edge.',
-    limitation: 'Angles, moments, timing and bank direction are authored, not calibrated adult-koi mechanics. Ray lengths are constrained; real rays retain elasticity. The dorsal and anal fins still follow the spine, although bluegill can control them independently. Tail comparisons use bluegill and trout.',
+    claim: 'Measured koi pectorals expand, bend, cup and undulate during hovering and retreating. Bluegill dorsal and anal fins change shape independently and can incline to the same side in a turn. Their tail fan narrows during gliding and curves differently while braking.',
+    implementation: 'Rays and membrane bend together. Shared paired-fin commands drive pitch and roll, followed by axial response. Dorsal and anal fins add restrained inclination and distal flexion while keeping their posed attachments and ray lengths. Three outlines trace the actual moving fin edges.',
+    limitation: 'Angles, moments, timing and bank direction are authored, not calibrated adult-koi mechanics. Constrained rays approximate elastic tissue. Median-fin shape adds no simulated force; it settles toward neutral during a glide. Comparative bluegill evidence supplies no rule that koi median fins collapse while coasting.',
     sources: [
       { label: 'Wang et al. 2013: three-dimensional koi fin motion', url: 'https://doi.org/10.1016/S1672-6529(13)60217-6' },
       { label: 'Wilga and Lauder 1999: pectoral action initiates sturgeon rise and sink', url: 'https://doi.org/10.1242/jeb.202.18.2413' },
       { label: 'Ting and Yang 2008: opposing fin moments during cichlid descent', url: 'https://doi.org/10.1242/jeb.020263' },
       { label: 'Standen and Lauder 2005: independent dorsal and anal fin motion in bluegill', url: 'https://doi.org/10.1242/jeb.01706' },
+      { label: 'Chadwell and Ashley-Ross 2012: regional bluegill fin-ray stiffness', url: 'https://doi.org/10.1002/jmor.11031' },
+      { label: 'Li et al.: goldfish segmented spine-like and branching fin rays', url: 'https://doi.org/10.1002/dvdy.24340' },
       { label: 'Higham 2007: paired fins and braking', url: 'https://biomechanics.ucr.edu/Higham_2007_JEB.pdf' },
       { label: 'Alben et al. 2007: active ray curvature and stiffness', url: 'https://doi.org/10.1098/rsif.2006.0181' },
       { label: 'Das et al. 2023: finite elasticity and large ray deformations in trout', url: 'https://doi.org/10.1016/j.actbio.2023.06.029' },
@@ -121,7 +123,7 @@ export const buildChapters = [
   {
     id: 'geometry',
     title: 'Author the structure',
-    text: 'Build a volumetric fish around an articulated spine. Give the face actual cavities, moving gill covers and layered eyes; let scales overlap and fin tissue flex with its rays. The anatomy is authored from references, rather than reconstructed from a scan.',
+    text: 'Build a volumetric fish around an articulated spine. Give the face actual cavities, moving gill covers and layered eyes; let scales overlap and fin tissue flex with its rays. Preserve each median-fin attachment and ray length after the body bends. The anatomy is authored from references.',
     topics: ['anatomy', 'craft'],
   },
   {

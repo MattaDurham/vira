@@ -90,7 +90,7 @@ Three.js and its loader utilities are vendored with provenance in
 | | Cycles reference | Live aquarium |
 |---|---|---|
 | Fish | Shared GLB geometry, 1,330 scales, layered eyes and fin rays | Same mesh and skin weights |
-| Motion | Frozen reference pose | 34 axial and 6 facial controls, lateral/vertical curvature and axial torsion, a travelling trunk wave, burst-and-coast propulsion, flexing paired fins and articulated respiratory jaw/gill motion |
+| Motion | Frozen reference pose | 34 axial and 6 facial controls, lateral/vertical curvature and axial torsion, a travelling trunk wave, burst-and-coast propulsion, flexing paired, median and caudal fins, and articulated respiratory jaw/gill motion |
 | Water | Separate closed dielectric boundary and absorption/scattering volume, with path-traced refraction | Beer-Lambert extinction and camera-ray single scattering, with a moving planar reflection, exact dielectric Fresnel lookup and underwater total internal reflection |
 | Glass | Solid thin pane, path-traced refraction | Thin reflective pane approximation at near-normal incidence |
 | Fins | Separate translucent membrane maps; fine ray tubes omitted from the still | Same membrane UVs plus visible ray tubes, alpha-blended tissue and approximate subsurface backlighting |
@@ -169,6 +169,13 @@ inspection stroke. These are authored causal controls, not measured muscle force
 `tests/aquarium_fins.mjs` checks the actual paired membranes and ray geometry
 through a shared field: fixed attachments, close ray-to-tissue alignment,
 continuous phases, local volume preservation and unfolded surface triangles.
+`tests/aquarium_median.mjs` checks dorsal and anal attachment lines, material
+segment and actual tube-centerline lengths after skinning, shaft/branch
+junctions, ray-to-tissue alignment, smooth seams and rendered normal directions.
+Fixed-body comparisons isolate signed intrinsic fin movement from spine
+movement. Turn loading, glide release and seeded combined navigation use the
+same production fields. The deterministic study includes both median control
+histories at every physics tick.
 `tests/aquarium_turn_bend.mjs` reads the actual head, trunk and peduncle to
 check separate loading, peak and return times, quiet settling and small-turn
 restraint. It also exercises flicks and two minutes of deformed swimming for
@@ -318,6 +325,18 @@ koi calibration. [Howe and Astley](https://doi.org/10.1002/jez.2398) measured
 localized curvature pulses in giant danios; head-led reorientation does not
 imply that curvature must originate at the nose.
 
+The original [freely swimming carp video S1](https://figshare.com/articles/media/28127789?file=51456827)
+was reviewed at normal speed through its 50.433333-second end, including media
+times 2.870833, 12.153788 and 34.827844 seconds. At the first sample the fish
+cruises along the pool edge with extended pectorals; at the second its posterior
+is curved while the anterior stays relatively straight and the near pectoral
+presents a broad surface; at the third the tail is displaced as the fish
+crosses open water with paired fins visible. These are qualitative viewing
+notes. The source caption identifies a carp carrying a cranial 3D gyrosensor;
+the oblique overhead view, reflections and sensor prevent reliable local-roll
+or median-ray timing estimates. No control coefficients were derived from
+this clip.
+
 The [goldfish foraging video S2](https://ndownloader.figshare.com/files/51456824)
 was reviewed in its original player, including media times 3.52, 6.99 and
 11.37 seconds. Repeated nose-down dips interrupt slower recovery while the fish
@@ -352,10 +371,37 @@ adult-koi banking law. A glide on a curved path can retain a bank preference;
 ending a propulsive stroke does not forcibly level the fish.
 
 [Standen and Lauder's bluegill study](https://doi.org/10.1242/jeb.01706)
-measures independent dorsal and anal fin shape changes. Its proposed roll
-torque balance is a hypothesis, not a measured koi moment calibration.
-Those median fins still follow axial skinning in this rig; independent control
-requires preserving each dorsal attachment and ray length after skinning.
+records soft dorsal and anal fin shape during steady swimming and slow turns.
+Figure 5 (p. 2758) shows both trailing edges displaced to the same side,
+with modest curvature of individual rays despite a strongly bent fin surface.
+The authors infer varying basal ray rotation as a separate control from ray
+curvature; they did not measure the muscle activation needed to confirm that
+mechanism. The stiff anterior spines did not oscillate laterally. Results and
+Figure 6 (pp. 2758-2759) report smaller fin areas at faster steady speeds,
+contradicting the abstract's statement that area increases; turn areas remain
+comparable to those at low speeds. These observations establish neither a
+rule that median fins collapse during gliding nor adult-koi control values.
+The proposed roll torque balance remains a hypothesis.
+
+[Chadwell and Ashley-Ross's bluegill morphology study](https://doi.org/10.1002/jmor.11031)
+finds stiffer anterior soft rays and more flexible posterior rays with greater
+range of motion. Cyprinid supports need their own anatomical distinction:
+[Li et al.'s developing wild-type goldfish](https://doi.org/10.1002/dvdy.24340),
+Figures 31-32, have serrated anterior segmented spine-like rays and posterior
+rays that branch distally. These developmental specimens do not supply adult
+koi stiffness or movement measurements, and their reinforced leading rays
+should not be described as bluegill-style unsegmented spines.
+
+`aquarium-median.js` adds restrained dorsal and anal inclination and delayed
+distal curvature. It first skins the original material paths, retains every
+posed basal attachment, and integrates unit tangents at the original segment
+lengths. One posed tissue atlas carries the membrane and embedded ray tubes.
+Positions and surface normals return through each vertex's exact inverse
+weighted skin transform, so the renderer's subsequent skinning reproduces
+that surface. The long dorsal attachment remains a line across several
+vertebrae. Quiet glides release active bias toward neutral deployment; this
+shape field supplies no extra swimming force. Gains and response times are
+authored, with comparatively quiet anterior support and more posterior flex.
 The [original posterior bluegill video](https://www.youtube.com/watch?v=l7gtX7QIlLU)
 was reviewed at quarter speed, including media times 3.03, 4.94 and 5.47 seconds.
 Paired fins change from broad sheets to narrow edge presentations while the

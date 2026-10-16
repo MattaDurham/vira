@@ -1,8 +1,8 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=78';
-import {waterMax} from './aquarium-space.js?v=78';
-import {spinalField} from './aquarium-motion.js?v=78';
-import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace} from './aquarium-research-trace.js?v=78';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=79';
+import {waterMax} from './aquarium-space.js?v=79';
+import {spinalField} from './aquarium-motion.js?v=79';
+import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace} from './aquarium-research-trace.js?v=79';
 
 const NS='http://www.w3.org/2000/svg';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -50,14 +50,15 @@ export function researchJointRoll(joint){
 
 // Sample the exported distal boundary after its live deformation and skinning.
 // The outline therefore follows the same fan, attachment and camera as the fish.
-export function researchCaudalContour(asset){
-  let mesh;asset.traverse(object=>{if(!mesh&&object.isSkinnedMesh&&object.name.startsWith('Caudal_membrane'))mesh=object;});
-  if(!mesh)throw new Error('Research anchor missing: Caudal_membrane');
+export function researchFinContour(asset,prefix){
+  let mesh;asset.traverse(object=>{if(!mesh&&object.isSkinnedMesh&&object.name.startsWith(prefix))mesh=object;});
+  if(!mesh)throw new Error(`Research anchor missing: ${prefix}`);
   const uv=mesh.geometry.attributes.uv,edge=[];
   for(let i=0;i<uv.count;i++)if(uv.getY(i)<.001)edge.push(i);
   edge.sort((a,b)=>uv.getX(a)-uv.getX(b));
   return ()=>edge.map(i=>mesh.getVertexPosition(i,new Vector3()).applyMatrix4(mesh.matrixWorld));
 }
+export function researchCaudalContour(asset){return researchFinContour(asset,'Caudal_membrane');}
 
 export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints,camera,getState,getFish,onAction,onVisibility=()=>{}}){
   const events=new AbortController(),signal=events.signal;
@@ -65,14 +66,16 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   const layer=element('section','research-layer');layer.id='research-layer';layer.hidden=true;
   const pectoralAnchor=researchFinAnchor(asset,'Pectoral_membrane'),pelvicAnchor=researchFinAnchor(asset,'Pelvic_membrane');
   const caudalContour=researchCaudalContour(asset);
+  const medianContours=['Dorsal_membrane','Anal_membrane'].map(prefix=>researchFinContour(asset,prefix));
   layer.setAttribute('aria-label','Aquarium research layer');
   const diagram=svg('svg',{'class':'research-diagram','aria-hidden':'true'});
   const spine=svg('path',{'class':'research-spine'}),ray=svg('path',{'class':'research-ray'}),leader=svg('path',{'class':'research-leader'});
   const tailOutline=svg('path',{'class':'research-spine'});
+  const medianOutlines=medianContours.map(()=>svg('path',{'class':'research-spine research-median-outline'}));
   const trimArrows=[0,1].map(()=>svg('path',{'class':'research-trim-arrow'}));
-  diagram.append(ray,spine,tailOutline,leader,...trimArrows);
+  diagram.append(ray,spine,tailOutline,...medianOutlines,leader,...trimArrows);
   const dots=joints.map(()=>{const dot=svg('circle',{r:2.5,'class':'research-joint'});diagram.append(dot);return dot;});
-  const pins=Array.from({length:3},()=>{
+  const pins=Array.from({length:5},()=>{
     const group=svg('g'),line=svg('path',{fill:'none',stroke:'rgba(150,210,190,.35)','stroke-width':.7}),halo=svg('circle',{r:8,'class':'research-pin-halo'}),point=svg('circle',{r:2.5,'class':'research-pin'}),label=svg('text',{'class':'research-pin-label',x:14,y:-12});
     group.append(line,halo,point,label);diagram.append(group);return {group,label,line};
   });
@@ -221,16 +224,20 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       dot.setAttribute('r',active==='muscle'?2+value*2.5:2.3);dot.setAttribute('opacity',active==='muscle'?.25+.75*value:.7);
     });
     const axial=['head','muscle','anatomy'].includes(active);spine.setAttribute('d',axial?paths.join(' '):'');dots.forEach(dot=>{if(!axial)dot.style.display='none';});
-    const tailPoints=active==='fins'?caudalContour().map(p=>projectResearchPoint(p,camera,width,height)):[];
-    let tailPen=false;
-    tailOutline.setAttribute('d',tailPoints.map(p=>{
-      if(!p.visible){tailPen=false;return '';}
-      const command=`${tailPen?'L':'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`;tailPen=true;return command;
-    }).join(' '));
+    const finContours=active==='fins'?[caudalContour(),...medianContours.map(contour=>contour())]:[[],[],[]];
+    [tailOutline,...medianOutlines].forEach((outline,i)=>{
+      let pen=false;
+      outline.setAttribute('d',finContours[i].map(world=>{
+        const p=projectResearchPoint(world,camera,width,height);
+        if(!p.visible){pen=false;return '';}
+        const command=`${pen?'L':'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`;pen=true;return command;
+      }).join(' '));
+    });
     let labels;
     if(active==='head')labels=state.study?[[points[1],'Rigid skull'],[points[10],'Trunk flexion'],[points[29],'Tail bend']]:[[points[1],'Head attitude'],[points[10],'Shoulder response'],[points[29],'Tail follow-through']];
     else if(active==='muscle')labels=[[points[7],'Activation'],[points[18],'Travelling bend'],[points[31],'Propulsion']];
-    else if(active==='fins')labels=[[projectResearchPoint(pectoralAnchor(),camera,width,height),'Pectoral control'],[projectResearchPoint(pelvicAnchor(),camera,width,height),'Pelvic trim'],[points[32],'Caudal drive']];
+    else if(active==='fins')labels=[[projectResearchPoint(pectoralAnchor(),camera,width,height),'Pectoral control'],[projectResearchPoint(pelvicAnchor(),camera,width,height),'Pelvic trim'],[points[32],'Caudal drive'],
+      ...finContours.slice(1).map((contour,i)=>[projectResearchPoint(contour[Math.floor(contour.length/2)],camera,width,height),i?'Anal fin':'Dorsal fin'])];
     else if(active==='anatomy')labels=[[points[3],'Rigid anterior'],[points[16],'Articulated centra'],[points[31],'Caudal complex']];
     else if(active==='optics'){
       const center=joints[15].getWorldPosition(vector).clone(),surface=center.clone();surface.y=waterMax[1];
@@ -251,6 +258,7 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
       arrow.setAttribute('d',`M${point.x},${point.y}L${end.x},${end.y}m${-x*4-y*3},${-y*4+x*3}l${x*4+y*3},${y*4-x*3}l${-x*4+y*3},${-y*4-x*3}`);
     });
     const box=card.getBoundingClientRect(),bounds=root.getBoundingClientRect(),placed=[];
+    pins.forEach((pin,i)=>{if(i>=labels.length)pin.group.style.display='none';});
     labels.forEach(([p,text],i)=>{
       const pin=pins[i];pin.group.style.display=p?.visible?'':'none';if(!p?.visible)return;
       pin.group.setAttribute('transform',`translate(${p.x},${p.y})`);pin.label.textContent=text;

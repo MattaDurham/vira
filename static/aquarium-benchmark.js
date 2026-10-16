@@ -3,18 +3,19 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=78';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=78';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=78';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=78';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=78';
-import {finRayContrast} from './aquarium-fin-detail.js?v=78';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=78';
-import {waterOptics} from './aquarium-optics.js?v=78';
-import {createContainment} from './aquarium-collision.js?v=78';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=78';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=78';
-import {createResearchLayer} from './aquarium-research.js?v=78';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=79';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=79';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=79';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=79';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=79';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=79';
+import {finRayContrast} from './aquarium-fin-detail.js?v=79';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=79';
+import {waterOptics} from './aquarium-optics.js?v=79';
+import {createContainment} from './aquarium-collision.js?v=79';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=79';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=79';
+import {createResearchLayer} from './aquarium-research.js?v=79';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -46,14 +47,17 @@ const researchFocus=target.clone(),focusPoint=new THREE.Vector3();
 const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2(),interactionPlane=new THREE.Plane(new THREE.Vector3(0,0,1),-.14),hit=new THREE.Vector3();
 const deformable=[];
 const fins=[];
+const medianMeshes={},medianFins=[];
 const pairedFinControllers={
   pectoral:{'-1':createFinController(-1,true),'1':createFinController(1,true)},
   pelvic:{'-1':createFinController(-1,false),'1':createFinController(1,false)},
 };
 const caudalController=createCaudalController();
+const medianControllers=Object.fromEntries(['dorsal','anal'].map(kind=>[kind,createMedianController(kind)]));
 function observeFins(sample,key){
   for(const pair of Object.values(pairedFinControllers))for(const controller of Object.values(pair))controller.sample(sample,key);
   caudalController.sample(sample,key);
+  for(const controller of Object.values(medianControllers))controller.sample(sample,key);
 }
 const turnStudy=createTurnStudy(swimmer,{random:studyRandom,
   onReset:sample=>{turnPoseKey++;observeFins(sample,`turn:${turnPoseKey}`);},
@@ -381,6 +385,9 @@ function draw(now){
     geometry.computeVertexNormals();
     fin.reconcileNormals?.();
   }
+  // Median roots span several axial joints. Constrain their material rays in
+  // the posed frame, then return positions and normals through exact skinning.
+  for(const fin of medianFins)deformMedianFin(fin,medianControllers[fin.kind].sample(visualFish,finPoseKey));
   for(const {points,base} of barbels){
     const rootX=base[0],extent=Math.max(.001,Math.abs(base[(points.count-16)*3]-rootX));
     for(let i=0;i<points.count;i++){
@@ -405,6 +412,7 @@ function draw(now){
   }
   if(!state.study)for(let i=0;i<3;i++){
     if(!swimmer.contain(containment.correction()))break;pose();
+    for(const fin of medianFins)deformMedianFin(fin,medianControllers[fin.kind].sample(visualFish,finPoseKey));
   }
   if(state.research)researchFocus.lerp(asset.getWorldPosition(focusPoint),1-Math.exp(-4*Math.min(elapsed,.25)));
   if(state.closeup||state.cameraAngle==='fish'||state.cameraAngle==='tail'||state.research)setCamera();
@@ -524,7 +532,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=78');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=79');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -545,6 +553,7 @@ async function start(){
           reconcileNormals:object.name.includes('branched_rays')?createFinNormalSmoother(object.geometry):null,
           root:{x:points.getX(0),y:points.getY(0),z:points.getZ(0)}});
       }
+      if(/^(Dorsal|Anal)_(membrane|branched_rays)/.test(object.name))medianMeshes[object.name]=object;
       if(object.name.includes('sensory_barbel')){const points=object.geometry.attributes.position;barbels.push({points,base:Float32Array.from(points.array)});}
       const replace=mat=>{if(!converted.has(mat)){converted.set(mat,immerse(mat));for(const value of Object.values(mat))if(value?.isTexture)ownedTextures.add(value);mat.dispose();}return converted.get(mat);};
       object.material=Array.isArray(object.material)?object.material.map(replace):replace(object.material);
@@ -558,6 +567,9 @@ async function start(){
   const caudal=fins.find(fin=>!fin.paired&&fin.name.startsWith('Caudal_membrane'));
   const caudalFrame=createCaudalFrame(caudal.base,caudal.geometry.attributes.uv.array);
   fins.filter(fin=>!fin.paired).forEach(fin=>{fin.binding=bindCaudalGeometry(fin.base,caudalFrame);});
+  for(const [kind,prefix] of [['dorsal','Dorsal'],['anal','Anal']]){
+    medianFins.push(createMedianFin(medianMeshes[`${prefix}_membrane`],medianMeshes[`${prefix}_branched_rays`],{kind}));
+  }
   joints.sort((a,b)=>a.name.localeCompare(b.name));joints.forEach(b=>rest.push(b.quaternion.clone()));pose();facialRig=createFacialRig(asset);pose();
   containment=createContainment(asset);
   skeleton=new THREE.SkeletonHelper(asset);
@@ -571,7 +583,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=78').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=79').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});

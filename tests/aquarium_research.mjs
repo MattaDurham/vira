@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {Vector3,PerspectiveCamera,Texture,WebGPUCoordinateSystem,WebGLCoordinateSystem} from '../static/vendor/three.webgpu.js';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {applySwimPose} from '../static/aquarium-rig.js';
-import {projectResearchPoint,researchFinAnchor,researchCaudalContour,researchJointPitch,researchJointRoll} from '../static/aquarium-research.js';
+import {projectResearchPoint,researchFinAnchor,researchFinContour,researchCaudalContour,researchJointPitch,researchJointRoll} from '../static/aquarium-research.js';
 import {createSwimmer} from '../static/aquarium-motion.js';
 import {createCaudalFrame,createCaudalMotion,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
 import {researchTopics,buildChapters} from '../static/aquarium-research-data.js';
@@ -58,6 +58,22 @@ for(const controls of [{speed:.2,stroke:1,phase:1},{speed:.2,stroke:0,phase:1},{
   if(previousContour)assert.ok(actual.some((p,i)=>p.distanceTo(previousContour[i])>.004),
     'the research contour changes with actual kick, glide and braking shapes');
   previousContour=actual;
+}
+for(const [prefix,count] of [['Dorsal_membrane',43],['Anal_membrane',15]]){
+  const mesh=asset.getObjectByName(prefix),readContour=researchFinContour(asset,prefix);
+  const attr=mesh.geometry.attributes.position,uvs=mesh.geometry.attributes.uv;
+  const indices=Array.from({length:uvs.count},(_,i)=>i).filter(i=>uvs.getY(i)<.001).sort((a,b)=>uvs.getX(a)-uvs.getX(b));
+  assert.equal(indices.length,count,'the median outline includes the full shipped distal material edge');
+  const before=readContour(),index=indices[Math.floor(count/2)],saved=attr.getZ(index);
+  // Change the actual surface, then turn the actual rig. An outline cached
+  // from rest geometry or skinned with the wrong joint cannot pass both.
+  attr.setZ(index,saved+.008);
+  applySwimPose(asset,joints,rest,{x:.3,y:.8,z:-.2,yaw:.7,pitch:.2,bank:.1,phase:2,age:3,stroke:.7,speed:.2,yawRate:.2,pitchRate:.1});
+  const actual=readContour();assert.equal(actual.length,count);
+  actual.forEach((p,i)=>assert.ok(p.distanceTo(mesh.getVertexPosition(indices[i],new Vector3()).applyMatrix4(mesh.matrixWorld))<1e-12,
+    'median diagrams read the deformed, articulated surface in the render world frame'));
+  assert.ok(actual[Math.floor(count/2)].distanceTo(before[Math.floor(count/2)])>.002,'median annotations follow shape and attitude changes');
+  attr.setZ(index,saved);
 }
 assert.equal(ids.size,6);
 for(const topic of researchTopics){

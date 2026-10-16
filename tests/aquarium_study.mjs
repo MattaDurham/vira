@@ -9,6 +9,7 @@ import {applySwimPose,createFacialRig} from '../static/aquarium-rig.js';
 import {createContainment} from '../static/aquarium-collision.js';
 import {createFinController,createFinFrame,bindFinGeometry,deformFinGeometry} from '../static/aquarium-fins.js';
 import {createCaudalController,createCaudalFrame,bindCaudalGeometry,deformCaudalGeometry} from '../static/aquarium-caudal.js';
+import {createMedianController,createMedianFin,deformMedianFin} from '../static/aquarium-median.js';
 import {createStudyRandom,createTurnStudy} from '../static/aquarium-study.js';
 import {tankCenterZ,waterMin,waterMax} from '../static/aquarium-space.js';
 
@@ -19,17 +20,18 @@ const copy=value=>ArrayBuffer.isView(value)?Array.from(value):value;
 function controllers(){
   return {...Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
     Object.fromEntries([-1,1].map(side=>[side,createFinController(side,kind==='pectoral')]))])),
-  caudal:createCaudalController()};
+  caudal:createCaudalController(),median:Object.fromEntries(['dorsal','anal'].map(kind=>[kind,createMedianController(kind)]))};
 }
 
 function sampleFins(control,fish){
   return {...Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
     Object.fromEntries([-1,1].map(side=>[side,control[kind][side].sample(fish,'swimming turn')]))])),
-  caudal:control.caudal.sample(fish,'swimming turn')};
+  caudal:control.caudal.sample(fish,'swimming turn'),
+  median:Object.fromEntries(['dorsal','anal'].map(kind=>[kind,control.median[kind].sample(fish,'swimming turn')]))};
 }
 
 function snapshot(fish,motions){
-  return {fish:{...fish},caudal:{...motions.caudal},fins:Object.fromEntries(Object.entries(motions).filter(([kind])=>kind!=='caudal').map(([kind,sides])=>
+  return {fish:{...fish},caudal:{...motions.caudal},median:structuredClone(motions.median),fins:Object.fromEntries(Object.entries(motions).filter(([kind])=>!['caudal','median'].includes(kind)).map(([kind,sides])=>
     [kind,Object.fromEntries(Object.entries(sides).map(([side,motion])=>
       [side,Object.fromEntries(Object.entries(motion).map(([key,value])=>[key,copy(value)]))]))]))};
 }
@@ -56,6 +58,7 @@ function harness(seed,makeRandom,makeStudy,onGeometry){
     // readable checkpoint snapshots, without retaining millions of numbers.
     digest.update(JSON.stringify(fish));
     digest.update(JSON.stringify(motions.caudal));
+    digest.update(JSON.stringify(motions.median));
     for(const kind of ['pectoral','pelvic'])for(const side of [-1,1]){
       for(const value of Object.values(motions[kind][side])){
         if(ArrayBuffer.isView(value))digest.update(new Uint8Array(value.buffer,value.byteOffset,value.byteLength));
@@ -96,6 +99,7 @@ async function geometryReviewer(){
   joints.sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(joints.length,34,'the reproducible study exercises the actual authored axial rig');
   const rest=joints.map(joint=>joint.quaternion.clone()),face=createFacialRig(asset),containment=createContainment(asset);
+  const median=['Dorsal','Anal'].map(prefix=>createMedianFin(asset.getObjectByName(`${prefix}_membrane`),asset.getObjectByName(`${prefix}_branched_rays`),{kind:prefix.toLowerCase()}));
   for(const pectoral of [true,false]){
     const family=fins.filter(fin=>fin.paired&&fin.pectoral===pectoral);
     const frames=Object.fromEntries(family.filter(fin=>fin.mesh.name.includes('membrane')).map(fin=>{
@@ -115,6 +119,7 @@ async function geometryReviewer(){
       if(fin.paired)deformFinGeometry(fin.binding,motions[fin.pectoral?'pectoral':'pelvic'],points.array);
       else deformCaudalGeometry(fin.binding,motions.caudal,points.array);
     }
+    for(const fin of median)deformMedianFin(fin,motions.median[fin.kind]);
     const correction=containment.correction();
     const magnitude=Math.max(...Object.values(correction).map(Math.abs));
     report.maximumCorrection=Math.max(report.maximumCorrection,magnitude);
