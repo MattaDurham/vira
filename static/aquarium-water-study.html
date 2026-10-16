@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Aquarium water mechanics</title>
+  <link rel="stylesheet" href="aquarium-mechanics.css?v=91">
+  <link rel="stylesheet" href="aquarium-water-study.css?v=91">
+</head>
+<body><main>
+  <header class="lead">
+    <div class="eyebrow">Aquarium / experimental mechanics</div>
+    <h1>From bend to turn.</h1>
+    <p>Follow the head, trunk and tail through three water-resistance tests. The smoother body bend is a step forward; completing the turn and recovering the right posture remain open problems.</p>
+    <nav class="study-links" aria-label="Related studies"><a href="aquarium-benchmark.html?research=story">How this was built</a><a href="aquarium-mechanics.html">Joint mechanics</a><a href="aquarium-reference-turn.html">Reference turn animation</a></nav>
+  </header>
+  <section class="controls" aria-label="Replay controls">
+    <div class="transport"><button id="play" disabled>Play</button><button id="reset" disabled>Reset</button></div>
+    <label>Experiment<select id="run" disabled></select></label>
+    <label>Camera pair<select id="camera"><option value="quarter">Quarter + above</option><option value="side">Side + above</option><option value="side-quarter">Side + quarter</option></select></label>
+    <label>Speed<select id="speed"><option value="0.25" selected>0.25×</option><option value="0.5">0.5×</option><option value="1">1×</option></select></label>
+    <label class="check"><input id="anatomy" type="checkbox"> Bones and supports</label>
+    <label class="check"><input id="labels" type="checkbox" checked> Motion diagram</label>
+    <label class="check"><input id="follow" type="checkbox" checked> Follow fish</label>
+  </section>
+  <section id="field" class="comparison" aria-label="Two views of the same recorded animal">
+    <canvas id="canvas"></canvas>
+    <article id="left-pane" class="pane">
+      <header><span class="index">01</span><div><h2 id="left-title">Quarter view</h2><p>Actual recorded skin and skeleton</p></div></header>
+      <svg class="motion-diagram" aria-hidden="true"></svg>
+      <div class="readout"><span>Head–tail bend <b id="bend">—</b></span><span>Largest local joint <b id="joint">—</b></span></div>
+    </article>
+    <article id="right-pane" class="pane">
+      <header><span class="index">02</span><div><h2 id="right-title">Above</h2><p>Same state; follow mode tracks the centre of mass</p></div></header>
+      <svg class="motion-diagram" aria-hidden="true"></svg>
+      <div class="readout"><span>Head yaw <b id="yaw">—</b></span><span>Pitch <b id="pitch">—</b></span><span>Roll <b id="roll">—</b></span></div>
+    </article>
+    <div id="loading" class="loading" role="status">Loading recorded mechanics…</div>
+  </section>
+  <section class="timeline">
+    <output id="time" for="timeline">0 / 3 s</output><input id="timeline" aria-label="Water study time" type="range" min="0" max="3" step="any" value="0" disabled><span>120 recorded states/s · no pose interpolation</span>
+  </section>
+  <section class="experiment-note" aria-live="polite"><div class="eyebrow" id="case-index">Experiment</div><h2 id="case-title"></h2><p id="case-note"></p></section>
+  <section class="ledger">
+    <div><span class="label">Joint anchor error</span><strong id="anchor">—</strong><p>Gap between the physical joint anchors.</p></div>
+    <div><span class="label">Render agreement</span><strong id="join">—</strong><p>Bone position error in displayed model coordinates.</p></div>
+    <div><span class="label">Kinetic energy</span><strong id="energy">—</strong><p>Solid-body energy in physical SI units.</p></div>
+    <div><span class="label">Physical animal</span><strong id="scale">—</strong><p id="scale-note"></p></div>
+  </section>
+  <p id="status" class="status" role="status"></p>
+  <details class="method"><summary>What this experiment measures</summary>
+    <p>The skeleton displays the saved transforms of 29 connected physical bodies. The two cameras observe the same state. The diagram points to actual axial bone locations; a head–tail angle describes shape, while yaw describes the head’s orientation in the world. A large bend alone does not establish a completed U-turn.</p>
+    <p>The original test applied water resistance before the joint motors. The distributed-bend tests solve active motor impulses, resistance and frozen anchor velocity constraints together, then advance the body with Rapier. The active controller supplies energy. The optional 0.16-radian joint ranges and muscle occupancy are authored choices, rather than measured koi cartilage or muscle activation.</p>
+    <p>Water resistance uses 708 rigid body and caudal surface patches with quadratic normal and tangential drag. It omits added fluid mass, circulation, wakes, paired-fin propulsion, buoyancy and body self-contact. The 13 cm control scales geometry, mass, inertia and authored active capacity together. It uses a bluegill’s coarse relative body-shape sequence and initial velocity, with its head orientation and travel left free. This is a comparison across species, with no claim of dynamic similarity.</p>
+    <p>The selected run, source hashes, units and generation commands are recorded in the <a href="aquarium/water-study/manifest.json">data manifest</a>. The build scripts preserve the distinction between the reference motion and the physics result.</p>
+  </details>
+  <section class="study-sources" aria-labelledby="sources-title"><div class="eyebrow">Evidence behind the experiment</div><h2 id="sources-title">Watch, measure, compare.</h2>
+    <ul>
+      <li><a href="https://doi.org/10.7717/peerj.21161">Clark and Tytell (2026): bluegill turning</a> · <a href="https://doi.org/10.7717/peerj.21161/supp-2">Original fast-turn video</a> · <a href="https://github.com/andrewdclark/BluegillTurning/blob/47274ebe9d171a4806985c090ef4361878afd842/ProcessedData/fulldata.csv">Versioned measurements</a>. Regional angles inform the shape cue; they do not calibrate koi mechanics.</li>
+      <li><a href="https://doi.org/10.1007/s003600050235">Wakeling and Johnston (1999): isolated carp muscle force</a>. Maximum measured active stress informs an approximate geometric capacity envelope; routine activation and muscle occupancy remain authored.</li>
+      <li><a href="https://arxiv.org/abs/1507.04952">Piñeirua, Godoy-Diana and Thiria (2015): resistive and reactive propulsion</a>. This reduced test includes the resistive contribution.</li>
+      <li><a href="https://github.com/dimforge/rapier/blob/b716d375efc0201003f0cd9ef7168eee0b62c177/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs">Pinned Rapier angular motors and joint ranges</a>. Numerical constraints are distinct from anatomical measurements.</li>
+    </ul>
+  </section>
+</main><script type="module" src="aquarium-water-study.js?v=91"></script></body>
+</html>

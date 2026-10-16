@@ -24,6 +24,8 @@ export const researchTopics = [
       { label: 'Howe and Astley 2020: curvature pulses in giant danio turns', url: 'https://doi.org/10.1002/jez.2398' },
       { label: 'Wilga and Lauder 1999: pectoral action initiates sturgeon rise and sink', url: 'https://doi.org/10.1242/jeb.202.18.2413' },
       { label: 'Ehrlich and Schoppik 2019: larval zebrafish combine rotation and fin lift', url: 'https://doi.org/10.7554/eLife.45839' },
+      { label: 'Source video: larval zebrafish upward bouts and sinking, side view', url: 'https://doi.org/10.7554/eLife.45839.006' },
+      { label: 'Source video: larval zebrafish upward bouts, long-axis view', url: 'https://doi.org/10.7554/eLife.45839.007' },
       { label: 'Ting and Yang 2008: opposing fin moments during cichlid descent', url: 'https://doi.org/10.1242/jeb.020263' },
       { label: 'Observational reference: original koi pond footage', url: 'https://www.youtube.com/watch?v=5XJteeTP5SA' },
       { label: 'Observational reference: original underwater koi footage', url: 'https://www.youtube.com/watch?v=zhLm3EsDDqc' },
@@ -154,7 +156,7 @@ export const buildChapters = [
   {
     id: 'mechanics',
     title: 'Test the body under load',
-    text: 'The separate joint study lets motor commands act on 29 connected physical bodies, then renders their actual bone transforms. Water tests exposed a tail joint folding against the intended curve. Optional angular ranges spread that bend, but the wet response still changes with simulation step size. This remains an experiment: a stable calculation and a convincing swimming animal are separate checks.',
+    text: 'The separate joint study lets motor commands act on 29 connected physical bodies, then renders their actual bone transforms. Water tests exposed a folding tail joint. A shared solve for motors and resistance, geometric lateral capacity and authored joint ranges spread the bend. A second control scales the animal to the 13 cm bluegill reference and uses its relative body-shape sequence and initial velocity. The head turns farther, but the fish still fails to finish the reversal and develops unwanted pitch and roll. Replay these outcomes from two cameras; a deep body bend and a completed turn are separate measurements.',
     topics: ['head', 'muscle', 'anatomy'],
   },
   {

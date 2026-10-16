@@ -1,5 +1,5 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {researchTopics,buildChapters} from './aquarium-research-data.js?v=90';
+import {researchTopics,buildChapters} from './aquarium-research-data.js?v=91';
 import {waterMax} from './aquarium-space.js?v=90';
 import {spinalField} from './aquarium-motion.js?v=90';
 import {createResearchTrace,traceAxes,createPitchResearchTrace,createRollResearchTrace,createSteeringResearchTrace} from './aquarium-research-trace.js?v=90';
@@ -183,7 +183,11 @@ export function createResearchLayer({root,canvas,toggle,storyButton,asset,joints
   });
   const mechanicsLink=element('a','research-mechanics-link','Inspect joint mechanics');
   mechanicsLink.href='aquarium-mechanics.html';
-  story.append(element('p','','Watch the fish bend and twist from two cameras. This separate mechanics experiment develops the body response before water forces are coupled.'),mechanicsLink);
+  const waterLink=element('a','research-mechanics-link','Inspect water resistance');
+  waterLink.href='aquarium-water-study.html';
+  const animationLink=element('a','research-mechanics-link','Watch the reference turn animation');
+  animationLink.href='aquarium-reference-turn.html';
+  story.append(element('p','','Watch the fish bend and twist from two cameras, then compare the water tests with the reference animation. The water experiments expose the remaining turn and posture errors. The animation prescribes observed head and modeled centre-of-mass motion, with a fitted body curve, to provide a separate visual comparison.'),mechanicsLink,waterLink,animationLink);
   const bibliography=element('details','research-bibliography'),summary=element('summary','','Complete source index');bibliography.append(summary);
   const allSources=element('ol','research-sources'),seen=new Set();
   researchTopics.flatMap(topic=>topic.sources).forEach(source=>{
