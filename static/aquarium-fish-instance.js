@@ -2,15 +2,17 @@
  * geometry is uniformly scaled; the navigation gains remain the authored
  * adult-koi controller, not a calibrated juvenile or second-species model. */
 import {Skeleton,Vector3} from './vendor/three.webgpu.js';
-import {createSwimmer} from './aquarium-motion.js?v=90';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=90';
+import {createSwimmer} from './aquarium-motion.js?v=92';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=92';
 import {createContainment} from './aquarium-collision.js?v=90';
 import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=90';
 import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=90';
 import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=90';
 import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=90';
 import {createSupportArticulation} from './aquarium-supports.js?v=90';
-import {createManeuverFootprint} from './aquarium-footprint.js?v=90';
+import {createManeuverFootprint} from './aquarium-footprint.js?v=92';
+import {createAxialFrame} from './aquarium-axial-frame.js?v=90';
+import {createMassPlacement} from './aquarium-mass-placement.js?v=92';
 
 const mutableGeometry=name=>/^(Caudal|Pectoral|Pelvic|Dorsal|Anal)_/.test(name)||name.includes('sensory_barbel');
 
@@ -18,7 +20,7 @@ const mutableGeometry=name=>/^(Caudal|Pectoral|Pelvic|Dorsal|Anal)_/.test(name)|
  * materialFor may return shared, caller-owned materials. Materials and textures
  * are never disposed here; ownedGeometries and ownedSkeletons belong solely to
  * this instance. Immutable body/scale meshes retain their original geometry. */
-export function createKoiInstance(sourceAsset,{scale=1,initialPose={},random=Math.random,materialFor}={}){
+export function createKoiInstance(sourceAsset,{scale=1,initialPose={},random=Math.random,materialFor,turnControllerFactory,massProfile}={}){
   if(!sourceAsset?.isObject3D)throw new Error('A pristine koi GLTF scene is required');
   if(!Number.isFinite(scale)||scale<=0)throw new Error('Koi scale must be positive and finite');
   const sourceScale=sourceAsset.scale;
@@ -98,7 +100,8 @@ export function createKoiInstance(sourceAsset,{scale=1,initialPose={},random=Mat
   }
   joints.sort((a,b)=>a.name.localeCompare(b.name));
   const rest=joints.map(bone=>bone.quaternion.clone()),facialRig=createFacialRig(asset);
-  const swimmer=createSwimmer(random),fish=swimmer.fish;
+  const swimmer=createSwimmer(random,{turnControllerFactory}),fish=swimmer.fish;
+  const placement=massProfile?createMassPlacement({...createAxialFrame(asset),profile:massProfile}):null;
   const pairedControllers=Object.fromEntries(['pectoral','pelvic'].map(kind=>[kind,
     Object.fromEntries([-1,1].map(side=>[side,createFinController(side,kind==='pectoral')]))]));
   const caudalController=createCaudalController();
@@ -107,7 +110,7 @@ export function createKoiInstance(sourceAsset,{scale=1,initialPose={},random=Mat
   const rootOffset=new Vector3();
   asset.scale.multiplyScalar(scale);
   const physicalScale=asset.scale.x;
-  const maneuverFootprint=createManeuverFootprint(asset);swimmer.footprint(maneuverFootprint.bounds);
+  const maneuverFootprint=createManeuverFootprint(asset,{massProfile});swimmer.footprint(maneuverFootprint.bounds);
   const supports=createSupportArticulation(asset);
   for(const geometry of supports.ownedGeometries)ownedGeometries.add(geometry);
   function observe(sample){
@@ -116,11 +119,13 @@ export function createKoiInstance(sourceAsset,{scale=1,initialPose={},random=Mat
     for(const controller of Object.values(medianControllers))controller.sample(sample,poseKey);
   }
   function pose(sample=fish){
-    applySwimPose(asset,joints,rest,sample);
+    applySwimPose(asset,joints,rest,sample,{placement});
     // applySwimPose's reaction is measured in unscaled animal coordinates.
     // Convert that translation to this instance's physical uniform scale.
-    rootOffset.set(sample.x,sample.y,sample.z);
-    asset.position.sub(rootOffset).multiplyScalar(physicalScale).add(rootOffset);asset.updateMatrixWorld(true);
+    if(!placement){
+      rootOffset.set(sample.x,sample.y,sample.z);
+      asset.position.sub(rootOffset).multiplyScalar(physicalScale).add(rootOffset);asset.updateMatrixWorld(true);
+    }
     facialRig.pose(sample);
     supports.pose();
     return asset;

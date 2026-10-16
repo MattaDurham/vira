@@ -1,11 +1,12 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {spinalField} from './aquarium-motion.js?v=90';
+import {spinalField} from './aquarium-spine.js?v=92';
 
 const up=new Vector3(0,1,0),side=new Vector3(0,0,1),axis=new Vector3(1,0,0);
 const turn=new Quaternion(),bend=new Quaternion(),twist=new Quaternion(),center=new Vector3();
 const bodyRotation=new Quaternion(),bodyInverse=new Quaternion(),parentRotation=new Quaternion(),desired=new Quaternion();
+const placements=new WeakMap();
 
-export function applySwimPose(asset,joints,rest,fish){
+export function applySwimPose(asset,joints,rest,fish,{placement}={}){
   asset.position.set(fish.x,fish.y,fish.z);
   asset.rotation.set(0,fish.yaw,-fish.pitch,'YXZ');
   asset.rotateX(fish.bank??0);
@@ -31,6 +32,15 @@ export function applySwimPose(asset,joints,rest,fish){
     bone.quaternion.copy(parentRotation.multiply(desired));bone.updateMatrixWorld(true);
   });
   asset.updateMatrixWorld(true);
+  if(placement){
+    let cached=placements.get(asset);
+    if(cached?.placement!==placement){cached={placement,frame:placement.createFrame(),reference:new Vector3()};placements.set(asset,cached);}
+    placement.captureAsset(asset,joints,cached.frame);
+    cached.reference.set(fish.x,fish.y,fish.z);
+    placement.rootFromReference({...cached.frame,referencePosition:cached.reference,orientation:asset.quaternion,
+      scale:asset.scale.x,parentMatrix:asset.parent?.matrixWorld},asset.position);
+    asset.updateMatrixWorld(true);return;
+  }
   // Keep the same Gaussian-weighted geometric center in all three axes as
   // the articulated body folds. This is geometric centering, not a physical
   // angular-momentum or mass-reaction solver; the neutral rest arch is retained.

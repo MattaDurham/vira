@@ -3,7 +3,10 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=90';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=92';
+import {createSourceSteeringController} from './aquarium-source-steering.js?v=92';
+import {createAxialFrame} from './aquarium-axial-frame.js?v=92';
+import {createMassPlacement} from './aquarium-mass-placement.js?v=92';
 import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=90';
 import {createGentleStudy} from './aquarium-gentle-study.js?v=90';
 import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=90';
@@ -11,23 +14,24 @@ import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudal
 import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=90';
 import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=90';
 import {finRayContrast} from './aquarium-fin-detail.js?v=90';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=90';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=92';
 import {waterOptics} from './aquarium-optics.js?v=90';
 import {createContainment} from './aquarium-collision.js?v=90';
 import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=90';
 import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=90';
-import {createResearchLayer} from './aquarium-research.js?v=91';
+import {createResearchLayer} from './aquarium-research.js?v=92';
 import {createResearchShape} from './aquarium-research-shape.js?v=90';
-import {createKoiInstance} from './aquarium-fish-instance.js?v=90';
+import {createKoiInstance} from './aquarium-fish-instance.js?v=92';
 import {pigmentColorNode,pigmentFinPalette} from './aquarium-pigment.js?v=90';
 import {createSupportArticulation} from './aquarium-supports.js?v=90';
-import {createManeuverFootprint} from './aquarium-footprint.js?v=90';
+import {createManeuverFootprint} from './aquarium-footprint.js?v=92';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
 const studyRandom=createStudyRandom(requestedStudySeed===null?913:Number(requestedStudySeed));
 let navigationReplay=false,navigationPoseKey=0;
-const swimmer=createSwimmer(()=>navigationReplay?studyRandom():Math.random()),fish=swimmer.fish,clock=uniform(0);
+let swimmer,fish,turnStudy,gentleStudy,placement;
+const clock=uniform(0);
 const rayDetail=uniform(1),rayDetailPosition=new THREE.Vector3();
 const fullRayDetail=new URLSearchParams(location.search).get('ray-detail')==='full';
 const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front',research:false,community:true};
@@ -86,14 +90,17 @@ function observeFins(sample,key){
 // Fin compliance observes each completed physics step, including between
 // display frames. Held inspection poses keep their own separate history key.
 const observeLiveFins=sample=>observeFins(sample,'live');
-const turnStudy=createTurnStudy(swimmer,{random:studyRandom,
+function initializeSwimmer(turnControllerFactory){
+  swimmer=createSwimmer(()=>navigationReplay?studyRandom():Math.random(),{turnControllerFactory});fish=swimmer.fish;visualFish=fish;
+  turnStudy=createTurnStudy(swimmer,{random:studyRandom,
   onReset:sample=>{navigationPoseKey++;observeFins(sample,`navigation:${navigationPoseKey}`);},
   onTick:sample=>observeFins(sample,`navigation:${navigationPoseKey}`),
 });
-const gentleStudy=createGentleStudy(swimmer,{random:studyRandom,
+  gentleStudy=createGentleStudy(swimmer,{random:studyRandom,
   onReset:sample=>{navigationPoseKey++;observeFins(sample,`navigation:${navigationPoseKey}`);},
   onTick:sample=>observeFins(sample,`navigation:${navigationPoseKey}`),
 });
+}
 const activeNavigationStudy=()=>state.studyAxis==='gentle'?gentleStudy:turnStudy;
 const navigationHint=()=>state.studyAxis==='gentle'
   ?'A 16-second sequence of small course changes and a climb, using live swimming controls. Restart or record to replay; drag to inspect.'
@@ -383,13 +390,15 @@ function pose(){
   }
   const sample=state.study?held:fish;
   visualFish=sample;
-  applySwimPose(asset,joints,rest,sample);
+  applySwimPose(asset,joints,rest,sample,{placement});
   facialRig?.pose(sample);
   supportArticulation?.pose();
   const p=joints.at(-1).getWorldPosition(hit);
   canvas.dataset.tailPosition=[p.x,p.y,p.z].map(v=>v.toFixed(4)).join(',');
   canvas.dataset.phase=sample.phase.toFixed(4);
   canvas.dataset.age=fish.age.toFixed(2);canvas.dataset.pitch=sample.pitch.toFixed(3);
+  canvas.dataset.yaw=sample.yaw.toFixed(4);canvas.dataset.turnSourceWeight=(sample.turnSourceWeight??0).toFixed(3);
+  canvas.dataset.turnCoefficients=[sample.turnAnterior??0,sample.turnTrunk??0,sample.turnPosterior??0].map(value=>value.toFixed(4)).join(',');
   canvas.dataset.studyTick=navigationReplay?String(activeNavigationStudy().tick):'';
   canvas.dataset.studyStage=navigationReplay&&state.studyAxis==='gentle'?gentleStudy.stage:'';
   canvas.dataset.rootPosition=[sample.x,sample.y,sample.z].map(v=>v.toFixed(3)).join(',');
@@ -571,6 +580,11 @@ function record(){
 }
 
 async function start(){
+  const readJSON=async url=>{const response=await fetch(url);if(!response.ok)throw new Error(`${url}: HTTP ${response.status}`);return response.json();};
+  const [sourceTurn,massProfile]=await Promise.all([readJSON('aquarium/reference-turn.json?v=92'),readJSON('aquarium/body-mass.json?v=92')]);
+  const legacyTurn=new URLSearchParams(location.search).get('turn-controller')==='legacy';
+  const turnControllerFactory=legacyTurn?undefined:()=>createSourceSteeringController(sourceTurn);
+  initializeSwimmer(turnControllerFactory);canvas.dataset.turnController=legacyTurn?'legacy':'source-sequence';
   const forceWebGL=new URLSearchParams(location.search).get('renderer')==='webgl';
   renderer=new THREE.WebGPURenderer({canvas,antialias:true,alpha:false,powerPreference:'high-performance',forceWebGL});
   await renderer.init();
@@ -590,10 +604,11 @@ async function start(){
   }));
   habitat(stoneMaps);
   const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=90');asset=gltf.scene;scene.add(asset);
-  const maneuverFootprint=createManeuverFootprint(asset);swimmer.footprint(maneuverFootprint.bounds);
+  placement=createMassPlacement({...createAxialFrame(asset),profile:massProfile});
+  const maneuverFootprint=createManeuverFootprint(asset,{massProfile});swimmer.footprint(maneuverFootprint.bounds);
   for(const spec of companionSpecs){
     const detail=uniform(1),materials=new Map();
-    const companion=createKoiInstance(asset,{...spec,materialFor:original=>{
+    const companion=createKoiInstance(asset,{...spec,turnControllerFactory,massProfile,materialFor:original=>{
       if(!materials.has(original))materials.set(original,immerse(original,{pigment:spec.kind,detail}));
       return materials.get(original);
     }});

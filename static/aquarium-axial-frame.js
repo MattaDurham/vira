@@ -1,7 +1,7 @@
 /* Neutral rig coordinates and active shape targets only. Physical mass and
  * actual dynamic transforms belong to the articulated solver. */
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {spinalField} from './aquarium-spine.js?v=90';
+import {spinalField} from './aquarium-spine.js?v=92';
 const y=new Vector3(0,1,0),z=new Vector3(0,0,1);
 export function createAxialFrame(asset){
   asset.updateMatrixWorld(true);

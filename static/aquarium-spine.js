@@ -41,7 +41,7 @@ export function spinalField(fish,axial){
     const carrier=turnCarrierShare(alongBody(recruitmentHistory,s));
     const amplitude=(.09+drive*.10)*muscle*carrier;
     const lateral=(Math.atan(amplitude/length*(2*s*Math.sin(phase)-4.8*s*s*Math.cos(phase)))
-      +alongBody(yawHistory,s)+(fish.poseHistory!==false&&Number.isFinite(fish.turnAnterior)?regionalTurnAngle(s,[fish.turnAnterior,fish.turnTrunk,fish.turnPosterior]):-alongBody(turnHistory,s)*s*s*(3-2*s)))*lateralGain;
+      +alongBody(yawHistory,s)*(1-clamp(fish.turnSourceWeight??0,0,1))+(fish.poseHistory!==false&&Number.isFinite(fish.turnAnterior)?regionalTurnAngle(s,[fish.turnAnterior,fish.turnTrunk,fish.turnPosterior]):-alongBody(turnHistory,s)*s*s*(3-2*s)))*lateralGain;
     // Carp propulsion remains predominantly lateral. Vertical flexion follows
     // pitch manoeuvres; the small secondary wave is compliance, not a dolphin kick.
     const vertical=(-alongBody(pitchHistory,s)+.018*muscle*s*s*Math.sin(phase+.7))*verticalGain;

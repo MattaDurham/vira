@@ -6,8 +6,8 @@ export const researchTopics = [
     navLabel: 'Head-led turns',
     title: 'A course, then a turn',
     claim: 'Recorded koi single-beat turns bend to one side, then return. One filmed small carp combined a slight tail correction with a larger C bend. Bluegill anterior reorientation and regional bending overlap; small pectoral-led turns use little body bend.',
-    implementation: 'A turn loads a continuous C through three spinal regions. The front begins releasing while the rear is still loaded, so the return follows a different shape. Issued loading drives an authored angular response; recovery damps rotation. The live diagram measures the posed skin, its anterior-half axis and both caudal tips. Signed fin trim and pitched thrust carry climbs and dives.',
-    limitation: 'The angular response, angles and timing are authored, not measured adult-koi forces. Filtered bluegill axes span body regions; they do not establish rigid-skull onset or a head-only delay. Curvature can begin in the trunk while the front reorients. The small-carp sequence is one 55 mm animal. The skull-frame diagram adapts Wu’s image method; a large tail offset alone cannot distinguish C and S shapes.',
+    implementation: 'A chosen course retargets measured bluegill anterior reorientation and a fitted three-region body bend on one clock. Angle and duration scaling are authored; interruptions preserve each gesture target’s value, velocity and acceleration. Forward travel uses authored propulsion and drag, rather than the observed COM path. The live diagram measures the posed skin, its anterior-half axis and both caudal tips. Signed fin trim and pitched thrust carry climbs and dives.',
+    limitation: 'Source angles and durations are retargeted across species; they do not calibrate adult-koi forces. Filtered bluegill axes span body regions and do not establish rigid-skull onset or a head-only delay. Curvature can begin in the trunk while the front reorients. The small-carp sequence is one 55 mm animal. The skull-frame diagram adapts Wu’s image method; a large tail offset alone cannot distinguish C and S shapes.',
     sources: [
       { label: 'Tadokoro et al. 2025: head motion and gaze', url: 'https://doi.org/10.1152/jn.00565.2024' },
       { label: 'Source video S1: freely swimming carp', url: 'https://ndownloader.figshare.com/files/51456827' },
@@ -36,7 +36,7 @@ export const researchTopics = [
     navLabel: 'Muscle wave',
     title: 'Drive, bend, release, glide',
     claim: 'Koi and carp muscle activation preceded body movement in steady flow. Koi also alternate propulsive strokes with coasting. Isolated carp muscle experiments show that shortening speed changes the force produced.',
-    implementation: 'Drive travels through the articulated spine. Propulsive effort follows posterior activation and stroke rate, allowing the tail to finish its stroke before the glide. Water resistance slows the fish.',
+    implementation: 'In cruise, drive travels through the articulated spine. Authored forward propulsive effort follows posterior activation and stroke rate, allowing the tail to finish its stroke before the glide. Authored water resistance slows the fish.',
     limitation: 'This reduced-order rig does not simulate muscle tissue, measured EMG or fluid dynamics. Real flow can also bend a fish before its muscles respond. Isolated small-carp white-muscle measurements do not calibrate this model’s joint torques or routine swimming.',
     sources: [
       { label: 'Afridi et al. 2025: synchronized muscle activity and motion', url: 'https://doi.org/10.1098/rspb.2025.0474' },
@@ -52,7 +52,7 @@ export const researchTopics = [
     navLabel: 'Fins',
     title: 'Fins change jobs',
     claim: 'Koi pectorals cup and undulate during hovering and retreat. Slow bluegill turns use several strokes with similar bilateral amplitudes; faster turns change that balance. Trout pelvic corrections follow a variable sequence. Dorsal, anal and tail shapes also change with the task.',
-    implementation: 'Small course changes issue finite strokes: present the fin, load it, reorient, then retrieve. The same clearance-scaled basal commands supply an authored yaw response; retrieval only damps rotation. Tight turns fold the fins before loading the body. Pelvics respond to yaw and settling, and signed trim drives pitch and roll. Diagrams expose commands beside actual rig attitudes and moving edges.',
+    implementation: 'Between body gestures, finite strokes present, load, reorient and retrieve the fins. Their clearance-scaled basal commands supply an authored yaw response; retrieval damps rotation. During body gestures, yaw follows the retargeted source. Pelvics respond to yaw and settling. Signed fin trim drives pitch and roll throughout. Diagrams expose commands beside actual rig attitudes and moving edges.',
     limitation: 'Timing, angles, side choices and moments are authored. Koi hover data reconstruct one fin; comparative bluegill and trout studies do not calibrate bilateral koi turns. The basal motor response does not solve fin pressure, wake forces or a whole-animal momentum budget. Median-fin deformation preserves attachments and ray lengths but adds no simulated force.',
     sources: [
       { label: 'Wang et al. 2013: three-dimensional koi fin motion', url: 'https://doi.org/10.1016/S1672-6529(13)60217-6' },
@@ -150,7 +150,7 @@ export const buildChapters = [
   {
     id: 'controls',
     title: 'Connect cause and motion',
-    text: 'A chosen course loads a continuous bend through front, middle and rear regions. The front releases before the rear, making the return different from the loading path. Issued regional motion drives an authored angular response, and recovery damps it. Small corrections receive yaw response from the actual clearance-scaled fin commands, with a slow retrieval and quiet intervals. Signed trim drives pitch and roll with axial follow-through. These are authored responses, not solved pressures. Each fish has its own history and observes nearby animals. The diagrams expose commands beside the actual rig response.',
+    text: 'A chosen course retargets a filmed bluegill turn. Source anterior reorientation and fitted three-region body bend share one clock, with authored angle and duration scaling. Interruptions preserve each gesture target’s value, velocity and acceleration. Forward travel uses authored propulsion and drag; the observed COM path is not replayed. A 29-region mass proxy offsets the body as it bends while preserving the neutral navigation reference. This placement does not solve angular momentum. Between body gestures, finite fin strokes correct yaw. Signed trim drives pitch and roll throughout. Each fish keeps its own history and observes nearby animals.',
     topics: ['head', 'muscle', 'fins'],
   },
   {

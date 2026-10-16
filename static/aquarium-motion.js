@@ -1,5 +1,5 @@
-import {axialRates,turnCarrierShare} from './aquarium-spine.js?v=90';
-export {spinalField} from './aquarium-spine.js?v=90';
+import {axialRates,turnCarrierShare} from './aquarium-spine.js?v=92';
+export {spinalField} from './aquarium-spine.js?v=92';
 import {createFinYawController,trimFinAngles} from './aquarium-fin-yaw.js?v=90';
 import {finClearanceFactor,finClearanceFold} from './aquarium-fin-clearance.js?v=90';
 import {createTurnController,turnResponse} from './aquarium-turn.js?v=90';
@@ -191,11 +191,12 @@ export function createFinTaskController(){
   }};
 }
 
-export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=createFinTaskController}={}){
+export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=createFinTaskController,turnControllerFactory=createTurnController}={}){
   const fish={};let neighbors=[],forecastBounds=null;
   const ownScale=Number.isFinite(bodyScale)?clamp(bodyScale,.15,1.5):1;
   const finTasks=finTaskFactory(),finYaw=createFinYawController();
-  const bodyTurns=createTurnController();let turnAuthority=1,totalTurnYaw=0,strokeYawStart=0,strokeSerial=0;const strokeStarts=new Map();
+  const bodyTurns=turnControllerFactory(),sourceTurns=typeof bodyTurns.propose==='function';
+  let turnAuthority=1,totalTurnYaw=0,strokeYawStart=0,strokeSerial=0;const strokeStarts=new Map();
   let intent,intentTime,heading,depth,depthTime,cursor,cursorAge,attention,goal;
   let gait,gaitTime,turnTime,turnCooldown,turnSign,escapeTime,wallTime;
   let decisions=0,contacts=0;
@@ -215,7 +216,7 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
   function reset(){
     Object.assign(fish,referencePose,{bodyScale:ownScale,id,vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,pitchFin:0,pitchMoment:0,
       bank:0,bankRate:0,rollFin:0,rollMoment:0,
-      age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
+      age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,yawAcceleration:0,turnSourceWeight:0,
       yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
       bankLag1:0,bankLag2:0,bankLag3:0,
       muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
@@ -228,7 +229,8 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
     decisions=contacts=0;
   }
   reset();
-  function beginTurnBend(angle){bodyTurns.request(angle,fish.age,{urgent:intent==='escape'});}
+  const headJet=()=>({headYaw:fish.yaw,headRate:fish.yawRate,headAcceleration:fish.yawAcceleration,urgent:intent==='escape'});
+  function beginTurnBend(angle){bodyTurns.request(angle,fish.age,headJet());}
   function follow(point){
     if(!validPoint(point)){cursor=null;return;}
     // New motion attracts attention; a motionless pointer is gradually ignored.
@@ -257,6 +259,13 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
   function navigate(point){
     if(!validPoint(point))return false;
     cursor=null;attention=0;goal={x:clamp(point.x,-1.05,1.05),y:clamp(point.y,.50,1.22),z:clamp(point.z,-.55,.24)};
+    // Leaving a stop is a new travel decision. Reusing an old coast can pitch
+    // the fish toward its destination long before any posterior propulsion.
+    // Moving course updates retain their existing stroke/coast sequence.
+    if((intent==='hover'||gait==='coast'&&fish.speed<.025)
+      &&Math.hypot(goal.x-fish.x,goal.y-fish.y,goal.z-fish.z)>.18){
+      gait='stroke';gaitTime=duration(.8,1.5);
+    }
     intent='navigate';intentTime=45;escapeTime=0;decisions++;return true;
   }
   // Snapshot-only local awareness. This changes the next finite intent, never
@@ -269,17 +278,20 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
       yaw:Number.isFinite(n.yaw)?n.yaw:undefined})):[];
   }
   function footprint(callback){forecastBounds=typeof callback==='function'?callback:null;}
-  function forecastPose(time,rate){
-    const predicted=bodyTurns.peek(fish.age+time),pose={...fish,
+  function forecastPose(time,rate,authority=turnAuthority,sourcePlan=false){
+    const predicted=sourceTurns?bodyTurns.peek(time,{authority}):bodyTurns.peek(fish.age+time);
+    const programmed=sourceTurns&&(sourcePlan||bodyTurns.sample().active||predicted.active);
+    const pose={...fish,
       x:fish.x+fish.vx*time,y:fish.y+fish.vy*time,z:fish.z+fish.vz*time,
-      yaw:wrap(fish.yaw+rate*time),pitch:clamp(fish.pitch+fish.pitchRate*time,-.45,.45),
+      yaw:wrap(fish.yaw+(programmed?predicted.headDelta:rate*time)),pitch:clamp(fish.pitch+fish.pitchRate*time,-.45,.45),
       bank:clamp((fish.bank??0)+(fish.bankRate??0)*time,-.13,.13),
       phase:fish.phase+TAU*(.70+fish.drive*2.4)*fish.stroke*time,
       turnAnterior:predicted.b[0],turnTrunk:predicted.b[1],turnPosterior:predicted.b[2],
       turnBend:predicted.b[0],turnBend1:predicted.b[0],turnBend2:predicted.b[1],turnBend3:predicted.b[2],
-      turnRecruitment:predicted.activity[0],turnRecruitment1:predicted.activity[0],turnRecruitment2:predicted.activity[1],turnRecruitment3:predicted.activity[2]};
+      turnRecruitment:predicted.activity[0],turnRecruitment1:predicted.activity[0],turnRecruitment2:predicted.activity[1],turnRecruitment3:predicted.activity[2],
+      turnSourceWeight:predicted.sourceReplacementWeight??0};
     const pieces=Math.ceil(time*120),dt=time/pieces;
-    for(const [prefix,angularRate] of [['yawLag',rate],['pitchLag',fish.pitchRate],['bankLag',fish.bankRate??0]]){
+    for(const [prefix,angularRate] of [['yawLag',programmed?0:rate],['pitchLag',fish.pitchRate],['bankLag',fish.bankRate??0]]){
       for(let i=0;i<pieces;i++){
         let previous=0;
         axialRates.forEach((response,j)=>{const key=prefix+(j+1);pose[key]=approach(pose[key]-angularRate*dt,previous,response,dt);previous=pose[key];});
@@ -328,7 +340,9 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
       const standOff=goal?.18:.38;
       arrive=range<standOff;
       if(!arrive){
-        wantedYaw=Math.atan2(dz,-dx);
+        // An almost vertical destination has no meaningful azimuth. Retain
+        // the actual heading rather than turning toward signed zero or drift.
+        wantedYaw=horizontal>.025?Math.atan2(dz,-dx):fish.yaw;
         wantedPitch=clamp(Math.atan2(dy,Math.max(.35,horizontal)),-.42,.42);
         desiredSpeed*=clamp((range-standOff)/.55,.12,1);
       }else {wantedYaw=fish.yaw;desiredSpeed=0;}
@@ -399,7 +413,7 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
       }
     }
     const yawError=wrap(wantedYaw-fish.yaw),pitchError=wantedPitch-fish.pitch;
-    bodyTurns.request(fish.turnGestureActive&&Math.abs(yawError)>.16&&Math.sign(yawError)!==Math.sign(fish.turnHeadingBudget)?yawError:0,fish.age,{urgent:intent==='escape'});
+    bodyTurns.request(fish.turnGestureActive&&Math.abs(yawError)>.16&&Math.sign(yawError)!==Math.sign(fish.turnHeadingBudget)?yawError:0,fish.age,headJet());
     if(Math.abs(yawError)>.16&&turnCooldown===0&&bodyTurns.ready(fish.age)&&!arrive){
       turnTime=intent==='escape'?.9:1.25;turnSign=Math.sign(yawError);turnCooldown=.16;
       beginTurnBend(yawError,turnTime);
@@ -411,16 +425,17 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
       else {gait='stroke';gaitTime=desiredSpeed>.1?duration(.8,1.5):duration(.35,.65);}
     }
     const active=(intent!=='hover'||curious)&&!arrive&&(gait==='stroke'||escapeTime>0);
-    const gesture=bodyTurns.sample(fish.age);
+    let gesture=bodyTurns.sample(fish.age);
     if(gesture.serial!==strokeSerial){strokeSerial=gesture.serial;strokeYawStart=totalTurnYaw;strokeStarts.set(strokeSerial,strokeYawStart);
       for(const key of strokeStarts.keys())if(key!==gesture.serial&&key!==gesture.outgoingSerial)strokeStarts.delete(key);}
     const headingProgress=totalTurnYaw-strokeYawStart;
     const outgoingHeadingProgress=totalTurnYaw-(strokeStarts.get(gesture.outgoingSerial)??totalTurnYaw);
-    Object.assign(fish,{turnAnterior:gesture.b[0],turnTrunk:gesture.b[1],turnPosterior:gesture.b[2],
+    const applyGesture=()=>Object.assign(fish,{turnAnterior:gesture.b[0],turnTrunk:gesture.b[1],turnPosterior:gesture.b[2],
       turnAnteriorVelocity:gesture.v[0],turnTrunkVelocity:gesture.v[1],turnPosteriorVelocity:gesture.v[2],
       turnGestureSerial:gesture.serial,turnGestureAge:gesture.age,turnGestureActive:gesture.active,turnFinClearance:gesture.finClearance,turnPreparing:gesture.preparing,turnPower:gesture.power,turnHeadingBudget:gesture.budget,turnIntensity:gesture.intensity,turnProgress:headingProgress,
       turnRecruitment:gesture.activity[0],turnRecruitment1:gesture.activity[0],turnRecruitment2:gesture.activity[1],turnRecruitment3:gesture.activity[2],
-      turnBend:gesture.b[0],turnBend1:gesture.b[0],turnBend2:gesture.b[1],turnBend3:gesture.b[2]});
+      turnBend:gesture.b[0],turnBend1:gesture.b[0],turnBend2:gesture.b[1],turnBend3:gesture.b[2],turnSourceWeight:gesture.sourceReplacementWeight??0});
+    applyGesture();
     const turning=gesture.active,finAuthority=intent==='hover'||arrive?.18:.10;
     const finRate=clamp(yawError*.55,-finAuthority,finAuthority);
     const occupiedDepth=Math.abs(fish.z-tankCenterZ-.065*Math.sin(fish.yaw))+ez;
@@ -434,13 +449,14 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
       ||Math.abs(fish.z-tankCenterZ)+Math.abs(fish.vz)*.30+radius>tankDepth/2-.05
       ||fish.y-Math.abs(fish.vy)*.30-vertical<waterMin[1]+.05||fish.y+Math.abs(fish.vy)*.30+vertical>waterMax[1]-.05);
     const currentClearance=needsFootprint?clearance(forecastBounds(fish)):-Infinity;
-    const fits=rate=>{
+    const programmed=sourceTurns&&(gesture.active||bodyTurns.peek(.30,{authority:1}).active);
+    const fits=(rate,authority=turnAuthority)=>{
       if(needsFootprint){
         // The callback derives bounds from this asset's actual material/rig.
         // Evaluate the issued future C field and causal lag at intermediate
         // times, rather than testing only a rotated straight-body ellipsoid.
         for(const time of [.10,.20,.30]){
-          const next=clearance(forecastBounds(forecastPose(time,rate)));
+          const next=clearance(forecastBounds(forecastPose(time,rate,authority,programmed)));
           if(!Number.isFinite(next)||next<.025&&next<currentClearance-1e-6)return false;
         }
         return true;
@@ -450,19 +466,30 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
       const projected=Math.abs(fish.z+fish.vz*.3-tankCenterZ-.065*Math.sin(yaw))+extent;
       return projected<tankDepth/2-.045||projected<occupiedDepth;
     };
-    Object.assign(fish,finTasks.sample({age:fish.age,turn:gesture.preparing?0:clamp(finRate+(gesture.active?gesture.budget*.35:0),-1,1),yawError,
-      steeringMode:gesture.active?'body':'trim',yawRate:fish.yawRate,stopping:fish.brake*clamp((Math.abs(fish.forwardSpeed)-.025)/.075,0,1),
+    const bodyTask=gesture.bodyActive??gesture.active;
+    Object.assign(fish,finTasks.sample({age:fish.age,turn:gesture.preparing?0:clamp(finRate+(bodyTask?gesture.budget*.35:0),-1,1),yawError,
+      steeringMode:bodyTask?'body':'trim',yawRate:fish.yawRate,stopping:fish.brake*clamp((Math.abs(fish.forwardSpeed)-.025)/.075,0,1),
       mode:intent==='hover'&&!arrive?'hover':'swim'}));
     const finReaction=finYaw.sample(fish.age,finActuation(fish,1,true),finActuation(fish,-1,true));
     const finMoment=finReaction.moment,finDamping=finReaction.damping;
     fish.finYawMoment=finMoment;fish.finYawDamping=finDamping;
-    const predicted=turnResponse(gesture,fish.yawRate,.30,{finMoment,finDamping,headingProgress,outgoingHeadingProgress}).yawRate;
+    const prediction=programmed?bodyTurns.propose(.30,{authority:1}):null;
+    const predicted=prediction?prediction.stepMeanHeadRate:turnResponse(gesture,fish.yawRate,.30,{finMoment,finDamping,headingProgress,outgoingHeadingProgress}).yawRate;
     let allowed=1;
-    if(!fits(predicted)){allowed=0;for(const part of [.75,.5,.25])if(fits(fish.yawRate+(predicted-fish.yawRate)*part)){allowed=part;break;}}
-    const blocked=allowed===0;turnAuthority=approach(turnAuthority,allowed,12,dt);
-    const response=turnResponse(gesture,fish.yawRate,dt,{finMoment,finDamping,allowed:turnAuthority,headingProgress,outgoingHeadingProgress});
+    if(!fits(predicted,1)){allowed=0;for(const part of [.75,.5,.25]){
+      const rate=programmed?bodyTurns.propose(.30,{authority:part}).stepMeanHeadRate:fish.yawRate+(predicted-fish.yawRate)*part;
+      if(fits(rate,part)){allowed=part;break;}
+    }}
+    const blocked=allowed===0;turnAuthority=programmed?allowed:approach(turnAuthority,allowed,12,dt);
+    const sourceProposal=sourceTurns?bodyTurns.propose(dt,{authority:turnAuthority}):null;
+    const proposal=sourceProposal&&(gesture.active||sourceProposal.gesture.active)?sourceProposal:null;
+    const previousYawRate=fish.yawRate;
+    const response=proposal?{yawRate:proposal.gesture.headRate,moment:0,recoveryMoment:0}:
+      turnResponse(gesture,fish.yawRate,dt,{finMoment,finDamping,allowed:turnAuthority,headingProgress,outgoingHeadingProgress});
+    if(sourceProposal){gesture=bodyTurns.commit(sourceProposal);applyGesture();}
     fish.turnMoment=response.moment;fish.turnRecoveryMoment=response.recoveryMoment;
     fish.yawRate=response.yawRate;
+    fish.yawAcceleration=proposal?gesture.headAcceleration:(fish.yawRate-previousYawRate)/dt;
     // A depth decision first changes the paired fins' signed basal incidence.
     // Their shared neutral-relative control moment then accelerates pitch;
     // head rotation is the response, not the command used to decorate the fins.
@@ -472,11 +499,11 @@ export function createSwimmer(random=Math.random,{bodyScale=1,id,finTaskFactory=
     fish.pitchFin=approach(fish.pitchFin,pitchFinTarget,10,dt);
     fish.pitchMoment=finPitchMoment(fish);
     fish.pitchRate=clamp(fish.pitchRate+(fish.pitchMoment-3*fish.pitchRate)*dt,-.33,.33);
-    const yawDelta=fish.yawRate*dt,pitchDelta=clamp(fish.pitch+fish.pitchRate*dt,-.45,.45)-fish.pitch;
+    const yawDelta=proposal?proposal.headDelta:fish.yawRate*dt,pitchDelta=clamp(fish.pitch+fish.pitchRate*dt,-.45,.45)-fish.pitch;
     fish.yaw=wrap(fish.yaw+yawDelta);fish.pitch+=pitchDelta;totalTurnYaw+=yawDelta;
     // The stiff anterior frame leads; successive axial regions follow it.
     // Relative offsets survive a heading wrap without a two-pi tail impulse.
-    for(const [prefix,delta] of [['yawLag',yawDelta],['pitchLag',pitchDelta]]){
+    for(const [prefix,delta] of [['yawLag',proposal?0:yawDelta],['pitchLag',pitchDelta]]){
       let previous=0;
       axialRates.forEach((rate,i)=>{
         const name=prefix+(i+1);

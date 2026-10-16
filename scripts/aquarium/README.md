@@ -610,7 +610,27 @@ bluegill turns provide comparative context, not adult-koi calibration.
 
 ## Tight turns and independent animals
 
-`aquarium-turn.js` issues finite, twice-continuously differentiable turn
+The live benchmark's three animals now use `aquarium-source-steering.js`.
+Measured anterior reorientation and fitted regional curvature from bluegill
+trial BG63_14_8 share one clock. Requested angle and duration are authored
+retargeting choices. Reversals join the current heading/body values, velocities
+and accelerations; clearance slows that same clock. Pure forecasts and one
+committed proposal per tick keep the rendered bend and exact head increment
+together. The source already contains relative posterior lag, so it replaces
+the old yaw-history contribution during the gesture. Forward travel retains
+the authored propulsion and drag; the observed COM path is not used.
+`?turn-controller=legacy` retains the previous live controller for comparison.
+
+The live rig and its private forecast also share `aquarium-mass-placement.js`.
+Fixed 29-region neutral-envelope masses and actual bone orientations determine
+the posed centroid, including rotated material offsets. Placement preserves
+the existing neutral navigation reference and applies uniform scale once.
+This removes shape-induced mass drift; it does not solve angular momentum or
+water reaction. The opt-in forecast requires an identity parent because
+navigation and water bounds use that frame. Actual-asset joins check complete
+reversals, clearance, uploaded skin, cadence and the independent centroid law.
+
+The retained legacy `aquarium-turn.js` issues finite, twice-continuously differentiable turn
 gestures. Three regional curvature coefficients integrate into one continuous
 spinal tangent field. Normal and urgent turns allow substantially deeper C
 shapes than small steering corrections. The anterior region begins releasing
@@ -626,7 +646,8 @@ The same issued regional loading velocities drive a bounded, authored angular
 response. Recovery damps actual rotation. Heading budgets select gestures and
 passive stopping; there is no large independent desired-yaw-rate servo. This
 is a kinematic fluid-response closure, not CFD, measured hydrodynamic torque,
-or a body-and-water momentum conservation solver. Axial centering removes the
+or a body-and-water momentum conservation solver. Without an explicit mass
+placement, the legacy rig API's axial centering removes the
 geometric drift of the joint field in all three directions, using fixed
 Gaussian weights. Those weights are a geometric convention, not measured mass.
 

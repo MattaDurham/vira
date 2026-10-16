@@ -1,5 +1,7 @@
 import {Box3,Matrix4,Vector3} from './vendor/three.webgpu.js';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=90';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=92';
+import {createAxialFrame} from './aquarium-axial-frame.js?v=90';
+import {createMassPlacement} from './aquarium-mass-placement.js?v=92';
 
 const dynamicFin=name=>/^(Pectoral|Pelvic|Caudal|Dorsal|Anal)_(membrane|branched_rays)/.test(name);
 const corners=box=>Array.from({length:8},(_,i)=>new Vector3(i&1?box.max.x:box.min.x,i&2?box.max.y:box.min.y,i&4?box.max.z:box.min.z));
@@ -21,7 +23,9 @@ function tubeComponents(mesh){
 /** Cheap, read-only forecast of a COMPLETE proposed fish pose.
  * Capture a pristine instance before its first deformation. bounds(pose) runs
  * the exact rig on a private bone-only hierarchy, including facial articulation
- * and the scaled three-axis geometric-centering translation. It never changes
+ * and the scaled three-axis placement translation. The optional mass profile
+ * uses the same fixed material centroid as the live rig and requires an
+ * identity parent, matching navigation's water coordinates. It never changes
  * the live skeleton, geometry, controllers or simulation time.
  *
  * Ordinary skinning is a convex combination: transformed per-influence boxes
@@ -32,7 +36,14 @@ function tubeComponents(mesh){
  * displacement (<=3.02mm), ray tube transport and Float32 palette rounding.
  * These bounds are conservative navigation forecasts; actual deformed-geometry
  * containment remains the final guard. Result vectors are reused per call. */
-export function createManeuverFootprint(asset){
+export function createManeuverFootprint(asset,{massProfile}={}){
+  const checkParent=()=>{
+    if(!massProfile||!asset.parent)return;
+    asset.parent.updateWorldMatrix(true,false);
+    if(asset.parent.matrixWorld.elements.some((value,i)=>Math.abs(value-(i%5===0?1:0))>1e-10))
+      throw new Error('Mass-aware maneuver footprint requires an identity parent');
+  };
+  checkParent();
   const scale=asset.scale.x;
   if(!(scale>0)||Math.abs(scale-asset.scale.y)>1e-10||Math.abs(scale-asset.scale.z)>1e-10)throw new Error('Maneuver footprint needs positive uniform source scale');
   const map=new Map();
@@ -47,6 +58,7 @@ export function createManeuverFootprint(asset){
   shadow.traverse(node=>{if(node.isBone&&node.name.startsWith('spine_'))joints.push(node);});joints.sort((a,b)=>a.name.localeCompare(b.name));
   if(joints.length!==34)throw new Error('Maneuver footprint needs the complete exported spine');
   const rest=joints.map(bone=>bone.quaternion.clone()),face=createFacialRig(shadow),boxes=new Map(),spheres=[];
+  const placement=massProfile?createMassPlacement({...createAxialFrame(shadow),profile:massProfile}):null;
   const bind=new Vector3(),point=new Vector3(),post=new Matrix4();
   asset.updateMatrixWorld(true);
   const meshes=[];asset.traverse(mesh=>{if(mesh.isSkinnedMesh)meshes.push(mesh);});
@@ -111,8 +123,10 @@ export function createManeuverFootprint(asset){
   }
   const primitives=[...boxes].map(([bone,box])=>({bone,corners:corners(box)})),bounds=new Box3(),origin=new Vector3();
   function forecast(pose){
-    shadow.scale.setScalar(scale);applySwimPose(shadow,joints,rest,pose);
-    origin.set(pose.x,pose.y,pose.z);shadow.position.sub(origin).multiplyScalar(scale).add(origin);shadow.updateMatrixWorld(true);face.pose(pose);
+    checkParent();
+    shadow.scale.setScalar(scale);applySwimPose(shadow,joints,rest,pose,{placement});
+    if(!placement){origin.set(pose.x,pose.y,pose.z);shadow.position.sub(origin).multiplyScalar(scale).add(origin);shadow.updateMatrixWorld(true);}
+    face.pose(pose);
     bounds.makeEmpty();
     for(const primitive of primitives)for(const corner of primitive.corners)bounds.expandByPoint(point.copy(corner).applyMatrix4(primitive.bone.matrixWorld));
     for(const sphere of spheres){
