@@ -3,19 +3,19 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=79';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=79';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=79';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=79';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=79';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=79';
-import {finRayContrast} from './aquarium-fin-detail.js?v=79';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=79';
-import {waterOptics} from './aquarium-optics.js?v=79';
-import {createContainment} from './aquarium-collision.js?v=79';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=79';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=79';
-import {createResearchLayer} from './aquarium-research.js?v=79';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=80';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=80';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=80';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=80';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=80';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=80';
+import {finRayContrast} from './aquarium-fin-detail.js?v=80';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=80';
+import {waterOptics} from './aquarium-optics.js?v=80';
+import {createContainment} from './aquarium-collision.js?v=80';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=80';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=80';
+import {createResearchLayer} from './aquarium-research.js?v=80';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -120,12 +120,16 @@ function setCamera(){
     camera.lookAt(focus);camera.fov=10;camera.updateProjectionMatrix();camera.updateMatrixWorld();return;
   }
   camera.fov=canvas.clientWidth<650?64:THREE.MathUtils.radToDeg(2*Math.atan(18/(47*camera.aspect)));
+  // The elevated front view needs vertical room on ultrawide screens. This
+  // authored floor keeps the actual fish in frame without widening mobile.
+  if(state.cameraAngle==='oblique')camera.fov=Math.max(26,camera.fov);
   camera.updateProjectionMatrix();
-  if((state.cameraAngle==='fish'||state.cameraAngle==='tail')&&asset){
+  if(['fish','tail','oblique'].includes(state.cameraAngle)&&asset){
     const rear=state.cameraAngle==='tail';
     const focus=asset.localToWorld(new THREE.Vector3(rear?.70:-.15,.02,0));
     const orientation=asset.getWorldQuaternion(new THREE.Quaternion());
-    camera.position.copy(focus).add(new THREE.Vector3(distance*(rear?.38:-.7),.10+elevation,orbit*distance).applyQuaternion(orientation));
+    const height=state.cameraAngle==='oblique'?distance*.48:.10;
+    camera.position.copy(focus).add(new THREE.Vector3(distance*(rear?.38:-.7),height+elevation,orbit*distance).applyQuaternion(orientation));
     camera.lookAt(focus);camera.updateMatrixWorld();return;
   }
   const bearing=orbit+(state.cameraAngle==='quarter'?-.55:0);
@@ -334,8 +338,11 @@ function pose(){
     held.twistGain=axis==='lateral'||axis==='vertical'?0:1;
     if(axis==='vertical'||axis==='combined')held.pitchRate=.38*Math.sin(studyPhase*.32);
     if(axis==='twist'||axis==='combined')held.torsionDrive=.28*Math.sin(studyPhase*.27);
-    if(axis==='fins')Object.assign(held,{lateralGain:0,verticalGain:0,twistGain:0,stroke:0,
+    if(axis==='fins'||axis==='steering')Object.assign(held,{lateralGain:0,verticalGain:0,twistGain:0,stroke:0,
       speed:.10,forwardSpeed:.10,brake:.75,finPhase:fish.age*Math.PI*2*(.55+.35*.75),muscle1:0,muscle2:0,muscle3:0});
+    if(axis==='steering')Object.assign(held,{speed:.14,forwardSpeed:.14,brake:.4,
+      yawRate:.12*Math.sin(fish.age*.8),pitchFin:.04*Math.sin(fish.age*.6),
+      finPhase:fish.age*Math.PI*2*.72});
   }
   const sample=state.study?held:fish;
   visualFish=sample;
@@ -415,7 +422,7 @@ function draw(now){
     for(const fin of medianFins)deformMedianFin(fin,medianControllers[fin.kind].sample(visualFish,finPoseKey));
   }
   if(state.research)researchFocus.lerp(asset.getWorldPosition(focusPoint),1-Math.exp(-4*Math.min(elapsed,.25)));
-  if(state.closeup||state.cameraAngle==='fish'||state.cameraAngle==='tail'||state.research)setCamera();
+  if(state.closeup||['fish','tail','oblique'].includes(state.cameraAngle)||state.research)setCamera();
   // The combined ray sets include 0.26 mm branches. Hand their contrast to
   // the filtered membrane map when unresolved; retain topology and full
   // inspection materials. This is authored detail LOD, not exact coverage AA.
@@ -532,7 +539,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=79');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=80');asset=gltf.scene;scene.add(asset);
   const converted=new Map();
   asset.traverse(object=>{
     if(object.isBone&&object.name.startsWith('spine_'))joints.push(object);
@@ -583,7 +590,7 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=79').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch('aquarium/manifest.json?v=80').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
@@ -614,7 +621,7 @@ async function start(){
     if(turnReplay){state.cameraAngle='quarter';$('camera-angle').value='quarter';orbit=elevation=0;distance=4.1;restartTurnStudy();return;}
     state.study=state.studyAxis!=='swim';
     if(!state.study){swimmer.reset();Object.assign(fish,{x:.65,y:.58,z:.12,yaw:0});navigationLeg=-1;}
-    $('hint').textContent=state.studyAxis==='fins'?'Held fin-control study: inspect cupping, feathered recovery and independent sides. Timing is authored for inspection.':state.study?'Held orientation: vertical flexion and twist are amplified for inspection. Change camera angle to inspect in 3D.':'Ascent and descent come from nose-up and nose-down propulsion through the water.';
+    $('hint').textContent=state.studyAxis==='steering'?'Held fin-correction study: small steering reversals and changing pitch trim. The body stays fixed for inspection; inputs and timing are authored.':state.studyAxis==='fins'?'Held fin-control study: inspect cupping, feathered recovery and independent sides. Timing is authored for inspection.':state.study?'Held orientation: vertical flexion and twist are amplified for inspection. Change camera angle to inspect in 3D.':'Ascent and descent come from nose-up and nose-down propulsion through the water.';
     $('study').setAttribute('aria-pressed',String(state.study));pose();setPause(false);
   });
   $('camera-angle').addEventListener('change',()=>{state.cameraAngle=$('camera-angle').value;state.closeup=false;$('closeup').setAttribute('aria-pressed','false');setCamera();});

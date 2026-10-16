@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vira - Aquarium study</title>
-  <link rel="stylesheet" href="aquarium-benchmark.css?v=79">
+  <link rel="stylesheet" href="aquarium-benchmark.css?v=80">
 </head>
 <body>
   <main id="tank" aria-label="Interactive aquarium benchmark">
     <canvas id="aquarium" tabindex="0" aria-label="Aquarium. Move to draw the koi closer, click to tap the glass, drag or use arrow keys to look around."></canvas>
-    <img id="reference" src="aquarium/reference.webp?v=79" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
+    <img id="reference" src="aquarium/reference.webp?v=80" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
     <div class="loading" id="loading" role="status">Preparing the aquarium</div>
     <header>
       <div class="wordmark">VIRA <span>/ AQUARIUM STUDY</span></div>
@@ -31,9 +31,9 @@
         <button id="wireframe" aria-pressed="false">Wireframe</button>
         <button id="study" aria-pressed="false">Study body motion</button>
         <label for="study-axis">Study axis</label>
-        <select id="study-axis"><option value="combined">Combined motion</option><option value="lateral">Side to side</option><option value="vertical">Up and down</option><option value="twist">Axial twist</option><option value="fins">Paired fin control</option><option value="swim">Swimming ascent / descent</option><option value="turn">Swimming turn</option></select>
+        <select id="study-axis"><option value="combined">Combined motion</option><option value="lateral">Side to side</option><option value="vertical">Up and down</option><option value="twist">Axial twist</option><option value="fins">Paired fin control</option><option value="steering">Fine fin corrections</option><option value="swim">Swimming ascent / descent</option><option value="turn">Swimming turn</option></select>
         <label for="camera-angle">Camera</label>
-        <select id="camera-angle"><option value="front">Front</option><option value="quarter">Three-quarter</option><option value="top">Above the water</option><option value="fish">Head-on study</option><option value="tail">Tail-on study</option></select>
+        <select id="camera-angle"><option value="front">Front</option><option value="quarter">Three-quarter</option><option value="top">Above the water</option><option value="fish">Head-on study</option><option value="oblique">Oblique front</option><option value="tail">Tail-on study</option></select>
         <button id="closeup" aria-pressed="false">Face close-up</button>
         <label for="record-length">Recording length</label>
         <select id="record-length"><option value="8">8 seconds</option><option value="30" selected>30 seconds</option></select>
@@ -49,6 +49,6 @@
   <script>
     if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
   </script>
-  <script type="module" src="aquarium-benchmark.js?v=79"></script>
+  <script type="module" src="aquarium-benchmark.js?v=80"></script>
 </body>
 </html>

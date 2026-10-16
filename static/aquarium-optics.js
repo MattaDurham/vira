@@ -1,8 +1,8 @@
 /* Single-scattering water, integrated along the actual camera ray to scene
  * depth. The participating medium shares the aquarium's metre coordinates. */
 import {PostProcessing} from './vendor/three.webgpu.js';
-import {waterAbsorption,waterScattering} from './aquarium-water.js?v=79';
-import {waterMin,waterMax} from './aquarium-space.js?v=79';
+import {waterAbsorption,waterScattering} from './aquarium-water.js?v=80';
+import {waterMin,waterMax} from './aquarium-space.js?v=80';
 import {Fn,Loop,pass,screenUV,uniform,
   getViewPosition,vec3,vec4,float,min,max,exp,pow,select} from './vendor/three.tsl.js';
 

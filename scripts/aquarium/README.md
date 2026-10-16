@@ -408,7 +408,20 @@ Paired fins change from broad sheets to narrow edge presentations while the
 body stays comparatively quiet. This qualitative view does not resolve fluid
 forces or calibrate the roll controller.
 
-Paired fins paddle independently at low speed, open for braking and trail during
+[Drucker and Lauder (2001)](https://doi.org/10.1242/jeb.204.3.431) measure
+distinct pectoral stroke timing and wake-force directions during bluegill
+turns: the stimulus-near fin directs momentum laterally to rotate away, while
+the other directs it posteriorly to translate. In
+[Standen's trout study (2008)](https://doi.org/10.1242/jeb.018572), spontaneous
+foraging turns at 0.21-0.84 body lengths per second have no regular pelvic fin
+cycle. Heading change precedes inside-fin abduction; outside-fin abduction
+follows as heading change reduces, sometimes followed by another inside-fin
+correction. The proposed trimming forces are inferred from kinematics, not
+measured in that study. These species and conditions inform separate steering
+and settling actions, not adult-koi gains, continuous direction-reversal timing
+or quiet-glide relaxation constants.
+
+Paired fins use separate side phases at low speed, open for braking and trail during
 a propulsive burst. Their phase is independent of the tail; merged ray geometry
 uses each membrane's basal pivot and the corresponding side's paddle phase.
 A shared bind-space field curves each membrane and its embedded rays together.
@@ -420,14 +433,32 @@ into an invented earlier carrier phase. Pauses preserve the response, and a
 reset discards future command history. Frozen fixtures retain an explicitly
 stateless authored-cycle function. Smooth ray normals are reconciled only across
 the original smooth UV seams after deformation; intentional creases, skin
-influences and topology stay separate. These bounded deformations approximate the modes
+influences and topology stay separate.
+The unsigned fin-demand map uses a compact C2 transition through neutral, with
+an authored width of 0.04 in normalized demand, or radians per second for the
+yaw-rate contribution to phase speed. `finPhaseRate` is shared by live phase
+integration and stateless delayed-phase evaluation. Signed pitch and roll
+incidence retain their existing moment coupling. The C2 claim applies to this
+demand map; existing speed clamps and other motion branches retain their own
+regularity.
+The held `Fine fin corrections` study varies small steering and signed pitch
+trim while the body stays fixed. Its carrier is an authored fixed clock;
+the `Oblique front` camera exposes both fin surfaces for inspection. The
+ordinary swimming studies retain the live variable clock and moving body.
+These bounded deformations approximate the modes
 described in [Wang et al.'s koi study](https://doi.org/10.1016/S1672-6529(13)60217-6)
 and [active ray-curvature mechanics](https://doi.org/10.1098/rsif.2006.0181);
 they do not solve the two sliding ray halves or recover measured tissue forces.
 Comparisons include the Lauder Laboratory's original
 [front-view bluegill footage](https://www.youtube.com/watch?v=36Of7uj9naA),
-whose labriform swimming differs from carp, and
-[trout fin-control experiments](https://doi.org/10.1242/jeb.246275), which
+reviewed at quarter speed at media times 8.528094, 11.248222, 15.241736 and
+15.550365 seconds. The body heading stays comparatively steady while one fin
+presents a broad fan and the other is nearly edge-on. The clip is embedded on
+the [author's source page](https://sites.harvard.edu/glauder/research-videos/bluegill-pectoral-fin-locomotion/);
+its task, swimming speed and full three-dimensional kinematics were not
+established, and no quantitative timing was derived from this viewing.
+Bluegill labriform swimming also differs from carp. The
+[trout fin-control experiments](https://doi.org/10.1242/jeb.246275)
 distinguish actively held braking surfaces from passive motion in a wake.
 The laboratory's [prey-capture and braking clip](https://www.youtube.com/watch?v=yauU364_Gz8)
 was also inspected at quarter speed: after capture the head translates little

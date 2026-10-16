@@ -1,6 +1,6 @@
 /* Paired-fin tissue and its embedded rays share this bind-space deformation.
  * It preserves the authored attachment and skeleton; it does not add thrust. */
-import {finActuation} from './aquarium-motion.js?v=79';
+import {finActuation,finPhaseRate} from './aquarium-motion.js?v=80';
 
 const TAU=Math.PI*2,tableSize=33,maxDelay=.24;
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
@@ -30,7 +30,7 @@ export function createFinFrame(base,uv){
 function finMotion(fish,side,pectoral,samplePaddle,output){
   const age=fish.age??0,speed=Math.abs(fish.forwardSpeed??fish.speed??0);
   const phase=fish.finPhase??age*TAU*.65;
-  const phaseRate=TAU*(fish.finPhase===undefined?.65:.55+.35*(fish.brake??0)+.18*Math.abs(fish.yawRate??0));
+  const phaseRate=fish.finPhase===undefined?TAU*.65:finPhaseRate(fish);
   const base=finActuation(fish,side,pectoral),motion=output??{samples:new Float64Array(tableSize*2)};
   const {samples}=motion,delayed=samplePaddle?null:{...fish};
   for(let i=0;i<tableSize;i++){

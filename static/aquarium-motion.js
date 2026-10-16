@@ -1,12 +1,26 @@
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=79';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=80';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+// The .04 blend widths, in normalized demand and yaw-rate radians/second,
+// are authored. Compact C2 support preserves loaded fin controls and keeps
+// zero demand quiet without introducing a second phase clock.
+const positiveFinDemand=value=>{
+  if(value<=0)return 0;
+  if(value>=.04)return value;
+  const t=value/.04;
+  return .04*t*t*t*(6+t*(-8+3*t));
+};
+const finDemandMagnitude=value=>positiveFinDemand(Math.abs(value));
 const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a));
 export const referencePose=Object.freeze({x:.30,y:.77,z:.14,yaw:-.12,pitch:0,phase:0});
 const rootBounds=[['x','vx',waterMin[0]+.84,waterMax[0]-.84],
   ['y','vy',waterMin[1]+.45,waterMax[1]-.52],['z','vz',waterMin[2]+.43,waterMax[2]-.38]];
+
+export function finPhaseRate(fish){
+  return TAU*(.55+.35*(fish.brake??0)+.18*finDemandMagnitude(fish.yawRate??0));
+}
 
 export function waterFlow(point,time){
   // A weak, divergence-free circulation. Its normal velocity is zero at the
@@ -258,7 +272,7 @@ export function createSwimmer(random=Math.random){
       fish[name]=approach(fish[name],activation,rate,dt);activation=fish[name];
     });
     fish.phase+=TAU*(.70+fish.drive*2.4)*fish.stroke*dt;
-    fish.finPhase+=TAU*(.55+.35*fish.brake+.18*Math.abs(fish.yawRate))*dt;
+    fish.finPhase+=finPhaseRate(fish)*dt;
     // A finite loading stroke returns toward straight before the next bout.
     // Regional response carries both loading and release toward the peduncle;
     // it does not reset or borrow the independent propulsive carrier phase.
@@ -351,7 +365,7 @@ export function finActuation(fish,side,pectoral=true){
   // A stopped fish still has its brake flag set. Deploy against actual flow;
   // that flag alone must not produce perpetual paddling during a quiet hover.
   const stopping=brake*clamp((speed-.025)/.075,0,1);
-  const control=clamp(.65*stopping+.75*Math.abs(turn)+.65*Math.abs(trim),0,1);
+  const control=clamp(.65*stopping+.75*finDemandMagnitude(turn)+.65*finDemandMagnitude(trim),0,1);
   // Occasional balance corrections have long quiet intervals and independently
   // timed sides. Their restrained timing is authored, not measured carp data.
   const hover=clamp(1-speed/.065,0,1)*(1-clamp((fish.stroke??0)/.3,0,1))
@@ -362,7 +376,7 @@ export function finActuation(fish,side,pectoral=true){
   // sine-wave strokes. With no control demand, forward glides hold the fins.
   const beat=cycle<.38?Math.sin(Math.PI*cycle/.38)**2:-.28*Math.sin(Math.PI*(cycle-.38)/.62)**2;
   const gain=pectoral?1:.35;
-  return {spread:(.035+.07*slow+.18*stopping+.12*Math.max(0,turn*side)+.05*Math.abs(trim))*gain,
+  return {spread:(.035+.07*slow+.18*stopping+.12*positiveFinDemand(turn*side)+.05*finDemandMagnitude(trim))*gain,
     paddle:(.085*control+.14*hover)*beat*gain,
     sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain,
     incidence:trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35)};
