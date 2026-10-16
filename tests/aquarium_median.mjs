@@ -428,7 +428,7 @@ export async function assertMedianGeometry({create=createMedianFin,motion=create
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const report=await assertMedianGeometry();
-  const moduleURL=new URL('../static/aquarium-median.js',import.meta.url),source=await readFile(moduleURL,'utf8');
+  const moduleURL=new URL('../static/aquarium-median.js',import.meta.url),source=(await readFile(moduleURL,'utf8')).replace(/\r\n/g,'\n');
   const load=async text=>{
     const absolute=text.replace(/from '(\.[^']+)'/g,(_,path)=>`from '${new URL(path,moduleURL)}'`);
     return import(`data:text/javascript;base64,${Buffer.from(absolute).toString('base64')}`);
