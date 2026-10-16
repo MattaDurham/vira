@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vira - Aquarium study</title>
-  <link rel="stylesheet" href="aquarium-benchmark.css?v=90">
+  <script>if(new URLSearchParams(location.search).get('background')==='1')document.documentElement.dataset.background='true';</script>
+  <link rel="stylesheet" href="aquarium-benchmark.css?v=96">
 </head>
 <body>
   <main id="tank" aria-label="Interactive aquarium benchmark">
@@ -50,6 +51,6 @@
   <script>
     if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
   </script>
-  <script type="module" src="aquarium-benchmark.js?v=95"></script>
+  <script type="module" src="aquarium-benchmark.js?v=96"></script>
 </body>
 </html>
