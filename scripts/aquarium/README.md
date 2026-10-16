@@ -1,7 +1,12 @@
 # Aquarium benchmark
 
-An isolated quality benchmark, available at `/aquarium-benchmark.html`
-on Vira. It does not change the selected desktop background or Design Studio.
+The aquarium is available as a living desktop background through **Design Studio
+> Choose background > Aquarium**. It uses the same model and swimming engine
+as the full study at `/aquarium-benchmark.html`. The background honors saved
+motion, dimming and natural/wireframe choices, and rests when hidden. The full
+study retains its camera, research and mechanics inspection tools. Selecting
+Aquarium uses the existing `vira-background` preference; no extra account,
+service or rendering dependency is needed.
 
 The refined rigged koi has an independently authored top profile and continuous
 opaque surface maps. The original model remains available with `?model=original`

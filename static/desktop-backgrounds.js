@@ -7,6 +7,8 @@
     { id:"courtyard", name:"Open water", image:"open-water.svg" },
   ];
   const SCENES = [
+    { id: "aquarium", name: "Aquarium", image: "/aquarium/reference.webp",
+      detail: "Koi behind the glass. Move closer; click to tap the water." },
     { id: "koi", name: "Koi pond", image: "open-water-thumbnail.svg",
       detail: "Koi in dark, open water. Move closer; click for ripples." },
     { id: "redwoods", name: "Redwood grove", image: "redwoods.jpg",
@@ -19,7 +21,7 @@
   let prefs, io, host, panel, stop = () => {}, generation = 0;
   let message = "", initialized = false;
   const images = new Map();
-  const asset = name => "/backgrounds/" + name;
+  const asset = name => name.startsWith("/") ? name : "/backgrounds/" + name;
   function load(name) {
     if (!images.has(name)) images.set(name, new Promise((resolve, reject) => {
       const image = new Image();
@@ -60,16 +62,19 @@
     button.disabled = reduced.matches || prefs.scene === "none";
     button.setAttribute("aria-pressed", String(prefs.paused));
     panel.querySelector("input").disabled = !SCENES.some(s => s.id === prefs.scene);
-    panel.querySelector(".background-look-setting").hidden=prefs.scene!=="koi";
+    const fishScene=prefs.scene==="koi"||prefs.scene==="aquarium";
+    panel.querySelector(".background-look-setting").hidden=!fishScene;
     panel.querySelector(".background-look-select").value=prefs.look;
-    panel.querySelector(".background-look-select").disabled=prefs.scene==="koi" && !stop.look;
-    const studioLook=document.getElementById("design-pond-look");if(studioLook){studioLook.value=prefs.look;studioLook.disabled=prefs.scene==="koi" && !stop.look;}
-    const explore=panel.querySelector(".background-explore");explore.hidden=prefs.scene!=="koi";
+    panel.querySelector(".background-look-select").disabled=fishScene && !stop.look;
+    const studioLook=document.getElementById("design-pond-look");if(studioLook){studioLook.value=prefs.look;studioLook.disabled=fishScene && !stop.look;}
+    const explore=panel.querySelector(".background-explore");explore.hidden=!fishScene;
+    explore.textContent=prefs.scene==="aquarium"?"Open aquarium study":"Look around";
     explore.disabled=!stop.explore;
     panel.querySelector('[data-scene="koi"]').querySelector("img").src = asset("open-water-thumbnail.svg");
     panel.querySelector(".background-status").textContent = message ||
       (reduced.matches ? "Still scene: your system prefers reduced motion."
         : prefs.paused ? "Motion paused. Your choice is saved."
+        : prefs.scene === "aquarium" ? "Move over the open desktop to draw koi closer. Click to tap the glass."
         : prefs.scene === "koi" ? "Move over open water to draw koi closer. Click to make ripples."
         : "Your choice is saved. Motion rests when this tab is hidden.");
   }
@@ -100,6 +105,15 @@
     message = "Loading " + scene.name.toLowerCase() + "...";
     status();
     try {
+      if(scene.id==="aquarium"){
+        const factory=io.aquarium || (()=>import("./aquarium-background.js?v=1"));
+        const module=await factory();if(token!==generation)return;
+        const engine=module.create({node,canInteract:io.canInteract,look:prefs.look,motion:moving(),
+          onMessage:value=>{if(token===generation){message=value;status();}}});
+        if(token!==generation){engine?.();return;}
+        stop=engine;stop.look?.(prefs.look);stop.motion?.(moving());
+        message=stop.message || "";status();return;
+      }
       const names = scene.id === "koi"
         ? [scene.image, "kohaku.webp", "ogon.webp", "showa.webp", "shusui.webp"] : [scene.image];
       const loaded = await Promise.all(names.map(load));
@@ -130,7 +144,7 @@
   function setLook(look){
     if(!["natural","wireframe"].includes(look))return;
     prefs.look=look;save();
-    if(prefs.scene!=="koi")select("koi");
+    if(prefs.scene!=="koi"&&prefs.scene!=="aquarium")select("koi");
     else {stop.look?.(look);status();}
   }
 
@@ -632,13 +646,13 @@
     panel.setAttribute("aria-labelledby", "background-title");
     panel.innerHTML = `<div class="background-head"><div>
       <h2 id="background-title">A different kind of desktop</h2>
-      <p>Three living backgrounds. Choose one to see it on your desk.</p></div>
+      <p>Living backgrounds. Choose one to see it on your desk.</p></div>
       <button class="background-close" aria-label="Close background picker">&times;</button></div>
       <div class="background-options"></div><div class="background-simple"></div>
       <div class="background-controls"><button class="background-motion">Pause motion</button>
       <button class="background-explore" hidden>Look around</button>
       <label>Dim <input aria-label="Background dimming" type="range" min="0" max="65" step="1"></label></div>
-      <label class="background-look-setting" hidden>Pond look <select class="background-look-select" aria-label="Pond look">
+      <label class="background-look-setting" hidden>Fish look <select class="background-look-select" aria-label="Fish look">
         <option value="natural">Natural 3D</option><option value="wireframe">Cyberpunk wireframe</option></select></label>
       <p class="background-status" role="status"></p>`;
     for (const s of SCENES) {

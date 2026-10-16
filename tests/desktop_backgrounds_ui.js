@@ -85,6 +85,7 @@ const reduced = new Target(); reduced.matches = false;
 const windowEvents = new Target(), frames = new Map(), pendingImages = new Map();
 let nextFrame = 0, clock = 0, stored, stops = 0, constellations = 0;
 let pondFactory=async()=>null;
+let aquariumFactory=async()=>null;
 class Image {
   constructor() { this.width = 1600; this.height = 900; }
   set src(src) { pendingImages.set(src.split("/").pop(), this); }
@@ -105,6 +106,7 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
 (async () => {
   sandbox.window.ViraBackgrounds.init({ read: () => ({ scene: "unknown", dim: 100 }),
     pond3D:()=>pondFactory(),
+    aquarium:()=>aquariumFactory(),
     canInteract: target => target === document.body,
     write: (key, value) => { assert.equal(key, "vira-background"); stored = { ...value }; },
     constellation: () => { constellations++; return () => { stops++; }; } });
@@ -204,5 +206,41 @@ const frame = () => { clock += 40; const work = [...frames.values()]; frames.cle
   panel().querySelector(".background-explore").emit("click");assert.equal(engine.explored,true);
   assert.equal(panel().hidden,true,"exploration closes the picker without moving desktop windows");
   scene("none");assert.equal(retired,1,"leaving the scene disposes the 3D engine once");
-  console.log("Scene races, cleanup, pause/resume, hidden tabs, reduced motion and 3D style continuity pass.");
+  let aquariumRelease,aquariumAllocations=0,aquariumRetired=0,aquariumOptions,aquariumEngine;
+  aquariumFactory=()=>new Promise(resolve=>{aquariumRelease=resolve;});
+  const imageRequests=pendingImages.size;
+  scene("aquarium");await flush();scene("none");
+  aquariumRelease({create:()=>{aquariumAllocations++;}});await flush();
+  assert.equal(aquariumAllocations,0,"an abandoned aquarium import cannot create a frame");
+  assert.equal(pendingImages.size,imageRequests,"the aquarium bypasses the landscape and fish-sprite loaders");
+  aquariumFactory=async()=>({create:options=>{
+    aquariumAllocations++;aquariumOptions=options;
+    aquariumEngine=()=>{aquariumRetired++;};aquariumEngine.styles=[];aquariumEngine.moves=[];
+    aquariumEngine.look=value=>aquariumEngine.styles.push(value);aquariumEngine.motion=value=>aquariumEngine.moves.push(value);
+    aquariumEngine.explore=()=>{aquariumEngine.explored=true;};aquariumEngine.message="Loading aquarium...";
+    return aquariumEngine;
+  }});
+  scene("aquarium");await flush();
+  assert.equal(stored.scene,"aquarium","Aquarium uses the existing saved background preference");
+  assert.equal(aquariumAllocations,1);assert.equal(aquariumOptions.node,host());
+  assert.equal(aquariumOptions.canInteract(document.body),true);assert.equal(aquariumOptions.canInteract(trigger),false);
+  assert.equal(panel().querySelector(".background-look-setting").hidden,false);
+  assert.equal(panel().querySelector(".background-explore").textContent,"Open aquarium study");
+  look.value="wireframe";look.emit("change");
+  assert.equal(stored.scene,"aquarium","the aquarium look control retains its scene");
+  assert.equal(stored.look,"wireframe");assert.equal(aquariumEngine.styles.at(-1),"wireframe");
+  assert.equal(aquariumAllocations,1,"changing aquarium style retains its simulation");
+  motion.emit("click");assert.equal(aquariumEngine.moves.at(-1),false);
+  motion.emit("click");assert.equal(aquariumEngine.moves.at(-1),true);
+  reduced.matches=true;reduced.emit("change");assert.equal(aquariumEngine.moves.at(-1),false);
+  reduced.matches=false;reduced.emit("change");assert.equal(aquariumEngine.moves.at(-1),true);
+  aquariumOptions.onMessage("");assert.match(panel().querySelector(".background-status").textContent,/tap the glass/);
+  panel().querySelector(".background-explore").emit("click");assert.equal(aquariumEngine.explored,true);
+  const aquariumRange=panel().querySelector("input");aquariumRange.value="42";aquariumRange.emit("input");
+  assert.equal(stored.dim,.42);
+  scene("none");assert.equal(aquariumRetired,1,"leaving Aquarium disposes its iframe adapter once");
+  const settledStatus=panel().querySelector(".background-status").textContent;
+  aquariumOptions.onMessage("stale renderer error");
+  assert.equal(panel().querySelector(".background-status").textContent,settledStatus,"a retired child cannot overwrite the current scene status");
+  console.log("Scene races, cleanup, pause/resume, reduced motion, Aquarium persistence and live style continuity pass.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

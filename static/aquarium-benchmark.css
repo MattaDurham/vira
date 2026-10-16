@@ -1,4 +1,7 @@
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#030b12;color:#dee8eb}
+html[data-background=true],html[data-background=true] body,html[data-background=true] #tank{height:100%;min-height:0}
+html[data-background=true] header,html[data-background=true] .panel,html[data-background=true] footer,html[data-background=true] .research-launch,html[data-background=true] .research-layer{display:none!important}
+html[data-background=true] #aquarium{outline:none}
 *{box-sizing:border-box}body{margin:0}button,input{font:inherit}button{cursor:pointer;touch-action:manipulation}button:focus-visible,input:focus-visible,canvas:focus-visible{outline:2px solid #a9d9da;outline-offset:4px}
 #tank{position:relative;width:100%;height:100svh;min-height:540px;overflow:hidden;background:#030b12}#aquarium,#reference{position:absolute;inset:0;width:100%;height:100%;display:block}#reference{object-fit:contain;background:#030b12}#reference[hidden]{display:none}
 header{position:absolute;top:48px;left:48px;pointer-events:none;text-shadow:0 2px 24px #0008;max-width:min(570px,calc(100% - 96px))}.wordmark{font-size:15px;font-weight:600;letter-spacing:.18em}.wordmark span{margin-left:12px;color:#9cb3ba;font-size:10px;font-weight:500;letter-spacing:.13em}h1{font-size:clamp(24px,2.6vw,40px);font-weight:400;letter-spacing:-.035em;margin:26px 0 12px;line-height:1.18}header p{font-size:13px;color:#98adb4;line-height:1.6;margin:0}

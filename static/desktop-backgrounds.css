@@ -2,6 +2,8 @@
 #desktop-background { position: fixed; inset: 0; z-index: 0; pointer-events: none;
   overflow: hidden; background-position: center; background-size: cover; }
 #desktop-background canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#desktop-background iframe { position: absolute; inset: 0; width: 100%; height: 100%;
+  border: 0; pointer-events: none; }
 #desktop-background::after { content: ""; position: absolute; inset: 0;
   background: #050b0a; opacity: var(--scene-dim, .2); }
 body.focus-mode #desktop-background { z-index: 700; }
@@ -10,6 +12,7 @@ body.focus-mode #desktop-background { z-index: 700; }
 .background-studio-door button { margin-left: auto; }
 #background-picker { position: fixed; z-index: 4200; right: 18px; top: 54px;
   width: min(600px, calc(100vw - 36px)); box-sizing: border-box; padding: 20px;
+  max-height: calc(100vh - 72px); overflow-y: auto; overscroll-behavior: contain;
   background: var(--bg-raised); color: var(--text); border: 1px solid var(--line);
   border-radius: 14px; box-shadow: 0 24px 80px rgba(0,0,0,.5); }
 #background-picker[hidden] { display: none; }
@@ -18,7 +21,7 @@ body.focus-mode #desktop-background { z-index: 700; }
 .background-head p { font-size: 12px; color: var(--text-dim); margin: 0 0 18px; }
 .background-close { margin-left: auto; background: none; border: 0;
   color: var(--text-dim); padding: 4px 8px; cursor: pointer; font-size: 20px; }
-.background-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.background-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .background-choice { min-width: 0; text-align: left; padding: 0 0 12px;
   border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
   background: var(--bg-card); color: var(--text); cursor: pointer; font: inherit; }
