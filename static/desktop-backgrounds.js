@@ -106,7 +106,7 @@
     status();
     try {
       if(scene.id==="aquarium"){
-        const factory=io.aquarium || (()=>import("./aquarium-background.js?v=2"));
+        const factory=io.aquarium || (()=>import("./aquarium-background.js?v=3"));
         const module=await factory();if(token!==generation)return;
         const engine=module.create({node,canInteract:io.canInteract,look:prefs.look,motion:moving(),
           onMessage:value=>{if(token===generation){message=value;status();}}});
