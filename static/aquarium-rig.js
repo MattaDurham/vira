@@ -1,5 +1,5 @@
 import {Vector3,Quaternion} from './vendor/three.webgpu.js';
-import {spinalField} from './aquarium-motion.js?v=83';
+import {spinalField} from './aquarium-motion.js?v=86';
 
 const up=new Vector3(0,1,0),side=new Vector3(0,0,1),axis=new Vector3(1,0,0);
 const turn=new Quaternion(),bend=new Quaternion(),twist=new Quaternion(),center=new Vector3();
@@ -31,15 +31,16 @@ export function applySwimPose(asset,joints,rest,fish){
     bone.quaternion.copy(parentRotation.multiply(desired));bone.updateMatrixWorld(true);
   });
   asset.updateMatrixWorld(true);
-  // Approximate mass-weighted reaction relative to the original arched spine.
-  // Correct both transverse directions without erasing its neutral elevation.
-  let lateral=0,vertical=0,total=0;
+  // Keep the same Gaussian-weighted geometric center in all three axes as
+  // the articulated body folds. This is geometric centering, not a physical
+  // angular-momentum or mass-reaction solver; the neutral rest arch is retained.
+  let longitudinal=0,lateral=0,vertical=0,total=0;
   joints.forEach(bone=>{
     bone.getWorldPosition(center);asset.worldToLocal(center);
     const original=bone.userData.bodyCenter,weight=Math.exp(-Math.pow((original.x+.18)/.30,2));
-    lateral+=(center.z-original.z)*weight;vertical+=(center.y-original.y)*weight;total+=weight;
+    longitudinal+=(center.x-original.x)*weight;lateral+=(center.z-original.z)*weight;vertical+=(center.y-original.y)*weight;total+=weight;
   });
-  if(total){asset.translateZ(-lateral/total);asset.translateY(-vertical/total);}
+  if(total){asset.translateX(-longitudinal/total);asset.translateZ(-lateral/total);asset.translateY(-vertical/total);}
   asset.updateMatrixWorld(true);
 }
 

@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vira - Aquarium study</title>
-  <link rel="stylesheet" href="aquarium-benchmark.css?v=83">
+  <link rel="stylesheet" href="aquarium-benchmark.css?v=86">
 </head>
 <body>
   <main id="tank" aria-label="Interactive aquarium benchmark">
     <canvas id="aquarium" tabindex="0" aria-label="Aquarium. Move to draw the koi closer, click to tap the glass, drag or use arrow keys to look around."></canvas>
-    <img id="reference" src="aquarium/reference.webp?v=83" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
+    <img id="reference" src="aquarium/reference.webp?v=86" alt="Cycles path-traced reference of the same koi and aquarium" hidden>
     <div class="loading" id="loading" role="status">Preparing the aquarium</div>
     <header>
       <div class="wordmark">VIRA <span>/ AQUARIUM STUDY</span></div>
       <h1>A little world behind the glass.</h1>
-      <p>One koi. Real scales. Light through water.</p>
+      <p>Kohaku, Showa and gold Ogon. Light through water.</p>
     </header>
     <nav class="research-launch" aria-label="Behind the aquarium">
       <button id="research-toggle" aria-expanded="false" aria-pressed="false" aria-controls="research-layer" disabled><span class="research-orbit" aria-hidden="true"></span>Research layer</button>
@@ -29,6 +29,7 @@
         <button id="motion" aria-pressed="false">Pause motion</button>
         <button id="reset">Restart swim</button>
         <button id="wireframe" aria-pressed="false">Wireframe</button>
+        <button id="community" aria-pressed="true">Multiple fish</button>
         <button id="study" aria-pressed="false">Study body motion</button>
         <label for="study-axis">Study axis</label>
         <select id="study-axis"><option value="combined">Combined motion</option><option value="lateral">Side to side</option><option value="vertical">Up and down</option><option value="twist">Axial twist</option><option value="fins">Paired fin control</option><option value="steering">Fine fin corrections</option><option value="swim">Swimming ascent / descent</option><option value="turn">Swimming turn</option></select>
@@ -49,6 +50,6 @@
   <script>
     if(location.protocol==='file:')document.getElementById('loading').textContent='Open this interactive study through a local web server. See scripts/aquarium/README.md for the preview command.';
   </script>
-  <script type="module" src="aquarium-benchmark.js?v=83"></script>
+  <script type="module" src="aquarium-benchmark.js?v=86"></script>
 </body>
 </html>

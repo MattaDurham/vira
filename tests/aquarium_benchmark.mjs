@@ -304,37 +304,67 @@ for(const z of [rootMin[2],rootMax[2]-.02]){
 function assertHeadLeadsSteering(create,pose=applySwimPose){
   const swimmer=create(()=>.5);
   Object.assign(swimmer.fish,{x:0,y:.7,z:tankCenterZ,yaw:0,pitch:0});
-  // Isolate steering from the much larger propulsive oscillation. Read actual
-  // exported bone frames, so changing a diagnostic lag field alone cannot pass.
+  // Isolate steering from the propulsive carrier. A body-driven turn loads its
+  // regional shape before the head rotates; absolute yaw onset along the body
+  // therefore cannot be used as a skull-first servo-order assertion.
   const steeringSample=fish=>({...fish,drive:0,stroke:0,muscle1:0,muscle2:0,muscle3:0,bank:0});
-  const stations=[0,14,24,33];
+  const stations=[0,14,24,33],regions=['turnAnterior','turnTrunk','turnPosterior'];
+  const orientation=i=>joints[i].getWorldQuaternion(new Quaternion()).normalize();
   pose(asset,joints,rest,steeringSample(swimmer.fish));
-  const origins=stations.map(i=>joints[i].getWorldQuaternion(new Quaternion()).invert());
+  const origins=stations.map(i=>orientation(i).invert());
+  const skullRest=joints.slice(0,5).map((bone,i)=>orientation(i).premultiply(orientation(0).invert()));
+  const boneLengths=joints.map(bone=>bone.getWorldPosition(new Vector3()).distanceTo(bone.parent.getWorldPosition(new Vector3())));
   const angles=()=>stations.map((i,j)=>{
-    const q=joints[i].getWorldQuaternion(new Quaternion()).multiply(origins[j]);
+    const q=orientation(i).multiply(origins[j]).normalize();
     const direction=new Vector3(1,0,0).applyQuaternion(q);
-    return {yaw:Math.atan2(-direction.z,direction.x),pitch:-Math.asin(direction.y)};
+    return {yaw:Math.atan2(-direction.z,direction.x),pitch:-Math.asin(Math.max(-1,Math.min(1,direction.y)))};
   });
-  const onsets=stations.map(()=>({yaw:null,pitch:null}));
+  const onsets=stations.map(()=>({yaw:null,pitch:null})),regionalOnsets=regions.map(()=>null),proximalShare=regions.map(()=>null);
+  const peakBend={yaw:0,pitch:0};let peakCTime=0,headAtPeakC=0;
   swimmer.navigate({x:-.85,y:1.17,z:-.5});
   for(let frame=0;frame<120;frame++){
     swimmer.step(1/120);pose(asset,joints,rest,steeringSample(swimmer.fish));
-    angles().forEach((sample,i)=>{
-      for(const axis of ['yaw','pitch'])if(onsets[i][axis]===null&&Math.abs(sample[axis])>.005)onsets[i][axis]=(frame+1)/120;
+    const time=(frame+1)/120,actual=angles(),headInverse=orientation(0).invert(),tailFrame=orientation(33),proximalFrame=orientation(14);
+    actual.forEach((sample,i)=>{
+      for(const axis of ['yaw','pitch'])if(onsets[i][axis]===null&&Math.abs(sample[axis])>.005)onsets[i][axis]=time;
     });
+    for(const axis of ['yaw','pitch']){
+      const bend=Math.abs(actual.at(-1)[axis]-actual[0][axis]);
+      if(bend>peakBend[axis]){peakBend[axis]=bend;if(axis==='yaw'){peakCTime=time;headAtPeakC=Math.abs(actual[0].yaw);}}
+    }
+    joints.forEach((bone,i)=>{
+      const length=bone.getWorldPosition(new Vector3()).distanceTo(bone.parent.getWorldPosition(new Vector3()));
+      assert.ok(Math.abs(length-boneLengths[i])<1e-7,'issued turns rotate the actual fixed-length axial bones');
+      if(i<5)assert.ok(orientation(i).premultiply(headInverse).angleTo(skullRest[i])<1e-7,'the actual skull stays rigid while the body loads');
+    });
+    // Remove one regional command at a time from the same physical sample.
+    // The changed exported tail frame proves that issued loading reaches the
+    // actual rig, rather than merely changing a diagnostic onset field.
+    regions.forEach((field,i)=>{
+      if(regionalOnsets[i]!==null)return;
+      pose(asset,joints,rest,steeringSample({...swimmer.fish,[field]:0}));
+      const tailEffect=tailFrame.angleTo(orientation(33));
+      if(tailEffect>.001){regionalOnsets[i]=time;proximalShare[i]=proximalFrame.angleTo(orientation(14))/tailEffect;}
+      assert.ok(orientation(0).angleTo(headInverse.clone().invert())<1e-7,'regional body loading cannot bend or rotate the skull independently');
+    });
+    pose(asset,joints,rest,steeringSample(swimmer.fish));
   }
-  for(const axis of ['yaw','pitch']){
-    assert.ok(onsets.every(sample=>Number.isFinite(sample[axis])),`all axial regions eventually follow the head in ${axis}`);
-    for(let i=1;i<onsets.length;i++)assert.ok(onsets[i][axis]>onsets[i-1][axis]+1/120,
-      `actual ${axis} follows skull, shoulder, trunk and tail in order: ${onsets.map(sample=>sample[axis].toFixed(3)).join(', ')} s`);
-  }
-  const turning=angles();
+  assert.ok(regionalOnsets.every(Number.isFinite),'all three issued regional loads affect the actual exported rig');
+  for(let i=1;i<regionalOnsets.length;i++)assert.ok(regionalOnsets[i]>regionalOnsets[i-1]+1/120,
+    `actual regional loading travels anterior to posterior: ${regionalOnsets.map(time=>time.toFixed(3)).join(', ')} s`);
+  assert.ok(proximalShare[0]>proximalShare[1]+.1&&proximalShare[1]>proximalShare[2]+.1,
+    'the actual anterior load acts more proximally than the trunk and posterior loads');
+  assert.ok(Number.isFinite(onsets[0].yaw)&&regionalOnsets[0]<onsets[0].yaw,'actual anterior loading precedes head yaw instead of following a rigid yaw servo');
+  assert.ok(onsets[0].yaw+1/120<peakCTime&&headAtPeakC>.005,'the actual head begins rotating before the maximum C bend');
+  assert.ok(onsets.every(sample=>Number.isFinite(sample.pitch)),'all axial regions eventually follow the pitched head');
+  for(let i=1;i<onsets.length;i++)assert.ok(onsets[i].pitch>onsets[i-1].pitch+1/120,
+    `actual pitch follows skull, shoulder, trunk and tail in order: ${onsets.map(sample=>sample.pitch.toFixed(3)).join(', ')} s`);
   swimmer.navigate({...swimmer.fish});
   for(let frame=0;frame<360;frame++)swimmer.step(1/120);
   pose(asset,joints,rest,steeringSample(swimmer.fish));
   const settled=angles();
   for(const axis of ['yaw','pitch']){
-    const before=Math.abs(turning.at(-1)[axis]-turning[0][axis]),after=Math.abs(settled.at(-1)[axis]-settled[0][axis]);
+    const before=peakBend[axis],after=Math.abs(settled.at(-1)[axis]-settled[0][axis]);
     assert.ok(before>.05&&after<.015&&after<before*.2,`the actual posterior ${axis} bend relaxes after the manoeuvre`);
   }
   // A completed stroke can finish propagating during the start of a glide;
@@ -347,6 +377,7 @@ function assertHeadLeadsSteering(create,pose=applySwimPose){
     tail.push(body.getVertexPosition(peduncle,new Vector3()).applyMatrix4(body.matrixWorld));
   }
   assert.ok(tail[0].distanceTo(tail[1])<1e-5,'settled axial muscles leave the actual tail quiet during a glide');
+  return {regionalOnsets,proximalShare,headYawOnset:onsets[0].yaw,peakCTime,peakC:peakBend.yaw};
 }
 assertHeadLeadsSteering(createSwimmer);
 
@@ -364,27 +395,37 @@ const afterWrapTail=body.getVertexPosition(peduncle,new Vector3()).applyMatrix4(
 assert.ok(beforeWrapTail.distanceTo(afterWrapTail)<.005,'heading wrap cannot throw the skinned tail through the water');
 
 function assertTurnTorqueEnvelope(create){
-  // Compare each gesture with its own peak acceleration, not a biological
-  // jerk limit. Both broad turns and smaller course changes must load and
-  // release gradually instead of switching full torque at a timer boundary.
+  // Observe actual issued shape and response. The old maneuver diagnostic is
+  // no longer a force source. Compare with each episode's own peak rather than
+  // imposing an invented biological torque or jerk limit.
+  const reports=[];
   for(const target of [{x:0,y:.8,z:.24},{x:0,y:.8,z:-.55},{x:-.65,y:.8,z:.2},{x:-.85,y:.8,z:-.5}]){
     const swimmer=create(()=>.5);
     Object.assign(swimmer.fish,{x:0,y:.8,z:tankCenterZ,yaw:0,pitch:0});swimmer.navigate(target);
-    let previousRate=0,previousAcceleration=0,previousActivation=0,initial=null,peak=0,releaseJump=null;
-    for(let frame=0;frame<240;frame++){
+    let initial=null,peak=0,maximumJump=0,previousMoment=0,maximumPower=0,minimumRecoveryPower=0;
+    const moments=[];
+    for(let frame=0;frame<360;frame++){
       swimmer.step(1/120);
-      const fish=swimmer.fish,acceleration=(fish.yawRate-previousRate)*120,activation=Math.abs(fish.maneuver);
-      if(initial===null&&activation>.001)initial=Math.abs(acceleration);
-      if(releaseJump===null&&previousActivation>.5&&activation<previousActivation){
-        releaseJump=Math.abs(acceleration-previousAcceleration);
-      }
-      if(initial!==null&&releaseJump===null)peak=Math.max(peak,Math.abs(acceleration));
-      previousRate=fish.yawRate;previousAcceleration=acceleration;previousActivation=activation;
+      const fish=swimmer.fish,b=[fish.turnAnterior,fish.turnTrunk,fish.turnPosterior],v=[fish.turnAnteriorVelocity,fish.turnTrunkVelocity,fish.turnPosteriorVelocity];
+      assert.ok([...b,...v,fish.turnMoment,fish.turnRecoveryMoment,fish.turnPower,fish.yawRate,fish.forwardSpeed].every(Number.isFinite),'issued turn shape, response and swimming speed stay finite');
+      if(initial===null&&v.some(value=>Math.abs(value)>.001))initial=Math.abs(fish.turnMoment);
+      if(b.every((value,i)=>value*v[i]<=0))assert.ok(Math.abs(fish.turnMoment)<1e-10,'recovery or a held C cannot supply a new issued body moment');
+      if(v.every(value=>Math.abs(value)<1e-14))assert.ok(fish.turnPower<1e-12,'held or settled shape cannot supply new turn propulsive power');
+      assert.ok(fish.turnPower>=0&&fish.turnPower<=1,'issued turn power remains bounded');
+      const recoveryPower=fish.turnRecoveryMoment*fish.yawRate;
+      assert.ok(recoveryPower<=1e-10,'actual recovery removes angular energy rather than driving a second turn');
+      minimumRecoveryPower=Math.min(minimumRecoveryPower,recoveryPower);maximumPower=Math.max(maximumPower,fish.turnPower);
+      peak=Math.max(peak,Math.abs(fish.turnMoment));maximumJump=Math.max(maximumJump,Math.abs(fish.turnMoment-previousMoment));
+      moments.push(Math.abs(fish.turnMoment));previousMoment=fish.turnMoment;
     }
-    assert.ok(initial!==null&&releaseJump!==null&&peak>.1,'the probe includes an actual loaded turn and its release');
-    assert.ok(initial<peak/3,'turn acceleration builds with activation instead of beginning at full stroke torque');
-    assert.ok(releaseJump<peak/3,'releasing a turn changes acceleration gradually instead of stepping to the trim rate');
+    const peakIndex=moments.indexOf(peak),release=moments.slice(peakIndex+1).some(value=>value<peak*.5);
+    assert.ok(initial!==null&&peak>1e-8&&release&&maximumPower>1e-6,'the probe includes actual issued body loading, propulsion and release');
+    assert.ok(initial<peak/3,'actual body moment builds after issued shape motion begins');
+    assert.ok(maximumJump<peak/3,'loading and release do not step the actual body moment at a timer boundary');
+    assert.ok(minimumRecoveryPower<0,'the real swimming episode deploys an effective passive recovery');
+    reports.push({peakMoment:peak,maximumRelativeJump:maximumJump/peak,maximumPower,minimumRecoveryPower});
   }
+  return reports;
 }
 assertTurnTorqueEnvelope(createSwimmer);
 
@@ -410,7 +451,15 @@ for(let i=0;i<600;i++){
   idle.step(1/60);curious.step(1/60);startled.step(1/60);
   normalMax=Math.max(normalMax,idle.fish.speed);startleMax=Math.max(startleMax,startled.fish.speed);
   const f=curious.fish;
-  if(i>60&&f.vy>.002&&f.vy>previousVertical+.0001)assert.ok(f.pitch>0&&Math.hypot(f.vx,f.vz)>.02,'upward acceleration comes from nose-up swimming; a coast may retain small upward momentum');
+  if(i>60&&f.vy>.002&&f.vy>previousVertical+.0001){
+    applySwimPose(asset,joints,rest,f);
+    const skull=joints[0].getWorldQuaternion(new Quaternion()).multiply(joints[0].userData.bodyRest.clone().invert()).normalize();
+    const direction=new Vector3(-1,0,0).applyQuaternion(skull),horizontal=Math.hypot(direction.x,direction.z);
+    const flow=waterFlow(f,f.age),vx=f.vx-flow.x,vz=f.vz-flow.z;
+    const forwardXZ=(vx*direction.x+vz*direction.z)/horizontal,forward=vx*direction.x+f.vy*direction.y+vz*direction.z;
+    assert.ok(f.pitch>0&&direction.y>0&&f.forwardSpeed>0&&forward>0&&forwardXZ>0&&f.vy<2*forwardXZ*direction.y/horizontal,
+      'upward acceleration follows the actual nose-up skull axis and positive forward motion, including slow onset; sideways drift cannot satisfy the climb');
+  }
 }
 assert.ok(curious.fish.y>idle.fish.y+.15,'a high cursor encourages an actual climb');
 assert.ok(startleMax>normalMax*1.5,'a close tap creates a short, faster escape response');
@@ -538,6 +587,8 @@ for(let i=0;i<18000;i++){
   roam.step(1/60);
   for(const [name,value] of Object.entries(roam.fish)){
     if(name==='finTaskMode')assert.ok(['swim','hover','retreat','steer','brake','balance'].includes(value),'the task label remains a known locomotor context');
+    else if(name==='id')assert.ok(value===undefined||typeof value==='string'||Number.isFinite(value),'the optional fish identity remains a string or finite number');
+    else if(name==='turnGestureActive'||name==='turnPreparing')assert.equal(typeof value,'boolean',`${name}: turn lifecycle flags remain boolean`);
     else assert.ok(Number.isFinite(value),`${name}: long runs stay finite`);
   }
   const f=roam.fish;

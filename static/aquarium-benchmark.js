@@ -3,20 +3,24 @@ import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
-import {createSwimmer,waterFlow} from './aquarium-motion.js?v=83';
-import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=83';
-import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=83';
-import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=83';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=83';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=83';
-import {finRayContrast} from './aquarium-fin-detail.js?v=83';
-import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=83';
-import {waterOptics} from './aquarium-optics.js?v=83';
-import {createContainment} from './aquarium-collision.js?v=83';
-import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=83';
-import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=83';
-import {createResearchLayer} from './aquarium-research.js?v=83';
-import {createResearchShape} from './aquarium-research-shape.js?v=83';
+import {createSwimmer,waterFlow} from './aquarium-motion.js?v=86';
+import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=86';
+import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=86';
+import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=86';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=86';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=86';
+import {finRayContrast} from './aquarium-fin-detail.js?v=86';
+import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=86';
+import {waterOptics} from './aquarium-optics.js?v=86';
+import {createContainment} from './aquarium-collision.js?v=86';
+import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=86';
+import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=86';
+import {createResearchLayer} from './aquarium-research.js?v=86';
+import {createResearchShape} from './aquarium-research-shape.js?v=86';
+import {createKoiInstance} from './aquarium-fish-instance.js?v=86';
+import {pigmentColorNode,pigmentFinPalette} from './aquarium-pigment.js?v=86';
+import {createSupportArticulation} from './aquarium-supports.js?v=86';
+import {createManeuverFootprint} from './aquarium-footprint.js?v=86';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
@@ -25,13 +29,31 @@ let turnReplay=false,turnPoseKey=0;
 const swimmer=createSwimmer(()=>turnReplay?studyRandom():Math.random()),fish=swimmer.fish,clock=uniform(0);
 const rayDetail=uniform(1),rayDetailPosition=new THREE.Vector3();
 const fullRayDetail=new URLSearchParams(location.search).get('ray-detail')==='full';
-const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front',research:false};
+const state={paused:matchMedia('(prefers-reduced-motion: reduce)').matches,reference:false,wireframe:false,study:false,studyAxis:'combined',closeup:false,cameraAngle:'front',research:false,community:true};
+const companions=[];
+const companionSpecs=[
+  {kind:'showa',scale:.46,initialPose:{x:-.75,y:1.16,z:-.65,yaw:2.7,phase:1.1}},
+  {kind:'ogon',scale:.34,initialPose:{x:.85,y:.40,z:-.45,yaw:.20,phase:3.3}},
+];
+const communityVisible=()=>state.community&&!state.study&&!state.closeup&&!turnReplay;
+function allSwimmers(action){action(swimmer);for(const companion of companions)action(companion.swimmer);}
+function observeCommunity(){
+  const actors=[swimmer,...companions.map(companion=>companion.swimmer)];
+  if(!communityVisible()){actors.forEach(actor=>actor.neighbors([]));return;}
+  // Every animal sees the same beginning-of-frame snapshot. A later-updated
+  // fish must not gain knowledge of the earlier animal's new position.
+  const snapshot=actors.map(({fish:sample})=>({
+    x:sample.x,y:sample.y,z:sample.z,vx:sample.vx,vy:sample.vy,vz:sample.vz,yaw:sample.yaw,
+    radius:.22*(sample.bodyScale??1),length:1.5*(sample.bodyScale??1),
+  }));
+  actors.forEach((actor,index)=>actor.neighbors(snapshot.filter((_,other)=>other!==index)));
+}
 let renderer,scene,camera,asset,environment,disposed=false,previous=0,metrics=0;
 let liveEngine='Starting renderer',referenceMetadata=null;
 let skeleton;
 let optics;
 let waterInterface;
-let containment,facialRig;
+let containment,facialRig,supportArticulation;
 let research;
 let recording,recordingStream,recordingTimer,recordingUrl,recordingSurface,recordingContext;
 let recordingExtent=null;
@@ -144,7 +166,7 @@ function setCamera(){
   else camera.position.set(Math.sin(bearing)*distance,1.02+elevation,Math.cos(bearing)*distance);
   camera.lookAt(focus.x,state.research?focus.y:canvas.clientWidth<650?.20:focus.y,focus.z);camera.updateMatrixWorld();
 }
-function immerse(mat){
+function immerse(mat,{pigment='kohaku',detail=rayDetail}={}){
   const finTissue=mat.name.startsWith('Ivory fin membrane');
   const tissue=mat.name==='Pearl skin'||finTissue;
   const anatomical=mat.name.startsWith('Anatomy');
@@ -166,7 +188,7 @@ function immerse(mat){
   if(finTissue){
     material.transmission=0;material.opacity=mat.name==='Ivory fin membrane'?.72:1;material.transparent=true;
     material.depthWrite=false;material.clearcoat=.02;material.side=THREE.DoubleSide;material.alphaTest=.01;
-    material.color.setRGB(1,1,1);material.roughness=.38;material.ior=1.035;material.specularIntensity=.55;
+    material.color.setRGB(...pigmentFinPalette(pigment));material.roughness=.38;material.ior=1.035;material.specularIntensity=.55;
     material.map=mat.map??(finMap??=finTexture());
     material.thicknessColorNode=vec3(.7,.48,.28);
     material.thicknessAttenuationNode=float(.05);material.thicknessScaleNode=float(.65);
@@ -176,9 +198,9 @@ function immerse(mat){
   }
   if(mat.name==='Fin rays'){
     material.transmission=0;material.transparent=true;material.opacity=1;material.depthWrite=false;
-    material.opacityNode=rayDetail.mul(.32);
+    material.opacityNode=detail.mul(.32);
     material.ior=1.04;material.clearcoat=.02;material.roughness=.42;
-    material.castShadowNode=vec4(.7,.72,.58,rayDetail.mul(.04));
+    material.castShadowNode=vec4(.7,.72,.58,detail.mul(.04));
   }
   if(mat.name==='Pearl skin'){
     material.normalNode=bumpMap(mx_noise_float(positionGeometry.mul(900)).mul(.00009),.65);
@@ -186,7 +208,9 @@ function immerse(mat){
     // The skin-water interface has far less Fresnel contrast than skin-air.
     material.ior=1.04;material.specularIntensity=.6;
     material.clearcoat=.08;material.clearcoatRoughness=.35;
-    material.thicknessColorNode=texture(mat.map).rgb.mul(.22);
+    const pigmentColor=pigmentColorNode(pigment,texture(mat.map).rgb,positionGeometry);
+    if(pigment!=='kohaku')material.colorNode=pigmentColor;
+    material.thicknessColorNode=pigmentColor.mul(.22);
     material.thicknessAttenuationNode=float(.08);material.thicknessScaleNode=float(1.8);
   }
   if(mat.name==='Golden iris'&&!mat.map){
@@ -311,18 +335,18 @@ function pointerPoint(event){
   raycaster.setFromCamera(pointer,camera);return raycaster.ray.intersectPlane(interactionPlane,hit)?{x:hit.x,y:hit.y,z:.14}:null;
 }
 let drag=null;
-function pointerDown(event){if(state.reference)return;drag={id:event.pointerId,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,moved:false};canvas.setPointerCapture(event.pointerId);swimmer.follow(null);}
+function pointerDown(event){if(state.reference)return;drag={id:event.pointerId,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,moved:false};canvas.setPointerCapture(event.pointerId);allSwimmers(actor=>actor.follow(null));}
 function pointerMove(event){
   if(state.reference)return;
   if(drag&&drag.id===event.pointerId){
     if(Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>5)drag.moved=true;
     if(drag.moved){orbit=THREE.MathUtils.clamp(orbit+(event.clientX-drag.lastX)*.0015,-.28,.28);elevation=THREE.MathUtils.clamp(elevation+(event.clientY-drag.lastY)*.001,-.15,.20);setCamera();}
     drag.lastX=event.clientX;drag.lastY=event.clientY;
-  }else if(!turnReplay)swimmer.follow(pointerPoint(event));
+  }else if(!turnReplay)allSwimmers(actor=>actor.follow(pointerPoint(event)));
 }
-function pointerUp(event){if(drag&&event.pointerId===drag.id){if(!drag.moved&&!turnReplay)swimmer.flick(pointerPoint(event));drag=null;}}
+function pointerUp(event){if(drag&&event.pointerId===drag.id){if(!drag.moved&&!turnReplay)allSwimmers(actor=>actor.flick(pointerPoint(event)));drag=null;}}
 function pointerCancel(){drag=null;}
-function pointerLeave(){if(!drag)swimmer.follow(null);}
+function pointerLeave(){if(!drag)allSwimmers(actor=>actor.follow(null));}
 function wheel(event){if(state.reference)return;event.preventDefault();distance=THREE.MathUtils.clamp(distance+event.deltaY*.002,3.3,4.7);setCamera();}
 function key(event){
   if(event.key==='ArrowLeft')orbit=Math.max(-.28,orbit-.04);
@@ -352,6 +376,7 @@ function pose(){
   visualFish=sample;
   applySwimPose(asset,joints,rest,sample);
   facialRig?.pose(sample);
+  supportArticulation?.pose();
   const p=joints.at(-1).getWorldPosition(hit);
   canvas.dataset.tailPosition=[p.x,p.y,p.z].map(v=>v.toFixed(4)).join(',');
   canvas.dataset.phase=sample.phase.toFixed(4);
@@ -370,12 +395,17 @@ function draw(now){
   const elapsed=previous?(now-previous)/1000:0;previous=now;
   if(document.hidden||state.reference)return;
   if(!state.paused){
+    observeCommunity();
     if(state.studyAxis==='swim'&&!state.study){
       const leg=Math.floor(fish.age/12)%2;
       if(leg!==navigationLeg){swimmer.navigate({x:leg?.85:-.85,y:leg?.50:1.17,z:-.10});navigationLeg=leg;}
     }
     if(turnReplay)turnStudy.step(elapsed);else swimmer.step(elapsed,state.study?undefined:observeLiveFins);
+    if(communityVisible())for(const companion of companions)companion.step(elapsed);
     studyPhase+=Math.PI*2*1.19*Math.min(elapsed,.25);clock.value=fish.age;pose();}
+  for(const companion of companions)companion.asset.visible=communityVisible();
+  canvas.dataset.fishCount=String(1+(communityVisible()?companions.length:0));
+  canvas.dataset.fishVarieties=communityVisible()?'kohaku,showa,ogon':'kohaku';
   const finPoseKey=turnReplay?`turn:${turnPoseKey}`:state.study?state.studyAxis:'live';
   const pairedMotion={
     pectoral:{'-1':pairedFinControllers.pectoral[-1].sample(visualFish,finPoseKey),'1':pairedFinControllers.pectoral[1].sample(visualFish,finPoseKey)},
@@ -432,6 +462,10 @@ function draw(now){
   // inspection materials. This is authored detail LOD, not exact coverage AA.
   const cameraDepth=-asset.getWorldPosition(rayDetailPosition).applyMatrix4(camera.matrixWorldInverse).z;
   rayDetail.value=fullRayDetail?1:finRayContrast({renderHeight:canvas.height,projectionScaleY:camera.projectionMatrix.elements[5],cameraDepth});
+  for(const companion of companions)if(companion.asset.visible){
+    const depth=-companion.asset.getWorldPosition(rayDetailPosition).applyMatrix4(camera.matrixWorldInverse).z;
+    companion.detail.value=fullRayDetail?1:finRayContrast({renderHeight:canvas.height,projectionScaleY:camera.projectionMatrix.elements[5],cameraDepth:depth,diameter:.00026*companion.scale});
+  }
   const renderStarted=performance.now();
   waterInterface.update(renderer);optics.render();
   research?.update(now);
@@ -464,7 +498,7 @@ function restartTurnStudy(){
 function setView(reference){
   state.reference=reference;$('reference').hidden=!reference;$('live-view').setAttribute('aria-pressed',String(!reference));$('reference-view').setAttribute('aria-pressed',String(reference));
   research?.setReference(reference);
-  $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=$('record-length').disabled=reference;
+  $('motion').disabled=$('reset').disabled=$('wireframe').disabled=$('light').disabled=$('study').disabled=$('study-axis').disabled=$('closeup').disabled=$('camera-angle').disabled=$('record-length').disabled=$('community').disabled=reference;
   $('record').disabled=reference||recording?.state==='recording';
   $('hint').textContent=reference?'Cycles reference: the same authored fish, rendered offline through glass and volumetric water.':turnReplay?'The same swimming turn replays on restart and recording. Drag to inspect it from another angle.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';
   $('engine').textContent=reference?'Cycles / offline':liveEngine;
@@ -474,6 +508,7 @@ function setView(reference){
 function cleanup(){
   disposed=true;renderer?.setAnimationLoop(null);window.removeEventListener('resize',size);
   research?.dispose();
+  companions.forEach(companion=>companion.dispose());
   if(recording?.state==='recording')recording.stop();releaseCapture();if(recordingUrl)URL.revokeObjectURL(recordingUrl);
   canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerCancel);canvas.removeEventListener('pointerleave',pointerLeave);canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('keydown',key);
   optics?.dispose();waterInterface?.dispose();ownedGeometries.forEach(g=>g.dispose());ownedMaterials.forEach(m=>m.dispose());ownedTextures.forEach(t=>t.dispose());environment?.dispose();renderer?.dispose();
@@ -543,7 +578,18 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=83');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=86');asset=gltf.scene;scene.add(asset);
+  const maneuverFootprint=createManeuverFootprint(asset);swimmer.footprint(maneuverFootprint.bounds);
+  for(const spec of companionSpecs){
+    const detail=uniform(1),materials=new Map();
+    const companion=createKoiInstance(asset,{...spec,materialFor:original=>{
+      if(!materials.has(original))materials.set(original,immerse(original,{pigment:spec.kind,detail}));
+      return materials.get(original);
+    }});
+    Object.assign(companion,{detail,scale:spec.scale,kind:spec.kind});companions.push(companion);scene.add(companion.asset);
+  }
+  supportArticulation=createSupportArticulation(asset);
+  supportArticulation.ownedGeometries.forEach(geometry=>ownedGeometries.add(geometry));
   // Bind material landmarks before live fin deformation overwrites positions.
   const researchShape=createResearchShape(asset);
   const converted=new Map();
@@ -596,12 +642,18 @@ async function start(){
   optics=waterOptics(renderer,scene,camera);
   await renderer.compileAsync(scene,camera);await optics.prepare();loading.hidden=true;
   canvas.dataset.ready='true';
-  fetch('aquarium/manifest.json?v=83').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  // History can restore form values while the new GPU scene is loading.
+  // Synchronize after that work, before attaching controls to the fresh rig.
+  $('study-axis').value=state.studyAxis;$('camera-angle').value=state.cameraAngle;
+  $('light').value='1';$('light-value').value='100%';
+  $('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;
+  fetch('aquarium/manifest.json?v=86').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});
   $('motion').addEventListener('click',()=>setPause(!state.paused));
-  $('reset').addEventListener('click',()=>{if(turnReplay){restartTurnStudy();return;}swimmer.reset();state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';$('hint').textContent='Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
+  $('reset').addEventListener('click',()=>{if(turnReplay){restartTurnStudy();return;}swimmer.reset();companions.forEach(companion=>companion.reset());state.study=state.closeup=false;studyPhase=0;state.studyAxis='combined';$('study-axis').value='combined';$('hint').textContent='Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';navigationLeg=-1;$('study').setAttribute('aria-pressed','false');$('closeup').setAttribute('aria-pressed','false');orbit=elevation=0;distance=4.1;setCamera();pose();setPause(false);});
+  $('community').addEventListener('click',()=>{state.community=!state.community;$('community').setAttribute('aria-pressed',String(state.community));});
   $('wireframe').addEventListener('click',()=>{
     state.wireframe=!state.wireframe;skeleton.visible=state.wireframe;
     [...finSupports,...anatomicalMeshes].forEach(mesh=>{mesh.visible=state.wireframe;});scaleMeshes.forEach(mesh=>{mesh.visible=!state.wireframe;});
@@ -620,6 +672,7 @@ async function start(){
     });
     scaleMeshes.forEach(mesh=>{mesh.visible=!state.wireframe;});
     finSupports.forEach(mesh=>{mesh.visible=true;});
+    companions.forEach(companion=>companion.setInspection(state.wireframe,wireMaterial));
   });
   $('study').addEventListener('click',()=>{if(state.studyAxis==='swim'||state.studyAxis==='turn'){state.studyAxis='combined';$('study-axis').value='combined';}turnReplay=false;state.study=!state.study;studyPhase=fish.phase;$('study').setAttribute('aria-pressed',String(state.study));$('hint').textContent=state.study?'Held position reveals the spine. Choose an axis to isolate it; vertical flexion and twist are amplified for inspection.':'Move to invite the koi closer. Tap to startle or interest it. Drag to look around.';pose();});
   $('study-axis').addEventListener('change',()=>{

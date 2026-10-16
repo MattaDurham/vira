@@ -12,6 +12,20 @@ from pathlib import Path
 
 
 class AquariumBenchmarkTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the maneuver footprint harness")
+    def test_maneuver_footprint_contains_actual_posed_geometry(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_footprint.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the dorsal support harness")
+    def test_rigid_dorsal_supports_follow_actual_cartilage(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_supports.mjs")],
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the research shape harness")
     def test_research_shape_observes_actual_material_geometry(self):
         root = Path(__file__).resolve().parents[1]

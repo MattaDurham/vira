@@ -201,6 +201,13 @@ function assertFamily(family,baseline,positions,report,checkNormals=true){
       report[kind].maximumSegmentStrain=Math.max(report[kind].maximumSegmentStrain,strain);
       assert.ok(strain<.005,`local median tube centerline segments remain close to their material length (${family.kind} ${kind} ${group}, ${j}: ${strain})`);
     }
+    for(const ring of rings)for(let i=0;i<ring.length;i++)for(const step of [1,4]){
+      const a=ring[i],b=ring[(i+step)%ring.length];
+      const before=distance(point(rays.base,a),point(rays.base,b)),after=distance(point(positions.get(rays),a),point(positions.get(rays),b));
+      const error=Math.abs(after-before);
+      report.maximumTubeSectionError=Math.max(report.maximumTubeSectionError,error);
+      assert.ok(error<2e-7+before*.00002,'every actual median tube cross-section retains its captured annulus, including strong body turns');
+    }
     if(kind==='shaft'){
       const anchor=point(changed,membrane.paths[group*2+1][0]);
       assert.ok(distance(after[0],anchor)<2e-6,'each actual median shaft begins at its corresponding material attachment');
@@ -223,7 +230,7 @@ function assertFamily(family,baseline,positions,report,checkNormals=true){
       const [x,y,z]=ids.map(i=>vector(deformed,i)),next=y.sub(x).cross(z.sub(x));
       const jacobian=next.dot(normal)/(area*area);
       report.minimumSurfaceJacobian=Math.min(report.minimumSurfaceJacobian,jacobian);
-      assert.ok(jacobian>.2&&jacobian<5,'actual posed median tissue and tube walls retain a positive local surface Jacobian in their original winding');
+      assert.ok(jacobian>.2&&jacobian<5,`actual posed median tissue and tube walls retain a positive local surface Jacobian in their original winding (${record.mesh.name}, triangle ${i/3}: ${jacobian})`);
     }
   }
   if(checkNormals)for(const record of [membrane,rays]){
@@ -250,6 +257,7 @@ export async function assertMedianGeometry({create=createMedianFin,motion=create
   const model=await geometry(create),report={maximumRootError:0,maximumRadialArcStrain:0,maximumRadialSegmentError:0,
     shaft:{maximumArcStrain:0,maximumSegmentStrain:0},branch:{maximumArcStrain:0,maximumSegmentStrain:0},
     minimumSurfaceJacobian:Infinity,minimumNormalAgreement:Infinity,maximumGapIncrease:0,maximumCorrection:0,degenerateNormalChecks:0,
+    maximumTubeSectionError:0,
     intrinsic:{},causal:{},maximumRigidTransformError:0,minimumFinBoundaryClearance:Infinity};
   const swimmer=createSwimmer(()=>.5);Object.assign(swimmer.fish,{x:0,y:.8,z:tankCenterZ,yaw:0});
   swimmer.navigate({x:.8,y:1.15,z:tankCenterZ+.2});
@@ -257,6 +265,10 @@ export async function assertMedianGeometry({create=createMedianFin,motion=create
   for(let i=1;i<=132;i++){swimmer.step(1/120);if([60,87,132].includes(i))poses.push({...swimmer.fish});}
   poses.push({...swimmer.fish,yaw:1.3,pitch:.4,bank:.1,bankRate:.1,bankLag1:-.007,bankLag2:-.015,bankLag3:-.026,
     yawRate:.7,pitchRate:.3,torsionDrive:.16,stroke:1,phase:1.4});
+  for(const sign of [-1,1])poses.push({...neutral,age:.7,yaw:.8,pitch:.25,bank:sign*.12,
+    yawRate:sign*.9,pitchRate:.2,finSteer:sign*.3,stroke:1,drive:.4,muscle1:.8,muscle2:.8,muscle3:.8,phase:1.4,
+    turnAnterior:sign*2.4,turnTrunk:sign*2.4,turnPosterior:sign*2.4,
+    turnRecruitment1:.25,turnRecruitment2:.25,turnRecruitment3:.25});
   let restGaps;
   for(const [n,fish] of poses.entries()){
     const baseline=model.baseline(fish);
@@ -415,5 +427,23 @@ export async function assertMedianGeometry({create=createMedianFin,motion=create
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
-  console.log(`Actual median fins passed: ${JSON.stringify(await assertMedianGeometry())}`);
+  const report=await assertMedianGeometry();
+  const moduleURL=new URL('../static/aquarium-median.js',import.meta.url),source=await readFile(moduleURL,'utf8');
+  const load=async text=>{
+    const absolute=text.replace(/from '(\.[^']+)'/g,(_,path)=>`from '${new URL(path,moduleURL)}'`);
+    return import(`data:text/javascript;base64,${Buffer.from(absolute).toString('base64')}`);
+  };
+  const sectionStart=source.indexOf('      const ring=rings[j],center=j*3,guide=ring.unique[0]*3;');
+  const sectionEnd=source.indexOf('\n    }\n  }\n  family.maximumTubeCorrection',sectionStart);
+  assert.ok(sectionStart>=0&&sectionEnd>sectionStart,'the former translated-annulus mutation has a precise production seam');
+  const squeezed=await load(source.slice(0,sectionStart)+
+    '      for(const i of rings[j].all){target[i*3]+=dx;target[i*3+1]+=dy;target[i*3+2]+=dz;}'+source.slice(sectionEnd));
+  await assert.rejects(()=>assertMedianGeometry({create:squeezed.createMedianFin,deform:squeezed.deformMedianFin}),
+    /median tube cross-section retains its captured annulus/,'actual exported tube walls reject the former squeezed cross-section field');
+  const detachedSource=source.replace('if(!tube.shaft&&tube.border){','if(false&&tube.border){');
+  assert.notEqual(detachedSource,source,'the finite branch-contact correction was disconnected');
+  const detached=await load(detachedSource);
+  await assert.rejects(()=>assertMedianGeometry({create:detached.createMedianFin,deform:detached.deformMedianFin}),
+    /retain their baseline material alignment/,'actual exported branches reject a length-only free tip outside the tissue');
+  console.log(`Actual median fins passed: ${JSON.stringify(report)}; squeezed-wall and detached-tip mutations rejected`);
 }

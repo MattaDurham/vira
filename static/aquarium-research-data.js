@@ -6,14 +6,15 @@ export const researchTopics = [
     navLabel: 'Head-led turns',
     title: 'A course, then a turn',
     claim: 'Recorded koi single-beat turns bend to one side, then return. During controlled bluegill turns, head and tail rotation peaked in separate phases.',
-    implementation: 'Yaw turns begin at the head and load a brief bend through the trunk. The live shape diagram samples the posed skin, fits an anterior-half axis, and measures each caudal lobe tip against a fixed rest length. Vertical changes begin with signed fin trim, then head pitch and posterior follow-through. Pitched thrust carries the climb or dive.',
-    limitation: 'Fin angles, forces and timing are authored, not measured in adult koi. The skull-frame shape diagram adapts Wu’s image-based method with an orthogonal axis fit and two lobe tips; it does not reproduce their pipeline. Tail offset alone cannot distinguish a C bend from an S wave. Koi evidence selects single beats; bluegill turns use apparatus. Head-first timing is not universal.',
+    implementation: 'A turn loads a continuous C through three spinal regions. The front begins releasing while the rear is still loaded, so the return follows a different shape. Issued loading drives an authored angular response; recovery damps rotation. The live diagram measures the posed skin, its anterior-half axis and both caudal tips. Signed fin trim and pitched thrust carry climbs and dives.',
+    limitation: 'The angular response, fin angles and timing are authored controls, not measured adult-koi forces or a fluid simulation. Regional sequencing draws on comparative bluegill data. The skull-frame diagram adapts Wu’s image method; it does not reproduce that pipeline. A large tail offset alone cannot distinguish C and S shapes. Koi single-beat evidence and apparatus-elicited bluegill turns have different conditions.',
     sources: [
       { label: 'Tadokoro et al. 2025: head motion and gaze', url: 'https://doi.org/10.1152/jn.00565.2024' },
       { label: 'Source video S1: freely swimming carp', url: 'https://ndownloader.figshare.com/files/51456827' },
       { label: 'Source video S2: goldfish foraging', url: 'https://ndownloader.figshare.com/files/51456824' },
       { label: 'Clark and Tytell 2026: head and tail turn timing in bluegill', url: 'https://doi.org/10.7717/peerj.21161' },
       { label: 'Clark and Tytell: archived turning data and analysis code', url: 'https://doi.org/10.5281/zenodo.19102452' },
+      { label: 'Versioned bluegill midline coordinates used for regional comparison', url: 'https://github.com/andrewdclark/BluegillTurning/blob/47274ebe9d171a4806985c090ef4361878afd842/ProcessedData/fulldata.csv' },
       { label: 'Source video: slow bluegill turn, bottom and side views', url: 'https://doi.org/10.7717/peerj.21161/supp-1' },
       { label: 'Source video: fast bluegill turn, bottom and side views', url: 'https://doi.org/10.7717/peerj.21161/supp-2' },
       { label: 'Yang et al. 2009: routine koi turns', url: 'https://doi.org/10.1299/jbse.4.67' },
@@ -45,7 +46,7 @@ export const researchTopics = [
     navLabel: 'Fins',
     title: 'Fins change jobs',
     claim: 'Koi pectorals cup and undulate during hovering and retreat. Slow bluegill turns use several strokes with similar bilateral amplitudes; faster turns change that balance. Trout pelvic corrections follow a variable sequence. Dorsal, anal and tail shapes also change with the task.',
-    implementation: 'Live steering issues finite strokes with separate fore-aft rotations and a feathered return. Pelvic actions respond to actual yaw and settling. Rays and tissue follow observed commands; signed trim drives pitch and roll. The diagrams expose issued commands, actual rig attitudes and moving fin edges.',
+    implementation: 'Live steering issues finite strokes with separate fore-aft rotations and a feathered return. Very tight turns first fold the paired fins and let their distal response settle before the body loads. Pelvic actions respond to yaw and settling. Rays and tissue follow observed commands; signed trim drives pitch and roll. The diagrams expose commands, actual rig attitudes and moving fin edges.',
     limitation: 'Timing, angles, side choices and moments are authored. Koi hover data reconstruct one fin; comparative bluegill and trout studies do not calibrate bilateral koi turns. These strokes do not supply a measured yaw-force model. Median-fin deformation preserves attachments and ray lengths but adds no simulated force.',
     sources: [
       { label: 'Wang et al. 2013: three-dimensional koi fin motion', url: 'https://doi.org/10.1016/S1672-6529(13)60217-6' },
@@ -76,7 +77,7 @@ export const researchTopics = [
     navLabel: 'Skeleton',
     title: 'Structure beneath the skin',
     claim: 'Carp have a segmented axial skeleton, paired olfactory openings and a moving gill cover with a flexible sealing flap.',
-    implementation: 'Rigid centra and cranial plates sit within a deforming skin. Nasal apertures, moving jaw and gill covers, and layered eyes are separate three-dimensional surfaces.',
+    implementation: 'Rigid centra and cranial plates sit within a deforming skin. Each dorsal support articulates from its proximal attachment toward its posed cartilage anchor while preserving its shape. Nasal apertures, moving jaw and gill covers, and layered eyes are separate three-dimensional surfaces.',
     limitation: 'The skeleton and face are authored, not CT reconstructions. Iris reflectance draws on zebrafish evidence. XROMM informs carp feeding mechanics, not respiratory timing.',
     sources: [
       { label: 'Al Fatle and Jawad 2026: carp axial skeleton', url: 'https://www.jnhm.uobaghdad.edu.iq/index.php/BINHM/article/view/1263' },
@@ -103,9 +104,9 @@ export const researchTopics = [
   {
     id: 'craft',
     navLabel: 'The build',
-    title: 'One authored fish, two renderers',
-    claim: 'The live aquarium and offline reference share the same authored fish geometry and skin weights.',
-    implementation: 'Blender scripts construct the body, face, scales, fin rays and skeleton. Original AI-generated skin artwork and procedural fin-tissue maps cover that geometry. Stone maps are Poly Haven Dark Rock by Amal Kumar, CC0.',
+    title: 'One structure, several individuals',
+    claim: 'The original live koi and offline reference share authored geometry and skin weights. Koi color varieties can share that anatomy.',
+    implementation: 'Kohaku, Showa and gold Ogon have independent skeletons, fin histories and behavior. Pigmentation stays attached to the resting body surface. Each animal observes its neighbors before choosing its next course. Blender scripts construct the anatomy; original AI-generated skin artwork and procedural fin maps cover it. Stone maps are Poly Haven Dark Rock by Amal Kumar, CC0.',
     limitation: 'The offline still omits the fine ray tubes and uses different light transport. The live view fades unresolved ray-tube contrast into filtered fin detail. Shared source assets and geometry checks do not establish biological accuracy or photographic quality.',
     sources: [
       { label: 'Blender: glTF geometry, materials and skinning', url: 'https://docs.blender.org/manual/en/5.1/addons/import_export/scene_gltf2.html' },
@@ -139,7 +140,7 @@ export const buildChapters = [
   {
     id: 'controls',
     title: 'Connect cause and motion',
-    text: 'A chosen course loads a head-led yaw turn and finite paired-fin strokes. Unresolved steering can request another stroke; recovery and settling finish the gesture. Shared fin trim drives authored pitch and roll moments, with axial follow-through. Tail strokes accelerate the fish, while momentum and drag carry the glide. The diagrams expose the separate commands and actual rig response.',
+    text: 'A chosen course loads a continuous bend through front, middle and rear regions. The front releases before the rear, making the return different from the loading path. Issued regional motion drives an authored angular response, and recovery damps it. Fin trim drives pitch and roll with axial follow-through. Each fish has its own history and observes nearby animals. The diagrams expose commands beside the actual rig response.',
     topics: ['head', 'muscle', 'fins'],
   },
   {

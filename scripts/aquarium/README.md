@@ -3,13 +3,23 @@
 An isolated quality benchmark, available at `/aquarium-benchmark.html`
 on Vira. It does not change the selected desktop background or Design Studio.
 
-One original rigged koi is shared between an interactive WebGPU aquarium and
-a Blender Cycles reference. The controls compare the two renderers, restart the
+The original rigged koi is shared between an interactive WebGPU aquarium and
+a Blender Cycles reference. The live view also includes smaller Showa and gold
+Ogon varieties, each with its own skeleton, mutable fin surfaces, compliance
+history and behavior. These are koi color varieties, with uniformly scaled
+geometry and authored adult-koi controls; they are not calibrated juvenile
+models. The **Multiple fish** toggle isolates the original animal. Body,
+face and swimming-turn studies also isolate it. The offline still contains
+the original Kohaku only. The controls compare the two renderers, restart the
 swim, isolate body motion, inspect the mesh and deformation joints, and adjust
 illumination. A restart resumes motion rather than silently freezing the fish.
 Move the pointer to invite a loose approach; a close tap produces a brief escape.
 Attention has a short delay and fades when the pointer remains still, so the
 animal can resume its own activity instead of chasing indefinitely.
+Neighbor awareness uses one shared position/velocity snapshot before each
+display update. Bounded course, depth and speed adjustments let each animal
+yield while retaining its own destination; they do not impose a school or
+resolve fish-to-fish surface contact.
 Drag, scroll or use the focused canvas's arrow keys to inspect the tank.
 
 The optional **Research layer** follows the rendered skeleton with projected
@@ -591,3 +601,56 @@ the complete curve remains visible alongside the number. The build story
 links this inspection to the [archived bluegill data and code](https://doi.org/10.5281/zenodo.19102452)
 and the original slow/fast supplementary movies. Those apparatus-elicited
 bluegill turns provide comparative context, not adult-koi calibration.
+
+## Tight turns and independent animals
+
+`aquarium-turn.js` issues finite, twice-continuously differentiable turn
+gestures. Three regional curvature coefficients integrate into one continuous
+spinal tangent field. Normal and urgent turns allow substantially deeper C
+shapes than small steering corrections. The anterior region begins releasing
+while the posterior remains loaded, rather than unwinding every region along
+the loading path. This sequencing draws on the authors' filtered midline
+coordinates for trial BG63_17_5 in the
+[versioned bluegill data](https://github.com/andrewdclark/BluegillTurning/blob/47274ebe9d171a4806985c090ef4361878afd842/ProcessedData/fulldata.csv).
+The primary slow and fast supplementary movies were also inspected at normal
+and half speed. Those data concern bluegill in an experimental apparatus;
+they do not establish adult-koi curvature limits or muscle timing.
+
+The same issued regional loading velocities drive a bounded, authored angular
+response. Recovery damps actual rotation. Heading budgets select gestures and
+passive stopping; there is no large independent desired-yaw-rate servo. This
+is a kinematic fluid-response closure, not CFD, measured hydrodynamic torque,
+or a body-and-water momentum conservation solver. Axial centering removes the
+geometric drift of the joint field in all three directions, using fixed
+Gaussian weights. Those weights are a geometric convention, not measured mass.
+
+The actual GLB is checked for deep-bend skin shape, rigid skeletal transforms,
+support attachment and fin clearance. `aquarium-supports.js` rotates each
+dorsal pterygiophore from its posed proximal attachment toward its cartilage
+anchor without stretching the support. `aquarium-fish-instance.js` clones
+skeletons and mutable surfaces while sharing immutable source geometry.
+`aquarium-pigment.js` attaches color variation to material coordinates and
+uses the same color for diffuse light and approximate subsurface backlighting.
+The original asset and offline reference are unchanged.
+
+Urgent turns prepare the paired fins before loading the body: a smooth 0.12 s
+command fold allows another 0.24 s for the previously observed distal response
+to finish. A bounded 0.30 rad cranial basal fold clears the inner fin rays from
+the curling body. It uses the existing rigid fin rotation and preserves the
+recorded tissue response. This is an authored clearance policy, not a measured
+koi reflex. The cruise carrier stays quiet through the finite regional release
+and recovers smoothly; it cannot abruptly reappear when opposing bends cancel.
+The navigation forecast runs the exact rig on a private bone hierarchy and
+bounds actual material influence regions and fin arcs. It samples an issued
+future bend near a pane, while actual posed-geometry containment remains the
+final guard.
+Median ray tubes retain their captured cross-sections around the constrained
+centerline. A branch approaching the tissue edge can re-bend with a material
+plane bias through bounded, fixed-length passes. These are authored geometry
+constraints; they do not solve tissue forces.
+
+A separate bluegill anatomy prototype is being developed in ignored authoring
+files. It has a compressed body, species-specific face and fin structure. It
+is not included in the live aquarium yet. The strong koi bend also exposes
+remaining scale-plate stretching; passing geometry checks does not establish
+photographic or biological accuracy.

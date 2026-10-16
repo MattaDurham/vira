@@ -1,5 +1,7 @@
+import {finClearanceFactor,finClearanceFold} from './aquarium-fin-clearance.js?v=86';
+import {createTurnController,regionalTurnAngle,turnResponse} from './aquarium-turn.js?v=86';
 /* A metre-scaled swimmer: tail thrust, anisotropic drag and inertial steering. */
-import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=83';
+import {waterMin,waterMax,tankCenterZ,tankDepth,tankWidth} from './aquarium-space.js?v=86';
 
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -180,12 +182,13 @@ export function createFinTaskController(){
   }};
 }
 
-export function createSwimmer(random=Math.random){
-  const fish={};
+export function createSwimmer(random=Math.random,{bodyScale=1,id}={}){
+  const fish={};let neighbors=[],forecastBounds=null;
+  const ownScale=Number.isFinite(bodyScale)?clamp(bodyScale,.15,1.5):1;
   const finTasks=createFinTaskController();
+  const bodyTurns=createTurnController();let turnAuthority=1,totalTurnYaw=0,strokeYawStart=0,strokeSerial=0;const strokeStarts=new Map();
   let intent,intentTime,heading,depth,depthTime,cursor,cursorAge,attention,goal;
   let gait,gaitTime,turnTime,turnCooldown,turnSign,escapeTime,wallTime;
-  let bendTime,bendDuration,bendStrength,bendStart;
   let decisions=0,contacts=0;
   const duration=(lo,hi)=>lo+(hi-lo)*random();
   function chooseIntent(next){
@@ -201,29 +204,22 @@ export function createSwimmer(random=Math.random){
     decisions++;
   }
   function reset(){
-    Object.assign(fish,referencePose,{vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,pitchFin:0,pitchMoment:0,
+    Object.assign(fish,referencePose,{bodyScale:ownScale,id,vx:0,vy:0,vz:0,speed:0,drive:0,stroke:0,yawRate:0,pitchRate:0,pitchFin:0,pitchMoment:0,
       bank:0,bankRate:0,rollFin:0,rollMoment:0,
       age:0,finPhase:0,brake:0,maneuver:0,forwardSpeed:0,finSteer:0,
       yawLag1:0,yawLag2:0,yawLag3:0,pitchLag1:0,pitchLag2:0,pitchLag3:0,
       bankLag1:0,bankLag2:0,bankLag3:0,
       muscle1:0,muscle2:0,muscle3:0,turnBend:0,turnBend1:0,turnBend2:0,turnBend3:0,
       turnRecruitment:0,turnRecruitment1:0,turnRecruitment2:0,turnRecruitment3:0});
-    Object.assign(fish,finTasks.reset());
+    Object.assign(fish,finTasks.reset());bodyTurns.reset();turnAuthority=1;totalTurnYaw=strokeYawStart=strokeSerial=0;strokeStarts.clear();
+    Object.assign(fish,{turnAnterior:0,turnTrunk:0,turnPosterior:0,turnAnteriorVelocity:0,turnTrunkVelocity:0,turnPosteriorVelocity:0,turnMoment:0,turnRecoveryMoment:0,turnGestureSerial:0,turnIntensity:0,turnHeadingBudget:0,turnProgress:0,turnGestureAge:0,turnGestureActive:false,turnFinClearance:1,turnPreparing:false,turnPower:0});
     intent='cruise';intentTime=9;heading=fish.yaw;depth=fish.y;depthTime=18;
-    cursor=goal=null;cursorAge=attention=escapeTime=wallTime=0;
-    gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=.4;turnSign=1;
-    bendTime=bendDuration=1;bendStrength=bendStart=0;
+    cursor=goal=null;neighbors=[];cursorAge=attention=escapeTime=wallTime=0;
+    gait='stroke';gaitTime=1.15;turnTime=0;turnCooldown=0;turnSign=1;
     decisions=contacts=0;
   }
   reset();
-  function beginTurnBend(angle,duration){
-    // Fin trim needs no conspicuous C bend. Larger intended turns recruit a
-    // bounded, one-sided stroke; these magnitudes are authored for this rig.
-    const q=clamp((Math.abs(angle)-.16)/(Math.PI/2-.16),0,1);
-    bendStrength=Math.sign(angle)*.22*q*q*(3-2*q);
-    bendStart=fish.turnBend;
-    bendTime=0;bendDuration=duration;
-  }
+  function beginTurnBend(angle){bodyTurns.request(angle,fish.age,{urgent:intent==='escape'});}
   function follow(point){
     if(!validPoint(point)){cursor=null;return;}
     // New motion attracts attention; a motionless pointer is gradually ignored.
@@ -254,6 +250,34 @@ export function createSwimmer(random=Math.random){
     cursor=null;attention=0;goal={x:clamp(point.x,-1.05,1.05),y:clamp(point.y,.50,1.22),z:clamp(point.z,-.55,.24)};
     intent='navigate';intentTime=45;escapeTime=0;decisions++;return true;
   }
+  // Snapshot-only local awareness. This changes the next finite intent, never
+  // teleports a neighbour or permanently replaces the swimmer's destination.
+  function observeNeighbors(records){
+    neighbors=Array.isArray(records)?records.filter(n=>validPoint(n)&&(id===undefined||n.id!==id)).map(n=>({
+      x:n.x,y:n.y,z:n.z,vx:Number.isFinite(n.vx)?n.vx:0,vy:Number.isFinite(n.vy)?n.vy:0,vz:Number.isFinite(n.vz)?n.vz:0,
+      radius:Number.isFinite(n.radius)?clamp(n.radius,.03,1):.22,
+      length:Number.isFinite(n.length)?clamp(n.length,.1,3):1.5,
+      yaw:Number.isFinite(n.yaw)?n.yaw:undefined})):[];
+  }
+  function footprint(callback){forecastBounds=typeof callback==='function'?callback:null;}
+  function forecastPose(time,rate){
+    const predicted=bodyTurns.peek(fish.age+time),pose={...fish,
+      x:fish.x+fish.vx*time,y:fish.y+fish.vy*time,z:fish.z+fish.vz*time,
+      yaw:wrap(fish.yaw+rate*time),pitch:clamp(fish.pitch+fish.pitchRate*time,-.45,.45),
+      bank:clamp((fish.bank??0)+(fish.bankRate??0)*time,-.13,.13),
+      phase:fish.phase+TAU*(.70+fish.drive*2.4)*fish.stroke*time,
+      turnAnterior:predicted.b[0],turnTrunk:predicted.b[1],turnPosterior:predicted.b[2],
+      turnBend:predicted.b[0],turnBend1:predicted.b[0],turnBend2:predicted.b[1],turnBend3:predicted.b[2],
+      turnRecruitment:predicted.activity[0],turnRecruitment1:predicted.activity[0],turnRecruitment2:predicted.activity[1],turnRecruitment3:predicted.activity[2]};
+    const pieces=Math.ceil(time*120),dt=time/pieces;
+    for(const [prefix,angularRate] of [['yawLag',rate],['pitchLag',fish.pitchRate],['bankLag',fish.bankRate??0]]){
+      for(let i=0;i<pieces;i++){
+        let previous=0;
+        axialRates.forEach((response,j)=>{const key=prefix+(j+1);pose[key]=approach(pose[key]-angularRate*dt,previous,response,dt);previous=pose[key];});
+      }
+    }
+    return pose;
+  }
   function contain(correction){
     if(!['x','y','z'].some(axis=>Math.abs(correction[axis])>1e-6))return false;
     contacts++;
@@ -269,7 +293,6 @@ export function createSwimmer(random=Math.random){
     fish.age+=dt;intentTime-=dt;depthTime-=dt;cursorAge+=dt;
     escapeTime=Math.max(0,escapeTime-dt);wallTime=Math.max(0,wallTime-dt);
     turnCooldown=Math.max(0,turnCooldown-dt);turnTime=Math.max(0,turnTime-dt);
-    bendTime+=dt;
     if(intentTime<=0){
       goal=null;
       const choice=random();
@@ -339,9 +362,37 @@ export function createSwimmer(random=Math.random){
     if(fish.y+verticalExtent+fish.vy*lead>waterMax[1]-.08)wantedPitch=Math.min(wantedPitch,-.10);
     if(fish.y-verticalExtent+fish.vy*lead<waterMin[1]+.08)wantedPitch=Math.max(wantedPitch,.10);
 
+    if(neighbors.length){
+      let awayX=0,awayZ=0,awayY=0,weight=0;
+      const selfForward=directionOf(fish.yaw,0),scale=fish.bodyScale??ownScale;
+      for(const other of neighbors){
+        const rx=fish.x-other.x,rz=fish.z-other.z,rvx=fish.vx-other.vx,rvz=fish.vz-other.vz;
+        const relative=rvx*rvx+rvz*rvz,t=relative>1e-8?clamp(-(rx*rvx+rz*rvz)/relative,0,1.2):.65;
+        const dx=rx+rvx*t,dz=rz+rvz*t,dy=fish.y-other.y+(fish.vy-other.vy)*t;
+        const distance=Math.hypot(dx,dz),nx=distance>1e-5?dx/distance:0,nz=distance>1e-5?dz/distance:1;
+        const selfAxis=nx*selfForward.x+nz*selfForward.z;
+        const selfExtent=Math.hypot(.72*scale*selfAxis,.22*scale*Math.sqrt(Math.max(0,1-selfAxis*selfAxis)));
+        const speed=Math.hypot(other.vx,other.vz);
+        const ox=other.yaw!==undefined?-Math.cos(other.yaw):speed>.005?other.vx/speed:0;
+        const oz=other.yaw!==undefined?Math.sin(other.yaw):speed>.005?other.vz/speed:0;
+        const axis=nx*ox+nz*oz;
+        const otherExtent=ox||oz?Math.hypot(other.length*.5*axis,other.radius*Math.sqrt(Math.max(0,1-axis*axis))):other.length*.5;
+        const reach=selfExtent+otherExtent+.12,vertical=.24*scale+other.radius+.10;
+        const closeness=finEase(clamp((reach+.30-distance)/.30,0,1))*finEase(clamp((vertical-Math.abs(dy))/.20,0,1));
+        if(!closeness)continue;
+        awayX+=nx*closeness;awayZ+=nz*closeness;awayY+=Math.sign(dy)*closeness;weight+=closeness;
+      }
+      if(weight){
+        const direction=directionOf(wantedYaw,0),avoidYaw=Math.atan2(direction.z+.80*awayZ,-direction.x-.80*awayX);
+        wantedYaw=wrap(wantedYaw+clamp(wrap(avoidYaw-wantedYaw),-.75,.75));
+        wantedPitch=clamp(wantedPitch+clamp(awayY*.08,-.12,.12),-.42,.42);
+        desiredSpeed*=1-.65*clamp(weight,0,1);
+      }
+    }
     const yawError=wrap(wantedYaw-fish.yaw),pitchError=wantedPitch-fish.pitch;
-    if(Math.abs(yawError)>.16&&turnCooldown===0&&turnTime===0&&!arrive){
-      turnTime=intent==='escape'?.9:.65;turnSign=Math.sign(yawError);turnCooldown=1.05;
+    bodyTurns.request(fish.turnGestureActive&&Math.abs(yawError)>.16&&Math.sign(yawError)!==Math.sign(fish.turnHeadingBudget)?yawError:0,fish.age,{urgent:intent==='escape'});
+    if(Math.abs(yawError)>.16&&turnCooldown===0&&bodyTurns.ready(fish.age)&&!arrive){
+      turnTime=intent==='escape'?.9:1.25;turnSign=Math.sign(yawError);turnCooldown=.16;
       beginTurnBend(yawError,turnTime);
       gait='stroke';gaitTime=Math.max(gaitTime,turnTime);
     }
@@ -351,33 +402,55 @@ export function createSwimmer(random=Math.random){
       else {gait='stroke';gaitTime=desiredSpeed>.1?duration(.8,1.5):duration(.35,.65);}
     }
     const active=(intent!=='hover'||curious)&&!arrive&&(gait==='stroke'||escapeTime>0);
-    const turning=turnTime>0&&Math.sign(yawError)===turnSign;
-    const finAuthority=intent==='hover'||arrive?.18:.10;
-    const rateLimit=intent==='escape'?1.65:avoiding?.95:.76;
+    const gesture=bodyTurns.sample(fish.age);
+    if(gesture.serial!==strokeSerial){strokeSerial=gesture.serial;strokeYawStart=totalTurnYaw;strokeStarts.set(strokeSerial,strokeYawStart);
+      for(const key of strokeStarts.keys())if(key!==gesture.serial&&key!==gesture.outgoingSerial)strokeStarts.delete(key);}
+    const headingProgress=totalTurnYaw-strokeYawStart;
+    const outgoingHeadingProgress=totalTurnYaw-(strokeStarts.get(gesture.outgoingSerial)??totalTurnYaw);
+    Object.assign(fish,{turnAnterior:gesture.b[0],turnTrunk:gesture.b[1],turnPosterior:gesture.b[2],
+      turnAnteriorVelocity:gesture.v[0],turnTrunkVelocity:gesture.v[1],turnPosteriorVelocity:gesture.v[2],
+      turnGestureSerial:gesture.serial,turnGestureAge:gesture.age,turnGestureActive:gesture.active,turnFinClearance:gesture.finClearance,turnPreparing:gesture.preparing,turnPower:gesture.power,turnHeadingBudget:gesture.budget,turnIntensity:gesture.intensity,turnProgress:headingProgress,
+      turnRecruitment:gesture.activity[0],turnRecruitment1:gesture.activity[0],turnRecruitment2:gesture.activity[1],turnRecruitment3:gesture.activity[2],
+      turnBend:gesture.b[0],turnBend1:gesture.b[0],turnBend2:gesture.b[1],turnBend3:gesture.b[2]});
+    const turning=gesture.active,finAuthority=intent==='hover'||arrive?.18:.10;
     const finRate=clamp(yawError*.55,-finAuthority,finAuthority);
-    // Turning effort builds and releases with the same activation envelope
-    // that bends the body. Low-authority fin trim can lead that loaded stroke.
-    const turnEffort=clamp(fish.maneuver*Math.sign(yawError),0,1);
-    const turnRate=finRate+turnEffort*(clamp(yawError*2.0,-rateLimit,rateLimit)-finRate);
-    let safeRate=turnRate,blocked=false;
-    // A short angular forecast lets fins centre the animal before a tail-first
-    // collision. It constrains torque, never teleports the animal away.
     const occupiedDepth=Math.abs(fish.z-tankCenterZ-.065*Math.sin(fish.yaw))+ez;
+    const clearance=bounds=>bounds?Math.min(...['x','y','z'].flatMap((key,i)=>[
+      bounds.min[key]-waterMin[i],waterMax[i]-bounds.max[key]])):-Infinity;
+    // A complete circumscribed radius gates the more detailed asset forecast;
+    // a fish well inside all panes needs no repeated private-rig evaluations.
+    const size=fish.bodyScale??ownScale,radius=.98*size+.04;
+    const vertical=(.27+.85*Math.abs(Math.sin(fish.pitch))+.85*Math.abs(Math.sin(fish.bank??0)))*size+.04;
+    const needsFootprint=forecastBounds&&(Math.abs(fish.x)+Math.abs(fish.vx)*.30+radius>tankWidth/2-.05
+      ||Math.abs(fish.z-tankCenterZ)+Math.abs(fish.vz)*.30+radius>tankDepth/2-.05
+      ||fish.y-Math.abs(fish.vy)*.30-vertical<waterMin[1]+.05||fish.y+Math.abs(fish.vy)*.30+vertical>waterMax[1]-.05);
+    const currentClearance=needsFootprint?clearance(forecastBounds(fish)):-Infinity;
     const fits=rate=>{
+      if(needsFootprint){
+        // The callback derives bounds from this asset's actual material/rig.
+        // Evaluate the issued future C field and causal lag at intermediate
+        // times, rather than testing only a rotated straight-body ellipsoid.
+        for(const time of [.10,.20,.30]){
+          const next=clearance(forecastBounds(forecastPose(time,rate)));
+          if(!Number.isFinite(next)||next<.025&&next<currentClearance-1e-6)return false;
+        }
+        return true;
+      }
       const yaw=fish.yaw+rate*.30,extent=Math.hypot(.81*Math.sin(yaw),.29*Math.cos(yaw))
         +.19*Math.abs(Math.cos(yaw))*clamp(Math.max(Math.abs(fish.yawRate),Math.abs(rate))/.65,0,1);
       const projected=Math.abs(fish.z+fish.vz*.3-tankCenterZ-.065*Math.sin(yaw))+extent;
       return projected<tankDepth/2-.045||projected<occupiedDepth;
     };
-    if(!fits(safeRate)){
-      safeRate=0;
-      for(const fraction of [.75,.5,.25])if(fits(turnRate*fraction)){safeRate=turnRate*fraction;break;}
-      blocked=safeRate===0;
-    }
-    Object.assign(fish,finTasks.sample({age:fish.age,turn:clamp(safeRate*.9+fish.finSteer*.35,-1,1),yawError,
+    const predicted=turnResponse(gesture,fish.yawRate,.30,{finRate,headingProgress,outgoingHeadingProgress}).yawRate;
+    let allowed=1;
+    if(!fits(predicted)){allowed=0;for(const part of [.75,.5,.25])if(fits(fish.yawRate+(predicted-fish.yawRate)*part)){allowed=part;break;}}
+    const blocked=allowed===0;turnAuthority=approach(turnAuthority,allowed,12,dt);
+    const response=turnResponse(gesture,fish.yawRate,dt,{finRate,allowed:turnAuthority,headingProgress,outgoingHeadingProgress});
+    fish.turnMoment=response.moment;fish.turnRecoveryMoment=response.recoveryMoment;
+    Object.assign(fish,finTasks.sample({age:fish.age,turn:gesture.preparing?0:clamp(finRate+(gesture.active?gesture.budget*.35:0),-1,1),yawError,
       yawRate:fish.yawRate,stopping:fish.brake*clamp((Math.abs(fish.forwardSpeed)-.025)/.075,0,1),
       mode:intent==='hover'&&!arrive?'hover':'swim'}));
-    fish.yawRate=approach(fish.yawRate,safeRate,turning?5.5:7,dt);
+    fish.yawRate=response.yawRate;
     // A depth decision first changes the paired fins' signed basal incidence.
     // Their shared neutral-relative control moment then accelerates pitch;
     // head rotation is the response, not the command used to decorate the fins.
@@ -388,7 +461,7 @@ export function createSwimmer(random=Math.random){
     fish.pitchMoment=finPitchMoment(fish);
     fish.pitchRate=clamp(fish.pitchRate+(fish.pitchMoment-3*fish.pitchRate)*dt,-.33,.33);
     const yawDelta=fish.yawRate*dt,pitchDelta=clamp(fish.pitch+fish.pitchRate*dt,-.45,.45)-fish.pitch;
-    fish.yaw=wrap(fish.yaw+yawDelta);fish.pitch+=pitchDelta;
+    fish.yaw=wrap(fish.yaw+yawDelta);fish.pitch+=pitchDelta;totalTurnYaw+=yawDelta;
     // The stiff anterior frame leads; successive axial regions follow it.
     // Relative offsets survive a heading wrap without a two-pi tail impulse.
     for(const [prefix,delta] of [['yawLag',yawDelta],['pitchLag',pitchDelta]]){
@@ -400,7 +473,7 @@ export function createSwimmer(random=Math.random){
     }
     const braking=arrive||(intent==='hover'&&!curious)||avoiding||turningNearPane||Math.abs(yawError)>1.15;
     fish.brake=approach(fish.brake,braking?1:0,4,dt);
-    fish.maneuver=approach(fish.maneuver,turning&&!blocked?turnSign:0,5,dt);
+    fish.maneuver=approach(fish.maneuver,turning&&!blocked?Math.sign(gesture.budget):0,5,dt);
     fish.drive=approach(fish.drive,desiredSpeed,escapeTime?6:2.3,dt);
     const safeEscape=escapeTime>0&&occupiedDepth<tankDepth/2-.035&&Math.sin(fish.yaw)*(laneZ-fish.z)>0;
     const propel=active&&(!blocked||safeEscape);
@@ -414,25 +487,6 @@ export function createSwimmer(random=Math.random){
     });
     fish.phase+=TAU*(.70+fish.drive*2.4)*fish.stroke*dt;
     fish.finPhase+=finPhaseRate(fish)*dt;
-    // A finite loading stroke returns toward straight before the next bout.
-    // Regional response carries both loading and release toward the peduncle;
-    // it does not reset or borrow the independent propulsive carrier phase.
-    const u=clamp(bendTime/bendDuration,0,1),pulse=u<.3?u/.3:(1-u)/.7;
-    const shaped=pulse*pulse*(3-2*pulse);
-    fish.turnBend=u<.3?bendStart+(bendStrength-bendStart)*shaped:bendStrength*shaped;
-    // Unsigned activity shares the bend's causal response. Opposing turns can
-    // cross zero while their still-loaded posterior regions remain recruited.
-    fish.turnRecruitment=Math.abs(fish.turnBend)/.22;
-    let recruited=fish.turnRecruitment;
-    axialRates.forEach((rate,i)=>{
-      const key='turnRecruitment'+(i+1);
-      fish[key]=approach(fish[key],recruited,rate,dt);recruited=fish[key];
-    });
-    let bending=fish.turnBend;
-    axialRates.forEach((rate,i)=>{
-      const key='turnBend'+(i+1);
-      fish[key]=approach(fish[key],bending,rate,dt);bending=fish[key];
-    });
     const direction=directionOf(fish.yaw,fish.pitch),flow=waterFlow(fish,fish.age);
     const forward=(fish.vx-flow.x)*direction.x+(fish.vy-flow.y)*direction.y+(fish.vz-flow.z)*direction.z;
     fish.forwardSpeed=forward;
@@ -446,7 +500,10 @@ export function createSwimmer(random=Math.random){
     // release its effort smoothly after the gait requests a coast. This is an
     // authored force proxy, not tissue mechanics or a fitted EMG relationship.
     const tailDrive=fish.muscle3*fish.stroke;
-    const powerStroke=tailDrive*tailDrive*((1-carrier)+carrier*(.30+1.4*Math.cos(fish.phase-4.8)**2));
+    // The suppressed carrier can contribute only while the issued finite body
+    // gesture actually moves. Preparation and a frozen/settled C field cannot
+    // acquire mean forward power from an invisible cruise beat.
+    const powerStroke=tailDrive*tailDrive*((1-carrier)*fish.turnPower+carrier*(.30+1.4*Math.cos(fish.phase-4.8)**2));
     const thrust=(!blocked||safeEscape)?Math.max(0,(.55*fish.drive+1.0*fish.drive**2+(fish.drive-forward)*2.8)*powerStroke)*(escapeTime>0?1.9:1):0;
     const drag=(.38+fish.brake*.80)*forward+.95*forward*Math.abs(forward);
     const finForce=braking&&!arrive&&(intent!=='hover'||curious)?clamp((laneZ-fish.z)*2.0,-.12,.12)*Math.cos(fish.yaw):0;
@@ -490,7 +547,7 @@ export function createSwimmer(random=Math.random){
     const dt=Math.min(elapsed,.25),pieces=Math.max(1,Math.ceil(dt*120-1e-9));
     for(let i=0;i<pieces;i++){integrate(dt/pieces);onTick?.(fish);}
   }
-  return {fish,follow,flick,navigate,reset,contain,step,
+  return {fish,follow,flick,navigate,neighbors:observeNeighbors,footprint,reset,contain,step,
     get behavior(){return {intent:attention>.12&&intent!=='escape'&&intent!=='navigate'?'curious':intent,
       gait,attention,decisions,contacts,avoiding:wallTime>0};}};
 }
@@ -519,12 +576,12 @@ export function finActuation(fish,side,pectoral=true){
   const gain=pectoral?1:.35;
   const family=pectoral?'pectoral':'pelvic',suffix=side>0?'Plus':'Minus';
   const taskPaddle=fish[family+'Paddle'+suffix],taskForeAft=fish[family+'ForeAft'+suffix];
-  const tasked=fish.poseHistory!==false&&Number.isFinite(taskPaddle);
-  return {spread:(.035+.07*slow+.18*stopping+.12*positiveFinDemand(turn*side)+.05*finDemandMagnitude(trim))*gain,
-    paddle:tasked?taskPaddle:(.085*control+.14*hover)*beat*gain,
-    foreAft:tasked?taskForeAft??0:0,
+  const tasked=fish.poseHistory!==false&&Number.isFinite(taskPaddle),clearance=finClearanceFactor(fish);
+  return {spread:(.035+.07*slow+.18*stopping+.12*positiveFinDemand(turn*side)+.05*finDemandMagnitude(trim))*gain*clearance,
+    paddle:clearance*(tasked?taskPaddle:(.085*control+.14*hover)*beat*gain),
+    foreAft:clearance*(tasked?taskForeAft??0:0)+finClearanceFold(clearance,pectoral),
     sweep:(-.010*speed+.003*(control+.4*hover)*beat)*gain,
-    incidence:trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35)};
+    incidence:clearance*(trim*.25*(pectoral?-1:.35)+(fish.rollFin??0)*side*(pectoral?1:.35))};
 }
 
 export function finPitchMoment(fish){
@@ -567,12 +624,13 @@ export function spinalField(fish,axial){
     const s=clamp((x-axial[5])/length,0,1),phase=fish.phase-4.8*s;
     const muscle=alongBody(muscleHistory,s);
     // A body-driven turn replaces the independent cruise wave where it loads.
-    // Full recruitment at a quarter of maximum bend is an authored mode
-    // policy, not a koi measurement; tiny fin-trim corrections recruit little.
+    // R=.25 denotes full carrier replacement. The finite controller scales
+    // its C2 envelope by body-turn strength, so weak fin trim retains the
+    // ordinary propulsive wave. These blend thresholds are authored.
     const carrier=turnCarrierShare(alongBody(recruitmentHistory,s));
     const amplitude=(.09+drive*.10)*muscle*carrier;
     const lateral=(Math.atan(amplitude/length*(2*s*Math.sin(phase)-4.8*s*s*Math.cos(phase)))
-      +alongBody(yawHistory,s)-alongBody(turnHistory,s)*s*s*(3-2*s))*lateralGain;
+      +alongBody(yawHistory,s)+(fish.poseHistory!==false&&Number.isFinite(fish.turnAnterior)?regionalTurnAngle(s,[fish.turnAnterior,fish.turnTrunk,fish.turnPosterior]):-alongBody(turnHistory,s)*s*s*(3-2*s)))*lateralGain;
     // Carp propulsion remains predominantly lateral. Vertical flexion follows
     // pitch manoeuvres; the small secondary wave is compliance, not a dolphin kick.
     const vertical=(-alongBody(pitchHistory,s)+.018*muscle*s*s*Math.sin(phase+.7))*verticalGain;

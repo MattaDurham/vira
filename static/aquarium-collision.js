@@ -1,5 +1,5 @@
 import {Vector3,Box3} from './vendor/three.webgpu.js';
-import {waterMin,waterMax} from './aquarium-space.js?v=83';
+import {waterMin,waterMax} from './aquarium-space.js?v=86';
 
 const point=new Vector3();
 const tankMin=new Vector3(...waterMin),tankMax=new Vector3(...waterMax);

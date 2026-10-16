@@ -3,7 +3,7 @@
  * Rays retain their material lengths after the actual skeletal deformation.
  * This reduced-order animation field does not calculate water forces. */
 import {Matrix4} from './vendor/three.webgpu.js';
-import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=83';
+import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=86';
 
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
 const smooth=value=>value*value*(3-2*value);
@@ -68,6 +68,20 @@ function createBinding(mesh){
     reconcile:createFinNormalSmoother(mesh.geometry)};
 }
 
+function tubeFrame(centers,ring,gx,gy,gz,output){
+  const before=Math.max(0,ring-1)*3,after=Math.min(centers.length/3-1,ring+1)*3;
+  let tx=centers[after]-centers[before],ty=centers[after+1]-centers[before+1],tz=centers[after+2]-centers[before+2];
+  const length=Math.hypot(tx,ty,tz);
+  if(length<1e-12)throw new Error('Median tube has a degenerate material tangent');
+  tx/=length;ty/=length;tz/=length;
+  const along=gx*tx+gy*ty+gz*tz;
+  let rx=gx-along*tx,ry=gy-along*ty,rz=gz-along*tz;
+  const radius=Math.hypot(rx,ry,rz);
+  if(radius<1e-12)throw new Error('Median tube has a degenerate radial frame');
+  rx/=radius;ry/=radius;rz/=radius;
+  output.set([rx,ry,rz,ty*rz-tz*ry,tz*rx-tx*rz,tx*ry-ty*rx,tx,ty,tz]);
+}
+
 function createTubeTrees(binding,atlas){
   const {mesh,count,base}=binding,index=mesh.geometry.index.array,uv=mesh.geometry.attributes.uv;
   const parent=Array.from({length:count},(_,i)=>i),find=i=>parent[i]===i?i:parent[i]=find(parent[i]);
@@ -84,6 +98,15 @@ function createTubeTrees(binding,atlas){
     for(let j=0;j<rings.length;j++)for(let k=0;k<3;k++)centers[j*3+k]=rings[j].unique.reduce((sum,i)=>sum+base[i*3+k],0)/8;
     const lengths=new Float64Array(rings.length-1);
     for(let j=1;j<rings.length;j++)lengths[j-1]=Math.hypot(...subtract(point(centers,j),point(centers,j-1)));
+    for(let j=0;j<rings.length;j++){
+      const ring=rings[j],guide=ring.unique[0]*3,center=j*3;
+      ring.frame=new Float64Array(9);ring.coordinates=new Float64Array(ring.all.length*3);
+      tubeFrame(centers,j,base[guide]-centers[center],base[guide+1]-centers[center+1],base[guide+2]-centers[center+2],ring.frame);
+      for(let n=0;n<ring.all.length;n++){
+        const index=ring.all[n]*3,x=base[index]-centers[center],y=base[index+1]-centers[center+1],z=base[index+2]-centers[center+2];
+        for(let axis=0;axis<3;axis++)ring.coordinates[n*3+axis]=x*ring.frame[axis*3]+y*ring.frame[axis*3+1]+z*ring.frame[axis*3+2];
+      }
+    }
     const number=tubes.length,shaft=number%3===0;
     if(rings.length!==(shaft?25:9))throw new Error('Median tube tree order is unsupported');
     const tree=Math.floor(number/3),root=atlas.paths[tree*2+1]?.indices[0];
@@ -99,7 +122,14 @@ function createTubeTrees(binding,atlas){
       relative=subtract(point(centers,0),point(primary.centers,junction));
     }
     if(Math.hypot(...relative)>.000001)throw new Error('Median tube attachment does not match its material tree');
+    let border;
+    if(!shaft){
+      const tip=atlasPoint(...point(centers,rings.length-1),atlas),uv=atlas.uv;
+      const edge=tip.indices.filter(index=>uv.getY(index)<.001),inside=tip.indices.find(index=>uv.getY(index)>.001);
+      if(edge.length===2&&inside!==undefined)border={edge,inside};
+    }
     tubes.push({rings,centers,lengths,shaft,tree,root,junction,relative,
+      border,radius:Math.max(...rings[0].coordinates.filter((_,i)=>i%3!==2).map(Math.abs)),
       original:new Float64Array(centers.length),corrected:new Float64Array(centers.length)});
   }
   return tubes;
@@ -134,7 +164,7 @@ function createAtlas(binding){
       minY:Math.min(...indices.map(j=>base[j*3+1])),maxY:Math.max(...indices.map(j=>base[j*3+1]))});
   }
   if(!triangles.length||paths.length<2)throw new Error('Median material atlas is empty');
-  return {paths,triangles,base};
+  return {paths,triangles,base,uv};
 }
 
 function atlasPoint(x,y,z,atlas){
@@ -184,10 +214,63 @@ function constrainTubeTrees(family){
       const scale=lengths[j-1]/Math.hypot(dx,dy,dz);
       corrected[b]=corrected[a]+dx*scale;corrected[b+1]=corrected[a+1]+dy*scale;corrected[b+2]=corrected[a+2]+dz*scale;
     }
+    if(!tube.shaft&&tube.border){
+      // A branch terminates on the membrane edge. When its chord shortens,
+      // distribute that slack through its bend instead of pushing a rigidly
+      // integrated free tip outside the tissue. Both passes retain each
+      // captured segment length; the parent junction remains the anchor.
+      const last=corrected.length-3,anchor=corrected.slice(0,3),length=lengths.reduce((sum,value)=>sum+value,0);
+      const edge=tube.border.edge.map(index=>point(membrane.target,index)),inside=point(membrane.target,tube.border.inside);
+      const alongEdge=normalize(subtract(edge[1],edge[0])),inward=subtract(inside,edge[0]),along=dot(inward,alongEdge);
+      for(let k=0;k<3;k++)inward[k]-=along*alongEdge[k];
+      const normalInward=normalize(inward),protrusion=-dot(subtract(point(corrected,rings.length-1),point(original,rings.length-1)),normalInward);
+      // Begin contact correction smoothly while some tube wall still covers
+      // the edge, reaching full correction at one captured branch radius.
+      const contact=smooth(clamp((protrusion/tube.radius-.5)/.5,0,1));
+      const tipTarget=point(corrected,rings.length-1).map((value,k)=>value+(original[last+k]-value)*contact);
+      const chord=Math.hypot(...subtract(tipTarget,Array.from(anchor)));
+      if(chord<length&&contact>0){
+        const material=rings[Math.floor(rings.length/2)].unique[0]*6,surface=membrane.target;
+        const [a,b,c]=[0,1,2].map(k=>point(surface,binding.material[material+k]));
+        const normal=normalize(cross(subtract(b,a),subtract(c,a))),direction=normalize(subtract(point(original,rings.length-1),Array.from(anchor)));
+        const transverse=normalize(cross(normal,direction)),toward=subtract(point(surface,root),point(original,Math.floor(rings.length/2)));
+        // A small in-plane seed selects inward bending for nearly collinear
+        // branches. Its size is geometric and is not a measured tissue gain.
+        const bow=Math.sqrt(Math.max(0,length*length-chord*chord))*.005*contact*(dot(transverse,toward)<0?-1:1);
+        for(let j=1;j<rings.length-1;j++)for(let k=0;k<3;k++)corrected[j*3+k]+=transverse[k]*bow*Math.sin(Math.PI*j/(rings.length-1));
+        // Bound live work to 32 deterministic passes; any remaining tip error
+        // is retained, rather than stretching the ray to conceal the residual.
+        for(let iteration=0;iteration<32;iteration++){
+          corrected.set(tipTarget,last);
+          for(let j=rings.length-2;j>=0;j--){
+            const a=j*3,b=a+3,dx=corrected[a]-corrected[b],dy=corrected[a+1]-corrected[b+1],dz=corrected[a+2]-corrected[b+2];
+            const scale=lengths[j]/Math.hypot(dx,dy,dz);
+            corrected[a]=corrected[b]+dx*scale;corrected[a+1]=corrected[b+1]+dy*scale;corrected[a+2]=corrected[b+2]+dz*scale;
+          }
+          corrected.set(anchor,0);
+          for(let j=1;j<rings.length;j++){
+            const a=(j-1)*3,b=j*3,dx=corrected[b]-corrected[a],dy=corrected[b+1]-corrected[a+1],dz=corrected[b+2]-corrected[a+2];
+            const scale=lengths[j-1]/Math.hypot(dx,dy,dz);
+            corrected[b]=corrected[a]+dx*scale;corrected[b+1]=corrected[a+1]+dy*scale;corrected[b+2]=corrected[a+2]+dz*scale;
+          }
+          if(Math.hypot(corrected[last]-tipTarget[0],corrected[last+1]-tipTarget[1],corrected[last+2]-tipTarget[2])<1e-7)break;
+        }
+      }
+    }
     for(let j=0;j<rings.length;j++){
       const dx=corrected[j*3]-original[j*3],dy=corrected[j*3+1]-original[j*3+1],dz=corrected[j*3+2]-original[j*3+2];
       maximum=Math.max(maximum,Math.hypot(dx,dy,dz));
-      for(const i of rings[j].all){target[i*3]+=dx;target[i*3+1]+=dy;target[i*3+2]+=dz;}
+      const ring=rings[j],center=j*3,guide=ring.unique[0]*3;
+      // The tissue atlas supplies orientation, not a new ray thickness. A
+      // strong body bend can squeeze its in-plane coordinates while the
+      // separately constrained centerline keeps its arc. Carry each captured
+      // annulus rigidly around that corrected tangent instead of retaining
+      // the squeezed tube wall or merely translating its center.
+      tubeFrame(corrected,j,target[guide]-original[center],target[guide+1]-original[center+1],target[guide+2]-original[center+2],ring.frame);
+      for(let n=0;n<ring.all.length;n++){
+        const i=ring.all[n]*3,a=ring.coordinates[n*3],b=ring.coordinates[n*3+1],c=ring.coordinates[n*3+2];
+        for(let k=0;k<3;k++)target[i+k]=corrected[center+k]+ring.frame[k]*a+ring.frame[k+3]*b+ring.frame[k+6]*c;
+      }
     }
   }
   family.maximumTubeCorrection=maximum;
