@@ -1,6 +1,7 @@
 import * as THREE from './vendor/three.webgpu.js';
 import {GLTFLoader} from './vendor/GLTFLoader.js';
-import {createKoiInstance} from './aquarium-fish-instance.js?v=91';
+import {createKoiInstance} from './aquarium-fish-instance.js?v=95';
+import {getAquariumModel} from './aquarium-model.js?v=95';
 import {createAxialFrame} from './aquarium-axial-frame.js?v=91';
 import {headAngles} from './aquarium-attitude.js?v=91';
 import {createRapierRenderBridge} from './aquarium-articulated-render.js?v=91';
@@ -9,7 +10,7 @@ import {createReferenceAnimationClip} from './aquarium-reference-motion.js?v=91'
 // The bridge only copies P/Q to the real rig and refreshes visual tissue here.
 // This page never instantiates Rapier and never claims a physical solution.
 const $=id=>document.getElementById(id),degrees=180/Math.PI;
-const state={time:0,playing:false,speed:.25,camera:'side',anatomy:false,labels:true,follow:true,last:0};
+const state={time:0,playing:false,speed:.25,zoom:1,camera:'side',anatomy:false,labels:true,follow:true,last:0};
 const restingVisual=Object.fromEntries(['phase','finPhase','drive','stroke','muscle1','muscle2','muscle3','speed','forwardSpeed',
   'brake','finSteer','pitchFin','rollFin','turnAnterior','turnTrunk','turnPosterior','turnRecruitment1','turnRecruitment2',
   'turnRecruitment3','torsionDrive',...['yawLag','pitchLag','bankLag'].flatMap(prefix=>[1,2,3].map(i=>prefix+i)),
@@ -48,6 +49,7 @@ function render(){
     const view=views[i],{camera,pane}=view,r=pane.getBoundingClientRect(),mode=modes[i];
     camera.aspect=r.width/r.height;camera.up.set(0,1,0);
     const offset=mode==='above'?new THREE.Vector3(0,3.5,.001):mode==='side'?new THREE.Vector3(0,.12,3.5):new THREE.Vector3(-1.9,1.5,2.2);
+    offset.divideScalar(state.zoom);
     camera.position.copy(center).add(offset);if(mode==='above')camera.up.set(0,0,-1);
     camera.lookAt(center);camera.updateProjectionMatrix();camera.updateMatrixWorld();
     // WebGL viewport coordinates start at the bottom, including stacked mobile panes.
@@ -108,18 +110,35 @@ function animate(now){
 $('play').onclick=()=>{if(!clip)return;if(state.time>=end){state.time=0;show(0);}state.playing=!state.playing;$('play').textContent=state.playing?'Pause':'Play';};
 $('reset').onclick=()=>{state.playing=false;state.time=0;$('play').textContent='Play';show(0);};
 $('camera').onchange=e=>{state.camera=e.target.value;render();};$('speed').onchange=e=>state.speed=Number(e.target.value);
+$('zoom').onchange=e=>{state.zoom=Number(e.target.value);render();};
 $('anatomy').onchange=e=>{state.anatomy=e.target.checked;anatomy();};$('labels').onchange=e=>{state.labels=e.target.checked;render();};
 $('follow').onchange=e=>{state.follow=e.target.checked;render();};
 $('timeline').oninput=e=>{state.playing=false;$('play').textContent='Play';state.time=Number(e.target.value);show(state.time);};
 window.addEventListener('resize',resize);document.addEventListener('visibilitychange',()=>state.last=0);
 async function json(url){const response=await fetch(url);if(!response.ok)throw new Error(`${url}: HTTP ${response.status}`);return response.json();}
+function studyEnvironment(){
+  const room=new THREE.Scene();room.background=new THREE.Color(.035,.045,.055);
+  const cards=[[[0,3,0],[3,.55],new THREE.Color(3.4,3.5,3.7)],
+    [[-2,.8,1],[.4,2.3],new THREE.Color(1.4,1.6,1.8)],
+    [[2,1,-1],[1.2,.45],new THREE.Color(.65,.85,1.05)]];
+  for(const [position,dimensions,color] of cards){
+    const card=new THREE.Mesh(new THREE.PlaneGeometry(...dimensions),new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide}));
+    card.position.set(...position);card.lookAt(0,0,0);room.add(card);
+  }
+  const generator=new THREE.PMREMGenerator(renderer),environment=generator.fromScene(room,.035,.05,20,{size:256});
+  scene.environment=environment.texture;scene.environmentIntensity=.65;generator.dispose();
+  room.traverse(node=>{node.geometry?.dispose();node.material?.dispose();});
+  window.addEventListener('pagehide',()=>environment.dispose(),{once:true});
+}
 try{
   renderer=new THREE.WebGPURenderer({canvas:$('canvas'),antialias:true,forceWebGL:true});await renderer.init();
   renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.NeutralToneMapping;
-  const [gltf,data,profile]=await Promise.all([new GLTFLoader().loadAsync('./aquarium/koi.glb'),json('./aquarium/reference-turn.json'),json('./aquarium/body-mass.json')]);
+  const model=getAquariumModel(location.search);
+  const [gltf,data,profile]=await Promise.all([new GLTFLoader().loadAsync(model.asset),json('./aquarium/reference-turn.json'),json(model.profile)]);
   sampler=createAxialFrame(gltf.scene);clip=createReferenceAnimationClip({data,sampler,profile});packet=clip.createPacket();end=clip.metadata.end+.3;
-  scene=new THREE.Scene();scene.background=new THREE.Color(0x061019);scene.add(new THREE.HemisphereLight(0xdce8ea,0x10212a,1.35));
-  for(const [color,power,position] of [[0xfff0db,3.7,[-1,3,2]],[0x88bac8,1.6,[1,1,-2]]]){const light=new THREE.DirectionalLight(color,power);light.position.set(...position);scene.add(light);}
+  scene=new THREE.Scene();scene.background=new THREE.Color(0x061019);scene.add(new THREE.HemisphereLight(0xdce8ea,0x10212a,.55));
+  for(const [color,power,position] of [[0xfff0db,3.2,[-1,3,2]],[0x88bac8,1.4,[1,1,-2]]]){const light=new THREE.DirectionalLight(color,power);light.position.set(...position);scene.add(light);}
+  studyEnvironment();
   instance=createKoiInstance(gltf.scene,{random:()=>.5,materialFor:material=>{const cloned=material.clone();originals.set(cloned,{opacity:cloned.opacity,transparent:cloned.transparent,depthWrite:cloned.depthWrite});cloned.side=THREE.DoubleSide;return cloned;}});
   scene.add(instance.asset);bridge=createRapierRenderBridge(instance,{sampler});
   const grid=new THREE.GridHelper(4,40,0x31505c,0x16303b);grid.position.set(0,-.32,0);grid.material.transparent=true;grid.material.opacity=.42;scene.add(grid);

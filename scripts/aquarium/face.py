@@ -12,6 +12,15 @@ import math
 NARIAL_OPENINGS=((-0.590,.43,.0042,.0027,.0018),(-0.579,.48,.0046,.0029,.00035))
 
 
+def rostral_profile(x):
+    """Native collar radii and centre shared by its geometry and material chart."""
+    u=max(0,min(1,(-x-.660)/.012))
+    width=.0245-.0005*u
+    radius=.025-.0175*u+.0003*math.sin(math.pi*u)
+    center=-.03335-.00965*u
+    return width,radius,radius,center
+
+
 def opercular_span(t):
     return -.505,-.413+.039*math.sin(math.pi*t)**1.6
 
@@ -25,7 +34,7 @@ def opercular_coordinates(x,angle):
     return t,(x-front)/(rear-front)
 
 
-def author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil):
+def author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil,register_barbel_root=None):
     from mathutils import Vector
     flesh=material("Facial mucosa",(.65,.59,.50),.44)
     flesh.node_tree.nodes["Principled BSDF"].inputs["Subsurface Weight"].default_value=.16
@@ -237,9 +246,13 @@ def author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil):
         start=math.pi if lower else 0
         def collar(t,u):
             a=start+math.pi*t
-            return (-.660-.012*u,(.0245-.0005*u)*math.cos(a),(-.03335-.00965*u)+(.025-.0175*u+.0003*math.sin(math.pi*u))*math.sin(a))
+            x=-.660-.012*u
+            width,upper,lower_radius,center=rostral_profile(x)
+            radius=upper if math.sin(a)>=0 else lower_radius
+            return x,width*math.cos(a),center+radius*math.sin(a)
         rostrum=patch("Rostral lip attachment",64,24,collar,ivory,False)
         rostrum["facial_joint"]="jaw_lower" if lower else "jaw_upper"
+        rostrum["material_chart"]="rostral"
         skin_uv(rostrum)
 
     # Thick lips are modeled around a continuous oral tube. No opaque nose cap
@@ -272,6 +285,11 @@ def author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil):
         for small in [False,True]:
             origin=Vector((-.626,sign*.034,-.027)) if small else Vector((-.651,sign*.024,-.044))
             end=Vector((-.669,sign*.058,-.045)) if small else Vector((-.706,sign*.061,-.083))
+            if register_barbel_root is not None:
+                registered=Vector(register_barbel_root(origin.copy()))
+                delta=registered-origin
+                origin+=delta
+                end+=delta
             vertices,faces=[],[]
             for i in range(49):
                 t=i/48;point=origin.lerp(end,t)

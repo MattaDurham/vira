@@ -3,8 +3,10 @@
 An isolated quality benchmark, available at `/aquarium-benchmark.html`
 on Vira. It does not change the selected desktop background or Design Studio.
 
-The original rigged koi is shared between an interactive WebGPU aquarium and
-a Blender Cycles reference. The live view also includes smaller Showa and gold
+The refined rigged koi has an independently authored top profile and continuous
+opaque surface maps. The original model remains available with `?model=original`
+for its matching Blender Cycles reference and recorded mechanics comparisons.
+The live view also includes smaller Showa and gold
 Ogon varieties, each with its own skeleton, mutable fin surfaces, compliance
 history and behavior. These are koi color varieties, with uniformly scaled
 geometry and authored adult-koi controls; they are not calibrated juvenile
@@ -73,7 +75,7 @@ blender --background --factory-startup --python-exit-code 1 --python scripts/aqu
 node tests/aquarium_benchmark.mjs
 ```
 
-The build writes `static/aquarium/koi.glb`, `manifest.json` and `reference.webp`.
+The original build writes `static/aquarium/koi.glb`, `manifest.json` and `reference.webp`.
 Its editable Blender scene and full PNG reference live in `.aquarium-build/`,
 which is ignored by git. `--draft` renders 1280 x 720; a normal render is
 3840 x 2160. `--cpu` disables GPU selection, `--no-render` only exports the
@@ -81,9 +83,38 @@ model, and `--output DIR` changes the exported asset directory. Metal is used
 on macOS when available; other systems attempt CUDA and otherwise use CPU.
 Blender and cwebp are authoring tools; the Vira server does not require them.
 
+Build the refined geometry and its own mass profile separately:
+
+```sh
+blender --background --factory-startup --python-exit-code 1 --python scripts/aquarium/build.py -- --refined --no-render --output static/aquarium/refined
+node scripts/aquarium/build_body_mass.mjs --asset static/aquarium/refined/koi.glb --output static/aquarium/refined/body-mass.json
+```
+
+The top profile distinguishes the forehead, shoulder and posterior taper;
+its numeric stations are authored, not measured from oblique breeder portraits.
+Paired fins move with their new basal attachments, and eyes, gill hinges,
+barbels and internal cranial landmarks are registered together. The vertical
+profile and all 34 axial origins retain the original coordinates.
+
+The optional Blender export probe is `scripts/aquarium/check_skin_surface_blender.py`;
+it checks packed materials and the real face generator inside Blender, separately
+from the server and ordinary CI dependencies.
+
+The refined skin uses an opaque longitudinal/circumferential atlas with its
+periodic seam under the white belly. The oral collar has a separate coordinate
+chart that shares the outer rim. Pigment and roughness are separate from
+lighting, and scale geometry grows from a buried attachment over two staggered
+rows. Irregular pigment margins are informed by ZNA's descriptions of
+[kiwa and anterior sashi](https://zna.jp/en/keep-nishikigoi/nishikigoi-terminology/nishikigoi-terminology-2-hi-and-hi-markings/).
+[ZNA body terminology](https://zna.jp/en/keep-nishikigoi/nishikigoi-terminology/nishikigoi-terminology-1-body/),
+[Dainichi](https://dainichikoifarm.com/championship-grand-champion/) and
+[Momotaro](https://momotaro-koi.org/en/award-koi/) photographs guide the
+conformation qualitatively. [Portrait perspective](https://www.kodamakoifarm.com/how-to-take-photos-and-videos-of-koi-fish/)
+limits extracting true proportions from those images.
+
 All geometry is authored by this repository's Blender script. The skin source
 `static/aquarium/side-projection.png` was created with the built-in imagegen
-tool and calibrated onto the volumetric body. The current `skin-dermis.png`
+tool and fitted onto the original volumetric body. The original `skin-dermis.png`
 removes its printed eye, nostril and gill markings so real facial surfaces do
 not duplicate a photograph or stretch adjacent pigmentation into a radial halo.
 The original is preserved; both edit prompts are in `skin-dermis-prompt.txt`.
@@ -100,6 +131,10 @@ Three.js and its loader utilities are vendored with provenance in
 `static/vendor/README.md`.
 
 ## What the comparison measures
+
+The table describes `?model=original`, whose live geometry matches the preserved
+Cycles still. The refined model has no matching offline still yet; its Cycles
+comparison button is disabled.
 
 | | Cycles reference | Live aquarium |
 |---|---|---|
@@ -129,8 +164,8 @@ A startup failure stays visible as a named error.
 
 This remains a work in progress toward photographic quality. Skin detail,
 gill geometry, fin rays and continuous body deformation have been rebuilt.
-The facial feature locations, body contour and fin attachments are calibrated
-to the photographic source rather than a generic ellipsoid.
+The refined contour and attachments follow authored anatomical stations informed
+by breeder references; their dimensions have not been measured from those portraits.
 The live renderer uses rectangular area lighting, approximate subsurface
 scattering, micro-surface variation and a dense 22,000-pebble substrate.
 The offline and live optical models still differ; neither visual quality nor

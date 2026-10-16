@@ -24,7 +24,8 @@ def vertebral_positions():
     return positions+[.84]
 
 
-def author_anatomy(objects, mesh, curve, sphere, material, interpolate, surface, positions):
+def author_anatomy(objects, mesh, curve, sphere, material, interpolate, surface, positions,
+                   cranial_landmark=None,eye_shift=0.0):
     import bpy
 
     bone_mat = material("Anatomy mineralized bone", (.54,.67,.61), .55)
@@ -44,6 +45,7 @@ def author_anatomy(objects, mesh, curve, sphere, material, interpolate, surface,
 
     start=len(objects)
     facial=[]
+    cranial_landmark=cranial_landmark or (lambda point:point)
     vertices,faces=[],[]
     for i in range(15):
         x=-.57+.185*i/14
@@ -54,9 +56,9 @@ def author_anatomy(objects, mesh, curve, sphere, material, interpolate, surface,
             a=i*17+j;faces.append((a,a+1,a+18,a+17))
     mesh("Anatomy cranial roof",vertices,faces,[bone_mat])
     for side in [-1,1]:
-        ramus=curve("Anatomy mandibular ramus",[(-.654,side*.020,-.042),(-.598,side*.055,-.083),(-.49,side*.064,-.070)],.003,bone_mat)
+        ramus=curve("Anatomy mandibular ramus",[cranial_landmark(point) for point in [(-.654,side*.020,-.042),(-.598,side*.055,-.083),(-.49,side*.064,-.070)]],.003,bone_mat)
         ramus["facial_joint"]="jaw_lower";facial.append(ramus)
-        curve("Anatomy orbital rim",[(-.534+.024*math.cos(math.tau*i/20),side*.077,.0035+.024*math.sin(math.tau*i/20)) for i in range(21)],.0015,bone_mat)
+        curve("Anatomy orbital rim",[(-.534+.024*math.cos(math.tau*i/20),side*(.077+eye_shift),.0035+.024*math.sin(math.tau*i/20)) for i in range(21)],.0015,bone_mat)
         vertices,faces=[],[]
         for i in range(13):
             t=i/12;angle=(-.92+1.96*t) if side>0 else (math.pi+.92-1.96*t)
@@ -70,7 +72,7 @@ def author_anatomy(objects, mesh, curve, sphere, material, interpolate, surface,
         operculum["facial_joint"]="operculum_L" if side>0 else "operculum_R";facial.append(operculum)
         for i in range(5):
             sphere("Anatomy pharyngeal tooth",(-.44+i*.009,side*(.018+i*.004),-.098-i*.002),(.004,.004,.0055),bone_mat,segments=12)
-    premaxilla=curve("Anatomy premaxillary arch",[(-.653,-.030,-.025),(-.646,0,-.017),(-.653,.030,-.025)],.0025,bone_mat)
+    premaxilla=curve("Anatomy premaxillary arch",[cranial_landmark(point) for point in [(-.653,-.030,-.025),(-.646,0,-.017),(-.653,.030,-.025)]],.0025,bone_mat)
     premaxilla["facial_joint"]="jaw_upper";facial.append(premaxilla)
     unite([obj for obj in objects[start:] if obj not in facial],"Anatomy cranial complex",0)
 

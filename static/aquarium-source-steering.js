@@ -104,7 +104,16 @@ export function createSourceSteeringController(data,{duration=1.6,urgentDuration
   const profile=createSourceTurnProfile(data,{angle,duration:T,start:clock+preparation,heading:from[0].p});
   const trajectory={profile,start:clock,end:clock+preparation+T,preparation,budget:angle,relativeAngle:Math.abs(angle/headingSpan)*maximumRelativeAngle,serial:++s.serial,bridge:null,auxOutgoing:previous&&clock<previous.end+.4?previous:null};
   const atStart=base(trajectory,clock),different=from.some((j,i)=>Math.abs(j.p-atStart[i].p)>1e-12||Math.abs(j.v-atStart[i].v)>1e-12||Math.abs(j.a-atStart[i].a)>1e-10);
-  if(different){const to=base(trajectory,clock+handoffDuration);trajectory.bridge=from.map((a,i)=>coefficients(a,to[i],handoffDuration));}
+  if(different){
+   // A warm head jet also bridges the regional body channels. Keep a prepared
+   // source at its neutral start until that bridge ends, so it cannot borrow
+   // future body loading before the fin tuck and history drain have completed.
+   if(preparation&&preparation<handoffDuration){
+    trajectory.preparation=handoffDuration;trajectory.end=clock+handoffDuration+T;
+    trajectory.profile=createSourceTurnProfile(data,{angle,duration:T,start:clock+handoffDuration,heading:from[0].p});
+   }
+   const to=base(trajectory,clock+handoffDuration);trajectory.bridge=from.map((a,i)=>coefficients(a,to[i],handoffDuration));
+  }
   return trajectory;
  }
  function advanceTrajectories(s,clock){

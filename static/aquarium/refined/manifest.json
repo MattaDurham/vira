@@ -1,0 +1,66 @@
+{
+  "generator": "Blender 5.2.2 LTS",
+  "asset": "koi.glb",
+  "units": "metres",
+  "fish_length": 1.5,
+  "rig_joints": 40,
+  "facial_joints": [
+    "jaw_lower",
+    "jaw_upper",
+    "operculum_L",
+    "operculum_R",
+    "eye_L",
+    "eye_R"
+  ],
+  "facial_reference": "https://xromm.org/projects/fish-feeding/",
+  "anatomy": {
+    "vertebral_centra": 32,
+    "weberian_region": 4,
+    "abdominal_region": 17,
+    "hypurals": 6,
+    "reference": "https://doi.org/10.26842/binhm.7.2026.19.1.0139",
+    "scope": "Species-informed simplified axial anatomy; not a CT reconstruction"
+  },
+  "opaque_uv_repairs": 0,
+  "conformation": "Authored independent top profile",
+  "skin_surface": {
+    "albedo": "koi-skin-albedo.png",
+    "roughness": "koi-skin-roughness.png",
+    "size": [
+      4096,
+      2048
+    ],
+    "channels": "opaque RGB; albedo sRGB, roughness non-color",
+    "albedo_sha256": "55fe7bddf19cbf6353ec94c8f29d86b46ccd4d580ca0d4e93e2231129701af8a",
+    "roughness_sha256": "4e70d2f51bc703fb673cc51601937d6880c7149c2ef496b67931014b7c74598e",
+    "pbr": {
+      "ior": 1.04,
+      "coat": 0.08,
+      "coat_roughness": 0.35,
+      "subsurface": 0.08,
+      "metallic": 0.0,
+      "specular": 0.6
+    },
+    "pigment": "authored Kohaku islands, no baked illumination or scale outlines",
+    "material": "Pearl skin",
+    "uv": "Continuous skin surface; periodic V seam on white belly"
+  },
+  "water_bounds": {
+    "min": [
+      -2,
+      0.02,
+      -1.455
+    ],
+    "max": [
+      2,
+      1.79,
+      1.045
+    ]
+  },
+  "scale_count": 1330,
+  "source": "scripts/aquarium/build.py",
+  "license": "Original Vira benchmark asset; repository license applies",
+  "geometry_sha256": "2fa8219bf2274a9336899a371d64c36a4d60e6c2eba06631dc80bd60a2579f16",
+  "reference": null,
+  "reference_matches_asset": false
+}

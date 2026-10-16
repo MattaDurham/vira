@@ -4,14 +4,15 @@ import {mergeVertices} from './vendor/BufferGeometryUtils.js';
 import {RectAreaLightTexturesLib} from './vendor/RectAreaLightTexturesLib.js';
 import {cameraPosition,positionWorld,positionLocal,positionGeometry,output,uniform,vec3,vec4,float,max,min,step,abs,exp,sin,pow,uv,smoothstep,mx_noise_float,bumpMap,texture,triplanarTexture} from './vendor/three.tsl.js';
 import {createSwimmer,waterFlow} from './aquarium-motion.js?v=92';
-import {createSourceSteeringController} from './aquarium-source-steering.js?v=92';
+import {createSourceSteeringController} from './aquarium-source-steering.js?v=95';
 import {createAxialFrame} from './aquarium-axial-frame.js?v=92';
 import {createMassPlacement} from './aquarium-mass-placement.js?v=92';
+import {getAquariumModel} from './aquarium-model.js?v=95';
 import {createStudyRandom,createTurnStudy} from './aquarium-study.js?v=90';
 import {createGentleStudy} from './aquarium-gentle-study.js?v=90';
 import {createFinFrame,createFinController,bindFinGeometry,deformFinGeometry} from './aquarium-fins.js?v=90';
 import {createCaudalFrame,createCaudalController,bindCaudalGeometry,deformCaudalGeometry} from './aquarium-caudal.js?v=90';
-import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=90';
+import {createMedianController,createMedianFin,deformMedianFin} from './aquarium-median.js?v=95';
 import {createFinNormalSmoother} from './aquarium-fin-normals.js?v=90';
 import {finRayContrast} from './aquarium-fin-detail.js?v=90';
 import {applySwimPose,createFacialRig} from './aquarium-rig.js?v=92';
@@ -19,14 +20,15 @@ import {waterOptics} from './aquarium-optics.js?v=90';
 import {createContainment} from './aquarium-collision.js?v=90';
 import {createWaterInterface,waterExtinction} from './aquarium-water.js?v=90';
 import {waterMin,waterMax,tankCenterZ,tankDepth} from './aquarium-space.js?v=90';
-import {createResearchLayer} from './aquarium-research.js?v=92';
+import {createResearchLayer} from './aquarium-research.js?v=95';
 import {createResearchShape} from './aquarium-research-shape.js?v=90';
-import {createKoiInstance} from './aquarium-fish-instance.js?v=92';
+import {createKoiInstance} from './aquarium-fish-instance.js?v=95';
 import {pigmentColorNode,pigmentFinPalette} from './aquarium-pigment.js?v=90';
 import {createSupportArticulation} from './aquarium-supports.js?v=90';
 import {createManeuverFootprint} from './aquarium-footprint.js?v=92';
 
 const $=id=>document.getElementById(id),canvas=$('aquarium'),loading=$('loading');
+const model=getAquariumModel(location.search);
 const requestedStudySeed=new URLSearchParams(location.search).get('seed');
 const studyRandom=createStudyRandom(requestedStudySeed===null?913:Number(requestedStudySeed));
 let navigationReplay=false,navigationPoseKey=0;
@@ -220,7 +222,8 @@ function immerse(mat,{pigment='kohaku',detail=rayDetail}={}){
   }
   if(mat.name==='Pearl skin'){
     material.normalNode=bumpMap(mx_noise_float(positionGeometry.mul(900)).mul(.00009),.65);
-    material.roughnessNode=mx_noise_float(positionGeometry.mul(450)).mul(.055).add(.34);
+    material.roughnessNode=mat.roughnessMap?texture(mat.roughnessMap).g.mul(mat.roughness):
+      mx_noise_float(positionGeometry.mul(450)).mul(.055).add(.34);
     // The skin-water interface has far less Fresnel contrast than skin-air.
     material.ior=1.04;material.specularIntensity=.6;
     material.clearcoat=.08;material.clearcoatRoughness=.35;
@@ -581,7 +584,7 @@ function record(){
 
 async function start(){
   const readJSON=async url=>{const response=await fetch(url);if(!response.ok)throw new Error(`${url}: HTTP ${response.status}`);return response.json();};
-  const [sourceTurn,massProfile]=await Promise.all([readJSON('aquarium/reference-turn.json?v=92'),readJSON('aquarium/body-mass.json?v=92')]);
+  const [sourceTurn,massProfile]=await Promise.all([readJSON('aquarium/reference-turn.json?v=92'),readJSON(model.profile)]);
   const legacyTurn=new URLSearchParams(location.search).get('turn-controller')==='legacy';
   const turnControllerFactory=legacyTurn?undefined:()=>createSourceSteeringController(sourceTurn);
   initializeSwimmer(turnControllerFactory);canvas.dataset.turnController=legacyTurn?'legacy':'source-sequence';
@@ -603,7 +606,7 @@ async function start(){
     if(key==='color')map.colorSpace=THREE.SRGBColorSpace;stoneMaps[key]=map;
   }));
   habitat(stoneMaps);
-  const gltf=await new GLTFLoader().loadAsync('aquarium/koi.glb?v=90');asset=gltf.scene;scene.add(asset);
+  const gltf=await new GLTFLoader().loadAsync(model.asset);asset=gltf.scene;scene.add(asset);canvas.dataset.model=model.id;
   placement=createMassPlacement({...createAxialFrame(asset),profile:massProfile});
   const maneuverFootprint=createManeuverFootprint(asset,{massProfile});swimmer.footprint(maneuverFootprint.bounds);
   for(const spec of companionSpecs){
@@ -673,7 +676,7 @@ async function start(){
   $('study-axis').value=state.studyAxis;$('camera-angle').value=state.cameraAngle;
   $('light').value='1';$('light-value').value='100%';
   $('record').textContent=`Record ${$('record-length').value} seconds (1080p)`;
-  fetch('aquarium/manifest.json?v=90').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;$('reference-view').disabled=manifest.reference_matches_asset===false;}).catch(error=>console.warn('Reference metadata unavailable:',error));
+  fetch(model.manifest).then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(manifest=>{referenceMetadata=manifest.reference;const unavailable=manifest.reference_matches_asset===false;$('reference-view').disabled=unavailable;$('reference-view').title=unavailable?'No matching Cycles still has been rendered for this model.':'';}).catch(error=>console.warn('Reference metadata unavailable:',error));
   setPause(state.paused);
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',pointerCancel);canvas.addEventListener('pointerleave',pointerLeave);canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('keydown',key);
   window.addEventListener('resize',size);window.addEventListener('pagehide',cleanup,{once:true});

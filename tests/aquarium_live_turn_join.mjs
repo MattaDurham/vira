@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {resolve} from 'node:path';
 import {GLTFLoader} from '../static/vendor/GLTFLoader.js';
 import {Box3,Euler,Group,Matrix4,Quaternion,Texture,Vector3} from '../static/vendor/three.webgpu.js';
 import {createAxialFrame} from '../static/aquarium-axial-frame.js';
@@ -17,8 +18,17 @@ import {createSwimmer} from '../static/aquarium-motion.js';
 import {createStudyRandom} from '../static/aquarium-study.js';
 import {waterMin,waterMax,tankCenterZ} from '../static/aquarium-space.js';
 
-const bytes=await readFile(new URL('../static/aquarium/koi.glb',import.meta.url)),
-  profile=JSON.parse(await readFile(new URL('../static/aquarium/body-mass.json',import.meta.url),'utf8'));
+// Optional paired paths reuse exactly the same oracle for a separately built
+// visual variant. The original asset remains the default physical baseline.
+// Usage: node tests/aquarium_live_turn_join.mjs [assetPath profilePath]
+const suppliedPaths=process.argv.slice(2);
+if(suppliedPaths.length!==0&&suppliedPaths.length!==2)
+  throw new Error('Usage: node tests/aquarium_live_turn_join.mjs [assetPath profilePath]');
+const assetPath=suppliedPaths.length?resolve(suppliedPaths[0]):new URL('../static/aquarium/koi.glb',import.meta.url),
+  profilePath=suppliedPaths.length?resolve(suppliedPaths[1]):new URL('../static/aquarium/body-mass.json',import.meta.url);
+const bytes=await readFile(assetPath),profile=JSON.parse(await readFile(profilePath,'utf8')),
+  assetSHA256=createHash('sha256').update(bytes).digest('hex');
+assert.equal(profile.assetSHA256,assetSHA256,'the actual tested asset must match its selected mass profile');
 const sourceData=JSON.parse(await readFile(new URL('../static/aquarium/reference-turn.json',import.meta.url),'utf8'));
 const parse=async()=> (await new GLTFLoader().register(()=>({name:'LiveTurnJoinGeometry',loadTexture:()=>Promise.resolve(new Texture())}))
   .parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'')).scene;
@@ -210,4 +220,4 @@ export async function assertLiveSourceRoutes(){
   return {open:open.report,nearPane:near.report,cadences,mirrorError};
 }
 
-console.log(JSON.stringify({massAndFootprint:await assertLiveMassJoin(),sourceRoutes:await assertLiveSourceRoutes()}));
+console.log(JSON.stringify({assetSHA256,massAndFootprint:await assertLiveMassJoin(),sourceRoutes:await assertLiveSourceRoutes()}));

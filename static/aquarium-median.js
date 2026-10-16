@@ -191,11 +191,18 @@ export function createMedianFin(membraneMesh,rayMesh,{kind='dorsal'}={}){
   if(kind!=='dorsal'&&kind!=='anal')throw new Error('Unknown median fin kind');
   membraneMesh.updateMatrixWorld(true);rayMesh.updateMatrixWorld(true);
   const membrane=createBinding(membraneMesh),rays=createBinding(rayMesh),atlas=createAtlas(membrane);
-  const values=new Float64Array(rays.count*6);
+  const values=new Float64Array(rays.count*6),frameOffsets=new Uint32Array(rays.count),frameIndices=[],frames=new Map();
   for(let i=0;i<rays.count;i++){
     const found=atlasPoint(rays.base[i*3],rays.base[i*3+1],rays.base[i*3+2],atlas);
     values.set(found.indices,i*6);values.set(found.coordinates,i*6+3);
+    if(!frames.has(found.indices)){
+      frames.set(found.indices,frameIndices.length/3*12);frameIndices.push(...found.indices);
+    }
+    frameOffsets[i]=frames.get(found.indices);
   }
+  // Correspondence is fixed in material space. Only the current triangle
+  // basis changes, and every ray vertex on that triangle shares that basis.
+  rays.materialFrames={indices:Uint32Array.from(frameIndices),offsets:frameOffsets,values:new Float64Array(frames.size*12)};
   rays.material=values;rays.tubes=createTubeTrees(rays,atlas);
   return {kind,membrane:membraneMesh,rays:rayMesh,bindings:[membrane,rays],atlas,restPaths:atlas.paths,
     minimumSkinDeterminant:1};
@@ -329,11 +336,22 @@ function tissue(family,motion){
 
 function rayTissue(family){
   const surface=family.bindings[0].target,binding=family.bindings[1],values=binding.material,output=binding.target;
+  const {indices,offsets,values:frames}=binding.materialFrames;
+  // Refresh on every deformation, rather than caching by age: held studies,
+  // resets and repeated timestamps can still supply a different skeletal pose.
+  for(let i=0;i<indices.length;i+=3){
+    const a=indices[i]*3,b=indices[i+1]*3,c=indices[i+2]*3,o=i/3*12;
+    const ux=surface[b]-surface[a],uy=surface[b+1]-surface[a+1],uz=surface[b+2]-surface[a+2];
+    const vx=surface[c]-surface[a],vy=surface[c+1]-surface[a+1],vz=surface[c+2]-surface[a+2];
+    const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx,length=Math.hypot(nx,ny,nz);
+    frames[o]=surface[a];frames[o+1]=surface[a+1];frames[o+2]=surface[a+2];
+    frames[o+3]=ux;frames[o+4]=uy;frames[o+5]=uz;
+    frames[o+6]=vx;frames[o+7]=vy;frames[o+8]=vz;
+    frames[o+9]=nx/length;frames[o+10]=ny/length;frames[o+11]=nz/length;
+  }
   for(let i=0;i<binding.count;i++){
-    const o=i*6,a=values[o]*3,b=values[o+1]*3,c=values[o+2]*3;
-    const u=[surface[b]-surface[a],surface[b+1]-surface[a+1],surface[b+2]-surface[a+2]];
-    const v=[surface[c]-surface[a],surface[c+1]-surface[a+1],surface[c+2]-surface[a+2]],normal=normalize(cross(u,v));
-    for(let k=0;k<3;k++)output[i*3+k]=surface[a+k]+values[o+3]*u[k]+values[o+4]*v[k]+values[o+5]*normal[k];
+    const o=i*6,f=offsets[i];
+    for(let k=0;k<3;k++)output[i*3+k]=frames[f+k]+values[o+3]*frames[f+3+k]+values[o+4]*frames[f+6+k]+values[o+5]*frames[f+9+k];
   }
 }
 

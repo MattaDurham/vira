@@ -1,5 +1,6 @@
-/* Regenerate the compact neutral body-mass profile from the uploaded GLB.
+/* Regenerate the compact neutral body-mass profile from the selected GLB.
  * Usage: node scripts/aquarium/build_body_mass.mjs [output.json]
+ *        node scripts/aquarium/build_body_mass.mjs --asset input.glb --output output.json
  * This offline authoring step never imports the live swimmer or renderer. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -57,8 +58,41 @@ export async function writeBodyMass(output=defaultOutput,options={}){
   await writeFile(output,JSON.stringify(profile,null,2)+'\n','utf8');return profile;
 }
 
-if(process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url){
-  const output=process.argv[2]?pathToFileURL(resolve(process.argv[2])):defaultOutput;
-  const profile=await writeBodyMass(output);
-  console.log(`Generated ${profile.bodies29.length} body regions from ${profile.assetSHA256}`);
+function commandOptions(args){
+  let assetPath=defaultAsset,output=defaultOutput,positional,explicitOutput=false;
+  const seen=new Set();
+  for(let i=0;i<args.length;i++){
+    const argument=args[i];
+    if(argument==='--asset'||argument==='--output'){
+      if(seen.has(argument))throw new Error(`Duplicate option: ${argument}`);
+      seen.add(argument);
+      const value=args[++i];
+      if(!value||value.startsWith('-'))throw new Error(`Missing path for ${argument}`);
+      const url=pathToFileURL(resolve(value));
+      if(argument==='--asset')assetPath=url;
+      else {output=url;explicitOutput=true;}
+    }else if(argument.startsWith('-'))throw new Error(`Unknown option: ${argument}`);
+    else {
+      if(positional!==undefined)throw new Error('Only one positional output path is accepted');
+      positional=argument;
+    }
+  }
+  if(positional!==undefined){
+    if(explicitOutput)throw new Error('Choose either a positional output path or --output');
+    if(!positional)throw new Error('Missing positional output path');
+    output=pathToFileURL(resolve(positional));
+  }
+  return {assetPath,output};
+}
+
+if(process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url){
+  try{
+    const {assetPath,output}=commandOptions(process.argv.slice(2));
+    const profile=await writeBodyMass(output,{assetPath});
+    console.log(`Generated ${profile.bodies29.length} body regions from ${profile.assetSHA256}`);
+  }catch(error){
+    console.error(`Error: ${error.message}`);
+    console.error('Usage: node scripts/aquarium/build_body_mass.mjs [output.json] [--asset input.glb]\n       node scripts/aquarium/build_body_mass.mjs --asset input.glb --output output.json');
+    process.exitCode=1;
+  }
 }

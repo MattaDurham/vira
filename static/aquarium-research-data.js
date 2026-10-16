@@ -114,9 +114,9 @@ export const researchTopics = [
     id: 'craft',
     navLabel: 'The build',
     title: 'One structure, several individuals',
-    claim: 'The original live koi and offline reference share authored geometry and skin weights. Koi color varieties can share that anatomy.',
-    implementation: 'Kohaku, Showa and gold Ogon have independent skeletons, fin histories and behavior. Pigmentation stays attached to the resting body surface. Each animal observes its neighbors before choosing its next course. Blender scripts construct the anatomy; original AI-generated skin artwork and procedural fin maps cover it. Stone maps are Poly Haven Dark Rock by Amal Kumar, CC0.',
-    limitation: 'The offline still omits the fine ray tubes and uses different light transport. The live view fades unresolved ray-tube contrast into filtered fin detail. Shared source assets and geometry checks do not establish biological accuracy or photographic quality.',
+    claim: 'Koi conformation distinguishes the forehead, shoulder and caudal peduncle. Pigment margins and overlapping scales contribute separate surface details.',
+    implementation: 'Kohaku, Showa and gold Ogon have independent skeletons, fin histories and behavior. The refined model authors top width independently from its side silhouette, carrying the eyes, gill hinges and fin attachments with it. One opaque circumferential pigment map joins under the white belly; the oral collar has its own continuous chart. Scale relief emerges gradually. Pigment edges vary around each flank, while actual geometry supplies the scale relief. Stone maps are Poly Haven Dark Rock by Amal Kumar, CC0.',
+    limitation: 'Conformation stations and pigment are authored from qualitative references, not measured morphometrics. Breeder portraits can be oblique. The original model and its Cycles still remain available separately; the recorded mechanics retain that original geometry. Surface checks do not establish biological accuracy or photographic quality.',
     sources: [
       { label: 'Blender: glTF geometry, materials and skinning', url: 'https://docs.blender.org/manual/en/5.1/addons/import_export/scene_gltf2.html' },
       { label: 'Three.js: WebGPU renderer and WebGL fallback', url: 'https://threejs.org/docs/pages/WebGPURenderer.html' },
@@ -124,6 +124,11 @@ export const researchTopics = [
       { label: 'Physically Based Rendering: sampling and aliasing', url: 'https://pbr-book.org/4ed/Sampling_and_Reconstruction/Sampling_Theory' },
       { label: 'Dark Rock by Amal Kumar: original stone material, CC0', url: 'https://polyhaven.com/a/dark_rock' },
       { label: 'Poly Haven: CC0 asset license', url: 'https://polyhaven.com/license' },
+      { label: 'ZNA: forehead, shoulder and caudal-peduncle terminology', url: 'https://zna.jp/en/keep-nishikigoi/nishikigoi-terminology/nishikigoi-terminology-1-body/' },
+      { label: 'ZNA: pigment edges, scale-shaped kiwa and anterior sashi', url: 'https://zna.jp/en/keep-nishikigoi/nishikigoi-terminology/nishikigoi-terminology-2-hi-and-hi-markings/' },
+      { label: 'Dainichi Koi Farm: original championship conformation photographs', url: 'https://dainichikoifarm.com/championship-grand-champion/' },
+      { label: 'Momotaro Koi Farm: original award-koi photographs', url: 'https://momotaro-koi.org/en/award-koi/' },
+      { label: 'Kodama Koi Farm: portrait perspective and full-fin measurement', url: 'https://www.kodamakoifarm.com/how-to-take-photos-and-videos-of-koi-fish/' },
     ],
   },
 ];
@@ -138,7 +143,7 @@ export const buildChapters = [
   {
     id: 'geometry',
     title: 'Author the structure',
-    text: 'Build a volumetric fish around an articulated spine. Give the face actual cavities, moving gill covers and layered eyes; let scales overlap and fin tissue flex with its rays. Preserve each median-fin attachment and ray length after the body bends. The anatomy is authored from references.',
+    text: 'Author the forehead, forward shoulder and posterior taper independently of the side silhouette. Give the face actual cavities, moving gill covers and layered eyes, registered to the same surface as the fins and bones. Wrap pigment continuously around the fish, with the seam under the white belly and a separate chart for the oral collar. Let real scale relief emerge gradually and fin tissue flex with its rays. These forms and material choices are authored from references.',
     topics: ['anatomy', 'craft'],
   },
   {
@@ -162,7 +167,7 @@ export const buildChapters = [
   {
     id: 'verification',
     title: 'Light it, then look again',
-    text: 'Depth changes the path of light through water while the fish keeps its physical size. Compare the live approximation with the Cycles still, inspect the moving surfaces, and replay both the deep turn and a finite gentle-course sequence from different cameras alongside the source footage.',
+    text: 'Depth changes the path of light through water while the fish keeps its physical size. Inspect the refined surface from above, from the side and through a bend. Compare the original model with its matching Cycles still, and replay both the deep turn and a finite gentle-course sequence from different cameras alongside the source footage.',
     topics: ['optics', 'craft'],
   },
 ];

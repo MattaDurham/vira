@@ -31,7 +31,12 @@ def build():
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--samples", type=int)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--refined", action="store_true",
+                        help="Author independent top conformation and continuous opaque skin")
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
+    if args.refined:
+        from body_profile import profile_width
+        from skin_surface import SkinSurface,scale_offset
     if args.samples is not None and args.samples < 1:
         parser.error("--samples must be positive")
     encoder = shutil.which("cwebp")
@@ -157,7 +162,7 @@ def build():
     profile[0]=(-.66,.0245,.025,.025,-.03335)
     profile.append((.58,.0008,.010,.010,.002))
 
-    def interpolate(x):
+    def interpolate_base(x):
         for i in range(len(profile) - 1):
             if x <= profile[i + 1][0]:
                 a, b = profile[i], profile[i + 1]
@@ -171,6 +176,18 @@ def build():
                     values.append((2*t**3-3*t*t+1)*a[k] + (t**3-2*t*t+t)*ma + (-2*t**3+3*t*t)*b[k] + (t**3-t*t)*mb)
                 return values
         return list(profile[-1][1:])
+
+    def interpolate(x):
+        values=interpolate_base(x)
+        if args.refined:
+            values[0]=profile_width(x,values[0])
+        return values
+
+    skin_surface=None
+    skin_metadata=None
+    if args.refined:
+        skin_surface=SkinSurface(interpolate)
+        ivory,skin_metadata=skin_surface.build_material(output)
 
     def surface(x, angle, offset=0):
         width, upper, lower, center = interpolate(x)
@@ -292,6 +309,9 @@ def build():
         raise RuntimeError(f"Opaque skin projection has no valid dermis near pixel {x},{y}")
 
     def skin_uv(obj):
+        if skin_surface is not None:
+            skin_surface.assign_uv(obj)
+            return
         uv = obj.data.uv_layers.new(name="Photographic side projection")
         for loop in obj.data.loops:
             point = obj.matrix_world @ obj.data.vertices[loop.vertex_index].co
@@ -316,16 +336,21 @@ def build():
         for col in range(columns):
             angle = math.tau * (col + (row % 2)*0.5) / columns
             start = len(vertices)
-            vertices.append(surface(x, angle, 0.0008))
+            lift=scale_offset(x,angle,.0008) if args.refined else .0008
+            vertices.append(surface(x, angle, lift))
             n = 12
             for k in range(n):
                 t = math.tau*k/n
                 # The exposed edge points toward the tail, with a fine raised lip.
                 # Wrap each point onto the curved fish rather than putting a
                 # flat disk tangent to it. A sub-millimetre rim catches light.
-                point = surface(x+math.cos(t)*0.016,
-                                angle+math.sin(t)*math.tau/columns*0.58,
-                                0.00025+0.0003*max(0, math.cos(t)))
+                point_x=x+math.cos(t)*0.016
+                point_angle=angle+math.sin(t)*math.tau/columns*0.58
+                lift=.00025+0.0003*max(0,math.cos(t))
+                if args.refined:
+                    lift=scale_offset(point_x,point_angle,lift)
+                point = surface(point_x,point_angle,
+                                lift)
                 vertices.append(point)
             material_id = rng.randrange(5) + (5 if pigment(x, angle) else 0)
             for k in range(n):
@@ -367,7 +392,16 @@ def build():
         objects.append(bpy.context.object)
         return bpy.context.object
 
-    author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil)
+    def register_barbel_root(origin):
+        x,y,z=origin
+        old_width,upper,lower,center=interpolate_base(x)
+        radius=upper if z>=center else lower
+        angle=math.atan2((z-center)/radius,y/old_width)
+        shift=(interpolate(x)[0]-old_width)*math.cos(angle)
+        return Vector((x,y+shift,z))
+
+    author_face(mesh,curve,sphere,material,surface,skin_uv,ivory,cornea,pupil,
+                register_barbel_root=register_barbel_root if args.refined else None)
 
     fin_materials={}
     def fin_material(ray_count):
@@ -448,9 +482,18 @@ def build():
     # would cross the neighbouring distal rays near their basal attachments.
     fin_mesh("Caudal membrane", (0.54, 0, 0.028), [(0.74, 0, 0.17), (0.81, 0, 0.175), (0.835, 0, 0.15), (0.77, 0, 0.055), (0.70, 0, 0.016), (0.77, 0, -0.055), (0.835, 0, -0.16), (0.81, 0, -0.19), (0.74, 0, -0.18)], base_end=(0.54,0,-.024))
     fin_mesh("Dorsal membrane", (-0.08, 0, 0.19), [(-0.08, 0, 0.193), (-0.04, 0, 0.245), (0.0, 0, 0.254), (0.08, 0, 0.224), (0.18, 0, 0.209), (0.30, 0, 0.15), (0.43, 0, 0.091)], base_end=(0.43, 0, 0.08))
+    def paired_fin(name,x,angle,boundary):
+        base=surface(x,angle,.001)
+        if args.refined:
+            # Move the complete fan with its new surface attachment. Rebuilding
+            # only the root would change span, chord and the ray/tissue join.
+            dy=base.y-(interpolate_base(x)[0]+.001)*math.cos(angle)
+            boundary=[(px,py+dy,pz) for px,py,pz in boundary]
+        fin_mesh(name,base,boundary)
+
     for sign in [-1, 1]:
-        fin_mesh("Pectoral membrane", surface(-.35,-.73 if sign>0 else math.pi+.73,.001), [(-0.28, sign*0.22, -0.15), (-0.20, sign*0.27, -0.208), (-0.15, sign*0.24, -0.21), (-0.12, sign*0.17, -0.14), (-0.20, sign*0.14, -0.10)])
-        fin_mesh("Pelvic membrane", surface(.06,-.85 if sign>0 else math.pi+.85,.001), [(0.11, sign*0.19, -0.21), (0.18, sign*0.14, -0.23), (0.23, sign*0.085, -0.19), (0.12, sign*0.085, -0.14)])
+        paired_fin("Pectoral membrane",-.35,-.73 if sign>0 else math.pi+.73, [(-0.28, sign*0.22, -0.15), (-0.20, sign*0.27, -0.208), (-0.15, sign*0.24, -0.21), (-0.12, sign*0.17, -0.14), (-0.20, sign*0.14, -0.10)])
+        paired_fin("Pelvic membrane",.06,-.85 if sign>0 else math.pi+.85, [(0.11, sign*0.19, -0.21), (0.18, sign*0.14, -0.23), (0.23, sign*0.085, -0.19), (0.12, sign*0.085, -0.14)])
     fin_mesh("Anal membrane", (0.27, 0, -0.109), [(0.28, 0, -0.14), (0.34, 0, -0.17), (0.41, 0, -0.14), (0.44, 0, -0.071)])
 
     # Keep paired fins separate, but combine each fin's branched ray geometry.
@@ -469,7 +512,16 @@ def build():
         objects = [obj for obj in objects if obj not in pieces]+[combined]
 
     positions = vertebral_positions()
-    author_anatomy(objects,mesh,curve,sphere,material,interpolate,surface,positions)
+    eye_shift=0.0
+    def cranial_landmark(point):
+        x,y,z=point
+        return (x,y*interpolate(x)[0]/interpolate_base(x)[0],z)
+    if args.refined:
+        width,upper,lower,center=interpolate(-.534)
+        eye_angle=math.asin(max(-.98,min(.98,(.0035-center)/(upper if .0035>=center else lower))))
+        eye_shift=(width-interpolate_base(-.534)[0])*math.cos(eye_angle)
+    author_anatomy(objects,mesh,curve,sphere,material,interpolate,surface,positions,
+                   cranial_landmark=cranial_landmark if args.refined else None,eye_shift=eye_shift)
     # Rigid skull, 32 representative vertebral centra, and a caudal-fin handle.
     # This remains a simplified model, not a complete veterinary skeleton.
     bpy.ops.object.select_all(action="DESELECT")
@@ -498,6 +550,12 @@ def build():
         "eye_L": ((-.534,.080,.0035),(-.534,.088,.0035)),
         "eye_R": ((-.534,-.080,.0035),(-.534,-.088,.0035)),
     }
+    if args.refined:
+        for name in ("operculum_L","operculum_R"):
+            facial_specs[name]=tuple((x,y*interpolate(x)[0]/interpolate_base(x)[0],z)
+                                     for x,y,z in facial_specs[name])
+        for name,sign in (("eye_L",1),("eye_R",-1)):
+            facial_specs[name]=tuple((x,y+sign*eye_shift,z) for x,y,z in facial_specs[name])
     for name,(head,tail) in facial_specs.items():
         bone=armature_data.edit_bones.new(name);bone.head=head;bone.tail=tail
         bone.parent=armature_data.edit_bones[names[0]]
@@ -739,6 +797,8 @@ def build():
                     "reference":"https://doi.org/10.26842/binhm.7.2026.19.1.0139",
                     "scope":"Species-informed simplified axial anatomy; not a CT reconstruction"},
         "opaque_uv_repairs":uv_repairs,
+        "conformation":"Authored independent top profile" if args.refined else "Generated side-image profile",
+        "skin_surface":skin_metadata,
         "water_bounds":{"min":[-2,.02,-tank_y-tank_depth/2],"max":[2,1.79,-tank_y+tank_depth/2]},
         "scale_count": rows*columns, "source": "scripts/aquarium/build.py",
         "license": "Original Vira benchmark asset; repository license applies",
