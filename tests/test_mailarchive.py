@@ -415,6 +415,32 @@ class ParallelHistoryTests(_Base):
         self.assertFalse(any("giving up" in m for m in said), said)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
+    def test_a_sweep_holds_no_write_across_its_imap_calls(self):
+        # The sweep's first write (the UIDVALIDITY mark) used to stay in an
+        # open transaction through the SEARCHes and first FETCH that follow,
+        # which at Gmail's ten seconds a command outlasted the other
+        # writer's wait. Another writer must get in while the sweep waits
+        # on the server.
+        db = self.root / "index.sqlite"
+        locked = []
+
+        class Peeking(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "search":
+                    other = sqlite3.connect(db, timeout=0.2)
+                    try:
+                        other.execute("BEGIN IMMEDIATE")
+                        other.execute("ROLLBACK")
+                    except sqlite3.OperationalError as e:
+                        locked.append(f"{args[-1]}: {e}")
+                    finally:
+                        other.close()
+                return super().uid(cmd, *args)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        self.imap = Peeking({u: raw_message(f"<{u}@example.test>") for u in range(1, 5)})
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None), 4)
+        self.assertEqual(locked, [])
+
     def test_a_bounded_sweep_stays_on_one_connection(self):
         made = self.connections({u: raw_message(f"<{u}@example.test>") for u in range(1, 30)})
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=10, workers=4), 10)

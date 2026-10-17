@@ -160,8 +160,9 @@ def _db(create=True):
             if not create:
                 return None
             r.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(path, timeout=30)
-        con.execute("PRAGMA busy_timeout=30000")
+        con = sqlite3.connect(path, timeout=120)
+        con.execute("PRAGMA busy_timeout=120000")   # outwait a slow writer rather
+                                                    # than end a pass on it
         # Write-ahead mode, as the other indexes: a status read never
         # waits on a sweep. Skipped while another connection holds a
         # transaction; taken on the next open.
@@ -892,6 +893,13 @@ def _imap_sweep(acct, store, limit, log, workers=None):
             con.execute("DELETE FROM seen_uids WHERE account=?", (addr,))
         if validity:
             set_state(con, val_key, validity)
+            # Committed at once: this is the sweep's first write, and left
+            # open it held the index through the SEARCHes and the first
+            # FETCH that follow, thirty seconds at Gmail's pace, past the
+            # other writer's wait. The background sweep and the CLI's
+            # walkers locked each other out of the last span that way
+            # (2026-10-17).
+            store.commit()
         if not low:
             # First sweep (or the ascending walk's state from before this
             # shape): new mail starts at today's newest uid, and the walk
