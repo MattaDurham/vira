@@ -441,6 +441,22 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(mailarchive.sweep(log=lambda *a: None), 4)
         self.assertEqual(locked, [])
 
+    def test_a_batch_is_one_commit(self):
+        # Four walkers committing a hundred times each in a row starved the
+        # background sweep past its lock wait; a batch is written in one
+        # transaction once its FETCH has returned.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        self.connections(mailbox)
+        commits = []
+        real = mailarchive._Store.commit
+
+        def commit(store):
+            commits.append(1)
+            return real(store)
+        with mock.patch.object(mailarchive._Store, "commit", commit):
+            self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=3), 1200)
+        self.assertLess(len(commits), 60, len(commits))     # 12 batches, not 1200 messages
+
     def test_a_bounded_sweep_stays_on_one_connection(self):
         made = self.connections({u: raw_message(f"<{u}@example.test>") for u in range(1, 30)})
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=10, workers=4), 10)
@@ -582,14 +598,17 @@ class ParallelHistoryTests(_Base):
             archived, errored, _ = mailarchive._sweep(said.append, None, None, 2)
         self.assertTrue(errored)
         self.assertTrue(any("walk ended early" in m for m in said), said)
-        self.assertEqual(archived, 2)            # the walker stopped at the lock
+        # A batch is one transaction: the lock mid-batch rolled back the two
+        # rows before it, and nothing is marked seen, so the next pass
+        # fetches all ten again.
+        self.assertEqual(archived, 0)
         # Every walker says why it left: the one that hit the lock names
         # it, the other saw the pass ending.
         exits = [m for m in said if "walker done" in m]
         self.assertEqual(len(exits), 2, said)
         self.assertTrue(any("OperationalError" in m for m in exits), exits)
         self.assertTrue(any("pass is ending" in m or "no spans left" in m for m in exits), exits)
-        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 8)
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 10)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
 

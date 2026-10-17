@@ -493,10 +493,12 @@ class _Store:
         return self.con.execute(
             "SELECT 1 FROM messages WHERE key=?", (key,)).fetchone() is not None
 
-    def put(self, *, account, raw, fallback_key, fallback_date=None):
+    def put(self, *, account, raw, fallback_key, fallback_date=None, commit=True):
         """Archive one raw message. Returns 1 when the row is new, else 0.
         The key is the Message-ID when the headers carry one, so the same
-        message met twice is one row; `fallback_key` names it otherwise."""
+        message met twice is one row; `fallback_key` names it otherwise.
+        `commit=False` leaves the row in the caller's transaction, for a
+        batch that is already in hand (see fetch_many)."""
         if self.cap and self.used >= self.cap:
             raise ArchiveFull(
                 f"archive at cap ({self.used / 1e9:.1f} of {self.cap / 1e9:.1f} GB)")
@@ -511,7 +513,8 @@ class _Store:
             (key, account, mid or None, sha, size, date, _now()))
         if new_bytes:
             self.used += size
-        self.con.commit()
+        if commit:
+            self.con.commit()
         new_row = int(cur.rowcount > 0)
         self.archived += new_row
         return new_row
@@ -673,16 +676,24 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                     m = _UID_IN_FETCH.search(items[i + 1])
                 if m is not None:
                     got[int(m.group(1))] = item[1]
+            # One commit for the batch. The per-message commit of the
+            # sequential walk keeps a transaction from spanning a network
+            # fetch; here the FETCH has returned before the first write,
+            # and a hundred commits in a row from each of four walkers
+            # (an fsync each) starved the background sweep, and sometimes
+            # a walker, past their lock waits (2026-10-17).
+            got_rows = 0
             for uid in chunk:
                 raw = got.get(uid)
                 store.mark_seen(addr, validity, uid)
                 if raw is None:
-                    store.commit()
                     continue
-                n = store.put(account=addr, raw=raw,
-                              fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
-                with lock:
-                    st["n"] += n
+                got_rows += store.put(account=addr, raw=raw,
+                                      fallback_key=f"{addr}|uid:{validity or 0}:{uid}",
+                                      commit=False)
+            store.commit()
+            with lock:
+                st["n"] += got_rows
 
         def search(lo, hi):
             typ, data = state["imap"].uid("search", None, "UID", f"{lo}:{hi}")
