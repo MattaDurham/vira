@@ -73,7 +73,11 @@ CONNECTION_LIMIT = "Too many simultaneous connections"   # Gmail's alert at 15 p
 OVER_QUOTA = "[OVERQUOTA]"   # Gmail's answer once the account's command or
                              # bandwidth budget is spent (2026-10-16: after
                              # 8 GB in two hours); a pause clears it
-QUOTA_WAIT = 900             # seconds the backfill rests before trying again
+QUOTA_WAIT = 300             # seconds the backfill rests before trying again.
+                             # Each pass after a rest gets a burst of about
+                             # 100-200 MB before the next refusal whatever the
+                             # rest: five-minute rests made 12,200 messages
+                             # an hour, fifteen-minute rests 7,900 (2026-10-16)
 
 
 def _at_connection_limit(exc):
