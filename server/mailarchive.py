@@ -70,10 +70,18 @@ SWEEP_LIMIT = 200            # messages per account per background tick;
 MAX_CONSECUTIVE_FAILURES = 3
 WORKER_RECONNECTS = 5        # stalled connections a history walker replaces per pass
 CONNECTION_LIMIT = "Too many simultaneous connections"   # Gmail's alert at 15 per account
+OVER_QUOTA = "[OVERQUOTA]"   # Gmail's answer once the account's command or
+                             # bandwidth budget is spent (2026-10-16: after
+                             # 8 GB in two hours); a pause clears it
+QUOTA_WAIT = 900             # seconds the backfill rests before trying again
 
 
 def _at_connection_limit(exc):
     return CONNECTION_LIMIT.lower() in str(exc).lower()
+
+
+def _over_quota(exc):
+    return OVER_QUOTA.lower() in str(exc).lower()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
@@ -751,6 +759,12 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                     except (ArchiveFull, sqlite3.OperationalError):
                         raise
                     except Exception as e:  # noqa: BLE001
+                        if _over_quota(e):
+                            # Gmail has closed the budget for every
+                            # connection: nothing to reconnect or step
+                            # past. The pass ends on it and the backfill
+                            # rests before the next one.
+                            raise
                         # The whole command failed: the connection died
                         # (replaced, within the budget) or one message in
                         # the chunk is one Gmail will not serve. Either
@@ -778,6 +792,8 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                         except (ArchiveFull, sqlite3.OperationalError):
                             raise
                         except Exception as e:  # noqa: BLE001
+                            if _over_quota(e):
+                                raise
                             state["fails"] += 1
                             if state["fails"] <= MAX_CONSECUTIVE_FAILURES:
                                 # A lone failure: recorded for the next sweep,
@@ -915,6 +931,8 @@ def _imap_sweep(acct, store, limit, log, workers=None):
             except (ArchiveFull, sqlite3.OperationalError):
                 raise
             except Exception as e:  # noqa: BLE001
+                if _over_quota(e):
+                    raise               # the account's budget, not this message
                 fails[0] += 1
                 if fails[0] > MAX_CONSECUTIVE_FAILURES:
                     return "abort"
@@ -1193,6 +1211,14 @@ def backfill(log=print, account=None, workers=None):
         if con is not None:
             con.close()
         if errored:
+            if _over_quota(note):
+                # Gmail's budget for the account is spent; a pause clears
+                # it (2026-10-16). Rest, then carry on from the marks; the
+                # wait does not count against the retries.
+                log(f"mail archive backlog: Gmail's quota; resting "
+                    f"{QUOTA_WAIT // 60} minutes before the next pass")
+                time.sleep(QUOTA_WAIT)
+                continue
             if _at_connection_limit(note) and workers > 1:
                 # Gmail's 15 per account are shared with the owner's mail
                 # apps; walk with fewer rather than keep being refused.

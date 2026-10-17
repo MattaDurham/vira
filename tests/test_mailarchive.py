@@ -347,6 +347,41 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
         self.assertEqual(mailarchive.stats()["failed"], 0)
 
+    def test_gmails_quota_ends_the_pass_and_the_backfill_rests(self):
+        # [OVERQUOTA] is the account's budget, not a dead connection or a
+        # poison message: no reconnect, no one-at-a-time retry, no failure
+        # recorded. The pass ends on it and the backfill waits QUOTA_WAIT
+        # before walking on from the marks.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 301)}
+        refusals = [2]
+        alert = "[OVERQUOTA] Account exceeded command or bandwidth limits."
+
+        class Quota(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and refusals[0]:
+                    refusals[0] -= 1
+                    raise imaplib.IMAP4.error(alert)
+                return super().uid(cmd, *args)
+        made = []
+
+        def factory(*a, **k):
+            c = Quota(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        said = []
+        naps = []
+        with mock.patch.object(mailarchive.time, "sleep", naps.append):
+            self.assertEqual(mailarchive.backfill(log=said.append, workers=2), 300)
+        self.assertIn(mailarchive.QUOTA_WAIT, naps)
+        self.assertTrue(any("Gmail's quota; resting" in m for m in said), said)
+        self.assertFalse(any("one at a time" in m or "reconnecting" in m for m in said), said)
+        self.assertEqual(mailarchive.stats()["failed"], 0)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
     def test_a_bounded_sweep_stays_on_one_connection(self):
         made = self.connections({u: raw_message(f"<{u}@example.test>") for u in range(1, 30)})
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=10, workers=4), 10)
