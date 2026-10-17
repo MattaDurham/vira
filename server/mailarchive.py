@@ -1214,6 +1214,13 @@ def backfill(log=print, account=None, workers=None):
         after = _watermarks(con) if con is not None else {}
         if con is not None:
             con.close()
+        if n:
+            # A pass that archived something is progress, whatever ended
+            # it: the stalls that count toward giving up are the ones in a
+            # row with nothing to show. (Gmail's budget ends every pass of
+            # a long walk, and three stalls hours apart once ended the
+            # backfill at 87%, 2026-10-17.)
+            errored_in_a_row = 0
         if errored:
             if _over_quota(note):
                 # Gmail's budget for the account is spent; a pause clears
@@ -1221,6 +1228,7 @@ def backfill(log=print, account=None, workers=None):
                 # wait does not count against the retries.
                 log(f"mail archive backlog: Gmail's quota; resting "
                     f"{QUOTA_WAIT // 60} minutes before the next pass")
+                errored_in_a_row = 0      # a planned pause, not a failure
                 time.sleep(QUOTA_WAIT)
                 continue
             if _at_connection_limit(note) and workers > 1:

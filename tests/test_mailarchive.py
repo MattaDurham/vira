@@ -382,6 +382,39 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(mailarchive.stats()["failed"], 0)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
+    def test_stalls_between_productive_passes_do_not_add_up_to_giving_up(self):
+        # Every pass of a long walk ends on Gmail's quota; a stall now and
+        # then in between must not be counted as three failures in a row.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        script = ["quota", "stall", "quota", "stall", "quota", "stall"]   # then clean
+        alert = "[OVERQUOTA] Account exceeded command or bandwidth limits."
+
+        class Flaky(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and script and "," in str(args[0]):
+                    what = script.pop(0)
+                    if what == "quota":
+                        raise imaplib.IMAP4.error(alert)
+                if cmd == "search" and script and script[0] == "stall":
+                    script.pop(0)
+                    raise OSError("The read operation timed out")
+                return super().uid(cmd, *args)
+        made = []
+
+        def factory(*a, **k):
+            c = Flaky(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        said = []
+        with mock.patch.object(mailarchive.time, "sleep", lambda s: None):
+            self.assertEqual(mailarchive.backfill(log=said.append, workers=2), 1200)
+        self.assertFalse(any("giving up" in m for m in said), said)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
     def test_a_bounded_sweep_stays_on_one_connection(self):
         made = self.connections({u: raw_message(f"<{u}@example.test>") for u in range(1, 30)})
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=10, workers=4), 10)
