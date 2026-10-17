@@ -44,6 +44,7 @@ import hashlib
 import imaplib
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -550,6 +551,9 @@ def _uidvalidity(imap):
 
 
 BACKLOG_SPAN = 500           # uids per SEARCH while walking the history down
+FETCH_BATCH = 100            # uids per FETCH on that walk: Gmail charges by
+                             # the command, not the message (2026-10-16)
+_UID_IN_FETCH = re.compile(rb"\bUID (\d+)")
 
 
 def _default_workers():
@@ -561,9 +565,15 @@ def _default_workers():
 
 def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
     """The history phase on `workers` connections at once (the CLI
-    backfill; the background sweep stays on one). One message per round
-    trip per connection is the rate limit, not bandwidth: four connections
-    turned a six-day Gmail walk into a day and a half (2026-10-14). A
+    backfill; the background sweep stays on one). The round trip is the
+    rate limit, not bandwidth: four connections turned a six-day Gmail
+    walk into a day and a half (2026-10-14), and Gmail then began pacing
+    the account by the command, about ten seconds for each whatever it
+    carried (2026-10-16: SELECT, SEARCH, a 15 KB message and a 9 MB batch
+    of a hundred all waited the same). So a walker fetches FETCH_BATCH
+    messages per command: one per FETCH made 1,360 an hour on four
+    connections; a hundred per FETCH made 27,500 in its first five
+    minutes on the same four. A
     dispenser hands each connection the next span down; the history mark
     moves only past spans that are complete and contiguous with it, and
     seen_uids makes a span met again cost a SEARCH, not a fetch. Returns
@@ -626,6 +636,40 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                             fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
             with lock:
                 st["n"] += got
+
+        def fetch_many(chunk):
+            """One FETCH for a chunk of uids. The reply tags each message
+            with its uid (Gmail puts it first; a late one is read from the
+            text after the literal); a uid the reply leaves out is gone
+            from the mailbox and is marked seen like any other. Anything
+            but an OK answer is raised, so the caller walks the chunk one
+            message at a time rather than marking a hundred uids seen on
+            a refusal."""
+            typ, md = state["imap"].uid("fetch", ",".join(map(str, chunk)),
+                                        "(BODY.PEEK[])")
+            if typ != "OK":
+                raise imaplib.IMAP4.error(f"fetch answered {typ}")
+            got = {}
+            items = list(md or [])
+            for i, item in enumerate(items):
+                if not (isinstance(item, tuple) and len(item) == 2):
+                    continue
+                head = item[0] if isinstance(item[0], bytes) else bytes(item[0] or b"")
+                m = _UID_IN_FETCH.search(head)
+                if m is None and i + 1 < len(items) and isinstance(items[i + 1], bytes):
+                    m = _UID_IN_FETCH.search(items[i + 1])
+                if m is not None:
+                    got[int(m.group(1))] = item[1]
+            for uid in chunk:
+                raw = got.get(uid)
+                store.mark_seen(addr, validity, uid)
+                if raw is None:
+                    store.commit()
+                    continue
+                n = store.put(account=addr, raw=raw,
+                              fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
+                with lock:
+                    st["n"] += n
 
         def search(lo, hi):
             typ, data = state["imap"].uid("search", None, "UID", f"{lo}:{hi}")
@@ -694,38 +738,67 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                         return
                     uids = search(lo, hi)
                 abandoned = False
-                for uid in uids:
+                pending = [u for u in uids if not store.seen(addr, validity, u)]
+                for chunk in (pending[i:i + FETCH_BATCH]
+                              for i in range(0, len(pending), FETCH_BATCH)):
                     if ending():
                         abandoned = True
                         break
-                    if store.seen(addr, validity, uid):
-                        continue
                     try:
-                        fetch(uid)
+                        fetch_many(chunk)
                         state["fails"] = 0
                         continue
                     except (ArchiveFull, sqlite3.OperationalError):
                         raise
                     except Exception as e:  # noqa: BLE001
-                        state["fails"] += 1
-                        if state["fails"] <= MAX_CONSECUTIVE_FAILURES:
-                            # A lone failure: recorded for the next sweep,
-                            # and the walk steps past it.
+                        # The whole command failed: the connection died
+                        # (replaced, within the budget) or one message in
+                        # the chunk is one Gmail will not serve. Either
+                        # way the chunk is walked one message at a time,
+                        # where a poison message is recorded and stepped
+                        # past as before.
+                        dead = isinstance(e, (OSError, imaplib.IMAP4.abort))
+                        log(f"  imap {addr}: fetch of {len(chunk)} uids "
+                            f"({chunk[-1]}:{chunk[0]}) failed: {e}; "
+                            f"{'reconnecting and ' if dead else ''}"
+                            f"fetching them one at a time")
+                        if dead and not reconnect(f"uids {chunk[-1]}:{chunk[0]}"):
+                            why = "repeated failures"
+                            return
+                    for uid in chunk:
+                        if ending():
+                            abandoned = True
+                            break
+                        if store.seen(addr, validity, uid):
+                            continue
+                        try:
+                            fetch(uid)
+                            state["fails"] = 0
+                            continue
+                        except (ArchiveFull, sqlite3.OperationalError):
+                            raise
+                        except Exception as e:  # noqa: BLE001
+                            state["fails"] += 1
+                            if state["fails"] <= MAX_CONSECUTIVE_FAILURES:
+                                # A lone failure: recorded for the next sweep,
+                                # and the walk steps past it.
+                                store.failed(addr, uid, e)
+                                store.commit()
+                                log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                                continue
+                        if not reconnect(f"uid {uid}"):
+                            why = "repeated failures"
+                            return
+                        try:
+                            fetch(uid)
+                        except (ArchiveFull, sqlite3.OperationalError):
+                            raise
+                        except Exception as e:  # noqa: BLE001 - poison after all
                             store.failed(addr, uid, e)
                             store.commit()
                             log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
-                            continue
-                    if not reconnect(f"uid {uid}"):
-                        why = "repeated failures"
-                        return
-                    try:
-                        fetch(uid)
-                    except (ArchiveFull, sqlite3.OperationalError):
-                        raise
-                    except Exception as e:  # noqa: BLE001 - poison after all
-                        store.failed(addr, uid, e)
-                        store.commit()
-                        log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                    if abandoned:
+                        break
                 if abandoned:
                     why = "the pass is ending; span abandoned"
                     return
