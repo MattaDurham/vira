@@ -44,6 +44,7 @@ import hashlib
 import imaplib
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -69,10 +70,22 @@ SWEEP_LIMIT = 200            # messages per account per background tick;
 MAX_CONSECUTIVE_FAILURES = 3
 WORKER_RECONNECTS = 5        # stalled connections a history walker replaces per pass
 CONNECTION_LIMIT = "Too many simultaneous connections"   # Gmail's alert at 15 per account
+OVER_QUOTA = "[OVERQUOTA]"   # Gmail's answer once the account's command or
+                             # bandwidth budget is spent (2026-10-16: after
+                             # 8 GB in two hours); a pause clears it
+QUOTA_WAIT = 300             # seconds the backfill rests before trying again.
+                             # Each pass after a rest gets a burst of about
+                             # 100-200 MB before the next refusal whatever the
+                             # rest: five-minute rests made 12,200 messages
+                             # an hour, fifteen-minute rests 7,900 (2026-10-16)
 
 
 def _at_connection_limit(exc):
     return CONNECTION_LIMIT.lower() in str(exc).lower()
+
+
+def _over_quota(exc):
+    return OVER_QUOTA.lower() in str(exc).lower()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
@@ -147,8 +160,9 @@ def _db(create=True):
             if not create:
                 return None
             r.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(path, timeout=30)
-        con.execute("PRAGMA busy_timeout=30000")
+        con = sqlite3.connect(path, timeout=120)
+        con.execute("PRAGMA busy_timeout=120000")   # outwait a slow writer rather
+                                                    # than end a pass on it
         # Write-ahead mode, as the other indexes: a status read never
         # waits on a sweep. Skipped while another connection holds a
         # transaction; taken on the next open.
@@ -479,10 +493,12 @@ class _Store:
         return self.con.execute(
             "SELECT 1 FROM messages WHERE key=?", (key,)).fetchone() is not None
 
-    def put(self, *, account, raw, fallback_key, fallback_date=None):
+    def put(self, *, account, raw, fallback_key, fallback_date=None, commit=True):
         """Archive one raw message. Returns 1 when the row is new, else 0.
         The key is the Message-ID when the headers carry one, so the same
-        message met twice is one row; `fallback_key` names it otherwise."""
+        message met twice is one row; `fallback_key` names it otherwise.
+        `commit=False` leaves the row in the caller's transaction, for a
+        batch that is already in hand (see fetch_many)."""
         if self.cap and self.used >= self.cap:
             raise ArchiveFull(
                 f"archive at cap ({self.used / 1e9:.1f} of {self.cap / 1e9:.1f} GB)")
@@ -497,7 +513,8 @@ class _Store:
             (key, account, mid or None, sha, size, date, _now()))
         if new_bytes:
             self.used += size
-        self.con.commit()
+        if commit:
+            self.con.commit()
         new_row = int(cur.rowcount > 0)
         self.archived += new_row
         return new_row
@@ -550,6 +567,9 @@ def _uidvalidity(imap):
 
 
 BACKLOG_SPAN = 500           # uids per SEARCH while walking the history down
+FETCH_BATCH = 100            # uids per FETCH on that walk: Gmail charges by
+                             # the command, not the message (2026-10-16)
+_UID_IN_FETCH = re.compile(rb"\bUID (\d+)")
 
 
 def _default_workers():
@@ -561,9 +581,15 @@ def _default_workers():
 
 def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
     """The history phase on `workers` connections at once (the CLI
-    backfill; the background sweep stays on one). One message per round
-    trip per connection is the rate limit, not bandwidth: four connections
-    turned a six-day Gmail walk into a day and a half (2026-10-14). A
+    backfill; the background sweep stays on one). The round trip is the
+    rate limit, not bandwidth: four connections turned a six-day Gmail
+    walk into a day and a half (2026-10-14), and Gmail then began pacing
+    the account by the command, about ten seconds for each whatever it
+    carried (2026-10-16: SELECT, SEARCH, a 15 KB message and a 9 MB batch
+    of a hundred all waited the same). So a walker fetches FETCH_BATCH
+    messages per command: one per FETCH made 1,360 an hour on four
+    connections; a hundred per FETCH made 27,500 in its first five
+    minutes on the same four. A
     dispenser hands each connection the next span down; the history mark
     moves only past spans that are complete and contiguous with it, and
     seen_uids makes a span met again cost a SEARCH, not a fetch. Returns
@@ -626,6 +652,48 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                             fallback_key=f"{addr}|uid:{validity or 0}:{uid}")
             with lock:
                 st["n"] += got
+
+        def fetch_many(chunk):
+            """One FETCH for a chunk of uids. The reply tags each message
+            with its uid (Gmail puts it first; a late one is read from the
+            text after the literal); a uid the reply leaves out is gone
+            from the mailbox and is marked seen like any other. Anything
+            but an OK answer is raised, so the caller walks the chunk one
+            message at a time rather than marking a hundred uids seen on
+            a refusal."""
+            typ, md = state["imap"].uid("fetch", ",".join(map(str, chunk)),
+                                        "(BODY.PEEK[])")
+            if typ != "OK":
+                raise imaplib.IMAP4.error(f"fetch answered {typ}")
+            got = {}
+            items = list(md or [])
+            for i, item in enumerate(items):
+                if not (isinstance(item, tuple) and len(item) == 2):
+                    continue
+                head = item[0] if isinstance(item[0], bytes) else bytes(item[0] or b"")
+                m = _UID_IN_FETCH.search(head)
+                if m is None and i + 1 < len(items) and isinstance(items[i + 1], bytes):
+                    m = _UID_IN_FETCH.search(items[i + 1])
+                if m is not None:
+                    got[int(m.group(1))] = item[1]
+            # One commit for the batch. The per-message commit of the
+            # sequential walk keeps a transaction from spanning a network
+            # fetch; here the FETCH has returned before the first write,
+            # and a hundred commits in a row from each of four walkers
+            # (an fsync each) starved the background sweep, and sometimes
+            # a walker, past their lock waits (2026-10-17).
+            got_rows = 0
+            for uid in chunk:
+                raw = got.get(uid)
+                store.mark_seen(addr, validity, uid)
+                if raw is None:
+                    continue
+                got_rows += store.put(account=addr, raw=raw,
+                                      fallback_key=f"{addr}|uid:{validity or 0}:{uid}",
+                                      commit=False)
+            store.commit()
+            with lock:
+                st["n"] += got_rows
 
         def search(lo, hi):
             typ, data = state["imap"].uid("search", None, "UID", f"{lo}:{hi}")
@@ -694,38 +762,75 @@ def _walk_history_parallel(addr, host, pw, box, validity, low, log, workers):
                         return
                     uids = search(lo, hi)
                 abandoned = False
-                for uid in uids:
+                pending = [u for u in uids if not store.seen(addr, validity, u)]
+                for chunk in (pending[i:i + FETCH_BATCH]
+                              for i in range(0, len(pending), FETCH_BATCH)):
                     if ending():
                         abandoned = True
                         break
-                    if store.seen(addr, validity, uid):
-                        continue
                     try:
-                        fetch(uid)
+                        fetch_many(chunk)
                         state["fails"] = 0
                         continue
                     except (ArchiveFull, sqlite3.OperationalError):
                         raise
                     except Exception as e:  # noqa: BLE001
-                        state["fails"] += 1
-                        if state["fails"] <= MAX_CONSECUTIVE_FAILURES:
-                            # A lone failure: recorded for the next sweep,
-                            # and the walk steps past it.
+                        if _over_quota(e):
+                            # Gmail has closed the budget for every
+                            # connection: nothing to reconnect or step
+                            # past. The pass ends on it and the backfill
+                            # rests before the next one.
+                            raise
+                        # The whole command failed: the connection died
+                        # (replaced, within the budget) or one message in
+                        # the chunk is one Gmail will not serve. Either
+                        # way the chunk is walked one message at a time,
+                        # where a poison message is recorded and stepped
+                        # past as before.
+                        dead = isinstance(e, (OSError, imaplib.IMAP4.abort))
+                        log(f"  imap {addr}: fetch of {len(chunk)} uids "
+                            f"({chunk[-1]}:{chunk[0]}) failed: {e}; "
+                            f"{'reconnecting and ' if dead else ''}"
+                            f"fetching them one at a time")
+                        if dead and not reconnect(f"uids {chunk[-1]}:{chunk[0]}"):
+                            why = "repeated failures"
+                            return
+                    for uid in chunk:
+                        if ending():
+                            abandoned = True
+                            break
+                        if store.seen(addr, validity, uid):
+                            continue
+                        try:
+                            fetch(uid)
+                            state["fails"] = 0
+                            continue
+                        except (ArchiveFull, sqlite3.OperationalError):
+                            raise
+                        except Exception as e:  # noqa: BLE001
+                            if _over_quota(e):
+                                raise
+                            state["fails"] += 1
+                            if state["fails"] <= MAX_CONSECUTIVE_FAILURES:
+                                # A lone failure: recorded for the next sweep,
+                                # and the walk steps past it.
+                                store.failed(addr, uid, e)
+                                store.commit()
+                                log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                                continue
+                        if not reconnect(f"uid {uid}"):
+                            why = "repeated failures"
+                            return
+                        try:
+                            fetch(uid)
+                        except (ArchiveFull, sqlite3.OperationalError):
+                            raise
+                        except Exception as e:  # noqa: BLE001 - poison after all
                             store.failed(addr, uid, e)
                             store.commit()
                             log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
-                            continue
-                    if not reconnect(f"uid {uid}"):
-                        why = "repeated failures"
-                        return
-                    try:
-                        fetch(uid)
-                    except (ArchiveFull, sqlite3.OperationalError):
-                        raise
-                    except Exception as e:  # noqa: BLE001 - poison after all
-                        store.failed(addr, uid, e)
-                        store.commit()
-                        log(f"  imap {addr}: uid {uid} not archived, will retry: {e}")
+                    if abandoned:
+                        break
                 if abandoned:
                     why = "the pass is ending; span abandoned"
                     return
@@ -799,6 +904,13 @@ def _imap_sweep(acct, store, limit, log, workers=None):
             con.execute("DELETE FROM seen_uids WHERE account=?", (addr,))
         if validity:
             set_state(con, val_key, validity)
+            # Committed at once: this is the sweep's first write, and left
+            # open it held the index through the SEARCHes and the first
+            # FETCH that follow, thirty seconds at Gmail's pace, past the
+            # other writer's wait. The background sweep and the CLI's
+            # walkers locked each other out of the last span that way
+            # (2026-10-17).
+            store.commit()
         if not low:
             # First sweep (or the ascending walk's state from before this
             # shape): new mail starts at today's newest uid, and the walk
@@ -842,6 +954,8 @@ def _imap_sweep(acct, store, limit, log, workers=None):
             except (ArchiveFull, sqlite3.OperationalError):
                 raise
             except Exception as e:  # noqa: BLE001
+                if _over_quota(e):
+                    raise               # the account's budget, not this message
                 fails[0] += 1
                 if fails[0] > MAX_CONSECUTIVE_FAILURES:
                     return "abort"
@@ -1119,7 +1233,23 @@ def backfill(log=print, account=None, workers=None):
         after = _watermarks(con) if con is not None else {}
         if con is not None:
             con.close()
+        if n:
+            # A pass that archived something is progress, whatever ended
+            # it: the stalls that count toward giving up are the ones in a
+            # row with nothing to show. (Gmail's budget ends every pass of
+            # a long walk, and three stalls hours apart once ended the
+            # backfill at 87%, 2026-10-17.)
+            errored_in_a_row = 0
         if errored:
+            if _over_quota(note):
+                # Gmail's budget for the account is spent; a pause clears
+                # it (2026-10-16). Rest, then carry on from the marks; the
+                # wait does not count against the retries.
+                log(f"mail archive backlog: Gmail's quota; resting "
+                    f"{QUOTA_WAIT // 60} minutes before the next pass")
+                errored_in_a_row = 0      # a planned pause, not a failure
+                time.sleep(QUOTA_WAIT)
+                continue
             if _at_connection_limit(note) and workers > 1:
                 # Gmail's 15 per account are shared with the owner's mail
                 # apps; walk with fewer rather than keep being refused.

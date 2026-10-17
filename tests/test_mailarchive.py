@@ -52,6 +52,7 @@ class FakeIMAP:
         self.poison = poison if poison is not None else {}   # shared: a poison
                                                               # message fails on any connection
         self.fetched = []
+        self.commands = []     # uids asked for by each FETCH command
 
     def login(self, *a):
         return "OK", []
@@ -76,7 +77,23 @@ class FakeIMAP:
                 lo, hi = hi, lo
             hits = sorted(u for u in self.mailbox if lo <= u <= hi)
             return "OK", [" ".join(map(str, hits)).encode()]
+        if "," in str(args[0]):               # one FETCH for a batch of uids
+            uids = [int(x) for x in str(args[0]).split(",")]
+            self.commands.append(len(uids))
+            if any(self.poison.get(x) for x in uids):
+                # The command fails whole; the walker then fetches the
+                # chunk one message at a time, where the poison counts.
+                raise imaplib.IMAP4.error("fetch failed")
+            out = []
+            for x in uids:
+                self.fetched.append(x)
+                if x in self.mailbox:
+                    out.append((f"{x} (UID {x} BODY[] {{{len(self.mailbox[x])}}}".encode(),
+                                self.mailbox[x]))
+                    out.append(b")")
+            return "OK", out or [None]
         u = int(args[0])
+        self.commands.append(1)
         self.fetched.append(u)
         if self.poison.get(u):
             self.poison[u] -= 1
@@ -292,6 +309,154 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(mailarchive.stats()["accounts"][IMAP_ACCOUNT]["messages"], 1200)
         self.assertTrue(mailarchive.stats()["accounts"][IMAP_ACCOUNT]["history_complete"])
 
+    def test_the_history_is_fetched_a_hundred_messages_a_command(self):
+        # Gmail paces the account by the command (2026-10-16), so the walk
+        # asks for FETCH_BATCH uids at once: 1200 messages in three spans
+        # cost 5 + 5 + 2 FETCH commands, not 1200.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        made = self.connections(mailbox)
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=3), 1200)
+        commands = [n for c in made[1:] for n in c.commands]
+        self.assertEqual(sorted(commands), [100] * 12)
+        self.assertEqual(sorted(u for c in made for u in c.fetched), list(range(1, 1201)))
+
+    def test_a_batch_that_dies_with_its_connection_is_refetched_one_at_a_time(self):
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 301)}
+        stalls = [1]
+
+        class Dying(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and "," in str(args[0]) and stalls[0]:
+                    stalls[0] -= 1
+                    raise OSError("read timed out")
+                return super().uid(cmd, *args)
+        made = []
+
+        def factory(*a, **k):
+            c = Dying(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        said = []
+        self.assertEqual(mailarchive.sweep(log=said.append, workers=1 + 1), 300)
+        self.assertTrue(any("reconnecting and fetching them one at a time" in m for m in said), said)
+        self.assertEqual(len(made), 1 + 2 + 1)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+        self.assertEqual(mailarchive.stats()["failed"], 0)
+
+    def test_gmails_quota_ends_the_pass_and_the_backfill_rests(self):
+        # [OVERQUOTA] is the account's budget, not a dead connection or a
+        # poison message: no reconnect, no one-at-a-time retry, no failure
+        # recorded. The pass ends on it and the backfill waits QUOTA_WAIT
+        # before walking on from the marks.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 301)}
+        refusals = [2]
+        alert = "[OVERQUOTA] Account exceeded command or bandwidth limits."
+
+        class Quota(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and refusals[0]:
+                    refusals[0] -= 1
+                    raise imaplib.IMAP4.error(alert)
+                return super().uid(cmd, *args)
+        made = []
+
+        def factory(*a, **k):
+            c = Quota(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        said = []
+        naps = []
+        with mock.patch.object(mailarchive.time, "sleep", naps.append):
+            self.assertEqual(mailarchive.backfill(log=said.append, workers=2), 300)
+        self.assertIn(mailarchive.QUOTA_WAIT, naps)
+        self.assertTrue(any("Gmail's quota; resting" in m for m in said), said)
+        self.assertFalse(any("one at a time" in m or "reconnecting" in m for m in said), said)
+        self.assertEqual(mailarchive.stats()["failed"], 0)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
+    def test_stalls_between_productive_passes_do_not_add_up_to_giving_up(self):
+        # Every pass of a long walk ends on Gmail's quota; a stall now and
+        # then in between must not be counted as three failures in a row.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        script = ["quota", "stall", "quota", "stall", "quota", "stall"]   # then clean
+        alert = "[OVERQUOTA] Account exceeded command or bandwidth limits."
+
+        class Flaky(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "fetch" and script and "," in str(args[0]):
+                    what = script.pop(0)
+                    if what == "quota":
+                        raise imaplib.IMAP4.error(alert)
+                if cmd == "search" and script and script[0] == "stall":
+                    script.pop(0)
+                    raise OSError("The read operation timed out")
+                return super().uid(cmd, *args)
+        made = []
+
+        def factory(*a, **k):
+            c = Flaky(mailbox)
+            made.append(c)
+            return c
+        p = mock.patch.object(mailarchive.imaplib, "IMAP4_SSL", factory)
+        p.start()
+        self.addCleanup(p.stop)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        said = []
+        with mock.patch.object(mailarchive.time, "sleep", lambda s: None):
+            self.assertEqual(mailarchive.backfill(log=said.append, workers=2), 1200)
+        self.assertFalse(any("giving up" in m for m in said), said)
+        self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
+
+    def test_a_sweep_holds_no_write_across_its_imap_calls(self):
+        # The sweep's first write (the UIDVALIDITY mark) used to stay in an
+        # open transaction through the SEARCHes and first FETCH that follow,
+        # which at Gmail's ten seconds a command outlasted the other
+        # writer's wait. Another writer must get in while the sweep waits
+        # on the server.
+        db = self.root / "index.sqlite"
+        locked = []
+
+        class Peeking(FakeIMAP):
+            def uid(self, cmd, *args):
+                if cmd == "search":
+                    other = sqlite3.connect(db, timeout=0.2)
+                    try:
+                        other.execute("BEGIN IMMEDIATE")
+                        other.execute("ROLLBACK")
+                    except sqlite3.OperationalError as e:
+                        locked.append(f"{args[-1]}: {e}")
+                    finally:
+                        other.close()
+                return super().uid(cmd, *args)
+        self.accounts = [{"email": IMAP_ACCOUNT, "host": "imap.example.test"}]
+        self.imap = Peeking({u: raw_message(f"<{u}@example.test>") for u in range(1, 5)})
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None), 4)
+        self.assertEqual(locked, [])
+
+    def test_a_batch_is_one_commit(self):
+        # Four walkers committing a hundred times each in a row starved the
+        # background sweep past its lock wait; a batch is written in one
+        # transaction once its FETCH has returned.
+        mailbox = {u: raw_message(f"<{u}@example.test>") for u in range(1, 1201)}
+        self.connections(mailbox)
+        commits = []
+        real = mailarchive._Store.commit
+
+        def commit(store):
+            commits.append(1)
+            return real(store)
+        with mock.patch.object(mailarchive._Store, "commit", commit):
+            self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=3), 1200)
+        self.assertLess(len(commits), 60, len(commits))     # 12 batches, not 1200 messages
+
     def test_a_bounded_sweep_stays_on_one_connection(self):
         made = self.connections({u: raw_message(f"<{u}@example.test>") for u in range(1, 30)})
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, limit=10, workers=4), 10)
@@ -324,6 +489,9 @@ class ParallelHistoryTests(_Base):
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
         self.assertEqual(mailarchive.stats()["failed"], 4)
         self.assertTrue(any("reconnecting (1 of" in m for m in said), said)
+        # The chunk holding the poison failed as one command and was then
+        # walked one message at a time.
+        self.assertTrue(any("failed: fetch failed; fetching them one at a time" in m for m in said), said)
         poison.clear()
         self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 4)
         self.assertEqual(mailarchive.stats()["messages"], 1000)
@@ -430,14 +598,17 @@ class ParallelHistoryTests(_Base):
             archived, errored, _ = mailarchive._sweep(said.append, None, None, 2)
         self.assertTrue(errored)
         self.assertTrue(any("walk ended early" in m for m in said), said)
-        self.assertEqual(archived, 2)            # the walker stopped at the lock
+        # A batch is one transaction: the lock mid-batch rolled back the two
+        # rows before it, and nothing is marked seen, so the next pass
+        # fetches all ten again.
+        self.assertEqual(archived, 0)
         # Every walker says why it left: the one that hit the lock names
         # it, the other saw the pass ending.
         exits = [m for m in said if "walker done" in m]
         self.assertEqual(len(exits), 2, said)
         self.assertTrue(any("OperationalError" in m for m in exits), exits)
         self.assertTrue(any("pass is ending" in m or "no spans left" in m for m in exits), exits)
-        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 8)
+        self.assertEqual(mailarchive.sweep(log=lambda *a: None, workers=2), 10)
         self.assertEqual(self.state(f"low:{IMAP_ACCOUNT}"), "1")
 
 
