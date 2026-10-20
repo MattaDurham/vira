@@ -423,7 +423,10 @@ def parse_changelog_md(diff_text, current_text=""):
             out.append({"at": at, "sha": sha, "section": section, "release": release,
                         "headline": headline[:300], "detail": detail[:1200],
                         "removed": first not in current})
-    out.sort(key=lambda e: -e["at"])
+    # Newest first; the diff runs oldest first, so a tie on the second goes
+    # to whichever was added later.
+    order = {id(e): i for i, e in enumerate(out)}
+    out.sort(key=lambda e: (-e["at"], -order[id(e)]))
     return out
 
 

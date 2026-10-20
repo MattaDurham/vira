@@ -754,7 +754,7 @@ class Fleet:
         nodes = [r for r in rows if not r["live"] and r["id"] in shown]
         sessions.sort(key=lambda s: (STATUS_RANK[s["status"]], -(s["lastAt"] or 0)))
         nodes.sort(key=lambda n: -(n["lastAt"] or 0))
-        roots = {r["repo"] for r in rows if r.get("repo")} | {r["folder"] for r in sessions if r.get("folder")}
+        roots = {r["repo"] for r in rows if r.get("repo")} | {r["folder"] for r in rows if r.get("folder")}
         servers = self._servers(procs, roots, listener_pids)
         totals = dict(open=len(sessions), working=0, needsYou=0, jobs=0, idle=0,
                       subagents=0, shells=0, servers=len(servers), instances=len(instances),
@@ -1117,15 +1117,18 @@ def label_repo(scan, live_rows, instances, t_now):
     """A scan plus who is where: the sessions in each worktree, the Vira
     instance serving it, and its status label."""
     out = {k: v for k, v in scan.items() if k not in ("heads", "remotes")}
+    real = lambda p: os.path.normcase(os.path.realpath(p)).rstrip(os.sep)
+    paths = [real(o["path"]) for o in scan.get("worktrees") or []]
+    folders = [(r, real(r["folder"])) for r in live_rows if r.get("folder")]
     wts = []
     for w in scan.get("worktrees") or []:
-        path = w["path"].rstrip("/")
-        here = [r for r in live_rows if r.get("folder") and (
-            r["folder"].rstrip("/") == path or r["folder"].startswith(path + "/"))
-            and not any(o["path"] != w["path"] and o["path"].startswith(path + "/")
-                        and r["folder"].startswith(o["path"]) for o in scan["worktrees"])]
-        inst = next((i for i in instances if i.get("worktree")
-                     and os.path.normcase(i["worktree"].rstrip("/")) == os.path.normcase(path)), None)
+        path = real(w["path"])
+        # A worktree nested in another (app worktrees live inside the main
+        # checkout) owns the sessions in it; the outer one does not.
+        inner = [o for o in paths if o != path and o.startswith(path + os.sep)]
+        here = [r for r, f in folders if (f == path or f.startswith(path + os.sep))
+                and not any(f == o or f.startswith(o + os.sep) for o in inner)]
+        inst = next((i for i in instances if i.get("worktree") and real(i["worktree"]) == path), None)
         if w["kind"] == "main":
             label = "Live"
         elif any(r["status"] != "Closed" for r in here):

@@ -104,9 +104,15 @@ def repo_root(path):
     return found
 
 
+def same_path(a, b):
+    """Whether two folders are one, through symlinks (git reports resolved
+    paths: /var is /private/var on macOS)."""
+    return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+
 def worktree_kind(path, main):
     path = str(path)
-    if os.path.normcase(path) == os.path.normcase(str(main)):
+    if same_path(path, main):
         return "main"
     if "/.claude/worktrees/" in path.replace("\\", "/"):
         return "app"

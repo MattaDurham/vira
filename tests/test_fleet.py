@@ -496,6 +496,125 @@ class Parsers(unittest.TestCase):
 
 
 
+class Repositories(unittest.TestCase):
+    """fleetgit against a real repository built in a temp folder."""
+
+    def setUp(self):
+        import shutil
+        import subprocess
+        if not shutil.which("git"):
+            self.skipTest("git is unavailable")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "proj"
+        self.root.mkdir()
+        env = dict(os.environ, GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                   GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com",
+                   GIT_CONFIG_NOSYSTEM="1", HOME=tmp.name)
+
+        def git(*args, cwd=None):
+            subprocess.run(["git", *args], cwd=cwd or self.root, env=env, check=True,
+                           capture_output=True, text=True, encoding="utf-8")
+
+        self.git = git
+        git("init", "-q", "-b", "main")
+        git("config", "core.hooksPath", "/dev/null")
+        (self.root / "CHANGELOG.md").write_text("# Changelog\n\n### Added\n\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "start")
+        # A branch that landed by merge, with a change-log bullet.
+        git("checkout", "-q", "-b", "claude/landed")
+        (self.root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n### Added\n\n- The landed thing. It works.\n", encoding="utf-8")
+        git("commit", "-q", "-am", "landed work")
+        git("checkout", "-q", "main")
+        git("merge", "-q", "--no-ff", "claude/landed", "-m", "Merge branch 'claude/landed'")
+        # A branch with unlanded commits and no worktree.
+        git("checkout", "-q", "-b", "claude/pending")
+        (self.root / "p.txt").write_text("p\n", encoding="utf-8")
+        git("add", "p.txt")
+        git("commit", "-q", "-m", "pending work")
+        git("checkout", "-q", "main")
+        # Two app worktrees: one with a session in it, one with uncommitted edits.
+        self.busy = self.root / ".claude" / "worktrees" / "busy"
+        self.dirty = self.root / ".claude" / "worktrees" / "dirty"
+        git("worktree", "add", "-q", "-b", "claude/busy", str(self.busy))
+        git("worktree", "add", "-q", "-b", "claude/dirty", str(self.dirty))
+        (self.dirty / "scratch.txt").write_text("x\n", encoding="utf-8")
+        p = mock.patch.dict(os.environ, {"VIRA_FLEET_GH": ""})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_worktrees_branches_and_status_labels(self):
+        from server import fleetgit as fg
+        self.assertEqual(Path(fg.repo_root(str(self.busy))).resolve(), self.root.resolve())
+        scan = fg.scan(str(self.root), fg.GhCache())
+        self.assertEqual(scan["base"], "main")
+        self.assertEqual(scan["prNote"], "gh not found on this machine")
+        session = {"id": "s1", "folder": str(self.busy), "status": "Working", "live": True}
+        repo = fleet.label_repo(scan, [session], [], now())
+        by_name = {w["name"]: w for w in repo["worktrees"]}
+        self.assertEqual(by_name["proj"]["kind"], "main")
+        self.assertEqual(by_name["proj"]["label"], "Live")
+        self.assertEqual(by_name["busy"]["label"], "In use")
+        self.assertEqual(by_name["busy"]["sessions"], ["s1"])
+        self.assertEqual(by_name["proj"]["sessions"], [], "a session in a nested worktree is not the main checkout's")
+        self.assertEqual(by_name["dirty"]["label"], "Uncommitted changes")
+        self.assertEqual(by_name["dirty"]["dirty"], 1)
+        branches = {b["name"]: b for b in repo["branches"]}
+        self.assertEqual(branches["claude/landed"]["label"], "Landed, can remove")
+        self.assertEqual(branches["claude/pending"]["label"], "Unlanded commits")
+        self.assertEqual(branches["claude/pending"]["ahead"], 1)
+        self.assertNotIn("heads", repo)
+
+    def test_landings_and_change_log_from_history(self):
+        from server import fleetgit as fg
+        scan = fg.scan(str(self.root), fg.GhCache())
+        merge = scan["landings"][0]
+        self.assertEqual((merge["branch"], merge["tool"], merge["merge"]), ("claude/landed", "claude", True))
+        self.assertEqual(merge["files"], 1)
+        self.assertEqual([c["headline"] for c in scan["changelog"]], ["The landed thing."])
+        self.assertEqual(scan["changelog"][0]["section"], "Added")
+        # A new commit on main moves the cache.
+        (self.root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n### Added\n\n- Second.\n- The landed thing. It works.\n", encoding="utf-8")
+        self.git("commit", "-q", "-am", "direct")
+        scan = fg.scan(str(self.root), fg.GhCache())
+        self.assertEqual(scan["landings"][0]["tool"], "direct")
+        self.assertEqual([c["headline"] for c in scan["changelog"]], ["Second.", "The landed thing."])
+
+    def test_signature_moves_when_a_branch_or_worktree_does(self):
+        from server import fleetgit as fg
+        before = fg.signature(str(self.root))
+        self.git("branch", "claude/new")
+        self.assertNotEqual(fg.signature(str(self.root)), before)
+
+
+class InstancesAndServers(Base):
+    def test_a_branch_instance_is_shown_beside_its_worktree(self):
+        wt = Path(self.env.folder("wt"))
+        (wt / ".test-instance.json").write_text(json.dumps({"pid": 4242, "port": 8390}), encoding="utf-8")
+        self.fleet.scans["/r"] = {"worktrees": [{"path": str(wt), "branch": "claude/a"}]}
+        self.env.proc(4242, "python -m uvicorn server.main:app --port 8390", ppid=1, secs=50 * 3600)
+        with mock.patch.object(fleet, "listening_ports", lambda: {8390: 4242}), \
+                mock.patch.object(fleet, "probe_instance", lambda port, timeout=0: {"id": "branch:a", "kind": "branch"}):
+            snap = self.live()
+        inst = next(i for i in snap["instances"] if i["port"] == 8390)
+        self.assertEqual(inst["worktree"], str(wt))
+        self.assertEqual(inst["branch"], "claude/a")
+        self.assertGreater(now() - inst["startedAt"], 49 * 3600_000)
+        self.assertNotIn(4242, [s["pid"] for s in snap["servers"]], "an instance is not a stray dev server")
+
+    def test_a_dev_server_left_running_in_a_session_folder(self):
+        cwd = self.env.folder("site")
+        self.env.transcript(cwd, "c1", [said("Started the server.", now() - MIN)])
+        self.env.record("local_1", "c1", cwd)
+        self.env.proc(700, "node node_modules/.bin/vite --port 5173", cwd=cwd, ppid=1, secs=7200)
+        self.env.proc(701, "/Applications/Some.app/Contents/MacOS/x", cwd=cwd, ppid=1)
+        snap = self.live()
+        self.assertEqual([(s["pid"], s["port"]) for s in snap["servers"]], [(700, 5173)])
+
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
