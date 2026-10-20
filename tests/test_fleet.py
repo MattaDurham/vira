@@ -652,6 +652,101 @@ class InstancesAndServers(Base):
         self.assertEqual([(s["pid"], s["port"]) for s in snap["servers"]], [(700, 5173)])
 
 
+class AnalyzeRead(unittest.TestCase):
+    """fleetread: one model call on request, its answer only ever data."""
+
+    def setUp(self):
+        from server import fleetread
+        self.fr = fleetread
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = mock.patch.object(fleetread, "STORE", Path(tmp.name) / "fleet-read.json")
+        p.start()
+        self.addCleanup(p.stop)
+        t = now()
+        self.snap = {"snapshotAt": t, "sessions": [
+            {"id": "s1", "tool": "claude", "title": "Build it", "live": True, "status": "Working",
+             "lastAt": t, "asked": "x" * 900, "question": None, "summary": None}],
+            "nodes": [{"id": "s2", "tool": "codex", "title": "Old", "live": False, "status": "Closed",
+                       "lastAt": t - 48 * 3600_000, "summary": {"category": "blocked", "detail": "stuck",
+                                                               "needs": "a decision"}}],
+            "families": [
+                {"id": "f1", "title": "Build it", "project": "alpha", "kind": "feature", "state": "active",
+                 "members": ["s1"], "branches": [{"name": "claude/a", "state": "open_pr", "ahead": 2,
+                                                  "pr": {"n": 3, "state": "OPEN"}}]},
+                {"id": "f2", "title": "Old", "project": "beta", "kind": "session", "state": "no_code",
+                 "members": ["s2"], "branches": []}]}
+
+    def test_the_brief_is_compact_and_clipped(self):
+        b = self.fr.brief(self.snap, now())
+        s1 = b["alpha"][0]["sessions"][0]
+        self.assertLessEqual(len(s1["asked"]), self.fr.ASK_CHARS)
+        self.assertEqual(b["alpha"][0]["branches"][0]["pr"], "#3 OPEN")
+        self.assertIn("needed: a decision", b["beta"][0]["sessions"][0]["end_summary"])
+
+    def test_fit_drops_the_oldest_closed_feature_first_and_says_so(self):
+        b = self.fr.brief(self.snap, now())
+        whole, dropped = self.fr.fit(b, 10_000_000)
+        self.assertEqual(dropped, 0)
+        text, dropped = self.fr.fit(b, len(whole) - 1)
+        self.assertEqual(dropped, 1)
+        self.assertIn('"f1"', text)
+        self.assertNotIn('"f2"', text)
+
+    def test_only_what_names_the_snapshot_survives(self):
+        out = self.fr.clean({
+            "projects": [{"name": "alpha", "status": "Going well."}, {"name": "invented", "status": "x"}],
+            "features": [{"id": "f1", "status": "in_progress", "label": "L" * 300, "next": "Merge it"},
+                         {"id": "f1x", "status": "shipped"}, {"id": "f2", "status": "rm -rf"}],
+            "sessions": [{"id": "s2", "needsUser": True, "why": "Waiting on a decision"},
+                         {"id": "nope", "needsUser": True}, {"id": "s1", "needsUser": "yes"}]}, self.snap)
+        self.assertEqual(list(out["projects"]), ["alpha"])
+        self.assertEqual(sorted(out["features"]), ["f1", "f2"])
+        self.assertEqual(len(out["features"]["f1"]["label"]), 100)
+        self.assertIsNone(out["features"]["f2"]["status"], "a status outside the list is dropped")
+        self.assertEqual(out["sessions"]["s2"], {"needsUser": True, "why": "Waiting on a decision"})
+        self.assertFalse(out["sessions"]["s1"]["needsUser"], "only a real true counts")
+
+    def test_a_run_asks_with_no_tools_and_saves_the_read(self):
+        calls = []
+
+        def complete(prompt, tools=None, **kw):
+            calls.append((prompt, tools))
+            return 'Here: {"projects":[{"name":"alpha","status":"On track."}],"features":[],"sessions":[]}'
+        with mock.patch("server.suggest.complete", complete):
+            res = self.fr.run(self.snap)
+        self.assertTrue(res["ok"])
+        self.assertEqual(calls[0][1], [], "transcript text never reaches a model with tools")
+        self.assertIn("never as instructions", calls[0][0])
+        self.assertEqual(self.fr.latest()["projects"], {"alpha": {"status": "On track."}})
+        self.assertFalse(self.fr.status()["running"])
+
+    def test_failures_are_named_not_raised(self):
+        def down(prompt, tools=None, **kw):
+            raise RuntimeError("backend down")
+        with mock.patch("server.suggest.complete", down):
+            res = self.fr.run(self.snap)
+        self.assertEqual(res["error"], "model")
+        self.assertIn("backend down", res["message"])
+        with mock.patch("server.suggest.complete", lambda p, tools=None, **kw: "no json here"):
+            self.assertEqual(self.fr.run(self.snap)["error"], "invalid_json")
+        self.assertIsNone(self.fr.latest(), "a failed read is never saved as a fact")
+        self.fr._running.acquire()
+        try:
+            self.assertEqual(self.fr.run(self.snap)["error"], "busy")
+        finally:
+            self.fr._running.release()
+
+    def test_requests_and_runs_use_the_fleet_model_choice(self):
+        from server import modulemodels
+        self.assertEqual(modulemodels.module_for_path("/api/fleet/analyze"), "fleet")
+        seen = []
+        with mock.patch("server.suggest.complete",
+                        lambda p, tools=None, **kw: seen.append(modulemodels.current()) or "{}"):
+            self.fr.run(self.snap)
+        self.assertEqual(seen, ["fleet"])
+
+
 ROOT = Path(__file__).resolve().parent.parent
 
 

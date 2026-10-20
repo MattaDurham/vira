@@ -267,4 +267,28 @@ assert.ok(Date.now() - F.S.receivedAt < 1000);
 // A missing source says so in the bottom strip.
 assert.match(root.querySelector(".fl-bottom").textContent, /Codex not found on this machine/);
 
+// The Analyze read: its status wins the feature chip, a session it flags
+// joins the needs-you row as a soft card, and the button says where it stands.
+F.S.ai.read = { at: NOW - 5 * MIN, projects: { alpha: { status: "One feature open." } },
+  features: { w1: { status: "stalled", label: "The W feature", next: "Merge PR 4" } },
+  sessions: { i1: { needsUser: true, why: "Its tests fail" } } };
+F.render();
+const lanes2 = root.querySelector(".fl-lanes");
+assert.equal(F.famStateChip(snap.families[0]).textContent, "Stalled");
+assert.match(lanes2.querySelector(".fl-fam-ai").textContent, /Next: Merge PR 4/);
+assert.match(lanes2.querySelector(".fl-ai-note").textContent, /One feature open\./);
+const soft = lanes2.querySelectorAll(".fl-qcard").filter((c) => c.classList.contains("soft"));
+assert.equal(soft.length, 1);
+assert.match(soft[0].textContent, /Its tests fail/);
+assert.match(soft[0].textContent, /From the AI read/);
+const aiBox = root.querySelector(".fl-ai");
+F.renderAi();
+assert.match(aiBox.textContent, /Last read/);
+assert.equal(aiBox.querySelector(".fl-ai-btn").textContent, "Analyze again");
+F.S.ai.running = true;
+F.S.ai.startedAt = Date.now();
+F.renderAi();
+assert.match(aiBox.textContent, /Reading your sessions/);
+assert.equal(aiBox.querySelector(".fl-ai-btn"), null, "no second run while one is going");
+
 console.log("fleet UI: ok");

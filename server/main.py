@@ -40,7 +40,7 @@ from . import (
                executive,
                feedstate,
                find,
-               fleet,
+               fleet, fleetread,
                flows,
                frontdoor,
                reading,
@@ -3038,6 +3038,24 @@ async def api_fleet_stream():
             fleet.HUB.unsubscribe(q)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/fleet/analysis")
+def api_fleet_analysis():
+    """The last Analyze read, and whether one is running now."""
+    return fleetread.status()
+
+
+@app.post("/api/fleet/analyze")
+def api_fleet_analyze():
+    """Run the Analyze read now: one model call over what Fleet shows. Only
+    ever on the owner's press; each run spends model usage."""
+    with admission.cpu("fleet"):
+        snap = fleet.FLEET.live()
+    res = fleetread.run(snap)
+    if not res["ok"]:
+        raise HTTPException(409 if res["error"] == "busy" else 502, res["message"])
+    return res["read"]
 
 
 # ---------- Android companion (pairing, message ingest, pings) ----------

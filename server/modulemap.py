@@ -414,7 +414,10 @@ DEFAULT_MODULES = [
              "them: each repository's worktrees and branches, pull requests "
              "through gh, the landings on the base branch and CHANGELOG.md "
              "by the day each bullet landed. The live tier runs every two "
-             "seconds and only while a Fleet window holds the stream open.",
+             "seconds and only while a Fleet window holds the stream open. "
+             "The Analyze read (server/fleetread.py) is one model call, only "
+             "on the owner's press, with no tools, saved to "
+             "data/fleet-read.json.",
      "links": [{"to": "sessions", "how": "reads Vira's jobs from"},
                {"to": "job-ledger", "how": "reads job history from"},
                {"to": "changelog-engine", "how": "shows Vira's change log through"}],
@@ -728,7 +731,9 @@ DEFAULT_MODULES = [
              "waiting on the owner above them. Beside the sessions: each "
              "project's worktrees, branches and Vira instances, a timeline "
              "of landings and change-log entries, the last 7 days, the "
-             "background model calls, and dev servers left running.",
+             "background model calls, and dev servers left running. An "
+             "Analyze button asks for a plain status of each project, "
+             "feature and session, marked AI wherever it shows.",
      "links": [{"to": "fleet-engine", "how": "follows live through"}],
      "endpoints": ["#fleet"],
      "keywords": ["fleet window", "session fleet", "needs you",

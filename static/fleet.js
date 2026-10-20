@@ -28,7 +28,8 @@
   const BRANCH_LABEL = { open_pr: "open PR", unmerged: "not merged", merged: "merged",
                          deleted: "deleted", unknown: "unknown" };
   const STATE_LABEL = { active: "In progress", unmerged: "Not merged", done: "Done",
-                        no_code: "No code" };
+                        no_code: "No code", shipped: "Shipped", in_progress: "In progress",
+                        stalled: "Stalled", abandoned: "Abandoned" };
   const LISTS = {
     working: { title: "Working now", test: (n) => n.live && n.status === "Working" },
     needs: { title: "Waiting on you", test: (n) => realWaiting(n) },
@@ -45,6 +46,8 @@
     tool: "all", project: "", mode: "24h", tab: "sessions",
     view: null, stack: [], tl: { mode: "all", q: "", day: null },
     seenFeed: new Set(), mounted: false, root: null, ticker: null, watch: null,
+    // The Analyze read: the last saved result, and a run in flight.
+    ai: { read: null, running: false, startedAt: null, error: null },
   };
   const tiles = new Map(), chips = new Map();
   const projColor = new Map();
@@ -290,6 +293,76 @@
     if (error && age > LIVE_FRESH_MS) return { text: "Reconnecting", cls: "bad" };
     if (age < LIVE_FRESH_MS) return { text: "Live", cls: "on" };
     return { text: `Paused, updated ${ago(age)}`, cls: "" };
+  }
+
+  // ---------- the Analyze read ----------
+  const aiFeature = (id) => S.ai.read && S.ai.read.features && S.ai.read.features[id];
+  const aiSession = (id) => S.ai.read && S.ai.read.sessions && S.ai.read.sessions[id];
+  const aiProject = (name) => S.ai.read && S.ai.read.projects && S.ai.read.projects[name];
+  function aiTag() { return el("span", "fl-ai-tag", "AI"); }
+  function aiNote(text) {
+    if (!text) return null;
+    const n = el("div", "fl-ai-note");
+    n.append(aiTag(), el("span", null, text));
+    return n;
+  }
+  async function loadAi() {
+    try {
+      const r = await fetch("/api/fleet/analysis");
+      if (!r.ok) return;
+      const body = await r.json();
+      S.ai.read = body.read || null;
+      if (body.running && !S.ai.running) { S.ai.running = true; S.ai.startedAt = body.startedAt; }
+      renderAi();
+      render();
+    } catch (e) { /* the button still works */ }
+  }
+  async function runAi() {
+    if (S.ai.running) return;
+    S.ai = { ...S.ai, running: true, startedAt: Date.now(), error: null };
+    renderAi();
+    try {
+      const r = await fetch("/api/fleet/analyze", { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || `The read failed (${r.status}).`);
+      S.ai.read = body;
+    } catch (e) {
+      S.ai.error = (e && e.message) || "The read failed. Try again.";
+    }
+    S.ai.running = false;
+    S.ai.startedAt = null;
+    renderAi();
+    render();
+  }
+  function renderAi() {
+    const box = S.root && q1(S.root, "fl-ai");
+    if (!box) return;
+    const a = S.ai;
+    const sig = JSON.stringify([a.running, a.startedAt, a.error, a.read && a.read.at]);
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    const state = el("span", "fl-ai-state");
+    state.append(aiTag(), document.createTextNode(" "));
+    if (a.running) {
+      state.append(document.createTextNode("Reading your sessions "));
+      const t = el("b", "fl-num");
+      since(t, a.startedAt);
+      state.append(t);
+      box.replaceChildren(state);
+      return;
+    }
+    if (a.read && a.read.at) {
+      state.append(document.createTextNode("Last read "));
+      const t = el("b");
+      agoAt(t, a.read.at);
+      state.append(t);
+      if (a.read.dropped) state.append(document.createTextNode(` (${plural(a.read.dropped, "older feature")} left out to fit)`));
+    } else state.append(document.createTextNode("No AI read yet"));
+    const parts = [state];
+    if (a.error) parts.push(el("span", "fl-ai-err", a.error));
+    parts.push(btn("fl-ai-btn", a.read && a.read.at ? "Analyze again" : "Analyze", runAi,
+      "One model call reads every project, feature and session shown and writes a plain status for each. Uses your model usage; it never runs by itself."));
+    box.replaceChildren(...parts);
   }
 
   // ---------- navigation: every view is a key; Back walks the trail ----------
@@ -570,10 +643,14 @@
   // ---------- questions waiting on the owner ----------
   function askStrip(shown) {
     const waiting = shown.filter(realWaiting);
-    if (!waiting.length) return null;
+    // Sessions the AI read says need the owner, and that are not already
+    // asking: shown apart, and marked as the read's opinion.
+    const flagged = shown.filter((n) => !realWaiting(n) && aiSession(n.id) && aiSession(n.id).needsUser);
+    if (!waiting.length && !flagged.length) return null;
     const wrap = el("section", "fl-asks");
     const h = el("div", "fl-asks-h", "Waiting on you");
-    h.append(el("span", null, plural(waiting.length, "question")));
+    h.append(el("span", null, [waiting.length ? plural(waiting.length, "question") : "",
+      flagged.length ? `${flagged.length} more by the AI read` : ""].filter(Boolean).join(" / ")));
     const row = el("div", "fl-asks-row");
     waiting.forEach((n) => {
       const c = el("div", "fl-qcard");
@@ -596,14 +673,32 @@
       c.append(act);
       row.append(c);
     });
+    flagged.forEach((n) => {
+      const c = el("div", "fl-qcard soft");
+      clickable(c, n.id);
+      const top = el("div", "fl-qtop");
+      const p = el("span", "fl-qp", n.project);
+      p.style.color = pc(n.project);
+      top.append(p, toolTag(n));
+      const note = el("div", "fl-qnote");
+      note.append(aiTag(), document.createTextNode(" From the AI read, not a question the session asked"));
+      c.append(top, el("div", "fl-qs", n.title), el("div", "fl-qq", aiSession(n.id).why || "May need you"), note);
+      const act = el("div", "fl-qact");
+      act.append(openLinks(n));
+      c.append(act);
+      row.append(c);
+    });
     wrap.append(h, row);
     return wrap;
   }
 
   // ---------- lanes, families and trees ----------
   function famStateChip(f) {
-    const key = f.state === "unmerged" ? "unmerged" : f.state;
-    return el("span", `fl-state s-${key}`, key === "unmerged" ? `${f.needsWork} not merged` : STATE_LABEL[key] || key);
+    const ai = aiFeature(f.id);
+    const key = ai && ai.status ? ai.status : f.state;
+    const chip = el("span", `fl-state s-${key}`, key === "unmerged" ? `${f.needsWork} not merged` : STATE_LABEL[key] || key);
+    if (ai && ai.status) chip.title = "From the AI read";
+    return chip;
   }
   function famCounts(f) {
     const parts = [];
@@ -629,6 +724,12 @@
       top.append(dots);
     }
     h.append(top);
+    const ai = aiFeature(f.id);
+    if (ai && (ai.label || ai.next)) {
+      const line = el("div", "fl-fam-ai");
+      line.append(aiTag(), document.createTextNode(` ${ai.label || ""}${ai.next ? ` Next: ${ai.next}` : ""}`));
+      h.append(line);
+    }
     return h;
   }
   function buildTree(members) {
@@ -685,6 +786,7 @@
       lane.style.setProperty("--pc", pc(p));
       const head = el("div", "fl-lane-h");
       head.append(btn("fl-lane-name", p, () => go(`proj:${p}`), "Open this project"), laneMeta(p, fams));
+      const aiLine = aiProject(p) ? aiNote(aiProject(p).status) : null;
       const body = el("div", "fl-lane-body");
       fams.forEach(({ f, members }) => {
         const fam = el("div", "fl-fam");
@@ -697,7 +799,7 @@
         fam.append(buildTree(members));
         body.append(fam);
       });
-      lane.append(head, body);
+      lane.append(head, ...(aiLine ? [aiLine] : []), body);
       return lane;
     }));
     box.scrollTop = keep;
@@ -948,8 +1050,9 @@
     const cols = el("div", "fl-cols");
     cols.append(left, right);
     const keep = sheet.scrollTop;
+    const ai = aiSession(s.id);
     sheet.replaceChildren(...[navRow(crumbsFor(s, idx)), head(eyebrow, s.title, openLinks(s)), questionBlock(s),
-      facts, dials, cols].filter(Boolean));
+      ai && ai.why ? aiNote(`${ai.needsUser ? "Needs you: " : ""}${ai.why}`) : null, facts, dials, cols].filter(Boolean));
     sheet.scrollTop = keep;
   }
   function renderClosed(sheet, n, idx) {
@@ -972,8 +1075,10 @@
     right.append(gitBlock(n, idx), linkBlock(n, idx));
     const cols = el("div", "fl-cols");
     cols.append(left, right);
-    sheet.replaceChildren(navRow(crumbsFor(n, idx)), head(eyebrow, n.title, openLinks(n)), facts,
-      el("p", "fl-empty", "Nothing is running for this session. Open it to pick it back up."), cols);
+    const ai = aiSession(n.id);
+    sheet.replaceChildren(...[navRow(crumbsFor(n, idx)), head(eyebrow, n.title, openLinks(n)),
+      ai && ai.why ? aiNote(`${ai.needsUser ? "Needs you: " : ""}${ai.why}`) : null, facts,
+      el("p", "fl-empty", "Nothing is running for this session. Open it to pick it back up."), cols].filter(Boolean));
   }
 
   const openFolds = new Set();
@@ -1020,9 +1125,11 @@
     const ses = el("div", "fl-list");
     f.members.map((id) => idx.byId.get(id)).filter(Boolean).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
       .forEach((n) => ses.append(sessionRow(n, n.parentId ? [el("span", null, n.link === "fork" ? "forked" : "started from another")] : [])));
-    sheet.replaceChildren(navRow([[f.project, `proj:${f.project}`]]), head(eyebrow, f.title), facts,
+    const fai = aiFeature(f.id);
+    sheet.replaceChildren(...[navRow([[f.project, `proj:${f.project}`]]), head(eyebrow, f.title),
+      fai ? aiNote(`${fai.label || ""}${fai.next ? ` Next: ${fai.next}` : ""}`) : null, facts,
       block("Sessions in this feature", ses),
-      block("Branches", f.branches.length ? branchList(f.branches, idx, f.id) : el("p", "fl-empty", "No branches recorded for this feature.")));
+      block("Branches", f.branches.length ? branchList(f.branches, idx, f.id) : el("p", "fl-empty", "No branches recorded for this feature."))].filter(Boolean));
   }
 
   // ----- project: worktrees, branches, instances, its timeline
@@ -1083,6 +1190,7 @@
     open.forEach((n) => openList.append(sessionRow(n)));
     if (!open.length) openList.append(el("p", "fl-empty", "No sessions open in this project."));
     const parts = [navRow(), title];
+    if (aiProject(name)) parts.push(aiNote(aiProject(name).status));
     if (repo) {
       const facts = el("div", "fl-facts");
       const f = (k, v) => { const x = el("span"); x.append(document.createTextNode(`${k} `), el("b", null, v)); facts.append(x); };
@@ -1382,7 +1490,7 @@
     const live = el("span", "fl-live");
     live.append(el("i"), el("span", "fl-live-t", "Connecting"));
     brand.append(btn("fl-home", "Fleet", home, "All sessions"), live);
-    top.append(brand, el("div", "fl-counts"));
+    top.append(brand, el("div", "fl-counts"), el("div", "fl-ai"));
     const controls = el("div", "fl-controls");
     const stage = el("div", "fl-stage");
     const lanes = el("div", "fl-lanes");
@@ -1507,6 +1615,8 @@
       S.tab = saved.tab || "sessions";
     }
     connect();
+    if (!S.aiLoaded) { S.aiLoaded = true; loadAi(); }
+    renderAi();
     if (!S.watch) S.watch = setInterval(watch, 2000);
     if (!S.ticker) S.ticker = setInterval(() => {
       if (!visible()) return;
@@ -1528,7 +1638,7 @@
       S, realWaiting, index, visibleNodes, laneGroups, counts, timelineRows, landingDays,
       weekBars, weekStart, callRows, liveLabel, viewKind, questionText, onFrame, render, mount,
       renderTop, renderLanes, askStrip, renderCalls, renderWeek, renderTimeline, renderBottom,
-      tiles, chips, go, back, home,
+      tiles, chips, go, back, home, renderAi, famStateChip,
     };
   }
 })();
