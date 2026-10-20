@@ -410,7 +410,8 @@ class Fleet:
             tpath = self._tpath(cli_id)
             origin = d.get("originCwd") or d.get("cwd") or ""
             project, repo = project_of(origin)
-            repo = fc.repo_of_record(d) or repo
+            anchored = fc.repo_of_record(d)
+            repo = os.path.realpath(anchored) if anchored else repo
             if repo and project != "No folder":
                 project = Path(repo).name
             base = d.get("sourceBranch") or "main"

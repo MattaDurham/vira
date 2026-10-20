@@ -100,6 +100,9 @@ def repo_root(path):
                 break
         except OSError:
             break
+    # Resolved, so one repository reached through a symlink and through its
+    # real path (a worktree's .git file names the real one) is one key.
+    found = os.path.realpath(found) if found else None
     _roots[path] = found
     return found
 

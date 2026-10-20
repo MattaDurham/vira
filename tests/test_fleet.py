@@ -590,6 +590,43 @@ class Repositories(unittest.TestCase):
         self.assertNotEqual(fg.signature(str(self.root)), before)
 
 
+class SlowTier(Base, Repositories):
+    """The repository picture as the window receives it: every repository
+    a session worked in, the 7-day bars, background calls, and Vira's own
+    change log beside the landings."""
+
+    def setUp(self):
+        Base.setUp(self)
+        Repositories.setUp(self)
+        groups = [{"date": time.strftime("%Y-%m-%d"), "goal": "", "entries": [
+            {"text": "Shipped it", "kind": "ship", "ts": datetime.now().isoformat(), "source": "retro"},
+            {"text": "Not doing it", "kind": "dropped", "ts": datetime.now().isoformat(), "source": "idea"}]}]
+        for p in (mock.patch.object(changelog, "REPO", self.root),
+                  mock.patch.object(changelog, "groups", lambda: groups)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_repos_week_calls_and_the_vira_log(self):
+        self.env.transcript(str(self.busy), "c1", [user("Work in the busy tree", now() - 2 * MIN)])
+        self.env.record("local_1", "c1", str(self.busy))
+        self.env.app_proc(101, "c1", str(self.busy))
+        self.env.transcript(str(self.root), "x1", [user("You are tagging DOCUMENTS here", now() - MIN)],
+                            entrypoint="sdk-cli")
+        snap = self.fleet.snapshot()
+        repos = snap["repos"]
+        self.assertEqual([Path(r["root"]).resolve() for r in repos["repos"]], [self.root.resolve()])
+        busy = next(w for w in repos["repos"][0]["worktrees"] if w["name"] == "busy")
+        self.assertEqual((busy["label"], busy["sessions"]), ("In use", ["local_1"]))
+        self.assertEqual([(w["id"], w["tool"], w["live"]) for w in repos["week"]], [("local_1", "claude", True)])
+        self.assertEqual([(c["kind"], c["today"]) for c in repos["calls"]], [("library tagging", 1)])
+        self.assertEqual(Path(repos["viraRepo"]).resolve(), self.root.resolve())
+        self.assertEqual([e["text"] for g in repos["viraLog"] for e in g["entries"]], ["Shipped it"],
+                         "a dropped idea is not a change")
+        self.assertFalse(self.fleet.repos_due(), "nothing moved since the scan")
+        self.git("branch", "claude/another")
+        self.assertTrue(self.fleet.repos_due(), "a new branch is noticed before the 30 s rescan")
+
+
 class InstancesAndServers(Base):
     def test_a_branch_instance_is_shown_beside_its_worktree(self):
         wt = Path(self.env.folder("wt"))
