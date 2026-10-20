@@ -101,7 +101,7 @@ def read_threads(since_ms, ids=()):
     columns this schema has; note says why there are none."""
     db = state_db()
     if not db:
-        return [], "not found on this machine"
+        return [], "Codex not found on this machine"
     try:
         con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=1)
     except sqlite3.Error as e:
