@@ -24,6 +24,7 @@
 <link rel="stylesheet" href="/forge.css">
 <link rel="stylesheet" href="/research.css">
 <link rel="stylesheet" href="/library.css">
+<link rel="stylesheet" href="/fleet.css">
 <link rel="stylesheet" href="/orbits.css">
 <link rel="stylesheet" href="/assistant.css">
 <link rel="stylesheet" href="/work-results.css">
@@ -797,6 +798,13 @@
     <div id="lib-root" class="lib-root"></div>
   </section>
 
+  <!-- FLEET (every agent session on this machine, live: server/fleet.py
+       collects Claude Code, Codex and Vira's jobs across every project;
+       static/fleet.js owns this view and its own heading) -->
+  <section id="view-fleet" class="view">
+    <div id="fleet-root" class="fl-root"></div>
+  </section>
+
   <!-- MAPS (the System Map's layered diagram, of anything you ask for:
        server/maps.py validates and stores each one, static/maps/view.html
        draws it) -->
@@ -1353,6 +1361,7 @@
 <script src="/reminder-stickies.js"></script>
 <script src="/research.js"></script>
 <script src="/library.js"></script>
+<script src="/fleet.js"></script>
 <script src="/atlas.js"></script>
 </body>
 </html>

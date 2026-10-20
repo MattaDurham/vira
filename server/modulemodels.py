@@ -28,6 +28,7 @@ MODULES = {
     "map": ("System Map", "Refresh the system map", "session"),
     "maps": ("Maps", "New maps and map refreshes", "session"),
     "library": ("Library", "Naming the subjects on the Library's map", "session"),
+    "fleet": ("Fleet", "The Analyze read of every project and session", "completion"),
     "setup": ("Config", "Build initial contact profiles and setup runs", "session"),
 }
 ALIASES = {"feed": "people", "find-cloud": "find", "find-related": "find",
@@ -198,6 +199,7 @@ _PATHS = {
     "/api/reading": "reader", "/api/evidence": "evidence",
     "/api/subs": "subs", "/api/subs-visuals": "subs",
     "/api/map": "map", "/api/maps": "maps", "/api/library": "library",
+    "/api/fleet": "fleet",
     "/api/genre": "design",
     "/api/design": "design", "/api/onboard/dossiers": "setup",
 }

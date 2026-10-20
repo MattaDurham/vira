@@ -296,6 +296,140 @@ def groups():
     return build()[0]
 
 
+# ---------- git sources: what landed, and CHANGELOG.md by the day it grew ----
+#
+# Two more entry sources, read from any repository's history rather than
+# from Vira's stores, so Fleet's timeline can show them for every project
+# it watches. They are pure parsers over git's output (server/fleetgit.py
+# runs git); nothing here shells out.
+#
+# Landings are the first-parent history of the base branch: one row per
+# merge or direct commit. CHANGELOG.md alone undercounts badly: since PRs
+# started carrying the write-up, Vira's file gained 7 entries in seven
+# weeks, while dozens of branches landed. A landing carries its PR's
+# number and title when gh knows the branch.
+
+# Quoted ("Merge branch 'x'") is git's own message; tools that write their
+# own merge commits often leave the quotes off.
+_MERGE_BRANCH = re.compile(
+    r"^Merge (?:branch|remote-tracking branch) '?([^'\s]+)'?|"
+    r"^Merge pull request #(\d+) from [^/\s]+/(\S+)")
+_SQUASH_PR = re.compile(r"\(#(\d+)\)\s*$")
+
+
+def _tool_of_branch(branch, merge):
+    b = (branch or "").removeprefix("origin/")
+    if b.startswith("claude/"):
+        return "claude"
+    if b.startswith("codex/"):
+        return "codex"
+    return "other" if merge else "direct"
+
+
+def parse_landings(log_text, prs=()):
+    """Rows from `git log --first-parent --format=%x1e%H%x1f%ct%x1f%P%x1f%s
+    --shortstat`, newest first: {sha, at, branch, tool, pr, title, files,
+    insertions, deletions, merge}."""
+    by_branch, by_number = {}, {}
+    for p in prs or ():
+        if p.get("branch"):
+            cur = by_branch.get(p["branch"])
+            if not cur or p.get("state") == "MERGED":
+                by_branch[p["branch"]] = p
+        if p.get("n"):
+            by_number[p["n"]] = p
+    out = []
+    for chunk in log_text.split("\x1e"):
+        chunk = chunk.strip("\n")
+        if not chunk:
+            continue
+        head, _, rest = chunk.partition("\n")
+        parts = head.split("\x1f")
+        if len(parts) < 4:
+            continue
+        sha, ct, parents, subject = parts[0], parts[1], parts[2], "\x1f".join(parts[3:])
+        merge = len(parents.split()) > 1
+        branch, number = None, None
+        m = _MERGE_BRANCH.match(subject)
+        if m:
+            branch = m.group(1) or m.group(3)
+            number = int(m.group(2)) if m.group(2) else None
+        else:
+            sq = _SQUASH_PR.search(subject)
+            number = int(sq.group(1)) if sq else None
+        pr = by_number.get(number) if number else None
+        if not pr and branch:
+            pr = by_branch.get(branch.removeprefix("origin/"))
+        stat = {"files": 0, "insertions": 0, "deletions": 0}
+        for key, rx in (("files", r"(\d+) files? changed"), ("insertions", r"(\d+) insertions?"),
+                        ("deletions", r"(\d+) deletions?")):
+            sm = re.search(rx, rest)
+            if sm:
+                stat[key] = int(sm.group(1))
+        out.append({"sha": sha, "at": int(ct) * 1000 if ct.isdigit() else None,
+                    "branch": branch, "tool": _tool_of_branch(branch, merge),
+                    "merge": merge, "subject": subject[:200],
+                    "pr": ({"n": pr.get("n"), "title": pr.get("title"), "url": pr.get("url")}
+                           if pr else ({"n": number, "title": None, "url": None} if number else None)),
+                    **stat})
+    return out
+
+
+def _md_bullets(text):
+    """first line -> (section, release, full text) for every top-level
+    bullet in a CHANGELOG.md."""
+    out, section, release, cur = {}, "", "", None
+    for line in (text or "").splitlines():
+        if line.startswith("## "):
+            release, section, cur = line[3:].strip(), "", None
+        elif line.startswith("### "):
+            section, cur = line[4:].strip(), None
+        elif line.startswith("- "):
+            cur = line[2:].strip()
+            out[cur] = [section, release, [cur]]
+        elif cur is not None and line.startswith("  ") and line.strip():
+            out[cur][2].append(line.strip())
+        elif not line.strip():
+            cur = None
+    return {k: (v[0], v[1], " ".join(v[2])) for k, v in out.items()}
+
+
+def parse_changelog_md(diff_text, current_text=""):
+    """CHANGELOG.md bullets dated by the first-parent commit that added
+    their first line, from `git log --first-parent --reverse -p
+    --unified=0 --format=%x1e%H%x1f%ct -- CHANGELOG.md`. Newest first:
+    {at, sha, section, release, headline, detail}. The section and full
+    text come from the current file; a bullet since removed keeps its
+    first line."""
+    current = _md_bullets(current_text)
+    seen, out = set(), []
+    for chunk in diff_text.split("\x1e"):
+        head, _, body = chunk.partition("\n")
+        parts = head.strip().split("\x1f")
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            continue
+        sha, at = parts[0], int(parts[1].strip()) * 1000
+        for line in body.splitlines():
+            if not line.startswith("+- ") or line.startswith("+++"):
+                continue
+            first = line[3:].strip()
+            if not first or first in seen:
+                continue
+            seen.add(first)
+            section, release, full = current.get(first, ("", "", first))
+            full = _clean(full)
+            m = re.match(r"(.+?[.!?])(\s+|$)(.*)", full)
+            headline, detail = (m.group(1), m.group(3)) if m else (full, "")
+            out.append({"at": at, "sha": sha, "section": section, "release": release,
+                        "headline": headline[:300], "detail": detail[:1200],
+                        "removed": first not in current})
+    # Newest first; the diff runs oldest first, so a tie on the second goes
+    # to whichever was added later.
+    order = {id(e): i for i, e in enumerate(out)}
+    out.sort(key=lambda e: (-e["at"], -order[id(e)]))
+    return out
+
+
 def api():
     g, w = build()
     return {"groups": g, "warnings": w}
