@@ -403,6 +403,25 @@ DEFAULT_MODULES = [
      "endpoints": ["/api/maps", "/api/maps/ask"],
      "keywords": ["layered map", "save_map", "maps window", "map anything"],
      "updated": "2026-10-08"},
+    {"id": "fleet-engine", "name": "Fleet", "layer": "engine",
+     "group": "operate", "kind": "in-process collector, read-only",
+     "what": "Every agent session on the machine, live: Claude Code "
+             "(desktop-app sessions, terminal sessions, subagents) from "
+             "its transcripts and the app's session records, Codex threads "
+             "from its thread database and rollout tails, and Vira's own "
+             "jobs from the registry and ledger. Headless SDK calls are "
+             "counted per folder and kind, never listed as sessions. Around "
+             "them: each repository's worktrees and branches, pull requests "
+             "through gh, the landings on the base branch and CHANGELOG.md "
+             "by the day each bullet landed. The live tier runs every two "
+             "seconds and only while a Fleet window holds the stream open.",
+     "links": [{"to": "sessions", "how": "reads Vira's jobs from"},
+               {"to": "job-ledger", "how": "reads job history from"},
+               {"to": "changelog-engine", "how": "shows Vira's change log through"}],
+     "endpoints": ["/api/fleet", "/api/fleet/stream"],
+     "keywords": ["fleet", "session fleet", "codex threads",
+                  "background calls", "worktrees", "landings"],
+     "updated": "2026-10-20"},
     {"id": "library-engine", "name": "Library", "layer": "engine",
      "group": "know", "kind": "out-of-process build + derived index",
      "what": "A subject tree for each connected vault, built in its own "
@@ -700,6 +719,21 @@ DEFAULT_MODULES = [
      "keywords": ["library window", "subject map", "document browser",
                   "constellation"],
      "updated": "2026-10-08"},
+    {"id": "fleet-win", "name": "Fleet", "layer": "surface",
+     "group": "operate", "kind": "dock window",
+     "what": "Every agent session on the machine in one live window, a few "
+             "seconds behind: a lane per project with live sessions as "
+             "tiles (status, turn clock, current tool, plan, context) and "
+             "closed ones as chips, families drawn as trees, the questions "
+             "waiting on the owner above them. Beside the sessions: each "
+             "project's worktrees, branches and Vira instances, a timeline "
+             "of landings and change-log entries, the last 7 days, the "
+             "background model calls, and dev servers left running.",
+     "links": [{"to": "fleet-engine", "how": "follows live through"}],
+     "endpoints": ["#fleet"],
+     "keywords": ["fleet window", "session fleet", "needs you",
+                  "worktrees table", "landings timeline"],
+     "updated": "2026-10-20"},
     {"id": "applications-win", "name": "Applications", "layer": "surface",
      "group": "operate", "kind": "dock window",
      "what": "The job-application catalog: every role worth the owner's "

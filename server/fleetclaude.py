@@ -658,6 +658,11 @@ CALL_KINDS = (
     (re.compile(r"cartographer|map building|asked for a map", re.I), "map building"),
     (re.compile(r"research assistant|answer questions? by", re.I), "research answer"),
     (re.compile(r"research topics?", re.I), "research topics"),
+    (re.compile(r"extracting billing evidence", re.I), "receipt extraction"),
+    (re.compile(r"auditing whether session retrospectives", re.I), "retro audit"),
+    (re.compile(r"drafting reply suggestions", re.I), "reply suggestions"),
+    (re.compile(r"MUSE\b", re.I), "idea engine"),
+    (re.compile(r"deciding which of .{0,30}cont|pairs of .{0,30}cont", re.I), "contact review"),
 )
 
 

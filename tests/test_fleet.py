@@ -469,11 +469,13 @@ class Parsers(unittest.TestCase):
         log = ("\x1eaaa\x1f1700000000\x1fp1 p2\x1fMerge branch 'claude/fleet'\n\n"
                " 3 files changed, 40 insertions(+), 2 deletions(-)\n"
                "\x1ebbb\x1f1699990000\x1fp0\x1fFix a typo (#12)\n\n 1 file changed, 1 insertion(+)\n"
-               "\x1eccc\x1f1699980000\x1fp8 p9\x1fMerge branch 'codex/speedup'\n")
+               "\x1eccc\x1f1699980000\x1fp8 p9\x1fMerge branch 'codex/speedup'\n"
+               "\x1eddd\x1f1699970000\x1fp6 p7\x1fMerge branch codex/unquoted into main\n")
         prs = [{"n": 40, "title": "Fleet window", "state": "MERGED", "branch": "claude/fleet",
                 "url": "https://example.com/40"}]
         rows = changelog.parse_landings(log, prs)
-        self.assertEqual([r["tool"] for r in rows], ["claude", "direct", "codex"])
+        self.assertEqual([r["tool"] for r in rows], ["claude", "direct", "codex", "codex"])
+        self.assertEqual(rows[3]["branch"], "codex/unquoted")
         self.assertEqual(rows[0]["pr"]["title"], "Fleet window")
         self.assertEqual((rows[0]["files"], rows[0]["insertions"], rows[0]["deletions"]), (3, 40, 2))
         self.assertEqual(rows[1]["pr"]["n"], 12)
@@ -491,6 +493,42 @@ class Parsers(unittest.TestCase):
                          [("Second thing shipped.", "Added", 1700100000000),
                           ("First thing.", "Fixed", 1700000000000)])
         self.assertEqual(rows[1]["detail"], "With detail continues here.")
+
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class TheWindow(unittest.TestCase):
+    def test_the_ui_harness(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js is unavailable")
+        result = subprocess.run([node, str(ROOT / "tests" / "fleet_ui.js")], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8",
+                                timeout=60, check=False)
+        self.assertEqual(0, result.returncode, result.stderr or result.stdout)
+
+    def test_registered_as_a_window_with_a_deep_link(self):
+        app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertRegex(app, r'\{ id: "fleet", title: "Fleet"')
+        self.assertIn('if (id === "fleet") window.loadFleet', app)
+        self.assertRegex(app, r'"fleet": \(rest\) =>')
+        self.assertIn('<section id="view-fleet" class="view">', html)
+        self.assertIn('<script src="/fleet.js"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/fleet.css">', html)
+        from server import modulemap, modulestory
+        ids = {m["id"] for m in modulemap.DEFAULT_MODULES}
+        self.assertTrue({"fleet-engine", "fleet-win"} <= ids)
+        self.assertEqual(modulestory.WINDOWS["fleet"]["map"], "fleet-win")
+
+    def test_nothing_is_wider_than_a_phone(self):
+        css = (ROOT / "static" / "fleet.css").read_text(encoding="utf-8")
+        self.assertIn("@media (max-width: 759px)", css)
+        self.assertRegex(css, r"\.fl-search \{[^}]*font-size: 16px")
 
 
 if __name__ == "__main__":

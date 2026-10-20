@@ -961,7 +961,7 @@ class Fleet:
             me = None
         cands = ([p for p in INSTANCE_PORTS if p in ports] if ports is not None else list(INSTANCE_PORTS))
         wt_by_port = {}
-        for scan in self.scans.values():
+        for scan in list(self.scans.values()):
             for w in scan.get("worktrees") or []:
                 try:
                     meta = json.loads((Path(w["path"]) / ".test-instance.json").read_text(encoding="utf-8"))
@@ -1068,7 +1068,7 @@ class Fleet:
         live = [r for r in rows if r["live"]]
         own = fg.repo_root(str(changelog.REPO))
         repos = []
-        for root, scan in self.scans.items():
+        for root, scan in list(self.scans.items()):
             repos.append(label_repo(scan, live, self.inst[0], t_now))
         repos.sort(key=lambda r: -self.roots_seen.get(r["root"], 0))
         week = [dict(id=r["id"], tool=r["tool"], title=r["title"], project=r["project"],
@@ -1095,9 +1095,11 @@ class Fleet:
         for g in built:
             if g["date"] < cutoff:
                 continue
+            # A dropped idea is a decision not to change anything; the
+            # timeline is what changed.
             groups.append(dict(date=g["date"], goal=g.get("goal") or "", entries=[
                 dict(text=fc.clip(e.get("text") or "", 300), kind=e.get("kind"), ts=e.get("ts"),
-                     source=e.get("source")) for e in g["entries"][:40]]))
+                     source=e.get("source")) for e in g["entries"][:40] if e.get("kind") != "dropped"]))
         self.vira_log = (time.time(), groups)
         return groups
 
@@ -1244,6 +1246,7 @@ class Hub:
                 q.put_nowait((event, data))
 
     async def run(self):
+        slow = None
         while self.subs:
             t0 = time.monotonic()
             try:
@@ -1256,19 +1259,30 @@ class Hub:
                         self._send("fleet", self.live_json)
                     else:
                         self._send("tick", json.dumps({"at": live["snapshotAt"]}))
-                repos = await asyncio.to_thread(self._tick_repos, self.ticks % 5 == 0)
-                if repos is not None:
-                    body = json.dumps(dict(repos, at=0), separators=(",", ":"))
-                    if body != self.repos_cmp:
-                        self.repos_cmp = body
-                        self.repos_json = json.dumps(repos, separators=(",", ":"))
-                        self._send("fleetrepos", self.repos_json)
+                # The slow tier runs beside the live one, never in its way:
+                # a first scan with gh can take seconds.
+                if slow is None or slow.done():
+                    slow = asyncio.get_running_loop().create_task(self._slow(self.ticks % 5 == 0))
             except Exception as e:  # noqa: BLE001 - one bad tick never ends the stream
                 log("tick failed:", repr(e))
             self.ticks += 1
             self.busy_s += time.monotonic() - t0
             await asyncio.sleep(max(0.2, LIVE_SECS - (time.monotonic() - t0)))
         self.task = None
+
+    async def _slow(self, relabel):
+        try:
+            repos = await asyncio.to_thread(self._tick_repos, relabel)
+        except Exception as e:  # noqa: BLE001
+            log("repos failed:", repr(e))
+            return
+        if repos is None:
+            return
+        body = json.dumps(dict(repos, at=0), separators=(",", ":"))
+        if body != self.repos_cmp:
+            self.repos_cmp = body
+            self.repos_json = json.dumps(repos, separators=(",", ":"))
+            self._send("fleetrepos", self.repos_json)
 
     def _tick_live(self):
         try:

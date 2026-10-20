@@ -309,8 +309,10 @@ def groups():
 # weeks, while dozens of branches landed. A landing carries its PR's
 # number and title when gh knows the branch.
 
+# Quoted ("Merge branch 'x'") is git's own message; tools that write their
+# own merge commits often leave the quotes off.
 _MERGE_BRANCH = re.compile(
-    r"^Merge (?:branch|remote-tracking branch) '([^']+)'|"
+    r"^Merge (?:branch|remote-tracking branch) '?([^'\s]+)'?|"
     r"^Merge pull request #(\d+) from [^/\s]+/(\S+)")
 _SQUASH_PR = re.compile(r"\(#(\d+)\)\s*$")
 
