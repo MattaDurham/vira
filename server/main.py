@@ -40,6 +40,7 @@ from . import (
                executive,
                feedstate,
                find,
+               fleet,
                flows,
                frontdoor,
                reading,
@@ -3000,6 +3001,41 @@ async def api_stream():
         finally:
             watcher.unsubscribe(q)
             session.sessions.unsubscribe(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ---------- Fleet: every agent session on this machine (server/fleet.py) ----
+
+@app.get("/api/fleet")
+def api_fleet():
+    """Every Claude Code, Codex and Vira session on this machine, plus the
+    repository picture around them, as one snapshot. The Fleet window
+    loads this once and then follows /api/fleet/stream."""
+    return fleet.FLEET.snapshot()
+
+
+@app.get("/api/fleet/stream")
+async def api_fleet_stream():
+    # Its own channel rather than frames on /api/stream: the collector runs
+    # only while a Fleet window holds this connection open, and a closed
+    # window is the connection closing, so no lease or heartbeat from the
+    # page is needed to stop it. Frames: `fleet` (the live snapshot, sent
+    # when it changes), `tick` (unchanged, still live), `fleetrepos` (the
+    # slow tier, when it changes).
+    q = fleet.HUB.subscribe()
+
+    async def gen():
+        try:
+            yield "event: hello\ndata: {}\n\n"
+            while True:
+                try:
+                    event, data = await asyncio.wait_for(q.get(), timeout=15)
+                    yield f"event: {event}\ndata: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            fleet.HUB.unsubscribe(q)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
