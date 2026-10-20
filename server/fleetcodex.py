@@ -103,7 +103,7 @@ def read_threads(since_ms, ids=()):
     if not db:
         return [], "Codex not found on this machine"
     try:
-        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=1)
+        con = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
     except sqlite3.Error as e:
         return [], f"could not open {db.name}: {e}"
     try:
