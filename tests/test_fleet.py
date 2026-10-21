@@ -762,6 +762,15 @@ class TheWindow(unittest.TestCase):
                                 timeout=60, check=False)
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 
+    def test_title_bar_double_click_fits_it_to_the_desk(self):
+        # Like Work, the bar's double-click fits Fleet to the whole desk and
+        # back, rather than resetting its zoom.
+        app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertRegex(app, r'const DESK_FIT_WINDOWS = new Set\(\[[^\]]*"fleet"')
+        self.assertIn("DESK_FIT_WINDOWS.has(spec.id)", app)
+        self.assertIn('document.querySelectorAll(".fwin.fwin-fit")', app)
+        self.assertNotIn('"#win-work.fwin-fit"', app)
+
     def test_registered_as_a_window_with_a_deep_link(self):
         app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")

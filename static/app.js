@@ -24969,8 +24969,8 @@ function addZoomControls(bar, target, initial, onChange, resetOnBar = true) {
   return { get: () => z, set: (v) => { z = v || 1; paint(); } };
 }
 
-// The Forge is the one module whose normal working surface is legitimately
-// the whole Vira desk. Keep this as a reversible presentation state rather
+// The Forge (and Fleet, see DESK_FIT_WINDOWS) are modules whose normal working
+// surface is legitimately the whole Vira desk. Keep this as a reversible presentation state rather
 // than saving the fitted rectangle: a second double-click returns to the
 // exact composition the owner had before, and saved layouts remain untouched.
 function forgeDesktopRect() {
@@ -25018,10 +25018,17 @@ function toggleForgeWindowFit(win) {
   fitForgeWindow(win);
 }
 
-window.addEventListener("resize", () => {
-  const forge = document.querySelector("#win-work.fwin-fit");
-  if (forge) setWinRect(forge, forgeDesktopRect(), false);
-});
+// Windows whose title-bar double-click fits them to the whole desk (and back)
+// instead of resetting zoom: Work, and Fleet (owner, 2026-10-21), whose lanes
+// and timeline want the full width just as the Forge does.
+const DESK_FIT_WINDOWS = new Set(["work", "fleet"]);
+
+function refitDeskWindows() {
+  document.querySelectorAll(".fwin.fwin-fit")
+    .forEach((w) => setWinRect(w, forgeDesktopRect(), false));
+}
+
+window.addEventListener("resize", refitDeskWindows);
 
 function buildWindow(spec, st, ci) {
   const section = $("#view-" + spec.id);
@@ -25042,10 +25049,11 @@ function buildWindow(spec, st, ci) {
   // position writes respect — so a zoom set while a card was open followed it
   // back to its parked tile, and an edit-mode zoom persisted before Save.
   // persistZoom routes it the same way persistGeom routes geometry.
+  const fits = DESK_FIT_WINDOWS.has(spec.id);
   win._zoom = addZoomControls(bar, () => body, st.z,
-    (z) => persistZoom(spec.id, z), spec.id !== "work");
-  if (spec.id === "work") {
-    bar.title = "Drag to move. Double-click to fit or restore Work.";
+    (z) => persistZoom(spec.id, z), !fits);
+  if (fits) {
+    bar.title = `Drag to move. Double-click to fit or restore ${spec.title}.`;
     bar.addEventListener("dblclick", (e) => {
       if (e.target.closest("button") || win.classList.contains("fwin-locked")) return;
       e.preventDefault();
@@ -31565,10 +31573,7 @@ window.addEventListener("resize", () => {
   if (editing || layoutMode !== "stage") return;
   clearTimeout(layoutResizeT);
   layoutResizeT = setTimeout(() => {
-    const restoreForgeFit = () => {
-      const forge = document.querySelector("#win-work.fwin-fit");
-      if (forge) setWinRect(forge, forgeDesktopRect(), false);
-    };
+    const restoreForgeFit = refitDeskWindows;
     if (stageComputed) { applyStage(false, true); restoreForgeFit(); return; }
     if (!stageBase) return;
     // re-scale from the ORIGINAL saved rects (never the on-screen ones, which
