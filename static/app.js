@@ -2617,6 +2617,7 @@ const DEFINE_RUNGS = {
 
 let defineCard = null;
 let definePending = "";
+let defineRequest = 0;
 
 // Mirrors define.clean_term on the server. Kept in step deliberately: the
 // menu must not offer to define something the route will refuse, and a
@@ -2760,6 +2761,7 @@ function renderDefines() {
 async function openDefine(term, options = {}) {
   const t = (term || "").trim();
   if (!t) return;
+  const request = ++defineRequest;
   const selected = options.noContext ? null : selectedTextTarget(null);
   const note = selected?.closest("[data-note-path]");
   const path = options.path || note?.dataset.notePath || "";
@@ -2787,12 +2789,16 @@ async function openDefine(term, options = {}) {
     // Concepts and Related are.
     openApp("find");
     await showFindChat();
+    if (request !== defineRequest) return;
     findChatShowMobileTab("define");
   }
   renderDefines();
   try {
-    defineCard = await post("/api/define", payload);
+    const card = await post("/api/define", payload);
+    if (request !== defineRequest) return;
+    defineCard = card;
   } catch (e) {
+    if (request !== defineRequest) return;
     definePending = "";
     renderDefines();
     [$("#find-define-root"), $("#find-mobile-define-root")].filter(Boolean).forEach((root) => {
@@ -27411,6 +27417,17 @@ function atlasNoteToFind(q) {
 // (e.g. #work/queue sub-tabs). The 06:00 iMessage deep-links #subs-visuals
 // once a day.
 const HASH_ROUTES = {
+  // External selections enter the same live module as an in-app lookup.
+  // Decode once: encoded slashes, plus signs and literal percent escapes
+  // belong to the term. Never attach the selection in this browser tab as
+  // context for text selected in another app.
+  "define": (rest) => {
+    let term;
+    try { term = termFromSelection(decodeURIComponent(rest.join("/"))); }
+    catch { toast("That definition link could not be read."); return; }
+    if (!term) { toast("Select a word or a short phrase to define."); return; }
+    return openDefine(term, { noContext: true });
+  },
   "person": (rest) => {
     const id = decodeURIComponent(rest.join("/"));
     if (id) openPerson(id);
@@ -27507,8 +27524,8 @@ function routeHash() {
   const base = rawBase.toLowerCase();
   const target = HASH_ROUTES[base];
   if (!target) return;
-  if (typeof target === "function") target(rest);
-  else openApp(target);
+  if (typeof target === "function") return target(rest);
+  return openApp(target);
 }
 addEventListener("hashchange", routeHash);
 

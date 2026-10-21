@@ -162,6 +162,35 @@ needed to look around. When you're ready, the **Setup** window (it opens
 itself on a fresh install) connects your real data. On a PC, see
 **Windows** below.
 
+### Define selected text from other Mac apps
+
+Vira's live Definition window can also receive text selected in another app.
+With Vira running, install the macOS action from your Vira checkout:
+
+```sh
+.venv/bin/python scripts/install-define-service.py
+```
+
+Select a word or short phrase, then right-click and choose **Services >
+Define with Vira**. The action opens Vira in your default browser and raises
+its existing Definition window, with the same vault lookup, model, saved
+notes, and follow-up actions as a lookup inside Vira. It does not copy or
+export a dictionary. The selection alone is passed to Vira; surrounding text
+in the source app is not captured. Apps must support macOS text Services.
+
+If the action is missing, enable it under **System Settings > Keyboard >
+Keyboard Shortcuts > Services** and reopen the source app. You can assign a
+keyboard shortcut there too. Vira must be running when you use the action;
+the action does not start or restart its server.
+
+For an installation on a different local port, pass `--url
+http://localhost:PORT/`. Rerunning the installer updates the action; remove
+it with `.venv/bin/python scripts/install-define-service.py --uninstall`.
+The workflow lives in `~/Library/Services/Define with Vira.workflow` and
+uses macOS's built-in AppleScript runtime, so it keeps working if the Vira
+checkout moves. Definition links have the form
+`http://localhost:8377/#define/<URL-encoded term>`.
+
 ## Windows
 
 The core app runs on Windows (CI runs the full test suite on
