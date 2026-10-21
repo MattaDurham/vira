@@ -736,6 +736,22 @@ class Repositories(unittest.TestCase):
         self.assertEqual(scan["landings"][0]["tool"], "direct")
         self.assertEqual([c["headline"] for c in scan["changelog"]], ["Second.", "The landed thing."])
 
+    def test_a_scan_never_rewrites_an_index(self):
+        # A tracked file whose mtime moved but whose content did not: a
+        # plain `git status` refreshes that stat data by writing the index
+        # under index.lock, the lock an agent's `git add` in the same
+        # worktree needs at that moment.
+        from server import fleetgit as fg
+        stale = time.time() - 1000
+        indexes = [self.root / ".git" / "index", self.root / ".git" / "worktrees" / "busy" / "index"]
+        for folder in (self.root, self.busy):
+            os.utime(folder / "CHANGELOG.md", (stale, stale))
+        before = [p.read_bytes() for p in indexes]
+        scan = fg.scan(str(self.root), fg.GhCache())
+        self.assertEqual({w["name"]: w["dirty"] for w in scan["worktrees"]}["busy"], 0)
+        rewritten = [p.parent.name for p, b in zip(indexes, before) if p.read_bytes() != b]
+        self.assertEqual(rewritten, [], "Fleet's status read wrote these indexes")
+
     def test_signature_moves_when_a_branch_or_worktree_does(self):
         from server import fleetgit as fg
         before = fg.signature(str(self.root))

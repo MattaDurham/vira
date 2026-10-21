@@ -8,7 +8,10 @@ repository, and skipped quietly when gh is missing or not signed in.
 
 Read-only: only git's read commands run (worktree list, for-each-ref,
 branch --merged, status --porcelain, log, show). Nothing is fetched,
-pruned or checked out.
+pruned or checked out. Every call runs with GIT_OPTIONAL_LOCKS=0, because
+a plain `git status` refreshes stale stat data by rewriting `.git/index`
+under `index.lock`, and an agent's `git add` or `git commit` in the same
+worktree at that moment fails with "index.lock: File exists".
 """
 import os
 import re
@@ -47,10 +50,13 @@ def gh_bin():
 
 
 def _run(cmd, cwd=None, timeout=GIT_TIMEOUT):
+    # No optional locks for git, or for the git that gh runs: Fleet only
+    # reads, so it never takes the index lock an agent may need.
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout,
-                           check=False)
+                           check=False, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return 1, ""
     return r.returncode, r.stdout

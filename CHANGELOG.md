@@ -155,6 +155,13 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Fixed
 
+- Fleet no longer takes a worktree's index lock. Its `git status` read,
+  run every 30 seconds in every worktree a session uses, refreshed stale
+  file stat data by rewriting `.git/index` under `index.lock`, so an
+  agent's `git add` or `git commit` in the same worktree could fail with
+  "index.lock: File exists". Every git call Fleet makes now runs with
+  `GIT_OPTIONAL_LOCKS=0`, which reads without writing.
+
 - Fleet's session detail told the truth about Vira jobs. A worktree branch
   with no commits read as "merged" because git lists a fresh branch's tip
   as already in main; it now reads "no commits yet" with its uncommitted
