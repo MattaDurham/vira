@@ -287,6 +287,24 @@ class AgentsReportBack(AgentsCase):
         # 250 tool lines, the report, the "done" line
         self.assertEqual(self.output(r).count(LANE + " Verify the sources"), 252)
 
+    def test_a_shell_line_names_its_purpose_and_a_failure_is_marked(self):
+        """A command that ends in `echo "exit $?"` succeeds whatever ran
+        before it; the window still has to say it failed."""
+        r = self.make_runner()
+        r.render_message(use("toolu_1", "Bash", {
+            "command": '(timeout 900 make test); echo "exit $?"', "description": "Run the full suite"}))
+        r.render_message(tool_result("toolu_1", "(eval):1: command not found: timeout\nexit 127"))
+        r.render_message(use("toolu_2", "Bash", {"command": "ls"}))
+        r.render_message(UserMessage(content=[ToolResultBlock(
+            tool_use_id="toolu_2", content="This session is read-only.", is_error=True)],
+            parent_tool_use_id=None))
+        r.render_message(use("toolu_3", "Bash", {"command": "make"}))
+        r.render_message(tool_result("toolu_3", "built"))
+        out = self.output(r)
+        self.assertIn('  → Bash: Run the full suite  $ (timeout 900 make test); echo "exit $?"\n'
+                      "    ↳ exit 127: (eval):1: command not found: timeout\n", out)
+        self.assertEqual(out.count("↳"), 1, "a gate denial and a success add no line")
+
     def test_agent_lines_never_reach_the_main_answer_stream(self):
         """message_items is the session's answer (chat and the reply
         channel read it back); an agent's report is not."""
@@ -491,6 +509,13 @@ class Instructions(unittest.TestCase):
         self.assertEqual(line, "Agent: Verify routing (Explore)")
         self.assertEqual(session._tool_summary({"name": "Task", "input": {}}),
                          "Agent: delegating a subtask…")
+
+    def test_a_shell_line_leads_with_what_the_command_is_for(self):
+        line = session._tool_summary({"name": "Bash", "input": {
+            "command": "python3 - <<'EOF'\nprint(1)\nEOF", "description": "Check the output"}})
+        self.assertEqual(line, "Bash: Check the output  $ python3 - <<'EOF' print(1) EOF")
+        self.assertEqual(session._tool_summary({"name": "Bash", "input": {"command": "ls -la"}}),
+                         "Bash: ls -la", "with no description the command reads as before")
 
 
 class MapPrompts(unittest.TestCase):

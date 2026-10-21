@@ -1550,6 +1550,8 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
 .term-sys { color: var(--term-mut); }
 .term-tool { color: var(--term-tool); }
 .term-tool .tname { color: var(--claude); font-weight: 500; }
+.term-tool .tcmd { color: var(--term-mut); }
+.term-fail { color: var(--red); }
 .term-text { color: var(--term-fg); }
 .term-text b { color: var(--text-bright); font-weight: 500; }
 .term-code { color: var(--term-code); background: var(--claude-soft);

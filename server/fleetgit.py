@@ -182,6 +182,27 @@ def pick_base(heads):
     return None
 
 
+# Reflog lines that move a branch without adding work of its own: its
+# creation, and a fast-forward onto another branch (syncing with the base).
+_NO_WORK = re.compile(r"^branch: Created from |: Fast-forward$")
+
+
+def never_committed(root, branch):
+    """Whether a branch has had no commit of its own since it was created,
+    from its reflog. `git branch --merged` lists such a branch, because its
+    tip is a commit the base already holds, but nothing of it ever landed:
+    a fresh agent worktree read as "merged" while its session was still
+    writing. False when there is no reflog to say (expired, or turned off),
+    which leaves git's answer standing."""
+    p = Path(root) / ".git" / "logs" / "refs" / "heads" / branch
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    msgs = [ln.split("\t", 1)[1] for ln in lines if "\t" in ln]
+    return bool(msgs) and all(_NO_WORK.search(m) for m in msgs)
+
+
 def parse_heads(text, with_ab):
     heads = {}
     for line in text.splitlines():
@@ -278,6 +299,8 @@ def scan(root, gh_cache=None, now_ms=None):
         rc, text = git(root, "branch", "--format=%(refname:short)", "--merged", base)
         if rc == 0:
             merged = {line.strip() for line in text.splitlines() if line.strip()}
+    fresh = {n for n in merged if n != base and never_committed(root, n)}
+    merged -= fresh
     if base and not with_ab:
         for h in heads.values():
             if h["name"] == base:
@@ -288,6 +311,7 @@ def scan(root, gh_cache=None, now_ms=None):
                 h["ahead"], h["behind"] = int(m.group(1)), int(m.group(2))
 
     in_wt = set()
+    dirty_of = {}
     for w in worktrees:
         kind = worktree_kind(w["path"], root)
         h = heads.get(w["branch"] or "") or {}
@@ -302,15 +326,18 @@ def scan(root, gh_cache=None, now_ms=None):
             detached=w["detached"], missing=not os.path.isdir(w["path"]),
             lastAt=h.get("at"), subject=h.get("subject"), ahead=h.get("ahead"),
             behind=h.get("behind"), merged=(w["branch"] in merged) if w["branch"] and w["branch"] != base else None,
-            dirty=dirty))
+            fresh=w["branch"] in fresh, dirty=dirty))
+        if w["branch"]:
+            dirty_of[w["branch"]] = dirty
     rest = [h for n, h in heads.items() if n not in in_wt and n != base]
     rest.sort(key=lambda h: -(h["at"] or 0))
     out["branchCount"] = len(rest)
     for h in rest[:BRANCHES_MAX]:
         out["branches"].append(dict(name=h["name"], lastAt=h["at"], subject=h["subject"],
                                     ahead=h["ahead"], behind=h["behind"],
-                                    merged=h["name"] in merged))
-    out["heads"] = {n: dict(merged=n in merged, ahead=h["ahead"]) for n, h in heads.items()}
+                                    merged=h["name"] in merged, fresh=h["name"] in fresh))
+    out["heads"] = {n: dict(merged=n in merged, ahead=h["ahead"], fresh=n in fresh,
+                            dirty=dirty_of.get(n)) for n, h in heads.items()}
 
     prs, note = (gh_cache.get(root) if gh_cache else ([], None))
     out["prs"], out["prNote"] = prs, note
@@ -352,10 +379,12 @@ def history(root, base, sha):
 
 
 def merged_state(scan_row, branch):
-    """(exists, merged, ahead) for a branch from a scan; None when unknown."""
+    """(exists, merged, ahead, fresh, dirty) for a branch from a scan; None
+    when unknown. fresh: no commit of its own yet. dirty: uncommitted files
+    in its worktree, None without one."""
     if not scan_row:
         return None
     h = (scan_row.get("heads") or {}).get(branch)
     if h is None:
-        return (False, None, None)
-    return (True, h["merged"], h["ahead"])
+        return (False, None, None, False, None)
+    return (True, h["merged"], h["ahead"], h.get("fresh", False), h.get("dirty"))

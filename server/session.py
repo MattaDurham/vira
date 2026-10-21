@@ -397,7 +397,11 @@ def _tool_summary(block):
     if name in ("Edit", "Write", "Read", "NotebookEdit"):
         return f"{name} {inp.get('file_path', '')}".strip()
     if name == "Bash":
-        return "Bash: " + (inp.get("command") or "").replace("\n", " ")[:100]
+        cmd = " ".join((inp.get("command") or "").split())[:100]
+        what = " ".join(str(inp.get("description") or "").split())[:100]
+        # The agent's own label says what the command is for; the command
+        # follows after "  $ " (the window dims it) for whoever wants it.
+        return f"Bash: {what}  $ {cmd}" if what else "Bash: " + cmd
     if name in ("Grep", "Glob"):
         return f"{name} {inp.get('pattern') or inp.get('query') or ''}".strip()
     if name == "TodoWrite":

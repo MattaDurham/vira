@@ -72,6 +72,17 @@ assert.ok(stranger.classList.contains('lane-2'), 'an unknown label still gets it
 const main = ctx.renderTermLine('  → Bash: ls', lanes);
 assert.ok(!main.classList.contains('term-agent'), 'main-agent lines are not lanes');
 
+// a shell line: the agent's purpose first, the command dimmed after it
+const labelled = ctx.renderTermLine('  → Bash: Run the full unittest suite  $ .venv/bin/python -m unittest', lanes);
+assert.equal(find(labelled, 'tcmd')[0].textContent, '  $ .venv/bin/python -m unittest');
+assert.match(labelled.textContent, /Bash: Run the full unittest suite/);
+const laneShell = ctx.renderTermLine('  ┊ Verify routing · → Bash: List files  $ ls server', lanes);
+assert.equal(find(laneShell, 'tcmd')[0].textContent, '  $ ls server');
+assert.equal(find(ctx.renderTermLine('  → Bash: ls', lanes), 'tcmd').length, 0, 'an unlabelled command reads as before');
+// a failed shell command, written by the runner under its line
+const failLine = ctx.renderTermLine('    ↳ exit 127: (eval):1: command not found: timeout', lanes);
+assert.ok(failLine.classList.contains('term-fail'), failLine.className);
+
 // the strip: one card per agent, running ones say what they are doing
 const box = new Element();
 ctx.renderAgentStrip(box, { agents });

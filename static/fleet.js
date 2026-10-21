@@ -26,7 +26,7 @@
   const STATUS_KEY = { "Working": "working", "Needs you": "needs", "Jobs running": "jobs",
                        "Idle": "idle", "Closed": "closed" };
   const BRANCH_LABEL = { open_pr: "open PR", unmerged: "not merged", merged: "merged",
-                         deleted: "deleted", unknown: "unknown" };
+                         fresh: "no commits yet", deleted: "deleted", unknown: "unknown" };
   const STATE_LABEL = { active: "In progress", unmerged: "Not merged", done: "Done",
                         no_code: "No code", shipped: "Shipped", in_progress: "In progress",
                         stalled: "Stalled", abandoned: "Abandoned" };
@@ -448,6 +448,66 @@
   }
   const toolTag = (n) => el("span", `fl-tool t-${n.tool}`, `${TOOL[n.tool] || n.tool}${n.surface && n.tool !== "vira" ? ` ${n.surface}` : ""}`);
 
+  // ---------- what a session is doing: one small animated icon per kind ----------
+  // The server names the kind (fleet.doing_of). The icons are drawn SVG,
+  // not GIFs: they take the theme's colours, stay sharp at any zoom, and
+  // hold a still frame under reduced motion. The moving parts carry the
+  // classes fleet.css animates. Each shape: [tag, attributes].
+  const C = (cx, cy, r, cls) => ["circle", { cx, cy, r, class: cls }];
+  const L = (x1, y1, x2, y2, cls) => ["line", { x1, y1, x2, y2, class: cls }];
+  const DOING = {
+    waiting: ["Waiting", [C(12, 12, 3, "fill"), C(12, 12, 3, "ping")]],
+    testing: ["Testing", [C(3.5, 12, 1.7, "fill t1"), C(8, 12, 1.7, "fill t2"), C(12.5, 12, 1.7, "fill t3"),
+      ["path", { d: "M16 12.5l2.3 2.3 4.2-5.3", class: "t4" }]]],
+    editing: ["Editing", [L(4, 6, 20, 6), L(4, 11, 17, 11), L(4, 16, 14, 16, "type"), L(15.5, 13.5, 15.5, 18.5, "caret")]],
+    reading: ["Reading", [["rect", { x: 5, y: 3, width: 14, height: 18, rx: 2 }], L(8.5, 8, 15.5, 8, "thin"),
+      L(8.5, 12, 15.5, 12, "thin"), L(8.5, 16, 13, 16, "thin"), ["rect", { x: 6.5, y: 6, width: 11, height: 4, class: "scan" }]]],
+    researching: ["Researching", [["g", { class: "hunt" }, [C(10, 10, 5), L(13.7, 13.7, 19, 19)]]]],
+    shipping: ["Shipping", [L(5, 3.5, 19, 3.5), ["g", { class: "push" }, [L(12, 20, 12, 8), ["path", { d: "M7.5 12L12 7.5l4.5 4.5" }]]]]],
+    delegating: ["Delegating", [C(5, 12, 2.4, "fill"), C(19, 5, 2), C(19, 12, 2), C(19, 19, 2),
+      L(7.5, 11, 17, 5.8, "flow"), L(7.5, 12, 17, 12, "flow"), L(7.5, 13, 17, 18.2, "flow")]],
+    running: ["Running", [["path", { d: "M5 7.5l4.5 4.5L5 16.5" }], L(12, 17, 19, 17, "caret")]],
+    thinking: ["Thinking", [C(6, 12, 2, "fill b1"), C(12, 12, 2, "fill b2"), C(18, 12, 2, "fill b3")]],
+    idle: ["Idle", [["path", { d: "M15.5 4.5a7.5 7.5 0 1 0 4 12.5 6 6 0 0 1-4-12.5z" }]]],
+  };
+  const DOING_ORDER = ["waiting", "testing", "editing", "reading", "researching", "shipping",
+                       "delegating", "running", "thinking", "idle"];
+  const doingKind = (n) => (n && DOING[n.doing] ? n.doing : n && n.live ? "running" : "idle");
+  const doingLabel = (kind) => (DOING[kind] || DOING.running)[0];
+  function svgShape([tag, attrs, kids]) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) if (v != null) node.setAttribute(k, String(v));
+    (kids || []).forEach((k) => node.append(svgShape(k)));
+    return node;
+  }
+  function doingIcon(kind) {
+    const k = DOING[kind] ? kind : "running";
+    const box = el("span", `fl-do k-${k}`);
+    box.dataset.kind = k;
+    box.setAttribute("aria-hidden", "true");
+    box.append(svgShape(["svg", { viewBox: "0 0 24 24" }, DOING[k][1]]));
+    return box;
+  }
+  // Every frame re-attaches the board's nodes, and a browser restarts a
+  // CSS animation on re-attach, so each icon would snap back to its first
+  // frame every two seconds. Pinning each one to the page clock makes a
+  // restart land on the phase it already had.
+  function syncIcons() {
+    if (typeof document.getAnimations !== "function") return;
+    for (const a of document.getAnimations()) {
+      if (String(a.animationName || "").startsWith("fl-do-") && a.startTime !== 0) a.startTime = 0;
+    }
+  }
+  // Swap the icon only when the kind changes, so it keeps its place.
+  function setDoingIcon(holder, kind) {
+    const cur = holder.children[0];
+    if (cur && cur.dataset && cur.dataset.kind === kind) return;
+    holder.replaceChildren(doingIcon(kind));
+  }
+  for (const k of DOING_ORDER) {
+    LISTS[`do-${k}`] = { title: doingLabel(k), test: (n) => n.live && doingKind(n) === k };
+  }
+
   // ---------- live tiles and closed chips (kept, updated in place) ----------
   function makeTile(id) {
     const b = el("div", "fl-tile");
@@ -458,7 +518,7 @@
     chip.append(el("span", "fl-dot"), el("span", "fl-st"));
     row1.append(chip, el("span", "fl-ttag"), el("span", "fl-clock fl-num"));
     const now1 = el("div", "fl-now");
-    now1.append(el("span", "fl-tooln"), el("span", "fl-what"), el("span", "fl-t fl-num"));
+    now1.append(el("span", "fl-doh"), el("span", "fl-tooln"), el("span", "fl-what"), el("span", "fl-t fl-num"));
     const steps = el("div", "fl-steps");
     steps.append(el("div", "fl-segs"), el("span", "fl-sc fl-num"));
     const fuel = el("div", "fl-fuel");
@@ -492,14 +552,17 @@
   }
   function nowLine(node, s) {
     const tool = q1(node, "fl-tooln"), what = q1(node, "fl-what"), t = q1(node, "fl-t");
+    const kind = doingKind(s);
     node.classList.toggle("quiet", !(s.turnOpen && s.now));
+    setDoingIcon(q1(node, "fl-doh"), kind);
+    tool.title = s.turnOpen && s.now ? s.now.name : "";
     if (s.status === "Needs you") {
       tool.textContent = "Waiting";
       what.textContent = questionText(s.question) || "Waiting for your answer";
       since(t, (s.question && s.question.at) || s.lastAt);
       return;
     }
-    if (s.turnOpen && s.now) { tool.textContent = s.now.name; what.textContent = s.now.desc || ""; since(t, s.now.startedAt); return; }
+    if (s.turnOpen && s.now) { tool.textContent = doingLabel(kind); what.textContent = s.now.desc || ""; since(t, s.now.startedAt); return; }
     if (s.turnOpen) {
       tool.textContent = "Thinking";
       what.textContent = s.feed && s.feed[0] ? `after ${s.feed[0].name}` : "working out the next step";
@@ -507,8 +570,8 @@
       return;
     }
     const live = s.agents.live[0];
-    if (live) { tool.textContent = "Agent"; what.textContent = live.what; since(t, live.startedAt); return; }
-    if (s.shells[0]) { tool.textContent = "Shell"; what.textContent = s.shells[0].cmd; since(t, s.shells[0].startedAt); return; }
+    if (live) { tool.textContent = "Delegating"; what.textContent = live.what; since(t, live.startedAt); return; }
+    if (s.shells[0]) { tool.textContent = doingLabel(kind); what.textContent = s.shells[0].cmd; since(t, s.shells[0].startedAt); return; }
     tool.textContent = "Done";
     what.textContent = (s.summary && s.summary.detail) || s.lastText || "Finished its last request";
     agoAt(t, s.lastAt);
@@ -638,6 +701,42 @@
       sel,
       ...(S.tab === "sessions" ? [el("span", "fl-lbl", "Closed"),
         seg("Closed sessions", [["linked", "Linked only"], ["24h", "Last 24 h"], ["3d", "Last 3 days"]], S.mode, pick("mode"))] : []));
+  }
+
+  // ---------- live sessions grouped by what they are doing ----------
+  // "Those three are testing, those two are editing": one card per kind,
+  // its icon, a count, and the first few sessions by name. Cards are kept
+  // and updated in place so their icons keep animating across frames.
+  const doingCards = new Map();
+  function doingStrip(shown) {
+    const groups = new Map();
+    shown.filter((n) => n.live).forEach((n) => {
+      const k = doingKind(n);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(n);
+    });
+    if (!groups.size) return null;
+    const wrap = S.doingWrap || (S.doingWrap = el("section", "fl-doing"));
+    wrap.setAttribute("aria-label", "What the open sessions are doing");
+    wrap.replaceChildren(...DOING_ORDER.filter((k) => groups.has(k)).map((k) => {
+      let card = doingCards.get(k);
+      if (!card) {
+        card = el("div", `fl-dcard k-${k}`);
+        const top = btn("fl-dtop", null, () => go(`list:do-${k}`), `Show every session: ${doingLabel(k)}`);
+        top.append(doingIcon(k), el("span", "fl-dl", doingLabel(k)), el("b", "fl-dc fl-num"));
+        card.append(top, el("div", "fl-dnames"));
+        doingCards.set(k, card);
+      }
+      const ns = groups.get(k).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+      q1(card, "fl-dc").textContent = String(ns.length);
+      q1(card, "fl-dnames").replaceChildren(...ns.slice(0, 3).map((n) => {
+        const b = btn("fl-dn", n.title, () => go(n.id), n.title);
+        b.style.setProperty("--pc", pc(n.project));
+        return b;
+      }), ...(ns.length > 3 ? [el("span", "fl-dmore", `+${ns.length - 3} more`)] : []));
+      return card;
+    }));
+    return wrap;
   }
 
   // ---------- questions waiting on the owner ----------
@@ -775,13 +874,15 @@
   function renderLanes(box, d, idx, shown) {
     const order = laneGroups(shown, idx);
     const asks = askStrip(shown);
+    const doing = doingStrip(shown);
+    const tops = [doing, asks].filter(Boolean);
     if (!order.length) {
-      box.replaceChildren(...(asks ? [asks] : []), el("p", "fl-empty",
+      box.replaceChildren(...tops, el("p", "fl-empty",
         "No sessions to show. Open one in Claude Code or Codex, or show closed sessions from the last 24 hours."));
       return;
     }
     const keep = box.scrollTop;
-    box.replaceChildren(...(asks ? [asks] : []), ...order.map(({ p, fams }) => {
+    box.replaceChildren(...tops, ...order.map(({ p, fams }) => {
       const lane = el("section", "fl-lane");
       lane.style.setProperty("--pc", pc(p));
       const head = el("div", "fl-lane-h");
@@ -919,7 +1020,7 @@
       const a = el("div", "a fl-mono");
       a.append(fam && fam.kind === "feature" ? btn("fl-lk", branch, () => go(`fam:${fam.id}`)) : document.createTextNode(branch));
       const fb = fam && fam.branches.find((b) => b.name === branch);
-      it.append(a, el("div", `b fl-bs ${fb ? fb.state : ""}`, fb ? BRANCH_LABEL[fb.state] : `from ${g.base || "main"}`));
+      it.append(a, el("div", `b fl-bs ${fb ? fb.state : ""}`, fb ? branchLabel(fb) : `from ${g.base || "main"}`));
       if (g.worktree || n.folder) it.append(el("div", "c fl-mono", g.worktree ? `Worktree ${g.worktree}` : n.folder));
       list.append(it);
     }
@@ -961,7 +1062,9 @@
   }
   function renderSession(sheet, s, idx) {
     const eyebrow = el("div", "fl-eyebrow");
-    eyebrow.append(projLink(s.project), toolTag(s), chipFor(s.status));
+    const doing = el("span", "fl-doing-tag");
+    doing.append(doingIcon(doingKind(s)), document.createTextNode(doingLabel(doingKind(s))));
+    eyebrow.append(projLink(s.project), toolTag(s), chipFor(s.status), doing);
     const facts = el("div", "fl-facts");
     const fact = (k, v) => { const f = el("span"); f.append(document.createTextNode(`${k} `), typeof v === "string" ? el("b", null, v) : v); facts.append(f); };
     fact("Model", s.model || "-");
@@ -993,7 +1096,10 @@
       dial("Context", el("span", "v fl-num", ctx.used ? `${Math.round(p * 100)}%` : "-"),
         ctx.used ? `${tok(ctx.used)} of ${tok(ctx.limit)} tokens${ctx.compactions ? ` / compacted ${ctx.compactions}x` : ""}` : "not reported", tank),
       dial("Agents running", el("span", "v fl-num", String(s.agents.live.length)), `${s.agents.total} spawned in this session`),
-      dial("Shells running", el("span", "v fl-num", String(s.shells.length)), `${s.turnTools || 0} tool calls this request`));
+      // Shells are read from the session's process; without one, 0 would
+      // claim nothing runs when nothing was looked at.
+      dial("Shells running", el("span", "v fl-num", s.pid ? String(s.shells.length) : "-"),
+        `${s.pid ? "" : "process not found / "}${s.turnTools || 0} tool calls this request`));
     const feed = el("div", "fl-list");
     if (s.now && s.turnOpen) {
       const it = el("div", "fl-item run");
@@ -1004,18 +1110,28 @@
       it.append(a, bt);
       feed.append(it);
     }
-    (s.feed || []).filter((f) => f.ms != null).forEach((f) => {
-      const key = `${s.id}|${f.at}|${f.name}`;
-      const it = el("div", `fl-item${f.error ? " err" : ""}${S.seenFeed.has(key) ? "" : " fresh"}`);
+    (s.feed || []).filter((f) => f.say || f.ms != null).forEach((f) => {
+      const key = `${s.id}|${f.at}|${f.say ? "say" : f.name}`;
+      const fresh = S.seenFeed.has(key) ? "" : " fresh";
       S.seenFeed.add(key);
-      const a = el("div", "a");
-      a.append(el("span", "fl-tooln", f.name), document.createTextNode(f.desc || ""));
       const bt = el("div", "b");
-      bt.textContent = `${dur(f.ms)} / `;
       const ag = el("span");
       agoAt(ag, f.at);
+      if (f.say) {
+        // The agent's own words between calls: what it says it is doing.
+        const it = el("div", `fl-item say${fresh}`);
+        bt.append(ag);
+        it.append(el("div", "a fl-quote soft", f.say), bt);
+        feed.append(it);
+        return;
+      }
+      const it = el("div", `fl-item${f.error ? " err" : ""}${fresh}`);
+      const a = el("div", "a");
+      a.append(el("span", "fl-tooln", f.name), document.createTextNode(f.desc || ""));
+      bt.textContent = `${f.error ? "failed / " : ""}${dur(f.ms)} / `;
       bt.append(ag);
       it.append(a, bt);
+      if (f.out) it.append(el("div", "c fl-mono", f.out));
       feed.append(it);
     });
     if (!feed.children.length) feed.append(el("p", "fl-empty", "No tool calls yet."));
@@ -1040,10 +1156,11 @@
     });
     if (!shells.children.length) shells.append(el("p", "fl-empty", "No shell commands running."));
     const left = el("div", "fl-col");
-    left.append(block("Asked", el("p", "fl-quote", s.asked || "No request found.")),
+    // append() writes a null argument as the text "null": filter first.
+    left.append(...[block("Asked", el("p", "fl-quote", s.asked || "No request found.")),
       block("Task list", s.plan ? plan : el("p", "fl-empty", "This request has no task list.")),
       s.summary ? block("Where it stands", el("p", "fl-quote soft", s.summary.detail || s.summary.category || "-")) : null,
-      gitBlock(s, idx), linkBlock(s, idx));
+      gitBlock(s, idx), linkBlock(s, idx)].filter(Boolean));
     const right = el("div", "fl-col");
     right.append(block("Activity", feed), block("Subagents", agents), block("Shell commands", shells),
       block("Last message", el("p", "fl-quote soft", s.lastText || "-")));
@@ -1082,14 +1199,18 @@
   }
 
   const openFolds = new Set();
-  function branchRow(b, idx) {
-    const r = el("div", "fl-brow");
+  function branchLabel(b) {
     let label = BRANCH_LABEL[b.state] || b.state;
     if (b.state === "unmerged" && b.ahead) label = `not merged / ${plural(b.ahead, "commit")} ahead`;
     if (b.state === "open_pr" && b.pr) label = `PR #${b.pr.n} open`;
     if (b.state === "merged" && b.pr) label = `merged / #${b.pr.n}`;
     if (b.state === "deleted") label = b.pr && b.pr.state === "CLOSED" ? `deleted / PR #${b.pr.n} closed` : "deleted / closed out";
-    r.append(el("div", "fl-bn", b.name), el("div", `fl-bs ${b.state}`, label));
+    if (b.dirty && b.state !== "merged") label += ` / ${plural(b.dirty, "uncommitted file")}`;
+    return label;
+  }
+  function branchRow(b, idx) {
+    const r = el("div", "fl-brow");
+    r.append(el("div", "fl-bn", b.name), el("div", `fl-bs ${b.state}`, branchLabel(b)));
     const meta = el("div", "fl-bm");
     meta.append(el("span", null, `into ${b.base || "main"}`));
     if (b.pr && safeUrl(b.pr.url)) meta.append(ext("fl-ext", `Pull request #${b.pr.n}`, b.pr.url));
@@ -1107,7 +1228,7 @@
   }
   function branchList(branches, idx, key) {
     const box = el("div", "fl-brs");
-    const todo = branches.filter((b) => ["open_pr", "unmerged", "unknown"].includes(b.state));
+    const todo = branches.filter((b) => ["open_pr", "unmerged", "fresh", "unknown"].includes(b.state));
     const merged = branches.filter((b) => b.state === "merged"), gone = branches.filter((b) => b.state === "deleted");
     if (todo.length) todo.forEach((b) => box.append(branchRow(b, idx)));
     else box.append(el("p", "fl-empty", "Nothing left to merge."));
@@ -1134,7 +1255,8 @@
 
   // ----- project: worktrees, branches, instances, its timeline
   const LABEL_CLS = { "Live": "live", "In use": "use", "Uncommitted changes": "dirty",
-                      "Unlanded commits": "unlanded", "Landed, can remove": "landed" };
+                      "Unlanded commits": "unlanded", "Landed, can remove": "landed",
+                      "No commits, can remove": "fresh" };
   function aheadText(x) {
     if (x.ahead == null) return "-";
     return `${x.ahead} ahead${x.behind ? ` / ${x.behind} behind` : ""}`;
@@ -1518,6 +1640,7 @@
     const typing = active && active.classList && active.classList.contains("fl-search")
       ? { start: active.selectionStart, end: active.selectionEnd } : null;
     renderInner(root);
+    syncIcons();
     if (typing) {
       const box = root.querySelector(".fl-search");
       if (box) { box.focus(); try { box.setSelectionRange(typing.start, typing.end); } catch (e) { /* not a text box */ } }
@@ -1638,7 +1761,7 @@
       S, realWaiting, index, visibleNodes, laneGroups, counts, timelineRows, landingDays,
       weekBars, weekStart, callRows, liveLabel, viewKind, questionText, onFrame, render, mount,
       renderTop, renderLanes, askStrip, renderCalls, renderWeek, renderTimeline, renderBottom,
-      tiles, chips, go, back, home, renderAi, famStateChip,
+      tiles, chips, go, back, home, renderAi, famStateChip, branchLabel, doingStrip,
     };
   }
 })();

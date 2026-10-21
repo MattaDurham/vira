@@ -41,7 +41,9 @@ class Node {
   set innerHTML(v) { this._text = ""; this.children = []; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return this.attrs[k]; }
-  _adopt(c) { if (typeof c === "string") c = new Node("#text", c); c.parent = this; return c; }
+  // Like a browser: anything that is not a node is appended as its text,
+  // so a stray null shows up as "null" here as it does on screen.
+  _adopt(c) { if (!(c instanceof Node)) c = new Node("#text", String(c)); c.parent = this; return c; }
   append(...cs) { cs.forEach((c) => this.children.push(this._adopt(c))); }
   appendChild(c) { this.append(c); return c; }
   prepend(...cs) { this.children.unshift(...cs.map((c) => this._adopt(c))); }
@@ -88,7 +90,9 @@ const MIN = 60e3, H = 3600e3, DAY = 24 * H;
 const live = (id, project, status, extra = {}) => ({
   id, tool: "claude", surface: "app", project, title: `Session ${id}`, status, live: true,
   family: id, lastAt: NOW - MIN, createdAt: NOW - H, turnOpen: status === "Working",
-  turnStartedAt: NOW - 2 * MIN, now: status === "Working" ? { name: "Bash", desc: "npm test", startedAt: NOW - 5000 } : null,
+  turnStartedAt: NOW - 2 * MIN,
+  now: status === "Working" ? { name: "Bash", desc: "npm test", startedAt: NOW - 5000, kind: "testing" } : null,
+  doing: status === "Working" ? "testing" : status === "Needs you" ? "waiting" : "idle",
   feed: [], plan: { done: 1, total: 3, items: [{ content: "a", status: "completed" },
     { content: "b", status: "in_progress" }, { content: "c", status: "pending" }] },
   question: null, context: { used: 100000, limit: 200000, compactions: 0 },
@@ -211,12 +215,26 @@ assert.equal(asks.querySelector(".fl-open").href, "claude://claude.ai/epitaxy/n1
 
 const tile = F.tiles.get("w1");
 assert.equal(tile.dataset.status, "Working");
-assert.equal(tile.querySelector(".fl-tooln").textContent, "Bash");
+assert.equal(tile.querySelector(".fl-tooln").textContent, "Testing", "the tile says what the call is for");
+assert.equal(tile.querySelector(".fl-tooln").title, "Bash");
 assert.equal(tile.querySelector(".fl-what").textContent, "npm test");
+const icon = tile.querySelector(".fl-do");
+assert.equal(icon.dataset.kind, "testing");
+assert.ok(icon.querySelector("svg"), "the icon is drawn");
 assert.equal(tile.querySelector(".fl-sc").textContent, "1/3");
 assert.equal(tile.querySelectorAll(".fl-seg").length, 3);
 assert.equal(F.chips.get("c1").querySelector(".fl-tt").textContent, "Closed c1", "a closed fork is a chip");
 assert.equal(F.tiles.get("i1").querySelector(".fl-tool").textContent, "Codex app");
+
+// The doing strip: open sessions grouped by what they are doing, in a
+// fixed order, each card naming its sessions.
+const strip = lanesBox.querySelector(".fl-doing");
+assert.ok(strip, "the doing strip is drawn above the lanes");
+const cards = strip.querySelectorAll(".fl-dcard");
+assert.deepEqual(cards.map((c) => c.querySelector(".fl-dl").textContent), ["Waiting", "Testing", "Idle"]);
+assert.equal(cards[2].querySelector(".fl-dc").textContent, "2");
+assert.deepEqual(cards[1].querySelectorAll(".fl-dn").map((n) => n.textContent), ["Session w1"]);
+assert.equal(F.doingStrip([]), null, "nothing open, no strip");
 
 // A Vira job opens in Vira, not over a URL.
 const viraOpen = F.tiles.has("v1") && lanesBox.querySelectorAll(".fl-fam").length > 0;
@@ -228,10 +246,51 @@ next.sessions[0].status = "Idle";
 next.sessions[0].turnOpen = false;
 next.sessions[0].now = null;
 next.sessions[0].lastText = "All green.";
+next.sessions[0].doing = "idle";
 F.onFrame("fleet", next);
 assert.equal(F.tiles.get("w1"), tile, "the tile is kept, so its bars animate");
 assert.equal(tile.dataset.status, "Idle");
 assert.equal(tile.querySelector(".fl-what").textContent, "All green.");
+const idleIcon = tile.querySelector(".fl-do");
+assert.equal(idleIcon.dataset.kind, "idle", "the icon follows the session");
+F.onFrame("fleet", next);
+assert.equal(tile.querySelector(".fl-do"), idleIcon, "an unchanged kind keeps its icon, so it keeps animating");
+assert.equal(root.querySelector(".fl-doing").querySelectorAll(".fl-dcard").length, 2, "a kind nobody is doing leaves the strip");
+
+// A doing card opens the list of those sessions.
+F.onFrame("fleet", snap);
+root.querySelector(".fl-doing").querySelectorAll(".fl-dtop")[1].click();
+assert.equal(F.S.view, "list:do-testing");
+assert.match(root.querySelector(".fl-sheet").textContent, /Session w1/);
+F.back();
+
+// A session's sheet: no stray "null", the agent's own words and each
+// call's result in Activity, a failure marked, and shells not claimed as
+// 0 when its process was never found.
+const busy = JSON.parse(JSON.stringify(snap));
+busy.sessions[0].feed = [
+  { say: "263 related tests pass. Running the full suite.", at: NOW - 20e3 },
+  { name: "Bash", desc: "Run the full unittest suite", at: NOW - 30e3, ms: 31, error: true,
+    out: "exit 127: (eval):1: command not found: timeout", kind: "testing" },
+  { name: "Read", desc: "app.js", at: NOW - 40e3, ms: 12, kind: "reading" }];
+F.onFrame("fleet", busy);
+F.go("w1");
+const ses = root.querySelector(".fl-sheet");
+assert.ok(!/null/.test(ses.textContent), "no null rendered as text");
+assert.match(ses.querySelector(".fl-item.say").textContent, /Running the full suite/);
+const failed = ses.querySelector(".fl-item.err");
+assert.match(failed.textContent, /exit 127: \(eval\):1: command not found: timeout/);
+assert.match(failed.querySelector(".b").textContent, /^failed \/ 31ms/);
+assert.match(ses.textContent, /process not found/);
+assert.equal(ses.querySelector(".fl-doing-tag").textContent, "Testing");
+F.back();
+F.onFrame("fleet", snap);
+
+// Branch labels: a branch with no commits is not "merged", and its
+// uncommitted files are counted.
+assert.equal(F.branchLabel({ state: "fresh", dirty: 15 }), "no commits yet / 15 uncommitted files");
+assert.equal(F.branchLabel({ state: "unmerged", ahead: 2, dirty: 1 }), "not merged / 2 commits ahead / 1 uncommitted file");
+assert.equal(F.branchLabel({ state: "merged", dirty: 3 }), "merged");
 
 // A count opens the list it counts; Back comes home.
 count("needs").click();

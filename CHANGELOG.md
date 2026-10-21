@@ -19,6 +19,15 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   iMessage ping, asked once per day, cause and children. Off by default
   (`coverage_enabled`); it runs on the assistant's pass. Code:
   `server/coverage.py`.
+
+- What each session is doing, at a glance, in Fleet. Every open session
+  carries a small animated icon for the kind of work under way: testing,
+  editing, reading, researching, shipping, delegating, running a command,
+  thinking, waiting on the owner, or idle. The kind is read from the call
+  running now (a shell command by what it runs). A strip above the board
+  groups the sessions by kind with their names, and each group opens the
+  list of those sessions.
+
 - Event prep in the daily brief. When a dated occasion is coming up (a
   trip, a birthday, a dinner, a festival), the brief gathers every open
   loop tied to it into one countdown checklist: logistics, gifts, packing
@@ -145,6 +154,19 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   recommendation on a row is now resume or discard.
 
 ### Fixed
+
+- Fleet's session detail told the truth about Vira jobs. A worktree branch
+  with no commits read as "merged" because git lists a fresh branch's tip
+  as already in main; it now reads "no commits yet" with its uncommitted
+  file count. A running job shows its shells, CPU and memory (read from the
+  runner's process), what the agent last said, and a request clock that
+  restarts on a steer. Activity shows each command's result and the agent's
+  own status lines, and marks a command that failed even when it echoed
+  its exit code and returned success. A stray "null" no longer renders
+  under the task list.
+- A session window's shell lines lead with what the command is for (the
+  agent's own description), with the command dimmed after it, and a failed
+  command gets a line under it saying why.
 
 - The branch-first gate no longer denies a session's own commands. It
   read any `>` in a command's text as a redirect, including inside a

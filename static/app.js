@@ -9256,7 +9256,7 @@ function renderAgentLine(m, lanes) {
     const span = el("span", "term-tool");
     span.appendChild(document.createTextNode("\u2192 "));
     span.appendChild(el("span", "tname", tool[1]));
-    span.appendChild(document.createTextNode(tool[2]));
+    appendToolRest(span, tool[2]);
     div.appendChild(span);
   } else {
     const span = el("span", "term-text");
@@ -9264,6 +9264,16 @@ function renderAgentLine(m, lanes) {
     div.appendChild(span);
   }
   return div;
+}
+
+// A tool line's text after its name. A shell line reads
+// ": <what the agent said it is for>  $ <command>" (session._tool_summary);
+// the command is dimmed so the purpose is what the eye lands on.
+function appendToolRest(node, rest) {
+  const cut = rest.indexOf("  $ ");
+  if (cut < 0) { node.appendChild(document.createTextNode(rest)); return; }
+  node.appendChild(document.createTextNode(rest.slice(0, cut)));
+  node.appendChild(el("span", "tcmd", rest.slice(cut)));
 }
 
 function renderTermLine(line, lanes) {
@@ -9283,8 +9293,11 @@ function renderTermLine(line, lanes) {
     if (m) {
       div.appendChild(document.createTextNode("  → "));
       div.appendChild(el("span", "tname", m[1]));
-      div.appendChild(document.createTextNode(m[2]));
+      appendToolRest(div, m[2]);
     } else { div.textContent = line; }
+  } else if (t.startsWith("↳")) {
+    // A shell command that failed, written by the runner under its line.
+    div.className = "term-line term-fail"; div.textContent = line;
   } else {
     div.className = "term-line term-text"; appendInline(div, line);
   }
