@@ -409,6 +409,12 @@ def tick(*, automatic=False):
             errors.append(f"Calendar planning needs attention ({type(exc).__name__}).")
         try:
             if apply_shared:
+                from . import coverage
+                coverage.tick()
+        except Exception as exc:
+            errors.append(f"Childcare coverage needs attention ({type(exc).__name__}).")
+        try:
+            if apply_shared:
                 _notify(_now())
         except Exception as exc:
             errors.append(f"Reminder delivery needs attention ({type(exc).__name__}).")

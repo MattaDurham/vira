@@ -796,6 +796,51 @@ def plan_commitment(loop, subject_key, person_name=""):
     return _view(draft)
 
 
+def plan_coverage(gap_id, pickup, source, title, description):
+    """Stage one childcare pickup block for a coverage gap (server/coverage.py).
+
+    The time is the owner's own standing routine, or a school calendar's
+    early-dismissal time, never a model's guess; `time_chosen_by` says
+    which. It files on the family lane because a pickup needs somebody's
+    time. Re-planning the same gap and child returns the existing draft.
+    """
+    for key in ("start", "end"):
+        _date(pickup.get(key, ""))
+    draft = _validate({"title": title, "quote": source["text"], "owner_only": True,
+                       "lane": "family", "description": description, "attendees": [],
+                       "start": pickup["start"], "end": pickup["end"]},
+                      dict(source, is_from_me=False))
+    key = json.dumps(["coverage", gap_id, pickup.get("kid", "")])
+    draft_id = "cal_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    with locked(STORE):
+        state = _read()
+        prior = state["drafts"].get(draft_id)
+        if prior:
+            return _view(prior)
+        draft.update(id=draft_id, schedule_kind="coverage",
+                     time_chosen_by=pickup.get("time_from", "routine"),
+                     coverage_gap=gap_id, status="suggested", reason="",
+                     created_at=_stamp(), updated_at=_stamp())
+        state["drafts"][draft_id] = draft
+        jsonstore.write_atomic(STORE, state, indent=2, ensure_ascii=False)
+    return _view(draft)
+
+
+def _coverage_eligibility(draft):
+    """A pickup block's time comes from the owner's routine or the school's
+    own calendar, so it is not re-grounded against a message quote; it only
+    has to be a sane, future, same-day block."""
+    try:
+        start, end = _dates(draft)
+    except ValueError as exc:
+        return str(exc)
+    if start <= _now():
+        return "The pickup time has passed; no block is needed."
+    if not dt.timedelta(minutes=5) <= end - start <= dt.timedelta(hours=14):
+        return "A pickup block must run between 5 minutes and 14 hours."
+    return ""
+
+
 def _commitment_eligibility(draft):
     try:
         details = _commitment_details(_current_commitment(draft))
@@ -827,7 +872,12 @@ def _eligibility(draft, automatic=True):
         return "Connect real sources before creating calendar events."
     if cfg.get("assistant_enabled") is not True:
         return "Enable the assistant before creating calendar events."
-    if automatic and cfg.get("assistant_calendar_auto_create") is not True:
+    # Pickup blocks have their own switch: turning on the coverage watcher
+    # with blocks on is the owner's standing request for them.
+    coverage = draft.get("schedule_kind") == "coverage"
+    if automatic and coverage and settings.get("coverage_calendar_blocks") is not True:
+        return "Automatic pickup blocks are off; this remains a suggestion."
+    if automatic and not coverage and cfg.get("assistant_calendar_auto_create") is not True:
         return "Automatic calendar creation is off; this remains a suggestion."
     if not settings.IS_MAC:
         return "Personal calendar creation requires Calendar.app on macOS; export the draft instead."
@@ -873,6 +923,8 @@ def _lane_eligibility(draft):
     Nobody is invited; the people it names are description text."""
     if draft.get("schedule_kind") == "commitment":
         return _commitment_eligibility(draft)
+    if draft.get("schedule_kind") == "coverage":
+        return _coverage_eligibility(draft)
     try:
         start, _ = _dates(draft)
         reason = _grounded(draft)
@@ -975,6 +1027,9 @@ def _description(draft):
         parts.append("Calendar lane: " + draft["lane"])
     if draft.get("links"):
         parts.append("Links:\n" + "\n".join(draft["links"]))
+    if draft.get("schedule_kind") == "coverage":
+        parts.append("Pickup time from: " + (
+            "the school calendar" if draft.get("time_chosen_by") == "school" else "your standing routine"))
     if draft.get("schedule_kind") == "commitment":
         parts.append("Task deadline: " + draft.get("due", "") + (
             " (corrected by the owner)" if draft.get("deadline_authority") == "owner" else " (from source evidence)"))

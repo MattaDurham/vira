@@ -47,6 +47,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # the contact queue also contains unprocessed source evidence.
          "assistant-state.json", "assistant-commitments.json",
          "calendar-plans.json", "contact-intelligence.json",
+         # The childcare routine is owner-entered and exists nowhere else;
+         # its gap ledger is what keeps a question from being asked twice.
+         "coverage.json",
          "mail-accounts.json", "circuits.json", "evidence.json",
          # The Reader's queue: which documents are worth reading and which are
          # read. The documents themselves live at their sources, but the

@@ -368,6 +368,14 @@ class Watcher:
                             inbound.consume(new)
                     except Exception:  # noqa: BLE001
                         pass
+                    # A caregiver cancelling opens a coverage gap; the block
+                    # and the question follow on the assistant's next pass.
+                    try:
+                        from . import coverage, instance
+                        if instance.owns_automation():
+                            coverage.consume(new)
+                    except Exception:  # noqa: BLE001
+                        pass
             except sqlite3.OperationalError:
                 self.ok = False  # db locked or unreadable this tick; retry next poll
             self._stop.wait(self.poll)

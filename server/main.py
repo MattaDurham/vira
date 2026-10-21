@@ -2048,6 +2048,52 @@ def api_assistant_calendar(draft_id: str, req: AssistantCalendarReq):
         raise HTTPException(400, str(exc))
 
 
+@app.get("/api/coverage")
+def api_coverage():
+    """The Childcare window: routine, open gaps, the coming days' pickups."""
+    from . import coverage
+    try:
+        return coverage.status()
+    except ValueError as exc:
+        raise HTTPException(500, str(exc))
+
+
+@app.put("/api/coverage/routine")
+def api_coverage_routine(req: dict):
+    from . import coverage
+    try:
+        coverage.save_routine(req)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return coverage.status()
+
+
+@app.post("/api/coverage/check")
+def api_coverage_check():
+    """Read the school calendars and settle open gaps now, rather than on
+    the assistant's next pass. A manual act, so any instance may run it."""
+    from . import coverage
+    if not coverage.enabled():
+        raise HTTPException(409, "Turn on coverage watching in Config > Assistant first.")
+    result = coverage.tick()
+    return dict(coverage.status(), result=result)
+
+
+class CoverageAnswerReq(BaseModel):
+    taker: str
+
+
+@app.post("/api/coverage/gaps/{gap_id}")
+def api_coverage_answer(gap_id: str, req: CoverageAnswerReq):
+    from . import coverage
+    try:
+        return coverage.answer(gap_id, req.taker)
+    except KeyError:
+        raise HTTPException(404, "Coverage gap not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/assistant/calendar/{draft_id}.ics")
 def api_assistant_calendar_ics(draft_id: str):
     from . import calendarplan

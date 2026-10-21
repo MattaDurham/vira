@@ -80,7 +80,9 @@ class TheTable(unittest.TestCase):
         self.assertTrue(rows["assistant_debounce_s"]["advanced"])
         self.assertEqual(settingschema.keys("assistant", advanced=False),
                          ["assistant_enabled", "assistant_catchup_days",
-                          "assistant_stale_days", "assistant_due_soon_hours"])
+                          "assistant_stale_days", "assistant_due_soon_hours",
+                          "coverage_enabled", "coverage_calendar_blocks",
+                          "coverage_lookahead_days"])
         self.assertNotIn("assistant_calendar_id",
                          settingschema.keys("calendar", editable=True))
         groups = settingschema.payload({})["groups"]
