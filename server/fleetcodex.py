@@ -30,7 +30,8 @@ import os
 import sqlite3
 from pathlib import Path
 
-from .fleetclaude import clip, ts_ms
+from . import toolresult
+from .fleetclaude import add_say, clip, merge_feed, tool_kind, ts_ms
 
 # The first read of a rollout file. Rollouts reach hundreds of megabytes;
 # the open turn, its feed and plan sit in the tail.
@@ -159,6 +160,7 @@ class Rollout:
         self.turn_started = None
         self.turn_tools = 0
         self.feed = []
+        self.says = []              # recent status lines from the agent
         self.pending = {}           # call_id -> {name, desc, at}
         self.plan = None
         self.context = None
@@ -251,7 +253,7 @@ class Rollout:
             self.pending.clear()
             self.question = None
             if p.get("last_agent_message"):
-                self.last_text = clip(p["last_agent_message"], 280)
+                self._said(p["last_agent_message"], at)
         elif pt == "token_count":
             info = p.get("info") or {}
             last = info.get("last_token_usage") or {}
@@ -262,7 +264,7 @@ class Rollout:
         elif pt == "user_message" and p.get("message"):
             self.asked = clip(p["message"], 280)
         elif pt == "agent_message" and p.get("message"):
-            self.last_text = clip(p["message"], 280)
+            self._said(p["message"], at)
         elif pt and (pt.endswith("approval_request") or pt == "request_user_input"):
             q = p.get("questions") or []
             if q and isinstance(q, list):
@@ -288,7 +290,7 @@ class Rollout:
             if it == "UserMessage" and text:
                 self.asked = clip(text, 280)
             elif it == "AgentMessage" and text:
-                self.last_text = clip(text, 280)
+                self._said(text, at)
             elif it in ("TodoList", "Plan") and isinstance(item.get("items"), list):
                 self.plan = [{"content": clip(str(i.get("text") or i.get("step") or ""), 120),
                               "status": "completed" if i.get("completed") else
@@ -321,10 +323,13 @@ class Rollout:
             else:
                 desc = raw if isinstance(raw, str) else ""
             call = p.get("call_id") or p.get("id")
-            self.pending[call] = {"name": name, "desc": clip(str(desc), 140), "at": at or 0}
+            kind = tool_kind(name, args if isinstance(args, dict) and args
+                             else {"command": raw if isinstance(raw, str) else ""})
+            self.pending[call] = {"name": name, "desc": clip(str(desc), 140), "at": at or 0,
+                                  "kind": kind}
             self.turn_tools += 1
             self.feed.append({"id": call, "name": name, "desc": clip(str(desc), 140),
-                              "at": at or 0})
+                              "at": at or 0, "kind": kind})
             del self.feed[:-FEED_LEN]
         elif pt in ("function_call_output", "custom_tool_call_output", "local_shell_call_output"):
             call = p.get("call_id")
@@ -332,6 +337,8 @@ class Rollout:
                 for item in reversed(self.feed):
                     if item.get("id") == call:
                         item["ms"] = max(0, (at or 0) - item["at"])
+                        out, code = call_output(p.get("output"))
+                        toolresult.for_feed(item, item["name"], out, exit_code=code)
                         break
             if self.question:
                 self.question = None
@@ -339,7 +346,11 @@ class Rollout:
             text = " ".join(str(c.get("text") or "") for c in (p.get("content") or [])
                             if isinstance(c, dict)).strip()
             if text:
-                self.last_text = clip(text, 280)
+                self._said(text, at)
+
+    def _said(self, text, at):
+        self.last_text = clip(text, 280)
+        add_say(self.says, self.last_text, at)
 
     def running(self, now_ms):
         return bool(self.turn_open and self.last_at
@@ -349,7 +360,7 @@ class Rollout:
         if not self.pending:
             return None
         p = max(self.pending.values(), key=lambda x: x["at"])
-        return dict(name=p["name"], desc=p["desc"], startedAt=p["at"])
+        return dict(name=p["name"], desc=p["desc"], startedAt=p["at"], kind=p.get("kind"))
 
     def plan_view(self):
         if not self.plan:
@@ -358,7 +369,22 @@ class Rollout:
                     total=len(self.plan), items=self.plan)
 
     def feed_view(self):
-        return [{k: v for k, v in f.items() if k != "id"} for f in self.feed][::-1]
+        return merge_feed(self.feed, self.says)
+
+
+def call_output(out):
+    """(text, exit code) from a call's output. Codex writes a shell call's
+    output as JSON carrying the code in its metadata; other calls are plain
+    text or content items."""
+    if isinstance(out, str) and out.startswith("{"):
+        try:
+            out = json.loads(out)
+        except ValueError:
+            return out, None
+    if isinstance(out, dict):
+        meta = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
+        return out.get("output") or "", meta.get("exit_code")
+    return (out if isinstance(out, (str, list)) else ""), None
 
 
 def codex_running(procs):

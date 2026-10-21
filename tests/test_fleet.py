@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from server import changelog, fleet, fleetclaude as fc, fleetcodex as fx
+from server import changelog, fleet, fleetclaude as fc, fleetcodex as fx, toolresult
 
 MIN = 60_000
 
@@ -51,6 +51,12 @@ def tool_use(tid, name, inp, at, stop=None):
 def tool_result(tid, at):
     return {"type": "user", "timestamp": iso(at), "message": {
         "role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}}
+
+
+def result(tid, at, text, is_error=False):
+    return {"type": "user", "timestamp": iso(at), "message": {
+        "role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": text,
+                                     "is_error": is_error}]}}
 
 
 def said(text, at, stop="end_turn"):
@@ -339,6 +345,35 @@ class ClaudeSessions(Base):
         self.assertEqual(fc.call_kind("Summarize this please"), "other")
 
 
+class ActivityFeed(Base):
+    def test_results_status_lines_and_what_it_is_doing(self):
+        cwd = self.env.folder("act")
+        t = now() - 10 * MIN
+        self.env.transcript(cwd, "a1", [
+            user("Run the tests and fix what fails", t),
+            said("263 related tests pass. Running the full suite.", t + MIN, stop=None),
+            tool_use("b1", "Bash", {"command": "(timeout 900 python -m unittest) ; echo \"exit $?\"",
+                                    "description": "Run the full unittest suite"}, t + 2 * MIN),
+            result("b1", t + 2 * MIN + 31, "(eval):1: command not found: timeout\nexit 127"),
+            tool_use("r1", "Read", {"file_path": "/w/app.js"}, t + 3 * MIN),
+            result("r1", t + 3 * MIN, "1\tconst a = 1;"),
+            tool_use("b2", "Bash", {"command": "python -m unittest discover tests",
+                                    "description": "Run the full unittest suite"}, t + 4 * MIN)])
+        self.env.record("local_a", "a1", cwd)
+        self.env.app_proc(201, "a1", cwd)
+        row = self.row(self.live(), "local_a")
+        failed = next(f for f in row["feed"] if f.get("name") == "Bash" and "ms" in f)
+        self.assertTrue(failed["error"], "an echoed exit code does not hide a failure")
+        self.assertEqual(failed["out"], "exit 127: (eval):1: command not found: timeout")
+        read = next(f for f in row["feed"] if f.get("name") == "Read")
+        self.assertFalse(read["error"])
+        self.assertNotIn("out", read, "a file read's text is not a result line")
+        says = [f["say"] for f in row["feed"] if "say" in f]
+        self.assertEqual(says, ["263 related tests pass. Running the full suite."])
+        self.assertEqual(row["now"]["kind"], "testing")
+        self.assertEqual(row["doing"], "testing")
+
+
 class CodexThreads(Base):
     def thread(self, tid, events, cwd=None, **kw):
         path = self.env.rollout(tid, events)
@@ -384,6 +419,26 @@ class CodexThreads(Base):
         self.assertEqual(s["status"], "Idle")
         self.env.procs.clear()
         self.assertEqual(self.row(self.live(), "th1")["status"], "Closed")
+
+    def test_a_shell_call_reports_its_exit_code_and_kind(self):
+        t = now() - 30_000
+        self.thread("th2", [
+            ev("task_started", t),
+            ev("agent_message", t + 500, message="Running the tests now."),
+            item("function_call", t + 1000, name="exec_command",
+                 arguments='{"cmd": "pytest -q"}', call_id="c1"),
+            item("function_call_output", t + 4000, call_id="c1",
+                 output=json.dumps({"output": "1 failed, 9 passed", "metadata": {"exit_code": 1}})),
+            item("function_call", t + 5000, name="exec_command",
+                 arguments='{"cmd": "git push"}', call_id="c2")])
+        self.env.proc(300, "/Applications/X/codex app-server --listen stdio://")
+        s = self.row(self.live(), "th2")
+        call = next(f for f in s["feed"] if f.get("name") == "exec_command" and "ms" in f)
+        self.assertTrue(call["error"])
+        self.assertEqual(call["out"], "exit 1: 1 failed, 9 passed")
+        self.assertEqual(call["kind"], "testing")
+        self.assertEqual([f["say"] for f in s["feed"] if "say" in f], ["Running the tests now."])
+        self.assertEqual(s["doing"], "shipping")
 
     def test_an_open_turn_that_went_quiet_is_not_working(self):
         path = self.env.rollout("q", [ev("task_started", now() - 2 * 3600_000),
@@ -440,6 +495,35 @@ class ViraJobs(Base):
                        "status": status, "started": datetime.now().isoformat(timespec="seconds"),
                        "title": "A job", "prompt": "Do it", "provider": "anthropic"}])
 
+    def test_a_running_job_reads_its_transcript_and_process(self):
+        cwd = self.env.folder("vira-wt")
+        t0 = now() - 20 * MIN
+        tp = self.env.transcript(cwd, "s1", [
+            user("Implement the coverage window please", t0),
+            said("Routes in. Writing tests next.", t0 + 2 * MIN, stop=None),
+            user("Also cover the half-day case", t0 + 5 * MIN),
+            tool_use("b1", "Bash", {"command": ".venv/bin/python -m unittest discover tests",
+                                    "description": "Run the full suite"}, t0 + 6 * MIN)])
+        self.jobs = ([{"id": "j1", "status": "running", "awaiting": None}],
+                     [{"id": "j1", "session_id": "s1", "cwd": cwd, "status": "running",
+                       "started": datetime.fromtimestamp(t0 / 1000).isoformat(timespec="seconds"),
+                       "title": "A job", "prompt": "Do it", "provider": "anthropic",
+                       "transcript": str(tp)}])
+        self.env.proc(300, "/v/python -m server.runner /v/data/jobs/j1")
+        self.env.proc(301, "/u/.local/bin/claude --output-format stream-json --verbose", ppid=300)
+        self.env.proc(302, "/bin/zsh -c source /u/.claude/shell-snapshots/snapshot-zsh-1.sh && eval 'x' < /dev/null",
+                      ppid=301, secs=300)
+        self.env.proc(303, "/v/python -m unittest discover tests", ppid=302, secs=300)
+        row = self.row(self.live(), "vira:j1")
+        self.assertEqual(row["pid"], 301, "the runner's agent process is the job's")
+        self.assertEqual(len(row["shells"]), 1)
+        self.assertIn("unittest discover tests", row["shells"][0]["cmd"])
+        self.assertEqual(row["lastText"], "Routes in. Writing tests next.",
+                         "while it runs, what the agent last said, not the empty outcome")
+        self.assertAlmostEqual(row["turnStartedAt"], t0 + 5 * MIN, delta=2,
+                               msg="the request clock restarts on a steer")
+        self.assertEqual(row["doing"], "testing")
+
     def test_job_states(self):
         for awaiting, status in ((None, "Working"), ("ask", "Needs you"), ("permission", "Needs you"),
                                  ("agents", "Jobs running"), ("reply", "Idle")):
@@ -462,6 +546,52 @@ class MissingSources(Base):
             self.assertFalse(src[key]["found"], key)
             self.assertIn("not found on this machine", src[key]["note"])
         self.assertTrue(src["vira"]["found"])
+
+
+class ToolResults(unittest.TestCase):
+    def test_failures_the_tool_did_not_report(self):
+        cases = [
+            ("(eval):1: command not found: timeout\nexit 127", False,
+             ("exit 127: (eval):1: command not found: timeout", True)),
+            ("Exit code 1\nboom", True, ("exit 1: boom", True)),
+            ("....F\nFAILED (failures=1)", False, ("failed: FAILED (failures=1)", True)),
+            ("Traceback (most recent call last):\n  File x\nKeyError: 'a'", False, ("failed: KeyError: 'a'", True)),
+            ("Ran 263 tests in 1.4s\n\nOK\nok tests/x.js", False, ("Ran 263 tests in 1.4s OK", False)),
+            ("built\nexit 0", False, ("built", False)),
+            ("", False, (None, False)),
+            ([{"type": "text", "text": "a\nb"}], False, ("b", False)),
+        ]
+        for text, err, want in cases:
+            self.assertEqual(toolresult.summarize(text, err), want, text)
+        self.assertEqual(toolresult.summarize("all fine", exit_code=2), ("exit 2: all fine", True))
+
+    def test_what_a_call_is_for(self):
+        cases = [
+            ("Bash", {"command": ".venv/bin/python -m unittest discover tests"}, "testing"),
+            ("Bash", {"command": "node tests/fleet_ui.js"}, "testing"),
+            ("Bash", {"command": "git commit -m x && git push"}, "shipping"),
+            ("Bash", {"command": "sed -i '' s/a/b/ static/app.js"}, "editing"),
+            ("Bash", {"command": "grep -n foo server/fleet.py | head"}, "reading"),
+            ("Bash", {"command": "npm run build"}, "running"),
+            ("Edit", {"file_path": "/a.py"}, "editing"),
+            ("Read", {"file_path": "/a.py"}, "reading"),
+            ("WebSearch", {"query": "x"}, "researching"),
+            ("mcp__Claude_Browser__navigate", {"url": "x"}, "researching"),
+            ("Agent", {"description": "x"}, "delegating"),
+            ("shell", {"command": ["bash", "-lc", "pytest -q"]}, "testing"),
+        ]
+        for name, inp, want in cases:
+            self.assertEqual(fc.tool_kind(name, inp), want, (name, inp))
+
+    def test_what_a_session_is_doing(self):
+        base = dict(status="Working", turnOpen=True, now=None, agents={"live": []}, shells=[])
+        self.assertEqual(fleet.doing_of({**base, "status": "Needs you"}), "waiting")
+        self.assertEqual(fleet.doing_of({**base, "now": {"kind": "editing"}}), "editing")
+        self.assertEqual(fleet.doing_of({**base, "agents": {"live": [{}]}}), "delegating")
+        self.assertEqual(fleet.doing_of(base), "thinking")
+        self.assertEqual(fleet.doing_of({**base, "status": "Jobs running", "turnOpen": False,
+                                         "shells": [{"cmd": "pytest"}]}), "testing")
+        self.assertEqual(fleet.doing_of({**base, "status": "Idle", "turnOpen": False}), "idle")
 
 
 class Parsers(unittest.TestCase):
@@ -538,8 +668,10 @@ class Repositories(unittest.TestCase):
         # Two app worktrees: one with a session in it, one with uncommitted edits.
         self.busy = self.root / ".claude" / "worktrees" / "busy"
         self.dirty = self.root / ".claude" / "worktrees" / "dirty"
+        self.spare = self.root / ".claude" / "worktrees" / "spare"
         git("worktree", "add", "-q", "-b", "claude/busy", str(self.busy))
         git("worktree", "add", "-q", "-b", "claude/dirty", str(self.dirty))
+        git("worktree", "add", "-q", "-b", "claude/spare", str(self.spare))
         (self.dirty / "scratch.txt").write_text("x\n", encoding="utf-8")
         p = mock.patch.dict(os.environ, {"VIRA_FLEET_GH": ""})
         p.start()
@@ -561,11 +693,32 @@ class Repositories(unittest.TestCase):
         self.assertEqual(by_name["proj"]["sessions"], [], "a session in a nested worktree is not the main checkout's")
         self.assertEqual(by_name["dirty"]["label"], "Uncommitted changes")
         self.assertEqual(by_name["dirty"]["dirty"], 1)
+        # A worktree branch nobody committed on sits at a commit main holds,
+        # so git lists it as merged; nothing of it ever landed.
+        self.assertIs(by_name["dirty"]["merged"], False)
+        self.assertIs(by_name["dirty"]["fresh"], True)
+        self.assertEqual(by_name["spare"]["label"], "No commits, can remove")
+        self.assertEqual(scan["heads"]["claude/landed"], dict(merged=True, ahead=0, fresh=False, dirty=None),
+                         "a branch that had commits and landed is still merged")
+        self.assertEqual(scan["heads"]["claude/dirty"]["dirty"], 1)
         branches = {b["name"]: b for b in repo["branches"]}
         self.assertEqual(branches["claude/landed"]["label"], "Landed, can remove")
         self.assertEqual(branches["claude/pending"]["label"], "Unlanded commits")
         self.assertEqual(branches["claude/pending"]["ahead"], 1)
         self.assertNotIn("heads", repo)
+
+    def test_a_branch_synced_by_fast_forward_has_still_no_commits(self):
+        from server import fleetgit as fg
+        self.git("branch", "claude/synced")
+        (self.root / "m.txt").write_text("m\n", encoding="utf-8")
+        self.git("add", "m.txt")
+        self.git("commit", "-q", "-m", "main moves on")
+        self.git("checkout", "-q", "claude/synced")
+        self.git("merge", "-q", "--ff-only", "main")
+        self.git("checkout", "-q", "main")
+        heads = fg.scan(str(self.root), fg.GhCache())["heads"]
+        self.assertIs(heads["claude/synced"]["fresh"], True)
+        self.assertIs(heads["claude/synced"]["merged"], False)
 
     def test_landings_and_change_log_from_history(self):
         from server import fleetgit as fg
@@ -625,6 +778,18 @@ class SlowTier(Base, Repositories):
         self.assertFalse(self.fleet.repos_due(), "nothing moved since the scan")
         self.git("branch", "claude/another")
         self.assertTrue(self.fleet.repos_due(), "a new branch is noticed before the 30 s rescan")
+
+    def test_a_branch_with_only_uncommitted_files_is_work_not_landed(self):
+        self.env.transcript(str(self.dirty), "d1", [user("Start the dirty thing", now() - 30 * MIN),
+                                                    said("Stopped for now.", now() - 29 * MIN)])
+        self.env.record("local_d", "d1", str(self.dirty), branch="claude/dirty",
+                        lastActivityAt=now() - 29 * MIN)
+        self.fleet.repos(force=True)
+        snap = self.live()
+        fam = next(f for f in snap["families"] if "local_d" in f["members"])
+        branch = next(b for b in fam["branches"] if b["name"] == "claude/dirty")
+        self.assertEqual((branch["state"], branch["dirty"]), ("fresh", 1))
+        self.assertEqual((fam["state"], fam["needsWork"], fam["merged"]), ("unmerged", 1, 0))
 
 
 class InstancesAndServers(Base):

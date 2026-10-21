@@ -5,6 +5,8 @@
   --fl-merged: #a991c9; --fl-open: #8fbf8a; --fl-hot: var(--red);
   --fl-claude: var(--claude); --fl-codex: #6fbfb6; --fl-vira: #c9b86b; --fl-other: #8f8d85;
   --fl-track: var(--line); --fl-r: 4px;
+  --fl-do-test: #8fbf8a; --fl-do-edit: #7fa6e8; --fl-do-read: #6fbfb6; --fl-do-web: #c98fb4;
+  --fl-do-ship: #a991c9; --fl-do-agents: #c9a66b; --fl-do-run: #7fa6c9; --fl-do-think: var(--text-dim);
   display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 10px;
   height: calc(100vh - 150px); min-height: 480px; min-width: 0;
   font-size: 13px; color: var(--text);
@@ -131,6 +133,7 @@
 .fl-bd.open_pr { border-color: var(--fl-open); }
 .fl-bd.unmerged { border-color: var(--fl-need); }
 .fl-bd.deleted { border-style: dotted; opacity: 0.7; }
+.fl-bd.fresh { border-style: dashed; }
 svg.fl-wires { position: absolute; left: 0; top: 0; z-index: -1; pointer-events: none; overflow: visible; }
 svg.fl-wires path { fill: none; stroke: color-mix(in srgb, var(--pc) 60%, var(--text-faint)); stroke-width: 1.5; }
 svg.fl-wires path.fork { stroke-dasharray: 4 4; }
@@ -172,7 +175,8 @@ svg.fl-wires path.fork { stroke-dasharray: 4 4; }
 .fl-pr.MERGED { color: var(--fl-merged); }
 .fl-pr.OPEN { color: var(--fl-open); }
 .fl-pr.CLOSED { color: var(--fl-hot); }
-.fl-now { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: baseline; font-size: 12px; }
+.fl-now { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 12px; }
+.fl-doh { display: inline-flex; }
 .fl-tooln { font-family: var(--mono); font-size: 11px; color: var(--fl-work); padding: 0 5px; margin-right: 6px;
   background: color-mix(in srgb, var(--fl-work) 14%, transparent); }
 .fl-now .fl-tooln { margin-right: 0; }
@@ -248,6 +252,9 @@ ol.fl-plan li.in_progress::before { border-color: var(--fl-work); background: co
 .fl-item .c { grid-column: 1 / -1; font-size: 11.5px; color: var(--text-dim); overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 2px 10px; }
 .fl-item.run .b { color: var(--fl-work); }
 .fl-item.err .fl-tooln { color: var(--fl-hot); }
+.fl-item.err .b, .fl-item.err .c { color: var(--fl-hot); }
+.fl-item .c.fl-mono { font-size: 11px; }
+.fl-item.say .a { font-size: 12.5px; color: var(--text); }
 .fl-item.fresh { animation: fl-arrive 0.6s ease-out; }
 .fl-qblock { border: 1px solid var(--fl-need); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
   background: color-mix(in srgb, var(--fl-need) 6%, transparent); }
@@ -267,6 +274,7 @@ ol.fl-plan li.in_progress::before { border-color: var(--fl-work); background: co
 .fl-bs.merged { color: var(--fl-merged); }
 .fl-bs.unmerged { color: var(--fl-need); }
 .fl-bs.deleted, .fl-bs.unknown { color: var(--text-faint); }
+.fl-bs.fresh { color: var(--text-dim); }
 .fl-fgroup h4 { margin: 8px 0 0; font-size: 13px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 details.fl-fold summary { cursor: pointer; font-size: 12px; color: var(--text-dim); padding: 6px 0; }
 
@@ -285,7 +293,7 @@ details.fl-fold summary { cursor: pointer; font-size: 12px; color: var(--text-di
 .fl-label.l-dirty { color: var(--fl-need); }
 .fl-label.l-unlanded { color: var(--fl-need); }
 .fl-label.l-landed { color: var(--fl-merged); }
-.fl-label.l-unknown { color: var(--text-faint); }
+.fl-label.l-unknown, .fl-label.l-fresh { color: var(--text-faint); }
 .fl-cellbar { position: relative; display: flex !important; align-items: center; gap: 6px; }
 .fl-cellbar i { display: block; height: 8px; background: color-mix(in srgb, var(--fl-claude) 55%, transparent); min-width: 1px; flex: none; max-width: 70%; }
 .fl-cellbar b { font-family: var(--mono); font-weight: 500; }
@@ -348,6 +356,67 @@ details.fl-fold summary { cursor: pointer; font-size: 12px; color: var(--text-di
 .fl-gap { margin-left: auto; min-width: 0; }
 .fl-missing { color: var(--text-faint); }
 
+/* ---- what a session is doing: animated icons (fleet.js DOING) */
+.fl-do { display: inline-flex; flex: none; width: 18px; height: 18px; color: var(--fl-do-run); }
+.fl-do svg { width: 100%; height: 100%; overflow: visible; fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.fl-do svg * { transform-box: fill-box; transform-origin: center; }
+.fl-do .fill { fill: currentColor; stroke: none; }
+.fl-do .thin { stroke-width: 1.5; opacity: 0.6; }
+.fl-do.k-waiting { color: var(--fl-need); }
+.fl-do.k-waiting .ping { animation: fl-do-ping 1.6s ease-out infinite; }
+.fl-do.k-testing { color: var(--fl-do-test); }
+.fl-do.k-testing .t1, .fl-do.k-testing .t2, .fl-do.k-testing .t3, .fl-do.k-testing .t4 { animation: fl-do-tick 2s infinite; }
+.fl-do.k-testing .t2 { animation-delay: 0.3s; }
+.fl-do.k-testing .t3 { animation-delay: 0.6s; }
+.fl-do.k-testing .t4 { animation-delay: 0.9s; }
+.fl-do.k-editing { color: var(--fl-do-edit); }
+.fl-do.k-editing .type { stroke-dasharray: 10; animation: fl-do-type 1.8s steps(5, end) infinite; }
+.fl-do.k-editing .caret { stroke-width: 1.5; animation: fl-do-caret 1.8s steps(5, end) infinite, fl-do-blink 0.6s steps(1) infinite; }
+.fl-do.k-reading { color: var(--fl-do-read); }
+.fl-do.k-reading .scan { fill: currentColor; stroke: none; opacity: 0.3; animation: fl-do-scan 1.8s ease-in-out infinite alternate; }
+.fl-do.k-researching { color: var(--fl-do-web); }
+.fl-do.k-researching .hunt { animation: fl-do-hunt 2.4s ease-in-out infinite; }
+.fl-do.k-shipping { color: var(--fl-do-ship); }
+.fl-do.k-shipping .push { animation: fl-do-push 1.4s ease-in infinite; }
+.fl-do.k-delegating { color: var(--fl-do-agents); }
+.fl-do.k-delegating .flow { stroke-width: 1.5; stroke-dasharray: 2 2.5; animation: fl-do-flow 0.8s linear infinite; }
+.fl-do.k-running .caret { animation: fl-do-blink 1s steps(1) infinite; }
+.fl-do.k-thinking { color: var(--fl-do-think); }
+.fl-do.k-thinking .b1, .fl-do.k-thinking .b2, .fl-do.k-thinking .b3 { animation: fl-do-bob 1.2s ease-in-out infinite; }
+.fl-do.k-thinking .b2 { animation-delay: 0.15s; }
+.fl-do.k-thinking .b3 { animation-delay: 0.3s; }
+.fl-do.k-idle { color: var(--fl-idle); }
+@keyframes fl-do-ping { from { transform: scale(1); opacity: 0.9; } to { transform: scale(3); opacity: 0; } }
+@keyframes fl-do-tick { 0%, 8% { opacity: 0.15; } 18%, 80% { opacity: 1; } 100% { opacity: 0.15; } }
+@keyframes fl-do-type { from { stroke-dashoffset: 10; } to { stroke-dashoffset: 0; } }
+@keyframes fl-do-caret { from { transform: translateX(-10px); } to { transform: translateX(0); } }
+@keyframes fl-do-blink { 50% { opacity: 0; } }
+@keyframes fl-do-scan { from { transform: translateY(0); } to { transform: translateY(10px); } }
+@keyframes fl-do-hunt { 0%, 100% { transform: translate(-2px, -1px); } 33% { transform: translate(2px, -2px); } 66% { transform: translate(1px, 2px); } }
+@keyframes fl-do-push { 0% { transform: translateY(4px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateY(-2px); opacity: 0; } }
+@keyframes fl-do-flow { to { stroke-dashoffset: -4.5; } }
+@keyframes fl-do-bob { 0%, 100% { transform: translateY(0); opacity: 0.5; } 40% { transform: translateY(-3px); opacity: 1; } }
+.fl-doing-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); }
+.fl-doing-tag .fl-do { width: 16px; height: 16px; }
+
+/* ---- the doing strip: live sessions grouped by what they are doing */
+.fl-doing { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.fl-dcard { display: flex; flex-direction: column; gap: 4px; padding: 7px 10px 8px; min-width: 0; max-width: 100%;
+  flex: 0 1 220px; box-sizing: border-box; background: var(--bg-raised); border: 1px solid var(--line); }
+.fl-dtop { all: unset; cursor: pointer; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.fl-dtop:focus-visible { outline: 1px solid var(--text-faint); outline-offset: 2px; }
+.fl-dtop .fl-do { width: 24px; height: 24px; }
+.fl-dl { font-size: 13px; font-weight: 600; }
+.fl-dtop .fl-dc { margin-left: auto; font-weight: 500; font-size: 13.5px; color: var(--text); }
+.fl-dcard:hover { border-color: var(--text-faint); }
+.fl-dnames { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.fl-dn { all: unset; cursor: pointer; font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; padding-left: 8px; border-left: 2px solid var(--pc, var(--line)); min-width: 0; }
+.fl-dn:hover { color: var(--text); }
+.fl-dn:focus-visible { outline: 1px solid var(--text-faint); }
+.fl-dmore { font-size: 11px; color: var(--text-faint); padding-left: 10px; }
+
 @keyframes fl-beat { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
 @keyframes fl-shimmer { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 @keyframes fl-arrive { from { background: color-mix(in srgb, var(--fl-work) 14%, transparent); } to { background: transparent; } }
@@ -358,6 +427,7 @@ details.fl-fold summary { cursor: pointer; font-size: 12px; color: var(--text-di
   .fl-root { height: auto; min-height: 0; grid-template-rows: auto auto auto auto; }
   .fl-lanes, .fl-sheet { height: auto; overflow: visible; }
   .fl-tn { flex-direction: column; gap: 10px; }
+  .fl-dcard { flex: 1 1 140px; }
   .fl-kids { padding-left: 20px; }
   .fl-hint { display: none; }
   .fl-lane-name { font-size: 18px !important; }

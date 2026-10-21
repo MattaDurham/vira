@@ -30,7 +30,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import modeladmission as admission, agentbackend, answer_runtime, jobfiles, joblog, settings, viratools, worktree
+from . import modeladmission as admission, agentbackend, answer_runtime, jobfiles, joblog, settings, toolresult, viratools, worktree
 from .session import (EDIT_TOOLS, OUTPUT_CAP, READ_ONLY_EXCLUDE,
                       _extract_plan_md, _finalize_plan, _mark_idea,
                       _plan_ref, _scfg, _sdk_env, _tool_preview,
@@ -358,6 +358,7 @@ class Runner:
         self._execution_lock = asyncio.Lock()
         self._deadline_task = None
         self._native_tools = {}
+        self._shell_calls = set()        # main-agent shell calls awaiting a result
         self._execution_started_mono = None
         self._execution_elapsed = 0.0
         self.out = open(self.dir / "output.log", "a", encoding="utf-8")
@@ -1769,6 +1770,8 @@ class Runner:
                 elif isinstance(b, ToolUseBlock):
                     out += "  → " + _tool_summary(
                         {"name": b.name, "input": b.input}) + "\n"
+                    if b.name in toolresult.SHELL_TOOLS:
+                        self._shell_calls.add(b.id)
                     if b.name in AGENT_TOOLS:
                         self._agent_launched(b.id, b.input)
                     if not b.name.startswith("mcp__vira__"):
@@ -1781,6 +1784,14 @@ class Runner:
             for block in msg.content:
                 if not isinstance(block, ToolResultBlock):
                     continue
+                if block.tool_use_id in self._shell_calls:
+                    self._shell_calls.discard(block.tool_use_id)
+                    # Judged on the text alone: a real failure says "Exit
+                    # code N" there, while a gate denial (already logged as
+                    # a [vira] line) only sets is_error.
+                    line, failed = toolresult.summarize(block.content)
+                    if failed:
+                        self.append(f"    ↳ {line}\n")
                 a = self.agents.get(block.tool_use_id)
                 if a is not None and not a["background"]:
                     # A FOREGROUND agent's call returns its report, so the

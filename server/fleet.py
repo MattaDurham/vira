@@ -216,7 +216,7 @@ def base_row(**kw):
              context=None, agents={"live": [], "total": 0}, shells=[], model="",
              effort="", mode="", pid=None, cpu=None, memMB=None, asked=None,
              lastText=None, prs=[], summary=None, report=None, parentId=None,
-             link=None, family=None, git=None,
+             link=None, family=None, git=None, doing=None,
              _parent=None, _link=None, _sid=None, _written=[], _base=None)
     r.update(kw)
     return r
@@ -234,6 +234,24 @@ def status_of(turn_open, waiting, agents_live, shells, live):
     return "Idle"
 
 
+def doing_of(r):
+    """What a live session is doing, in one word the window draws as an
+    animated icon: the running call's kind (fleetclaude.tool_kind), else
+    waiting, delegating, thinking, a background shell, or idle."""
+    if r["status"] == "Needs you":
+        return "waiting"
+    now = r.get("now")
+    if r.get("turnOpen") and now and now.get("kind"):
+        return now["kind"]
+    if r["agents"]["live"]:
+        return "delegating"
+    if r.get("turnOpen"):
+        return "thinking"
+    if r.get("shells"):
+        return fc.tool_kind("Bash", {"command": r["shells"][0].get("cmd") or ""})
+    return "idle"
+
+
 # ---------------------------------------------------------------- Vira jobs
 
 def vira_jobs():
@@ -245,6 +263,26 @@ def vira_jobs():
     except Exception:  # noqa: BLE001 - a registry that cannot answer is no jobs
         live = []
     return live, joblog.recent(300)
+
+
+_RUNNER = re.compile(r"-m server\.runner\s+(.+?)\s*$")
+
+
+def job_agents(procs, kids):
+    """Job id -> the agent process a detached runner drives (`python -m
+    server.runner <data>/jobs/<id>`, whose child is the claude or codex
+    process), so a job gets its shells, CPU and memory like any session."""
+    out = {}
+    for p in procs.values():
+        m = _RUNNER.search(p["args"])
+        if not m:
+            continue
+        children = [procs[c] for c in kids.get(p["pid"], []) if c in procs]
+        agent = next((c for c in children if re.search(r"(?:^|/)(?:claude|codex)(?:\.exe)?(?:\s|$)",
+                                                        c["args"].split(" --", 1)[0])), None)
+        if agent:
+            out[Path(m.group(1).strip("'\"")).name] = agent
+    return out
 
 
 # ---------------------------------------------------------------- the collector
@@ -644,7 +682,7 @@ class Fleet:
 
     # ----- Vira
 
-    def _vira(self, t_now):
+    def _vira(self, t_now, procs=None, kids=None):
         try:
             live_rows, ledger = self._ledger()
         except Exception as e:  # noqa: BLE001 - a broken ledger is a named note
@@ -653,6 +691,7 @@ class Fleet:
         self.notes["vira"] = None
         live_by_id = {r["id"]: r for r in live_rows}
         by_branch = joblog.by_branch_index(ledger)
+        agents = job_agents(procs or {}, kids or {})
         rows = []
         for rec in ledger:
             reg = live_by_id.get(rec.get("id"))
@@ -684,6 +723,9 @@ class Fleet:
             if running and tp and os.path.exists(tp) and (rec.get("provider") or "anthropic") == "anthropic":
                 t = self._transcript(Path(tp))
             model = (t.model if t and t.model else rec.get("model")) or ""
+            proc = agents.get(rec["id"]) if running else None
+            shells = fc.shell_children(proc, procs, kids, t_now) if proc else []
+            outcome = fc.clip(desc.get("outcome") or "", 280) or None
             rows.append(base_row(
                 id=f"vira:{rec['id']}", tool="vira", surface=desc.get("kind_label") or "Job",
                 project=project, repo=repo, folder=rec.get("cwd"),
@@ -691,9 +733,17 @@ class Fleet:
                 branch=rec.get("branch") or None, title=fc.clip(desc.get("title") or "Vira job", 140),
                 viraJob=rec["id"], status=status, live=running, startedAt=started,
                 createdAt=started, lastAt=max(filter(None, [t.last_at if t else None, last]), default=None),
-                turnOpen=status == "Working", turnStartedAt=started if status == "Working" else None,
+                turnOpen=status == "Working",
+                # The transcript knows when the latest request began (a
+                # steer starts a new one); the ledger only knows the job's.
+                turnStartedAt=((t.turn_started if t and t.turn_started else started)
+                               if status == "Working" else None),
                 turnTools=t.turn_tools if t else 0, asked=fc.clip(rec.get("command") or "", 280) or None,
-                lastText=fc.clip(desc.get("outcome") or "", 280) or None,
+                # While it runs, what the agent last said; after, the outcome.
+                lastText=(t.last_text if t and t.last_text else None) or outcome,
+                shells=shells, pid=proc["pid"] if proc else None,
+                cpu=proc["cpu"] if proc else None,
+                memMB=round(proc["rss"] / 1024) if proc else None,
                 now=t.now_tool() if t else None, plan=t.plan_view() if t else None,
                 question=(dict(kind="ask", at=last, questions=[dict(
                     question="Waiting for your answer in Vira", header="Vira", multi=False, options=[])])
@@ -737,11 +787,13 @@ class Fleet:
         t_now = now_ms()
         self._used = set()
         procs, kids = self.procs.read()
-        vira = self._vira(t_now)
+        vira = self._vira(t_now, procs, kids)
         vira_by_sid = {r["_sid"]: r for r in vira if r.get("_sid")}
         claude = self._claude(t_now, procs, kids, set(vira_by_sid))
         codex = self._codex(t_now, procs, vira_by_sid)
         rows = vira + claude + codex
+        for r in rows:
+            r["doing"] = doing_of(r) if r["live"] else None
         for k in [k for k in self.transcripts if k not in self._used]:
             del self.transcripts[k]
         for r in rows:
@@ -870,9 +922,13 @@ class Fleet:
             roots = [m for m in members if not (m in parent_of and parent_of[m][0] in members)]
             root = min(roots or members, key=lambda m: by_id[m].get("createdAt") or 0)
             branches = self._family_branches([by_id[m] for m in members])
-            rank = {"open_pr": 0, "unmerged": 1, "unknown": 2, "deleted": 3, "merged": 4}
+            rank = {"open_pr": 0, "unmerged": 1, "fresh": 2, "unknown": 3, "deleted": 4, "merged": 5}
             bl = sorted(branches.values(), key=lambda b: (rank[b["state"]], b["name"]))
             prs = [b["pr"] for b in bl if b["pr"]]
+            # Uncommitted files on a branch with no commits are still work
+            # nobody has landed; a clean one is nothing at all.
+            pending = [b for b in bl if b["state"] in ("open_pr", "unmerged")
+                       or (b["state"] == "fresh" and b.get("dirty"))]
             active = any(m in open_ids and by_id[m]["status"] in ("Working", "Needs you", "Jobs running")
                          for m in members)
             families.append(dict(
@@ -883,11 +939,11 @@ class Fleet:
                 merged=sum(1 for b in bl if b["merged"] is True),
                 prsOpen=sum(1 for p in prs if p["state"] == "OPEN"),
                 prsMerged=sum(1 for p in prs if p["state"] == "MERGED"),
-                needsWork=sum(1 for b in bl if b["state"] in ("open_pr", "unmerged")),
+                needsWork=len(pending),
                 deleted=sum(1 for b in bl if b["state"] == "deleted"),
                 kind="feature" if (bl or len(members) > 1) else "session",
-                state=("active" if active else "unmerged" if any(b["state"] in ("open_pr", "unmerged") for b in bl)
-                       else "done" if bl else "no_code"),
+                state=("active" if active else "unmerged" if pending
+                       else "done" if any(b["state"] != "fresh" for b in bl) else "no_code"),
                 lastAt=max((by_id[m].get("lastAt") or 0) for m in members)))
         families.sort(key=lambda f: (-f["open"], -f["lastAt"]))
         return families
@@ -928,6 +984,7 @@ class Fleet:
                         cur["merged"] = True
         for b in branches.values():
             scan = self.scans.get(b.pop("repo", None))
+            fresh = False
             if scan:
                 local = fg.merged_state(scan, b["name"])
                 remotes = scan.get("remotes") or {}
@@ -935,12 +992,15 @@ class Fleet:
                     b["merged"] = local[1] if local[0] else remotes.get(b["name"])
                 b["exists"] = local[0] or b["name"] in remotes
                 b["ahead"] = None if b["merged"] is True or not local[0] else local[2]
+                fresh, b["dirty"] = local[3], local[4]
             else:
-                b["exists"], b["ahead"] = None, None
+                b["exists"], b["ahead"], b["dirty"] = None, None, None
             if b["pr"] and b["pr"]["state"] == "OPEN":
                 b["state"] = "open_pr"
             elif b["merged"] is True:
                 b["state"] = "merged"
+            elif fresh:
+                b["state"] = "fresh"
             elif b["exists"] is False:
                 b["state"] = "deleted"
             elif b["merged"] is False:
@@ -1138,13 +1198,16 @@ def label_repo(scan, live_rows, instances, t_now):
             label = "Uncommitted changes"
         elif w.get("merged") is False and (w.get("ahead") or 0) > 0:
             label = "Unlanded commits"
+        elif w.get("fresh"):
+            label = "No commits, can remove"
         elif w.get("merged") is True or (w.get("ahead") == 0):
             label = "Landed, can remove"
         else:
             label = "Unknown"
         wts.append(dict(w, sessions=[r["id"] for r in here], instance=inst, label=label))
     out["worktrees"] = wts
-    out["branches"] = [dict(b, label=("Landed, can remove" if b.get("merged") or b.get("ahead") == 0
+    out["branches"] = [dict(b, label=("No commits, can remove" if b.get("fresh")
+                                      else "Landed, can remove" if b.get("merged") or b.get("ahead") == 0
                                       else "Unlanded commits"))
                        for b in scan.get("branches") or []]
     return out

@@ -37,7 +37,7 @@ import re
 import time
 from pathlib import Path
 
-from . import settings
+from . import settings, toolresult
 
 # Bytes read from a transcript the first time it is seen. Sessions run to
 # hundreds of megabytes; the tail holds the open turn, the plan and the
@@ -52,6 +52,9 @@ LAST_TS_TAIL = 65_536
 # entrypoint and first prompt sit in the first few lines.
 HEAD_LINES = 40
 FEED_LEN = 10
+# The agent's own status lines kept beside the feed ("263 tests pass.
+# Running the full suite"): what it says it is doing, between its calls.
+SAYS_LEN = 5
 END_REASONS = {"end_turn", "stop_sequence", "max_tokens", "refusal"}
 ASK_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
 APP_ENTRY = "claude-desktop"
@@ -133,6 +136,67 @@ def user_text(content):
     content = re.sub(r"<[a-z_-]+(?: [^>]*)?>.*?</[a-z_-]+>", " ",
                      content, flags=re.S).strip()
     return content or None
+
+
+def merge_feed(feed, says):
+    """Tool calls and status lines, newest first. A line older than the
+    oldest call kept has lost its context, so it is left out."""
+    calls = [{k: v for k, v in f.items() if k != "id"} for f in feed]
+    floor = calls[0]["at"] if len(calls) >= FEED_LEN else 0
+    rows = calls + [dict(s) for s in says if s["at"] >= floor]
+    rows.sort(key=lambda r: r["at"] or 0, reverse=True)
+    return rows
+
+
+def add_say(says, text, at):
+    """Keep a status line, once: some sources write the same message as
+    more than one event."""
+    if not text or (says and says[-1]["say"] == text):
+        return
+    says.append({"say": text, "at": at or 0})
+    del says[:-SAYS_LEN]
+
+
+# What a tool call is for, in a word the window draws as an animated icon,
+# so a glance at the board says "those three are testing, those two are
+# editing". A shell command is read from the command itself, first match
+# wins: running tests outranks everything a test command also does.
+_TESTING = re.compile(r"\b(?:unittest|pytest|jest|vitest|mocha|tox|rspec|phpunit|preflight"
+                      r"|go test|cargo test|(?:npm|yarn|pnpm) (?:run )?test|node tests?/\S+)")
+_SHIPPING = re.compile(r"\bgit (?:commit|push|merge|rebase|tag|cherry-pick)\b|\bgh pr\b"
+                       r"|branch\.sh (?:pr|merge|discard)\b")
+_EDITING = re.compile(r"\bsed -i\b|\.write_text\(|\.write\(|\bapply_patch\b|\bpatch -p"
+                      r"|>>? ?[\w./-]+\.(?:py|js|ts|tsx|css|html|md|json|sh|ya?ml|toml)\b")
+_READING = re.compile(r"^\s*(?:cd \S+ && )?(?:grep|rg|ag|sed -n|cat|head|tail|less|ls|find|wc|tree|jq|file"
+                      r"|git (?:log|show|diff|status|blame|grep|branch|worktree list))\b")
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "str_replace_editor"}
+READ_TOOLS = {"Read", "Grep", "Glob", "LS", "view_image", "ReadMcpResourceTool"}
+WEB_TOOLS = {"WebSearch", "WebFetch", "web_search", "web_fetch"}
+AGENT_TOOLS = {"Agent", "Task", "spawn_agent"}
+
+
+def tool_kind(name, inp):
+    """testing, shipping, editing, reading, researching, delegating or
+    running: what a call is for."""
+    inp = inp if isinstance(inp, dict) else {}
+    if name in EDIT_TOOLS:
+        return "editing"
+    if name in READ_TOOLS:
+        return "reading"
+    if name in WEB_TOOLS or "Browser" in name or "claude-in-chrome" in name:
+        return "researching"
+    if name in AGENT_TOOLS:
+        return "delegating"
+    if name in toolresult.SHELL_TOOLS:
+        cmd = inp.get("command") or inp.get("cmd") or ""
+        if isinstance(cmd, list):
+            cmd = " ".join(str(c) for c in cmd)
+        cmd = str(cmd)
+        for kind, rx in (("testing", _TESTING), ("shipping", _SHIPPING),
+                         ("editing", _EDITING), ("reading", _READING)):
+            if rx.search(cmd):
+                return kind
+    return "running"
 
 
 def describe_tool(name, inp):
@@ -243,6 +307,7 @@ class Transcript:
         self.compactions = 0
         self.pending = {}          # tool_use id -> {name, desc, at}
         self.feed = []             # recent tool calls
+        self.says = []             # recent status lines from the agent
         self.plan = None           # [{content, status}]
         self.blocked = False       # wrap_up said the session waits on the person
         self.question = None       # a pending AskUserQuestion / ExitPlanMode
@@ -317,6 +382,7 @@ class Transcript:
                 bt = b.get("type")
                 if bt == "text" and b.get("text", "").strip():
                     self.last_text = clip(b["text"], 280)
+                    add_say(self.says, self.last_text, ts_ms(ts))
                 elif bt == "tool_use":
                     self.on_tool(b, ts)
             if msg.get("stop_reason") in END_REASONS:
@@ -338,7 +404,8 @@ class Transcript:
                         for item in reversed(self.feed):
                             if item.get("id") == b.get("tool_use_id"):
                                 item["ms"] = max(0, (ts_ms(ts) or 0) - item["at"])
-                                item["error"] = bool(b.get("is_error"))
+                                toolresult.for_feed(item, item["name"], b.get("content"),
+                                                    bool(b.get("is_error")))
                                 break
         txt = user_text(content)
         origin = (r.get("origin") or {}).get("kind", "human")
@@ -405,9 +472,10 @@ class Transcript:
             self.question = dict(kind="plan", at=at,
                                  plan=clip(inp.get("plan") or "", 1500))
         short, detail = describe_tool(name, inp)
-        self.pending[b.get("id")] = {"name": short, "desc": detail, "at": at}
+        kind = tool_kind(name, inp)
+        self.pending[b.get("id")] = {"name": short, "desc": detail, "at": at, "kind": kind}
         self.turn_tools += 1
-        self.feed.append({"id": b.get("id"), "name": short, "desc": detail, "at": at})
+        self.feed.append({"id": b.get("id"), "name": short, "desc": detail, "at": at, "kind": kind})
         del self.feed[:-FEED_LEN]
 
     def on_plan(self, inp):
@@ -441,7 +509,7 @@ class Transcript:
         if not self.pending:
             return None
         p = max(self.pending.values(), key=lambda x: x["at"])
-        return dict(name=p["name"], desc=p["desc"], startedAt=p["at"])
+        return dict(name=p["name"], desc=p["desc"], startedAt=p["at"], kind=p.get("kind"))
 
     def plan_view(self):
         if not self.plan:
@@ -450,7 +518,7 @@ class Transcript:
                     total=len(self.plan), items=self.plan)
 
     def feed_view(self):
-        return [{k: v for k, v in f.items() if k != "id"} for f in self.feed][::-1]
+        return merge_feed(self.feed, self.says)
 
     def waiting(self):
         """Blocked on the person right now: an open question or plan, or a
