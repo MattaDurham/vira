@@ -8,6 +8,17 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Childcare coverage gaps. A new Childcare window holds the owner's pickup
+  routine: each child's pickup time, who normally covers each school day,
+  and optionally the school's calendar (a Calendar.app calendar or an ICS
+  feed). Vira opens a gap when a caregiver cancels in iMessage ("Pat can't
+  come Monday"), when a school half day moves a pickup earlier, or when a
+  closure falls on a day nobody covers. Each gap gets a timed pickup block
+  on the family calendar (no invitees, its own `coverage_calendar_blocks`
+  switch) and one "who's taking it?" card in Attention > Decide, plus one
+  iMessage ping, asked once per day, cause and children. Off by default
+  (`coverage_enabled`); it runs on the assistant's pass. Code:
+  `server/coverage.py`.
 - Event prep in the daily brief. When a dated occasion is coming up (a
   trip, a birthday, a dinner, a festival), the brief gathers every open
   loop tied to it into one countdown checklist: logistics, gifts, packing

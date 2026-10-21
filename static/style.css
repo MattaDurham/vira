@@ -3981,6 +3981,48 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 #admin-list .brief-title { flex: 1 1 auto; max-width: none; white-space: normal; min-width: 0; }
 #admin-list .brief-sub { flex: 0 1 28%; }
 #admin-list .admin-notice { opacity: 0.7; }
+
+/* Childcare window (server/coverage.py): gaps first, then the coming days,
+   then the routine editor. Every row may shrink; nothing is wider than the
+   viewport on a phone. */
+.cov-gaps { display: grid; gap: 8px; margin: 8px 0 12px; }
+.cov-error { font-size: 12.5px; color: var(--red); padding: 4px 10px; }
+.cov-gap { border: 1px solid var(--red-line); background: var(--red-soft);
+  border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.cov-gap-kicker { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--red); }
+.cov-gap-q { font-size: 15px; margin: 4px 0; color: var(--text-head); font-weight: 500; }
+.cov-gap-src, .cov-gap-cal { font-size: 12.5px; color: var(--text-dim); margin: 2px 0;
+  overflow-wrap: anywhere; }
+.cov-gap-acts { margin-top: 6px; flex-wrap: wrap; }
+.cov-week { display: grid; gap: 2px; margin-bottom: 12px; }
+.cov-day { display: flex; gap: 10px; align-items: baseline; padding: 4px 10px;
+  border-bottom: 1px solid var(--line); min-width: 0; }
+.cov-date { flex: 0 0 92px; font-size: 12.5px; color: var(--text-dim); }
+.cov-pickups { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.cov-pickup { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12.5px;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); min-width: 0; }
+.cov-pickup .cov-time { color: var(--text-dim); }
+.cov-pickup .cov-who { color: var(--text-faint); }
+.cov-pickup.cov-st-gap, .cov-pickup.cov-st-nobody { border-color: var(--red-line); background: var(--red-soft); }
+.cov-pickup.cov-st-gap .cov-who, .cov-pickup.cov-st-nobody .cov-who { color: var(--red); }
+.cov-pickup.cov-st-covered { border-color: var(--green-line); }
+.cov-pickup.cov-st-not-needed { opacity: 0.6; }
+.cov-routine { margin: 4px 0 12px; padding: 0 10px; }
+.cov-routine > summary { cursor: pointer; font-size: 12.5px; color: var(--text-dim); padding: 6px 0; }
+.cov-h { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-dim); margin: 12px 0 6px; font-weight: 500; }
+.cov-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.cov-input, .cov-select { min-width: 0; flex: 1 1 140px; font-size: 16px; padding: 4px 6px;
+  background: var(--bg-raised); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+.cov-input[type="time"] { flex: 0 1 120px; }
+.cov-kid { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.cov-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 6px;
+  margin-bottom: 6px; }
+.cov-cell { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px;
+  color: var(--text-faint); min-width: 0; }
+.cov-cell .cov-select { flex: 0 0 auto; width: 100%; }
+.cov-foot { margin-top: 12px; justify-content: space-between; }
 .brief-row.brief-subrow { padding-left: 28px; opacity: 0.82; }
 
 /* ---------- event prep: countdown checklists (server/eventprep.py) ---------- */

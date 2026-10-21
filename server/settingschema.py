@@ -113,6 +113,23 @@ SCHEMA = [
     S("assistant_batch_size", "assistant", "int", 3, "Contacts per pass",
       "How many contacts one background pass processes.", advanced=True,
       range=(1, 10)),
+    S("coverage_enabled", "assistant", "bool", False,
+      "Watch for childcare coverage gaps",
+      "Uses the routine in the Childcare window: a caregiver cancelling in "
+      "iMessage, a half day, or a closure on a day nobody covers puts a "
+      "pickup block on the calendar and asks you once who is taking it. "
+      "Needs the assistant running."),
+    S("coverage_calendar_blocks", "assistant", "bool", True,
+      "Put pickup blocks on the calendar for coverage gaps",
+      "Off keeps each block as a suggestion in Attention instead. Blocks go "
+      "on the family calendar and never invite anyone."),
+    S("coverage_lookahead_days", "assistant", "int", 14,
+      "Days of school calendar to check for half days and closures",
+      range=(1, 60)),
+    S("coverage_block_minutes", "assistant", "int", 30,
+      "Pickup block length (minutes)",
+      "A child's own block length in the routine overrides this.",
+      advanced=True, range=(5, 180)),
 
     # ------------------------------------------------------ notifications
     S("notify_enabled", "notifications", "bool", True,

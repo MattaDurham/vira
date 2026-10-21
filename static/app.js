@@ -12345,7 +12345,8 @@ async function reviewAct(btn, row, it, action, after) {
     row.classList.add("gone");
     closeReviewContext();
     setTimeout(() => row.remove(), 250);
-    toast(action === "approve" ? "Approved" : "Dropped");
+    toast(action === "approve" ? "Approved" : action === "drop" ? "Dropped"
+      : "Recorded: " + (it.labels?.[action] || action));
     if (after) after();
   } catch (e) {
     [...(acts?.querySelectorAll("button") || [])].forEach((b) => {
@@ -12512,11 +12513,14 @@ function reviewRow(sec, it, after, source) {
     title: "Read the exact source context before deciding",
     run: () => openReviewContext(it),
   }, ...(it.actions || []).map((a) => ({
-    label: a,
-    cls: a === "approve" ? "" : "x",
+    label: it.labels?.[a] || a,
+    // A source with its own answers (a childcare gap's caregivers) labels
+    // them; only a refusal wears the drop style.
+    cls: a === "approve" || (it.labels?.[a] && a !== "not needed") ? "" : "x",
     title: (a === "approve"
       ? "Approve — the source's own tool performs the write"
-      : "Drop — recorded as decided, never shown again")
+      : a === "drop" ? "Drop — recorded as decided, never shown again"
+        : "Answer: " + (it.labels?.[a] || a))
       + (it.note ? " (" + it.note + ")" : ""),
     run: (btn, row) => reviewAct(btn, row, it, a, after),
   }))];
@@ -13204,6 +13208,231 @@ async function loadAdmin() {
     briefEmpty(host, "Admin inbox failed: " + errText(e));
   }
 }
+
+// ---------- childcare: the pickup routine and the gaps in it ----------
+// server/coverage.py owns the rules; this window shows the coming days,
+// answers open gaps (the same answer the Decide card gives), and edits the
+// routine. Every name and time here is the owner's own entry.
+const COV_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const COV_DAY_LABEL = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+let covState = null;
+
+function covClock(hhmm) {
+  if (!hhmm) return "time unknown";
+  const [h, m] = hhmm.split(":").map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")}${h < 12 ? "am" : "pm"}`;
+}
+
+function covWho(who) {
+  return who === "me" ? "you" : who || "nobody";
+}
+
+async function loadCoverage() {
+  const host = $("#cov-week");
+  if (!host) return;
+  try {
+    renderCoverage(await api("/api/coverage"));
+  } catch (e) {
+    host.innerHTML = "";
+    briefEmpty(host, "Childcare unavailable: " + errText(e));
+  }
+}
+
+function renderCoverage(c) {
+  covState = c;
+  const status = $("#cov-status");
+  const bits = [];
+  if (!c.enabled) bits.push("watching is off - turn it on in Config > Assistant");
+  else if (!c.assistant) bits.push("the assistant is off, so nothing is checked in the background");
+  else bits.push(c.checked_at ? "checked " + new Date(c.checked_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "not checked yet");
+  if (c.enabled && !c.blocks) bits.push("pickup blocks stay suggestions");
+  if (status) status.textContent = bits.join(" - ");
+  renderCovGaps($("#cov-gaps"), c);
+  renderCovWeek($("#cov-week"), c);
+  const box = $("#cov-routine-box");
+  if (box && !c.routine.kids.length) box.open = true;
+  renderCovRoutine($("#cov-routine"), c.routine);
+}
+
+function renderCovGaps(host, c) {
+  if (!host) return;
+  host.innerHTML = "";
+  (c.school_errors || []).forEach((msg) => host.appendChild(el("div", "cov-error", msg)));
+  c.gaps.forEach((g) => {
+    const card = el("article", "cov-gap");
+    card.appendChild(el("div", "cov-gap-kicker",
+      { cancellation: "Cancellation", half_day: "Half day", closure: "School closed" }[g.cause] || "Gap"));
+    card.appendChild(el("h3", "cov-gap-q", g.question));
+    if (g.source?.text) {
+      const from = g.source.from ? g.source.from + ": " : "";
+      card.appendChild(el("p", "cov-gap-src", from + "“" + g.source.text + "”"));
+    }
+    const placed = Object.values(g.calendar || {}).filter((v) => v && v !== "_error").length;
+    card.appendChild(el("p", "cov-gap-cal", g.calendar_note
+      || (placed ? "Pickup block on the calendar." : "Calendar block comes with the next check.")));
+    const acts = el("div", "brief-acts cov-gap-acts");
+    g.options.forEach((o) => {
+      const label = o === c.me ? "I'll take it" : o === c.not_needed ? "Not needed" : o;
+      const btn = el("button", "brief-act" + (o === c.not_needed ? " x" : ""), label);
+      btn.addEventListener("click", async () => {
+        acts.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        try {
+          const done = await post("/api/coverage/gaps/" + encodeURIComponent(g.id), { taker: o });
+          toast(done.note || (o === c.not_needed ? "Marked not needed" : covWho(o) + " is taking it"));
+          loadCoverage().catch(() => {});
+        } catch (e) {
+          acts.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+          toast("Could not record that: " + errText(e));
+        }
+      });
+      acts.appendChild(btn);
+    });
+    card.appendChild(acts);
+    host.appendChild(card);
+  });
+}
+
+function renderCovWeek(host, c) {
+  if (!host) return;
+  host.innerHTML = "";
+  if (!c.routine.kids.length) {
+    briefEmpty(host, "Add the children's pickups below to start watching for gaps.");
+    return;
+  }
+  c.week.forEach((d) => {
+    const row = el("div", "cov-day");
+    const date = new Date(d.date + "T12:00:00");
+    row.appendChild(el("div", "cov-date",
+      date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })));
+    const list = el("div", "cov-pickups");
+    d.pickups.forEach((p) => {
+      const chip = el("div", "cov-pickup cov-st-" + p.state.replace(/\s+/g, "-"));
+      chip.appendChild(el("strong", "", p.kid));
+      chip.appendChild(el("span", "cov-time", covClock(p.time)));
+      chip.appendChild(el("span", "cov-who",
+        p.state === "gap" ? "needs someone" : p.state === "not needed" ? "not needed" : covWho(p.who)));
+      list.appendChild(chip);
+    });
+    row.appendChild(list);
+    host.appendChild(row);
+  });
+}
+
+function covInput(value, placeholder, type = "text") {
+  const input = el("input", "cov-input");
+  input.type = type;
+  input.value = value ?? "";
+  input.placeholder = placeholder;
+  input.setAttribute("aria-label", placeholder);
+  return input;
+}
+
+function renderCovRoutine(host, routine) {
+  if (host) renderCovRoutineForm(host, JSON.parse(JSON.stringify(routine)));
+}
+
+function renderCovRoutineForm(host, draft) {
+  host.innerHTML = "";
+  const repaint = () => renderCovRoutineForm(host, draft);
+  host.appendChild(el("h4", "cov-h", "Caregivers"));
+  draft.caregivers.forEach((cg, i) => {
+    const row = el("div", "cov-row");
+    const name = covInput(cg.name, "Name");
+    name.addEventListener("change", () => { cg.name = name.value.trim(); repaint(); });
+    const handles = covInput((cg.handles || []).join(", "), "Phone or iMessage address (optional)");
+    handles.addEventListener("change", () => {
+      cg.handles = handles.value.split(/[,\s]+/).filter(Boolean);
+    });
+    const rm = el("button", "fchip sm", "Remove");
+    rm.addEventListener("click", () => { draft.caregivers.splice(i, 1); repaint(); });
+    row.append(name, handles, rm);
+    host.appendChild(row);
+  });
+  const addCg = el("button", "fchip sm", "Add caregiver");
+  addCg.addEventListener("click", () => { draft.caregivers.push({ name: "", handles: [] }); repaint(); });
+  host.appendChild(addCg);
+
+  host.appendChild(el("h4", "cov-h", "Children"));
+  const whoOptions = [["-", "no school"], ["", "nobody"], ["me", "me"],
+    ...draft.caregivers.filter((c) => c.name).map((c) => [c.name, c.name])];
+  draft.kids.forEach((kid, i) => {
+    const box = el("div", "cov-kid");
+    const top = el("div", "cov-row");
+    const name = covInput(kid.name, "Child's name");
+    name.addEventListener("change", () => { kid.name = name.value.trim(); });
+    const pickup = covInput(kid.pickup, "Pickup time", "time");
+    pickup.addEventListener("change", () => { kid.pickup = pickup.value; });
+    const place = covInput(kid.place, "School or pickup place (optional)");
+    place.addEventListener("change", () => { kid.place = place.value.trim(); });
+    const rm = el("button", "fchip sm", "Remove");
+    rm.addEventListener("click", () => { draft.kids.splice(i, 1); repaint(); });
+    top.append(name, pickup, place, rm);
+    box.appendChild(top);
+    const grid = el("div", "cov-grid");
+    COV_DAYS.forEach((day) => {
+      const cell = el("label", "cov-cell");
+      cell.appendChild(el("span", "", COV_DAY_LABEL[day]));
+      const sel = el("select", "cov-select");
+      const current = (kid.days || []).includes(day) ? (kid.cover?.[day] ?? "") : "-";
+      whoOptions.forEach(([value, label]) => {
+        const opt = el("option", "", label);
+        opt.value = value;
+        if (value === current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener("change", () => {
+        kid.days = (kid.days || []).filter((d) => d !== day);
+        kid.cover = kid.cover || {};
+        if (sel.value === "-") delete kid.cover[day];
+        else { kid.days.push(day); kid.cover[day] = sel.value; }
+      });
+      cell.appendChild(sel);
+      grid.appendChild(cell);
+    });
+    box.appendChild(grid);
+    const school = el("div", "cov-row");
+    const cal = covInput(kid.school_calendar, "School calendar name in Calendar.app");
+    cal.addEventListener("change", () => { kid.school_calendar = cal.value.trim(); });
+    const ics = covInput(kid.school_ics, "or school calendar feed URL (https or webcal)");
+    ics.addEventListener("change", () => { kid.school_ics = ics.value.trim(); });
+    school.append(cal, ics);
+    box.appendChild(school);
+    host.appendChild(box);
+  });
+  const addKid = el("button", "fchip sm", "Add child");
+  addKid.addEventListener("click", () => {
+    draft.kids.push({ name: "", pickup: "15:00", days: ["mon", "tue", "wed", "thu", "fri"], cover: {} });
+    repaint();
+  });
+  host.appendChild(addKid);
+
+  const foot = el("div", "cov-row cov-foot");
+  const start = covInput(draft.day_start, "Childcare starts on a closed day", "time");
+  start.addEventListener("change", () => { draft.day_start = start.value; });
+  const startLabel = el("label", "cov-cell");
+  startLabel.append(el("span", "", "Closed-day block starts"), start);
+  const save = el("button", "btn small", "Save routine");
+  save.addEventListener("click", async () => {
+    try {
+      renderCoverage(await put("/api/coverage/routine", draft));
+      toast("Routine saved");
+    } catch (e) {
+      toast("Routine not saved: " + errText(e));
+    }
+  });
+  foot.append(startLabel, save);
+  host.appendChild(foot);
+}
+
+$("#cov-refresh")?.addEventListener("click", () => loadCoverage());
+$("#cov-check")?.addEventListener("click", async () => {
+  try {
+    renderCoverage(await post("/api/coverage/check", {}));
+    toast("Checked the school calendars");
+  } catch (e) {
+    toast("Check failed: " + errText(e));
+  }
+});
 
 function renderBrief(b) {
   const body = $("#brief-body");
@@ -17249,6 +17478,7 @@ function viewLoad(id) {
   if (id === "research") window.loadResearch?.().catch(() => {});
   if (id === "journal") loadJournal().catch(() => {});
   if (id === "admin") loadAdmin().catch(() => {});
+  if (id === "coverage") loadCoverage().catch(() => {});
   if (id === "showroom") loadShowroom().catch(() => {});
   if (id === "attention") attentionTabLoad(attentionTab);
   if (id === "subs") loadSubs().catch(() => {});
@@ -22966,6 +23196,8 @@ const WINDOWS = [
     icon: "M12 4a5 5 0 0 1 5 5v3.5l1.6 2.7H5.4L7 12.5V9a5 5 0 0 1 5-5zM10.4 18.2a1.7 1.7 0 0 0 3.2 0" },
   { id: "admin", title: "Admin inbox", w: 600,
     icon: "M4 6h16v12H4zM4 7l8 6 8-6M15 17l1.5 1.5L20 15" },
+  { id: "coverage", title: "Childcare", w: 640,
+    icon: "M8 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM16.5 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM3.5 20c.4-4 2.2-6.5 4.5-6.5s4.1 2.5 4.5 6.5M13.5 20c.3-3 1.4-5 3-5s2.7 2 3 5M8 10v3.5" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
   { id: "applications", title: "Applications", w: 780,
@@ -27177,6 +27409,8 @@ const HASH_ROUTES = {
   "subs-visuals": "subsviz",
   "brief": "brief",
   "review": "review",
+  "coverage": "coverage",
+  "childcare": "coverage",
   "attention": (rest) => { setAttentionTab(rest[0] || "now", { defer: true }); openApp("attention"); },
   "showroom": "showroom",
   "triage": (rest) => revealTriage(decodeURIComponent(rest.join("/"))),

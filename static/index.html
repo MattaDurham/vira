@@ -186,6 +186,22 @@
     <div id="admin-list" class="list"></div>
   </section>
 
+  <!-- CHILDCARE (the pickup routine and the gaps in it; server/coverage.py) -->
+  <section id="view-coverage" class="view">
+    <div class="section-head"><h2>Childcare</h2>
+      <button class="fchip sm" id="cov-check" style="margin-left:auto">Check now</button>
+      <button class="fchip sm" id="cov-refresh">Refresh</button>
+    </div>
+    <div class="radar-sub"><span>Who picks up whom</span>
+      <span class="hint" id="cov-status">Loading...</span></div>
+    <div id="cov-gaps" class="cov-gaps"></div>
+    <div id="cov-week" class="cov-week"></div>
+    <details id="cov-routine-box" class="cov-routine">
+      <summary>Routine: children, caregivers, school calendars</summary>
+      <div id="cov-routine"></div>
+    </details>
+  </section>
+
   <!-- JOURNAL (the record of everything told to Vira, moved out of the brief) -->
   <section id="view-journal" class="view">
     <div class="section-head"><h2>Journal</h2>
