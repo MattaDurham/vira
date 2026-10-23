@@ -183,6 +183,16 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   the next open instead. `python -m server.textindex fts-check` /
   `fts-rebuild` and `python -m server.crmindex fts-check` / `fts-rebuild`
   are the repair path. The media index is unchanged in behaviour.
+- The text index's CLI backfills (`python -m server.textindex backfill`,
+  with or without `mail`, `--full` or `archive`) refuse to write while the
+  server indexes on another SQLite build, as the media index's already
+  do. The in-server text Indexer now records the build it runs on and the
+  time of every tick in the index's `state` table, and the backfill
+  command reads that heartbeat before it writes: within five minutes of a
+  tick from another build it stops with the media CLI's message, naming
+  both builds and asking for the server restart. The heartbeat and the
+  gate live in `server/ftsguard.py`; the media index calls the same
+  implementation through its old names.
 - Fleet no longer takes a worktree's index lock. Its `git status` read,
   run every 30 seconds in every worktree a session uses, refreshed stale
   file stat data by rewriting `.git/index` under `index.lock`, so an

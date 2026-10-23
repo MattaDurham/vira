@@ -40,7 +40,6 @@ import sys
 import threading
 import time
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 from . import ftsguard, runtimework
@@ -170,10 +169,6 @@ def _log_line(msg, echo=False):
     ftsguard.log_line(_DATA / "media-index.log", msg, echo=echo)
 
 
-def _utcnow():
-    return datetime.now(timezone.utc)
-
-
 # ---------- FTS5 integrity: one SQLite build per index ----------
 #
 # fts stores its own content and deletes a row by re-tokenizing that stored
@@ -184,10 +179,10 @@ def _utcnow():
 # under its own build when the check fails, and a CLI refuses to write
 # while the server indexes on another build.
 
-FTS_SQLITE_KEY = ftsguard.STATE_KEY     # state: build that last verified/rebuilt fts
-INDEXER_SQLITE_KEY = "indexer_sqlite"   # state: build the in-server Indexer runs on
-INDEXER_SEEN_KEY = "indexer_seen"       # state: UTC time of its last tick
-INDEXER_FRESH_S = 300                   # a tick this recent means the server writes
+FTS_SQLITE_KEY = ftsguard.STATE_KEY                 # state: build that last verified/rebuilt fts
+INDEXER_SQLITE_KEY = ftsguard.INDEXER_SQLITE_KEY    # state: build the in-server Indexer runs on
+INDEXER_SEEN_KEY = ftsguard.INDEXER_SEEN_KEY        # state: UTC time of its last tick
+INDEXER_FRESH_S = ftsguard.INDEXER_FRESH_S          # a tick this recent means the server writes
 
 
 def _fts_log(msg):
@@ -231,48 +226,23 @@ def fts_repair():
 
 def record_indexer_heartbeat(con):
     """The in-server Indexer's tick: which build it writes with, and when."""
-    con.execute("INSERT OR REPLACE INTO state(key,val) VALUES(?,?),(?,?)",
-                (INDEXER_SQLITE_KEY, sqlite3.sqlite_version,
-                 INDEXER_SEEN_KEY, _utcnow().isoformat(timespec="seconds")))
-    con.commit()
+    ftsguard.record_indexer_heartbeat(con, set_state=set_state)
 
 
 def mixed_build_refusal(con, now=None):
     """Why a CLI must not write the index now, or None: the server's Indexer
-    ticked within INDEXER_FRESH_S on another SQLite build. The venv links
-    Homebrew's libsqlite3, so a `brew upgrade sqlite` moves every NEW
-    process to the new build while the running server keeps the old one
-    mapped until its restart."""
-    build = get_state(con, INDEXER_SQLITE_KEY)
-    seen = get_state(con, INDEXER_SEEN_KEY)
-    if not build or not seen or build == sqlite3.sqlite_version:
-        return None
-    try:
-        seen_at = datetime.fromisoformat(seen)
-    except ValueError:
-        return None
-    if seen_at.tzinfo is None:
-        seen_at = seen_at.replace(tzinfo=timezone.utc)
-    if ((now or _utcnow()) - seen_at).total_seconds() > INDEXER_FRESH_S:
-        return None
-    return (f"the Vira server is indexing with SQLite {build} while this "
-            f"process has SQLite {sqlite3.sqlite_version}; two builds "
-            f"writing one FTS5 index leave it malformed, because unicode61 "
-            f"tokenizes differently across builds. Restart the server so "
-            f"both run the current build, then run this again.")
+    ticked within INDEXER_FRESH_S on another SQLite build (see ftsguard)."""
+    return ftsguard.mixed_build_refusal(con, get_state=get_state, now=now)
 
 
 def cli_may_write(log=print):
     """The gate every CLI backfill passes before touching the index."""
     con = _db()
     try:
-        why = mixed_build_refusal(con)
+        return ftsguard.cli_may_write(con, get_state=get_state, log=log,
+                                      index="the media index")
     finally:
         con.close()
-    if why:
-        log(f"refusing to write the media index: {why}")
-        return False
-    return True
 
 
 def refresh_fts(con, seq):
