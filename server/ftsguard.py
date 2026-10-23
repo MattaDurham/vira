@@ -23,15 +23,28 @@ their own `state` accessors and log destinations and hand them in here.
 
 `report` and `repair` back each module's `fts-check` / `fts-rebuild`
 command: the repair path that uses the venv's SQLite, never a shell.
+
+The same venv is why a CLI needs a gate. It links Homebrew's libsqlite3,
+so a `brew upgrade sqlite` moves every NEW process to the new build while
+the running server keeps the old one mapped until its restart; a CLI
+backfill started in between is the second build writing the index. So
+each in-server Indexer records its build and the time of every tick in
+its index's `state` table (`record_indexer_heartbeat`), and a CLI
+refuses to write while that heartbeat is fresh on another build
+(`cli_may_write`, which logs `mixed_build_refusal`'s reason).
 """
 import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 STATE_KEY = "fts_sqlite"    # state row: the build that last verified or rebuilt the table
 BUSY_MS = 2000              # the open-time check waits this long for a lock
+
+INDEXER_SQLITE_KEY = "indexer_sqlite"   # state row: the build the in-server Indexer runs on
+INDEXER_SEEN_KEY = "indexer_seen"       # state row: UTC time of its last tick
+INDEXER_FRESH_S = 300                   # a tick this recent means the server writes
 
 _verified = set()           # index paths this process has checked
 _lock = threading.Lock()
@@ -152,3 +165,51 @@ def repair(con, *, log, set_state, table="fts"):
         f"{sqlite3.sqlite_version} (fts-rebuild)")
     return {"sqlite": sqlite3.sqlite_version, "ok": err is None,
             "error": err, "rows": rows, "seconds": round(secs, 2)}
+
+
+# ---------- the CLI gate: no second build while the server writes ----------
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+def record_indexer_heartbeat(con, *, set_state):
+    """The in-server Indexer's tick: which build it writes with, and when.
+    Recorded every tick, so a heartbeat older than INDEXER_FRESH_S means
+    the server is not writing (stopped, or still in its boot wait)."""
+    set_state(con, INDEXER_SQLITE_KEY, sqlite3.sqlite_version)
+    set_state(con, INDEXER_SEEN_KEY, _utcnow().isoformat(timespec="seconds"))
+    con.commit()
+
+
+def mixed_build_refusal(con, *, get_state, now=None):
+    """Why a CLI must not write the index now, or None: the server's Indexer
+    ticked within INDEXER_FRESH_S on another SQLite build."""
+    build = get_state(con, INDEXER_SQLITE_KEY)
+    seen = get_state(con, INDEXER_SEEN_KEY)
+    if not build or not seen or build == sqlite3.sqlite_version:
+        return None
+    try:
+        seen_at = datetime.fromisoformat(seen)
+    except ValueError:
+        return None
+    if seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=timezone.utc)
+    if ((now or _utcnow()) - seen_at).total_seconds() > INDEXER_FRESH_S:
+        return None
+    return (f"the Vira server is indexing with SQLite {build} while this "
+            f"process has SQLite {sqlite3.sqlite_version}; two builds "
+            f"writing one FTS5 index leave it malformed, because unicode61 "
+            f"tokenizes differently across builds. Restart the server so "
+            f"both run the current build, then run this again.")
+
+
+def cli_may_write(con, *, get_state, log=print, index="the index"):
+    """The gate every CLI backfill passes before touching an index: False,
+    with the reason logged once, while the server indexes it on another
+    build. `index` names it in that line ("the media index")."""
+    why = mixed_build_refusal(con, get_state=get_state)
+    if why:
+        log(f"refusing to write {index}: {why}")
+        return False
+    return True

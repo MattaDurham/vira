@@ -175,6 +175,29 @@ def fts_repair():
         con.close()
 
 
+def record_indexer_heartbeat(con):
+    """The in-server Indexer's tick: which build it writes with, and when.
+    `python -m server.textindex backfill` reads it through cli_may_write
+    and refuses to be a second build writing this index (see ftsguard)."""
+    ftsguard.record_indexer_heartbeat(con, set_state=set_state)
+
+
+def mixed_build_refusal(con, now=None):
+    """Why a CLI must not write the index now, or None: the server's Indexer
+    ticked within ftsguard.INDEXER_FRESH_S on another SQLite build."""
+    return ftsguard.mixed_build_refusal(con, get_state=get_state, now=now)
+
+
+def cli_may_write(log=print):
+    """The gate every CLI backfill passes before touching the index."""
+    con = _db()
+    try:
+        return ftsguard.cli_may_write(con, get_state=get_state, log=log,
+                                      index="the text index")
+    finally:
+        con.close()
+
+
 def _insert(con, *, uid, source, text, date_ns, account=None, chat_id=None,
             is_group=0, from_me=0, sender_pid=None, chat_pid=None,
             sender_handle=None, subject=None, source_meta=None):
@@ -899,14 +922,23 @@ class Indexer(threading.Thread):
     new message bodies, and the CRM index's vector top-up. One thread
     rather than two — both are cheap, periodic, and never urgent."""
 
-    def __init__(self, every=180):
+    def __init__(self, every=180, boot_wait=20):
         super().__init__(daemon=True, name="vira-text-indexer")
         self.every = every
+        self.boot_wait = boot_wait
         self._stop = threading.Event()
 
     def run(self):
-        time.sleep(20)                  # let the server finish booting
+        time.sleep(self.boot_wait)      # let the server finish booting
         while not self._stop.is_set():
+            try:
+                con = _db()
+                try:
+                    record_indexer_heartbeat(con)   # read by the CLI gate
+                finally:
+                    con.close()
+            except Exception:  # noqa: BLE001 - the indexer never dies
+                pass
             try:
                 incremental()
             except Exception:  # noqa: BLE001 — the indexer never dies
@@ -935,6 +967,8 @@ if __name__ == "__main__":
         print(json.dumps(fts_repair(), indent=2))
         sys.exit(0)
     if cmd == "backfill":
+        if not cli_may_write():
+            sys.exit(2)
         which = sys.argv[2] if len(sys.argv) > 2 else "all"
         if which in ("all", "imessage"):
             print("imessage:", backfill_imessage(log=print))

@@ -274,7 +274,7 @@ class MixedBuildGate(_Index):
         with closing(mediaindex._db()) as con:
             mediaindex.set_state(con, mediaindex.INDEXER_SQLITE_KEY, "3.53.4")
             mediaindex.set_state(con, mediaindex.INDEXER_SEEN_KEY, now.isoformat())
-        with mock.patch.object(mediaindex, "_utcnow", return_value=now):
+        with mock.patch.object(ftsguard, "_utcnow", return_value=now):
             self.assertFalse(mediaindex.cli_may_write(log=lambda *a: None))
         with closing(mediaindex._db()) as con:
             mediaindex.record_indexer_heartbeat(con)

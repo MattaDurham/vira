@@ -17,6 +17,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -208,6 +209,69 @@ class TextIndex(_Store):
         self.assertEqual(done["rows"], 5)
         self.assertTrue(textindex.fts_report()["ok"])
         self.assertIn("(fts-rebuild)", self.log_text("text-index.log"))
+
+
+class TextIndexMixedBuildGate(TextIndex):
+    """The CLI backfill refuses to write beside a server indexing on
+    another SQLite build, as the media index's does (MixedBuildGate in
+    test_mediaindex_fts): the in-server Indexer's tick leaves the
+    heartbeat the gate reads."""
+
+    def test_a_cli_refuses_to_write_beside_a_server_indexing_on_another_build(self):
+        now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
+        with closing(textindex._db()) as con:
+            self.assertIsNone(textindex.mixed_build_refusal(con, now=now))
+            textindex.set_state(con, ftsguard.INDEXER_SQLITE_KEY, "3.53.4")
+            textindex.set_state(con, ftsguard.INDEXER_SEEN_KEY,
+                                (now - timedelta(seconds=40)).isoformat())
+            why = textindex.mixed_build_refusal(con, now=now)
+            self.assertIn("3.53.4", why)
+            self.assertIn(sqlite3.sqlite_version, why)
+            self.assertIn("restart", why.lower())
+            # a server that stopped ticking is not writing
+            textindex.set_state(con, ftsguard.INDEXER_SEEN_KEY,
+                                (now - timedelta(minutes=20)).isoformat())
+            self.assertIsNone(textindex.mixed_build_refusal(con, now=now))
+            # the server's own heartbeat is this build: no refusal
+            textindex.record_indexer_heartbeat(con)
+            self.assertIsNone(textindex.mixed_build_refusal(con))
+
+    def test_the_indexer_tick_records_build_and_time(self):
+        """Indexer.run, one tick: the heartbeat lands before the corpora
+        are touched, and an indexing failure does not skip it."""
+        idx = textindex.Indexer(every=0, boot_wait=0)
+
+        def failing_tick():
+            idx.stop()
+            raise RuntimeError("indexing failed")
+
+        with mock.patch.object(textindex, "incremental", side_effect=failing_tick), \
+                mock.patch.object(textindex.crmindex, "refresh"), \
+                mock.patch.object(textindex.crmindex, "embed_pending"):
+            idx.run()
+        with closing(textindex._db()) as con:
+            self.assertEqual(textindex.get_state(con, ftsguard.INDEXER_SQLITE_KEY),
+                             sqlite3.sqlite_version)
+            seen = datetime.fromisoformat(
+                textindex.get_state(con, ftsguard.INDEXER_SEEN_KEY))
+            self.assertLess(abs((datetime.now(timezone.utc) - seen).total_seconds()), 60)
+
+    def test_the_backfill_entry_point_stops_on_the_refusal(self):
+        now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
+        lines = []
+        with closing(textindex._db()) as con:
+            textindex.set_state(con, ftsguard.INDEXER_SQLITE_KEY, "3.53.4")
+            textindex.set_state(con, ftsguard.INDEXER_SEEN_KEY, now.isoformat())
+            con.commit()
+        with mock.patch.object(ftsguard, "_utcnow", return_value=now):
+            self.assertFalse(textindex.cli_may_write(log=lines.append))
+        self.assertEqual(len(lines), 1)
+        self.assertIn("refusing to write the text index", lines[0])
+        self.assertIn("3.53.4", lines[0])
+        with closing(textindex._db()) as con:
+            textindex.record_indexer_heartbeat(con)
+        self.assertTrue(textindex.cli_may_write(log=lines.append))
+        self.assertEqual(len(lines), 1)
 
 
 # ---------- the CRM index ----------
