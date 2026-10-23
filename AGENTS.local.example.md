@@ -260,6 +260,18 @@ permission gate.
 - **Never rebuild `.venv`**: its copied Python binary holds the Full Disk
   Access grant, and worktrees symlink to it. **Never delete
   `data/whatsapp/session/`**: that unpairs the linked device.
+- **One SQLite build per FTS5 index: the venv's.** `fts` stores its own
+  content and deletes a row by re-tokenizing it with the build doing the
+  delete, and unicode61 differs across builds (SQLite 3.54.0 tokenizes
+  U+FFFE and U+FFFF; 3.53.4 and macOS's `/usr/bin/sqlite3` 3.51.0 do not).
+  So a `sqlite3` shell's `quick_check` can call a healthy index malformed,
+  and its `rebuild` writes one the server's next write disagrees with.
+  Check and repair with `python -m server.mediaindex fts-check` /
+  `fts-rebuild`, never with a shell. The venv links Homebrew's libsqlite3,
+  so after a `brew upgrade sqlite` restart the server before any CLI
+  backfill: the CLI refuses while the server indexes on another build, and
+  every process checks the index once on open and rebuilds a malformed one,
+  logged in `data/media-index.log`.
 - **Timestamps are stored in UTC** and converted to local time before
   grouping by day, never sliced with `[:10]`. A watermark against a source
   that truncates precision uses `>=` plus de-duplication by seen id.

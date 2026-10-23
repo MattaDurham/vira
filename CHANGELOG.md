@@ -155,6 +155,21 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Fixed
 
+- The media index's FTS5 table no longer "corrupts" between repairs, and
+  heals itself when it is malformed. Both corruption reports were one
+  SQLite build reading an index another build wrote: SQLite 3.54.0's
+  unicode61 tokenizer treats U+FFFE and U+FFFF as token characters, 3.53.4
+  and macOS's `/usr/bin/sqlite3` 3.51.0 treat them as separators, and a
+  content-storing FTS5 table deletes a row by re-tokenizing its stored text
+  with whichever build runs the delete. So the shell's `quick_check` called
+  a healthy index malformed, and its `rebuild` left one the server's next
+  write disagreed with. Every process now runs the FTS5 integrity check
+  once on open and rebuilds a malformed index under its own build, logged
+  with both builds named; `python -m server.mediaindex fts-check` and
+  `fts-rebuild` are the repair path; and a CLI backfill refuses to write
+  while the server indexes on another SQLite build, which a
+  `brew upgrade sqlite` produces until the server restarts (the venv links
+  Homebrew's libsqlite3).
 - Fleet no longer takes a worktree's index lock. Its `git status` read,
   run every 30 seconds in every worktree a session uses, refreshed stale
   file stat data by rewriting `.git/index` under `index.lock`, so an

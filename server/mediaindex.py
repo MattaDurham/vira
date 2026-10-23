@@ -27,6 +27,9 @@ same stage functions past ROWID watermarks.
 
 CLI:  .venv/bin/python -m server.mediaindex backfill [--stage NAME]
       .venv/bin/python -m server.mediaindex status | reconcile
+      .venv/bin/python -m server.mediaindex fts-check | fts-rebuild
+        (the FTS5 index is checked and repaired by the venv's SQLite, never
+        by a sqlite3 shell: builds tokenize differently, see verify_fts)
 """
 import hashlib
 import json
@@ -37,7 +40,7 @@ import sys
 import threading
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import runtimework
@@ -122,12 +125,18 @@ CHUNK_CHARS = 1600
 MAX_CHUNKS = 8
 
 
-def _db():
+def _db(verify=True):
+    """A connection to the index, the schema in place. The first open per
+    process runs the FTS5 integrity check and rebuilds a malformed index
+    (see verify_fts); `verify=False` is for the report that must say what
+    it found rather than fix it."""
     _DATA.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB, timeout=60)
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
     _migrate(con)
+    if verify:
+        _verify_once(con)
     return con
 
 
@@ -153,6 +162,195 @@ def set_state(con, key, val):
     con.execute("INSERT OR REPLACE INTO state(key,val) VALUES(?,?)",
                 (key, str(val)))
     con.commit()
+
+
+def _log_line(msg, echo=False):
+    """One line in data/media-index.log, the Indexer's log; `echo` repeats
+    it on stderr (the server log) for the events the owner must see."""
+    line = f"{datetime.now().isoformat(timespec='seconds')} {msg}"
+    try:
+        with open(_DATA / "media-index.log", "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+    if echo:
+        print(line, file=sys.stderr)
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+# ---------- FTS5 integrity: one SQLite build per index ----------
+#
+# fts stores its own content and deletes a row by re-tokenizing that stored
+# text with the SQLite build doing the delete. unicode61 is not identical
+# across builds (3.54.0 tokenizes U+FFFE and U+FFFF; 3.53.4 and macOS's
+# /usr/bin/sqlite3 3.51.0 treat them as separators), so a refresh from a
+# second build leaves the first build's tokens behind, and an integrity
+# check from a second build disagrees with the writer even when nothing is
+# wrong. Both "corruptions" of the owner's index (2026-10-16, 2026-10-23)
+# were Apple's shell reading an index Homebrew's SQLite wrote. Hence: the
+# index records which build last verified it, every process checks it once
+# on open and rebuilds it under its own build when the check fails, and a
+# CLI refuses to write while the server indexes on another build.
+
+FTS_SQLITE_KEY = "fts_sqlite"           # state: build that last verified/rebuilt fts
+INDEXER_SQLITE_KEY = "indexer_sqlite"   # state: build the in-server Indexer runs on
+INDEXER_SEEN_KEY = "indexer_seen"       # state: UTC time of its last tick
+INDEXER_FRESH_S = 300                   # a tick this recent means the server writes
+FTS_CHECK_BUSY_MS = 2000                # the open-time check waits this long for a lock
+
+_fts_verified = set()                   # DB paths this process has checked
+_fts_lock = threading.Lock()
+
+
+def fts_check(con):
+    """FTS5's own integrity check under this process's SQLite build: None
+    when the index agrees with its stored content, else the error text.
+    A busy database raises sqlite3.OperationalError, as any write does."""
+    try:
+        con.execute("INSERT INTO fts(fts) VALUES('integrity-check')")
+        con.commit()
+        return None
+    except sqlite3.OperationalError:
+        raise
+    except sqlite3.DatabaseError as e:
+        con.rollback()
+        return str(e)
+
+
+def fts_rebuild(con):
+    """Re-derive the whole inverted index from the stored content under this
+    build. Returns (rows, seconds). About a second per 20,000 rows."""
+    t0 = time.time()
+    con.execute("INSERT INTO fts(fts) VALUES('rebuild')")
+    con.commit()
+    rows = con.execute("SELECT count(*) FROM fts").fetchone()[0]
+    return rows, time.time() - t0
+
+
+def verify_fts(con, log=None):
+    """Check the index under this build and rebuild it when the check
+    fails; record the build that verified it. Returns 'ok', 'rebuilt',
+    'skipped' (locked: try again at the next open) or 'failed'."""
+    log = log or (lambda msg: _log_line(msg, echo=True))
+    current = sqlite3.sqlite_version
+    previous = get_state(con, FTS_SQLITE_KEY)
+    con.execute(f"PRAGMA busy_timeout={int(FTS_CHECK_BUSY_MS)}")
+    try:
+        err = fts_check(con)
+    except sqlite3.OperationalError as e:
+        log(f"fts: check skipped, {e}; next open retries")
+        return "skipped"
+    finally:
+        con.execute("PRAGMA busy_timeout=60000")
+    result = "ok"
+    if err:
+        log(f"fts: malformed under SQLite {current} (last verified by "
+            f"SQLite {previous or 'an unrecorded build'}): {err}; rebuilding")
+        try:
+            rows, secs = fts_rebuild(con)
+        except sqlite3.DatabaseError as e:
+            log(f"fts: rebuild failed under SQLite {current}: {e}; "
+                f"searches may miss rows until the index is rebuilt")
+            return "failed"
+        log(f"fts: rebuilt {rows} rows in {secs:.1f}s under SQLite {current}")
+        result = "rebuilt"
+    elif previous and previous != current:
+        log(f"fts: SQLite build changed, {previous} -> {current}; index "
+            f"passes under {current}")
+    set_state(con, FTS_SQLITE_KEY, current)
+    return result
+
+
+def _verify_once(con):
+    key = str(DB)
+    with _fts_lock:
+        if key in _fts_verified:
+            return
+        _fts_verified.add(key)
+    if verify_fts(con) == "skipped":
+        with _fts_lock:
+            _fts_verified.discard(key)
+
+
+def fts_report():
+    """`python -m server.mediaindex fts-check`: what this build finds,
+    without fixing it."""
+    con = _db(verify=False)
+    try:
+        t0 = time.time()
+        err = fts_check(con)
+        return {"sqlite": sqlite3.sqlite_version, "ok": err is None,
+                "error": err,
+                "rows": con.execute("SELECT count(*) FROM fts").fetchone()[0],
+                "seconds": round(time.time() - t0, 2),
+                "last_verified_by": get_state(con, FTS_SQLITE_KEY)}
+    finally:
+        con.close()
+
+
+def fts_repair():
+    """`python -m server.mediaindex fts-rebuild`: rebuild under this build
+    and record it, whatever the check says."""
+    con = _db(verify=False)
+    try:
+        rows, secs = fts_rebuild(con)
+        err = fts_check(con)
+        set_state(con, FTS_SQLITE_KEY, sqlite3.sqlite_version)
+        _log_line(f"fts: rebuilt {rows} rows in {secs:.1f}s under SQLite "
+                  f"{sqlite3.sqlite_version} (fts-rebuild)")
+        return {"sqlite": sqlite3.sqlite_version, "ok": err is None,
+                "error": err, "rows": rows, "seconds": round(secs, 2)}
+    finally:
+        con.close()
+
+
+def record_indexer_heartbeat(con):
+    """The in-server Indexer's tick: which build it writes with, and when."""
+    con.execute("INSERT OR REPLACE INTO state(key,val) VALUES(?,?),(?,?)",
+                (INDEXER_SQLITE_KEY, sqlite3.sqlite_version,
+                 INDEXER_SEEN_KEY, _utcnow().isoformat(timespec="seconds")))
+    con.commit()
+
+
+def mixed_build_refusal(con, now=None):
+    """Why a CLI must not write the index now, or None: the server's Indexer
+    ticked within INDEXER_FRESH_S on another SQLite build. The venv links
+    Homebrew's libsqlite3, so a `brew upgrade sqlite` moves every NEW
+    process to the new build while the running server keeps the old one
+    mapped until its restart."""
+    build = get_state(con, INDEXER_SQLITE_KEY)
+    seen = get_state(con, INDEXER_SEEN_KEY)
+    if not build or not seen or build == sqlite3.sqlite_version:
+        return None
+    try:
+        seen_at = datetime.fromisoformat(seen)
+    except ValueError:
+        return None
+    if seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=timezone.utc)
+    if ((now or _utcnow()) - seen_at).total_seconds() > INDEXER_FRESH_S:
+        return None
+    return (f"the Vira server is indexing with SQLite {build} while this "
+            f"process has SQLite {sqlite3.sqlite_version}; two builds "
+            f"writing one FTS5 index leave it malformed, because unicode61 "
+            f"tokenizes differently across builds. Restart the server so "
+            f"both run the current build, then run this again.")
+
+
+def cli_may_write(log=print):
+    """The gate every CLI backfill passes before touching the index."""
+    con = _db()
+    try:
+        why = mixed_build_refusal(con)
+    finally:
+        con.close()
+    if why:
+        log(f"refusing to write the media index: {why}")
+        return False
+    return True
 
 
 def refresh_fts(con, seq):
@@ -840,12 +1038,7 @@ class Indexer(threading.Thread):
         self._last_reconcile = 0.0
 
     def _log(self, msg):
-        line = f"{datetime.now().isoformat(timespec='seconds')} {msg}\n"
-        try:
-            with open(_DATA / "media-index.log", "a") as f:
-                f.write(line)
-        except OSError:
-            pass
+        _log_line(msg)
 
     def run(self):
         time.sleep(20)          # let the server settle first
@@ -853,6 +1046,7 @@ class Indexer(threading.Thread):
             try:
                 con = _db()
                 gated = get_state(con, "backfill_running") == "1"
+                record_indexer_heartbeat(con)
                 con.close()
                 if not gated:
                     added = run_incremental(log=self._log)
@@ -893,9 +1087,17 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args and args[0] == "status":
         print(json.dumps(status(), indent=2))
+    elif args and args[0] == "fts-check":
+        report = fts_report()
+        print(json.dumps(report, indent=2))
+        sys.exit(0 if report["ok"] else 1)
+    elif args and args[0] == "fts-rebuild":
+        print(json.dumps(fts_repair(), indent=2))
     elif args and args[0] == "reconcile":
         reconcile()
     elif args and args[0] == "backfill":
+        if not cli_may_write():
+            sys.exit(2)
         names = ([args[args.index("--stage") + 1]] if "--stage" in args
                  else ["metadata", "email", "docs", "ocr", "scene",
                        "textvec", "gallery", "faces"])
@@ -914,4 +1116,5 @@ if __name__ == "__main__":
             gate.close()
     else:
         print("usage: python -m server.mediaindex "
-              "backfill [--stage NAME] | status | reconcile")
+              "backfill [--stage NAME] | status | reconcile | "
+              "fts-check | fts-rebuild")

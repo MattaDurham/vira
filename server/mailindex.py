@@ -602,6 +602,8 @@ if __name__ == "__main__":
     if args and args[0] == "status":
         print(json.dumps(status(), indent=2))
     elif args and args[0] == "backfill":
+        if not mediaindex.cli_may_write():
+            sys.exit(2)
         limit = _opt("--limit")
         backfill(account=_opt("--account"), since=_opt("--since"),
                  limit=int(limit) if limit else None, full=True)
