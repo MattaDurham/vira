@@ -29,7 +29,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from . import runtimework
+from . import ftsguard, runtimework
 
 from . import data as crm
 from . import retrieval, settings
@@ -52,12 +52,63 @@ _refreshed_at = 0.0
 REFRESH_S = 120
 
 
-def _con():
+def _con(verify=True):
+    """A connection to the index, the schema in place. The first open per
+    process runs the FTS5 integrity check and rebuilds a malformed index
+    (see ftsguard); `verify=False` is for the report that must say what
+    it found rather than fix it."""
     DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB, timeout=30)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
+    if verify:
+        ftsguard.verify_once(con, str(DB), log=_fts_log,
+                             get_state=get_state, set_state=set_state)
     return con
+
+
+def get_state(con, key, default=None):
+    row = con.execute("SELECT val FROM state WHERE key=?", (key,)).fetchone()
+    return row["val"] if row else default
+
+
+def set_state(con, key, val):
+    con.execute("INSERT OR REPLACE INTO state(key,val) VALUES(?,?)",
+                (key, str(val)))
+
+
+# ---------- FTS5 integrity: one SQLite build per index ----------
+#
+# refresh() empties fts and refills it, and FTS5 deletes each row by
+# re-tokenizing the copy of the text it stores. A second SQLite build
+# tokenizes that copy differently and leaves the index malformed (the
+# story is in ftsguard), so the index records the build that last verified
+# it, and every process checks it once on open and rebuilds it under its
+# own build when the check fails, logged in data/crm-index.log and the
+# server log.
+
+def _fts_log(msg):
+    ftsguard.log_line(DB.with_suffix(".log"), msg)
+
+
+def fts_report():
+    """`python -m server.crmindex fts-check`: what this build finds,
+    without fixing it."""
+    con = _con(verify=False)
+    try:
+        return ftsguard.report(con, get_state=get_state)
+    finally:
+        con.close()
+
+
+def fts_repair():
+    """`python -m server.crmindex fts-rebuild`: rebuild under this build
+    and record it, whatever the check says."""
+    con = _con(verify=False)
+    try:
+        return ftsguard.repair(con, log=_fts_log, set_state=set_state)
+    finally:
+        con.close()
 
 
 def available():
@@ -321,8 +372,15 @@ def status():
         con.close()
 
 
-if __name__ == "__main__":       # python -m server.crmindex [embed]
+if __name__ == "__main__":       # python -m server.crmindex [embed | fts-check | fts-rebuild]
     import sys
+    if "fts-check" in sys.argv:
+        report = fts_report()
+        print(json.dumps(report, indent=2))
+        sys.exit(0 if report["ok"] else 1)
+    if "fts-rebuild" in sys.argv:
+        print(json.dumps(fts_repair(), indent=2))
+        sys.exit(0)
     print(json.dumps(refresh(force=True, log=print), indent=1))
     if "embed" in sys.argv:
         while embed_pending(log=print):

@@ -36,7 +36,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import runtimework
+from . import ftsguard, runtimework
 
 # A full-history mailbox walk starts at UID watermark 0, and the UID
 # SEARCH reply listing a 20-year mailbox overflows imaplib's default 1MB
@@ -86,7 +86,11 @@ CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, val TEXT);
 """
 
 
-def _db():
+def _db(verify=True):
+    """A connection to the index, the schema in place. The first open per
+    process runs the FTS5 integrity check and rebuilds a malformed index
+    (see ftsguard); `verify=False` is for the report that must say what
+    it found rather than fix it."""
     DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB, timeout=60)
     con.row_factory = sqlite3.Row
@@ -112,6 +116,9 @@ def _db():
             if "source_meta" not in {r[1] for r in con.execute("PRAGMA table_info(items)")}:
                 con.close()
                 raise
+    if verify:
+        ftsguard.verify_once(con, str(DB), log=_fts_log,
+                             get_state=get_state, set_state=set_state)
     return con
 
 
@@ -133,6 +140,39 @@ def get_state(con, key, default=None):
 def set_state(con, key, val):
     con.execute("INSERT OR REPLACE INTO state(key,val) VALUES(?,?)",
                 (key, str(val)))
+
+
+# ---------- FTS5 integrity: one SQLite build per index ----------
+#
+# fts stores its own content, so a delete or an integrity check from a
+# second SQLite build re-tokenizes the stored text differently and leaves
+# or reports a malformed index (the story is in ftsguard). The index
+# records the build that last verified it; every process checks it once
+# on open and rebuilds it under its own build when the check fails,
+# logged in data/text-index.log and the server log.
+
+def _fts_log(msg):
+    ftsguard.log_line(DB.with_suffix(".log"), msg)
+
+
+def fts_report():
+    """`python -m server.textindex fts-check`: what this build finds,
+    without fixing it."""
+    con = _db(verify=False)
+    try:
+        return ftsguard.report(con, get_state=get_state)
+    finally:
+        con.close()
+
+
+def fts_repair():
+    """`python -m server.textindex fts-rebuild`: rebuild under this build
+    and record it, whatever the check says."""
+    con = _db(verify=False)
+    try:
+        return ftsguard.repair(con, log=_fts_log, set_state=set_state)
+    finally:
+        con.close()
 
 
 def _insert(con, *, uid, source, text, date_ns, account=None, chat_id=None,
@@ -882,9 +922,18 @@ class Indexer(threading.Thread):
         self._stop.set()
 
 
-if __name__ == "__main__":  # python -m server.textindex backfill [mail [--full] | archive]
+if __name__ == "__main__":
+    # python -m server.textindex backfill [mail [--full] | archive]
+    #                           | status | fts-check | fts-rebuild
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if cmd == "fts-check":
+        report = fts_report()
+        print(json.dumps(report, indent=2))
+        sys.exit(0 if report["ok"] else 1)
+    if cmd == "fts-rebuild":
+        print(json.dumps(fts_repair(), indent=2))
+        sys.exit(0)
     if cmd == "backfill":
         which = sys.argv[2] if len(sys.argv) > 2 else "all"
         if which in ("all", "imessage"):

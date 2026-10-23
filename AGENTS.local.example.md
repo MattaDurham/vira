@@ -267,11 +267,13 @@ permission gate.
   So a `sqlite3` shell's `quick_check` can call a healthy index malformed,
   and its `rebuild` writes one the server's next write disagrees with.
   Check and repair with `python -m server.mediaindex fts-check` /
-  `fts-rebuild`, never with a shell. The venv links Homebrew's libsqlite3,
-  so after a `brew upgrade sqlite` restart the server before any CLI
-  backfill: the CLI refuses while the server indexes on another build, and
-  every process checks the index once on open and rebuilds a malformed one,
-  logged in `data/media-index.log`.
+  `fts-rebuild` (likewise `server.textindex` and `server.crmindex`), never
+  with a shell. The venv links Homebrew's libsqlite3, so after a
+  `brew upgrade sqlite` restart the server before any CLI backfill: the
+  media CLI refuses while the server indexes on another build, and every
+  process checks each index once on open (`server/ftsguard.py`) and
+  rebuilds a malformed one, logged beside the index (`data/media-index.log`,
+  `data/text-index.log`, `data/crm-index.log`) and in the server log.
 - **Timestamps are stored in UTC** and converted to local time before
   grouping by day, never sliced with `[:10]`. A watermark against a source
   that truncates precision uses `>=` plus de-duplication by seen id.

@@ -170,6 +170,19 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   while the server indexes on another SQLite build, which a
   `brew upgrade sqlite` produces until the server restarts (the venv links
   Homebrew's libsqlite3).
+- The text index (message and mail bodies) and the CRM index heal their
+  FTS5 tables the same way. Both have the media index's table shape and
+  so the same exposure: a delete or an integrity check from another
+  SQLite build re-tokenizes the stored text differently, and the CRM
+  index empties and refills its table on every refresh. The check-and-
+  rebuild now lives in one helper, `server/ftsguard.py`, that all three
+  indexes call on the first open per process: a malformed index is
+  rebuilt under the current build and one line names the build that last
+  verified it and the one rebuilding it (`data/text-index.log`,
+  `data/crm-index.log`, and the server log); a locked index is checked at
+  the next open instead. `python -m server.textindex fts-check` /
+  `fts-rebuild` and `python -m server.crmindex fts-check` / `fts-rebuild`
+  are the repair path. The media index is unchanged in behaviour.
 - Fleet no longer takes a worktree's index lock. Its `git status` read,
   run every 30 seconds in every worktree a session uses, refreshed stale
   file stat data by rewriting `.git/index` under `index.lock`, so an

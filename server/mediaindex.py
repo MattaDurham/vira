@@ -29,7 +29,7 @@ CLI:  .venv/bin/python -m server.mediaindex backfill [--stage NAME]
       .venv/bin/python -m server.mediaindex status | reconcile
       .venv/bin/python -m server.mediaindex fts-check | fts-rebuild
         (the FTS5 index is checked and repaired by the venv's SQLite, never
-        by a sqlite3 shell: builds tokenize differently, see verify_fts)
+        by a sqlite3 shell: builds tokenize differently, see ftsguard)
 """
 import hashlib
 import json
@@ -43,7 +43,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import runtimework
+from . import ftsguard, runtimework
 
 from . import data as crm
 from . import retrieval
@@ -128,7 +128,7 @@ MAX_CHUNKS = 8
 def _db(verify=True):
     """A connection to the index, the schema in place. The first open per
     process runs the FTS5 integrity check and rebuilds a malformed index
-    (see verify_fts); `verify=False` is for the report that must say what
+    (see ftsguard); `verify=False` is for the report that must say what
     it found rather than fix it."""
     _DATA.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB, timeout=60)
@@ -167,14 +167,7 @@ def set_state(con, key, val):
 def _log_line(msg, echo=False):
     """One line in data/media-index.log, the Indexer's log; `echo` repeats
     it on stderr (the server log) for the events the owner must see."""
-    line = f"{datetime.now().isoformat(timespec='seconds')} {msg}"
-    try:
-        with open(_DATA / "media-index.log", "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
-    if echo:
-        print(line, file=sys.stderr)
+    ftsguard.log_line(_DATA / "media-index.log", msg, echo=echo)
 
 
 def _utcnow():
@@ -184,95 +177,36 @@ def _utcnow():
 # ---------- FTS5 integrity: one SQLite build per index ----------
 #
 # fts stores its own content and deletes a row by re-tokenizing that stored
-# text with the SQLite build doing the delete. unicode61 is not identical
-# across builds (3.54.0 tokenizes U+FFFE and U+FFFF; 3.53.4 and macOS's
-# /usr/bin/sqlite3 3.51.0 treat them as separators), so a refresh from a
-# second build leaves the first build's tokens behind, and an integrity
-# check from a second build disagrees with the writer even when nothing is
-# wrong. Both "corruptions" of the owner's index (2026-10-16, 2026-10-23)
-# were Apple's shell reading an index Homebrew's SQLite wrote. Hence: the
-# index records which build last verified it, every process checks it once
-# on open and rebuilds it under its own build when the check fails, and a
-# CLI refuses to write while the server indexes on another build.
+# text with the SQLite build doing the delete, and unicode61 differs across
+# builds, so a second build's refresh or check leaves or reports a malformed
+# index (the whole story is in ftsguard). The index records which build
+# last verified it, every process checks it once on open and rebuilds it
+# under its own build when the check fails, and a CLI refuses to write
+# while the server indexes on another build.
 
-FTS_SQLITE_KEY = "fts_sqlite"           # state: build that last verified/rebuilt fts
+FTS_SQLITE_KEY = ftsguard.STATE_KEY     # state: build that last verified/rebuilt fts
 INDEXER_SQLITE_KEY = "indexer_sqlite"   # state: build the in-server Indexer runs on
 INDEXER_SEEN_KEY = "indexer_seen"       # state: UTC time of its last tick
 INDEXER_FRESH_S = 300                   # a tick this recent means the server writes
-FTS_CHECK_BUSY_MS = 2000                # the open-time check waits this long for a lock
 
-_fts_verified = set()                   # DB paths this process has checked
-_fts_lock = threading.Lock()
+
+def _fts_log(msg):
+    _log_line(msg, echo=True)
 
 
 def fts_check(con):
-    """FTS5's own integrity check under this process's SQLite build: None
-    when the index agrees with its stored content, else the error text.
-    A busy database raises sqlite3.OperationalError, as any write does."""
-    try:
-        con.execute("INSERT INTO fts(fts) VALUES('integrity-check')")
-        con.commit()
-        return None
-    except sqlite3.OperationalError:
-        raise
-    except sqlite3.DatabaseError as e:
-        con.rollback()
-        return str(e)
+    """FTS5's integrity check under this build: None, or the error text."""
+    return ftsguard.check(con)
 
 
 def fts_rebuild(con):
-    """Re-derive the whole inverted index from the stored content under this
-    build. Returns (rows, seconds). About a second per 20,000 rows."""
-    t0 = time.time()
-    con.execute("INSERT INTO fts(fts) VALUES('rebuild')")
-    con.commit()
-    rows = con.execute("SELECT count(*) FROM fts").fetchone()[0]
-    return rows, time.time() - t0
-
-
-def verify_fts(con, log=None):
-    """Check the index under this build and rebuild it when the check
-    fails; record the build that verified it. Returns 'ok', 'rebuilt',
-    'skipped' (locked: try again at the next open) or 'failed'."""
-    log = log or (lambda msg: _log_line(msg, echo=True))
-    current = sqlite3.sqlite_version
-    previous = get_state(con, FTS_SQLITE_KEY)
-    con.execute(f"PRAGMA busy_timeout={int(FTS_CHECK_BUSY_MS)}")
-    try:
-        err = fts_check(con)
-    except sqlite3.OperationalError as e:
-        log(f"fts: check skipped, {e}; next open retries")
-        return "skipped"
-    finally:
-        con.execute("PRAGMA busy_timeout=60000")
-    result = "ok"
-    if err:
-        log(f"fts: malformed under SQLite {current} (last verified by "
-            f"SQLite {previous or 'an unrecorded build'}): {err}; rebuilding")
-        try:
-            rows, secs = fts_rebuild(con)
-        except sqlite3.DatabaseError as e:
-            log(f"fts: rebuild failed under SQLite {current}: {e}; "
-                f"searches may miss rows until the index is rebuilt")
-            return "failed"
-        log(f"fts: rebuilt {rows} rows in {secs:.1f}s under SQLite {current}")
-        result = "rebuilt"
-    elif previous and previous != current:
-        log(f"fts: SQLite build changed, {previous} -> {current}; index "
-            f"passes under {current}")
-    set_state(con, FTS_SQLITE_KEY, current)
-    return result
+    """Rebuild the inverted index under this build: (rows, seconds)."""
+    return ftsguard.rebuild(con)
 
 
 def _verify_once(con):
-    key = str(DB)
-    with _fts_lock:
-        if key in _fts_verified:
-            return
-        _fts_verified.add(key)
-    if verify_fts(con) == "skipped":
-        with _fts_lock:
-            _fts_verified.discard(key)
+    ftsguard.verify_once(con, str(DB), log=_fts_log,
+                         get_state=get_state, set_state=set_state)
 
 
 def fts_report():
@@ -280,13 +214,7 @@ def fts_report():
     without fixing it."""
     con = _db(verify=False)
     try:
-        t0 = time.time()
-        err = fts_check(con)
-        return {"sqlite": sqlite3.sqlite_version, "ok": err is None,
-                "error": err,
-                "rows": con.execute("SELECT count(*) FROM fts").fetchone()[0],
-                "seconds": round(time.time() - t0, 2),
-                "last_verified_by": get_state(con, FTS_SQLITE_KEY)}
+        return ftsguard.report(con, get_state=get_state)
     finally:
         con.close()
 
@@ -296,13 +224,7 @@ def fts_repair():
     and record it, whatever the check says."""
     con = _db(verify=False)
     try:
-        rows, secs = fts_rebuild(con)
-        err = fts_check(con)
-        set_state(con, FTS_SQLITE_KEY, sqlite3.sqlite_version)
-        _log_line(f"fts: rebuilt {rows} rows in {secs:.1f}s under SQLite "
-                  f"{sqlite3.sqlite_version} (fts-rebuild)")
-        return {"sqlite": sqlite3.sqlite_version, "ok": err is None,
-                "error": err, "rows": rows, "seconds": round(secs, 2)}
+        return ftsguard.repair(con, log=_fts_log, set_state=set_state)
     finally:
         con.close()
 
