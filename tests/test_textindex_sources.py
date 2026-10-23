@@ -129,7 +129,7 @@ class SourceIndexTests(SourceIndexFixture):
             self.assertEqual([row[:-1] for row in rows[:-1]], old_rows)
             self.assertTrue(all(row[-1] is None for row in rows[:-1]))
             self.assertEqual(con.execute("SELECT v FROM vec_text WHERE seq=1").fetchone()[0], b"unchanged")
-            self.assertEqual(con.execute("SELECT val FROM state").fetchone()[0], "42")
+            self.assertEqual(con.execute("SELECT val FROM state WHERE key LIKE 'wm_%'").fetchone()[0], "42")
             self.assertEqual(con.execute("SELECT count(*) FROM fts WHERE fts MATCH 'legacy'").fetchone()[0], 4)
         # Normal overlap must not update previously indexed source records.
         self.assertEqual(self.insert(ids[0], metadata={"graph_id": "invented"}, text="changed"), 0)
@@ -225,7 +225,7 @@ class EmailResourceIndexTests(SourceIndexFixture):
         with closing(sqlite3.connect(self.path)) as con:
             metadata = json.loads(con.execute("SELECT source_meta FROM items").fetchone()[0])
             self.assertNotIn("html", metadata)
-            self.assertEqual(con.execute("SELECT val FROM state").fetchone()[0], "2026-09-10T14:00:00Z")
+            self.assertEqual(con.execute("SELECT val FROM state WHERE key LIKE 'wm_%'").fetchone()[0], "2026-09-10T14:00:00Z")
 
     def test_graph_without_message_id_keeps_explicit_full_graph_id(self):
         msg = self.graph_message(mid="")
@@ -285,7 +285,7 @@ class EmailResourceIndexTests(SourceIndexFixture):
             self.assertEqual([link["url"] for link in row["links"]], [PAY_URL])
             self.assertEqual(row["text"], "Your invoice is ready.")
         with closing(sqlite3.connect(self.path)) as con:
-            self.assertEqual(con.execute("SELECT val FROM state").fetchone()[0], "42")
+            self.assertEqual(con.execute("SELECT val FROM state WHERE key LIKE 'wm_%'").fetchone()[0], "42")
 
     def test_imap_long_body_is_stored_whole(self):
         long_body = "y" * 50_000

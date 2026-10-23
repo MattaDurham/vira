@@ -27,7 +27,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import mediaindex  # noqa: E402
+from server import ftsguard, mediaindex  # noqa: E402
 
 NONCHAR = "￾"      # the character the builds disagree on
 
@@ -56,7 +56,7 @@ class _Index(unittest.TestCase):
         self.root = Path(tmp.name)
         for p in (mock.patch.object(mediaindex, "_DATA", self.root),
                   mock.patch.object(mediaindex, "DB", self.root / "media.sqlite"),
-                  mock.patch.object(mediaindex, "_fts_verified", set())):
+                  mock.patch.object(ftsguard, "_verified", set())):
             p.start()
             self.addCleanup(p.stop)
 
@@ -152,7 +152,7 @@ class SelfHeal(_Index):
 
     def test_opening_the_index_checks_it_and_rebuilds_a_malformed_one(self):
         self.corrupt()
-        mediaindex._fts_verified.clear()         # a new process
+        ftsguard._verified.clear()               # a new process
         with closing(mediaindex._db()) as con:
             self.assertIsNone(mediaindex.fts_check(con))
             self.assertEqual(mediaindex.get_state(con, mediaindex.FTS_SQLITE_KEY),
@@ -182,8 +182,8 @@ class SelfHeal(_Index):
         self.assertIn("3.53.4", self.log_text())
 
     def test_the_check_runs_once_per_process_per_index(self):
-        with mock.patch.object(mediaindex, "verify_fts",
-                               wraps=mediaindex.verify_fts) as v:
+        with mock.patch.object(ftsguard, "verify",
+                               wraps=ftsguard.verify) as v:
             mediaindex._db().close()
             mediaindex._db().close()
             self.assertEqual(v.call_count, 1)
@@ -198,10 +198,10 @@ class SelfHeal(_Index):
         holder = sqlite3.connect(mediaindex.DB)
         holder.execute("BEGIN IMMEDIATE")
         try:
-            with mock.patch.object(mediaindex, "FTS_CHECK_BUSY_MS", 50):
+            with mock.patch.object(ftsguard, "BUSY_MS", 50):
                 mediaindex._db().close()
             self.assertIn("skipped", self.log_text())
-            self.assertEqual(mediaindex._fts_verified, set())
+            self.assertEqual(ftsguard._verified, set())
         finally:
             holder.rollback()
             holder.close()
@@ -213,12 +213,12 @@ class SelfHeal(_Index):
         with closing(mediaindex._db(verify=False)) as con:
             add_item(con, 1, "a.jpg", "x")
             con.commit()
-        with mock.patch.object(mediaindex, "fts_check", return_value="malformed inverted index"), \
-                mock.patch.object(mediaindex, "fts_rebuild",
+        with mock.patch.object(ftsguard, "check", return_value="malformed inverted index"), \
+                mock.patch.object(ftsguard, "rebuild",
                                   side_effect=sqlite3.DatabaseError("database disk image is malformed")):
             mediaindex._db().close()
         self.assertIn("rebuild failed", self.log_text())
-        self.assertIn(str(mediaindex.DB), mediaindex._fts_verified)
+        self.assertIn(str(mediaindex.DB), ftsguard._verified)
 
 
 class RepairCommands(_Index):
