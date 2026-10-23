@@ -92,12 +92,28 @@ def etime_secs(e):
         return 0
 
 
+# The Claude desktop app starts each session's process with no --resume
+# argument, but sets this in its environment to the session's record id
+# (local_...). Several sessions can share a folder, so the folder alone
+# cannot say which one a process belongs to.
+HOST_SESSION_VAR = "CLAUDE_CODE_HOST_SESSION_ID"
+
+
+def host_session_id(env_text):
+    """HOST_SESSION_VAR's value in a process's environment text: `ps -E`
+    output (the arguments, then NAME=value pairs, space separated) or
+    /proc/<pid>/environ (NUL separated)."""
+    m = re.search(rf"(?:^|[\s\0]){HOST_SESSION_VAR}=([^\s\0]+)", env_text or "")
+    return m.group(1) if m else None
+
+
 class Procs:
-    """The process table, and each process's working folder (cached per
-    process: lsof is the slow part of a tick)."""
+    """The process table, and each process's working folder and app session
+    id (cached per process: lsof and ps -E are the slow part of a tick)."""
 
     def __init__(self):
         self.cwds = {}           # pid -> (started_s, cwd)
+        self.hosts = {}          # pid -> (started_s, app session id or None)
         self.note = None
 
     def read(self):
@@ -124,8 +140,9 @@ class Procs:
             procs[p["pid"]] = p
             kids.setdefault(p["ppid"], []).append(p["pid"])
         live = set(procs)
-        for k in [k for k in self.cwds if k not in live]:
-            del self.cwds[k]
+        for cache in (self.cwds, self.hosts):
+            for k in [k for k in cache if k not in live]:
+                del cache[k]
         return procs, kids
 
     def cwd_of(self, p):
@@ -150,6 +167,35 @@ class Procs:
                 cwd = None
         self.cwds[p["pid"]] = (started, cwd)
         return cwd
+
+    def host_session_of(self, p):
+        """The app session id a process carries (HOST_SESSION_VAR), or None.
+        The same environment holds the app's OAuth token, so only that one
+        value is kept; the rest of the text is dropped here. A failed read
+        is not cached, so the next tick tries again."""
+        started = time.time() - p["secs"]
+        hit = self.hosts.get(p["pid"])
+        if hit and abs(hit[0] - started) <= 3:
+            return hit[1]
+        if sys.platform.startswith("linux"):
+            try:
+                text = Path(f"/proc/{p['pid']}/environ").read_bytes().decode("utf-8", "replace")
+            except OSError:
+                return None
+        else:
+            ps = shutil.which("ps") or "/bin/ps"
+            try:
+                r = subprocess.run([ps, "-E", "-ww", "-o", "args=", "-p", str(p["pid"])],
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=3, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if r.returncode != 0:
+                return None
+            text = r.stdout
+        sid = host_session_id(text)
+        self.hosts[p["pid"]] = (started, sid)
+        return sid
 
 
 def listening_ports():
@@ -420,13 +466,21 @@ class Fleet:
         rows = []
         records, app_found = self._records()
         proj_found = fc.projects_dir().is_dir()
-        app_by_id, app_loose, cli_procs = {}, [], []
+        # An app process is matched to its record by --resume, else by the
+        # app session id in its environment. Only a process carrying
+        # neither falls back to its folder: one that names a session
+        # without a record here (archived, say) must not take the record of
+        # another session in the same folder.
+        app_by_id, app_by_host, app_loose, cli_procs = {}, {}, [], []
         for p in procs.values():
             a = p["args"]
             if fc.app_process(a):
                 rid = fc.resume_id(a)
+                host = None if rid else self.procs.host_session_of(p)
                 if rid:
                     app_by_id[rid] = p
+                elif host:
+                    app_by_host[host] = p
                 else:
                     app_loose.append(p)
             elif fc.cli_process(a):
@@ -442,7 +496,7 @@ class Fleet:
         for d in records:
             cli_id = d.get("cliSessionId")
             known_ids.add(cli_id)
-            proc = app_by_id.get(cli_id) if cli_id else None
+            proc = (app_by_id.get(cli_id) if cli_id else None) or app_by_host.get(d["sessionId"])
             if not proc and loose_by_cwd.get(d.get("cwd")):
                 proc = loose_by_cwd[d.get("cwd")].pop()
             tpath = self._tpath(cli_id)

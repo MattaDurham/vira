@@ -79,6 +79,7 @@ class Env:
             p.mkdir(parents=True, exist_ok=True)
         self.procs = []
         self.cwds = {}
+        self.hosts = {}
 
     def folder(self, name):
         p = self.work / name
@@ -117,12 +118,14 @@ class Env:
         if cwd:
             self.cwds[pid] = cwd
 
-    def app_proc(self, pid, cli=None, cwd=None):
+    def app_proc(self, pid, cli=None, cwd=None, host=None):
         args = ("/x/claude-code/2.0/abc/claude.app/Contents/MacOS/claude --output-format stream-json "
                 "--verbose --input-format stream-json")
         if cli:
             args += f" --resume={cli}"
         self.proc(pid, args, cwd)
+        if host:
+            self.hosts[pid] = host
 
     # ----- Codex
 
@@ -171,6 +174,7 @@ class Base(unittest.TestCase):
                 "VIRA_FLEET_GH": ""}),
             mock.patch.object(fleet.Procs, "read", lambda s: self._procs()),
             mock.patch.object(fleet.Procs, "cwd_of", lambda s, p: self.env.cwds.get(p["pid"])),
+            mock.patch.object(fleet.Procs, "host_session_of", lambda s, p: self.env.hosts.get(p["pid"])),
             mock.patch.object(fleet, "listening_ports", lambda: {}),
             mock.patch.object(fleet, "probe_instance", lambda *a, **k: None),
             mock.patch("server.prindex.lookup", lambda branch: None),
@@ -235,6 +239,34 @@ class ClaudeSessions(Base):
         self.env.record("local_1", "c1", cwd)
         self.env.app_proc(101, None, cwd)
         self.assertTrue(self.row(self.live(), "local_1")["live"])
+
+    def test_host_session_id_matches_the_process_to_its_session(self):
+        # The app passes no --resume; three sessions share one folder, and
+        # each process names its own record in its environment.
+        cwd = self.env.folder("gamma")
+        for n in (1, 2, 3):
+            self.env.transcript(cwd, f"c{n}", [said("Done.", now() - 2 * MIN)])
+            self.env.record(f"local_{n}", f"c{n}", cwd)
+        self.env.app_proc(101, None, cwd, host="local_3")
+        self.env.app_proc(102, None, cwd, host="local_1")
+        snap = self.live()
+        self.assertEqual(self.row(snap, "local_1")["pid"], 102)
+        self.assertEqual(self.row(snap, "local_3")["pid"], 101)
+        self.assertFalse(self.row(snap, "local_2")["live"])
+
+    def test_a_process_naming_another_session_never_takes_a_folder_match(self):
+        # The process belongs to an archived session in the same folder: it
+        # must not make the other, idle session's card look live.
+        cwd = self.env.folder("delta")
+        self.env.transcript(cwd, "c1", [said("Done.", now() - 90 * MIN)])
+        self.env.record("local_1", "c1", cwd, lastActivityAt=now() - 90 * MIN)
+        self.env.record("local_9", "c9", cwd, isArchived=True)
+        self.env.app_proc(101, None, cwd, host="local_9")
+        self.env.proc(102, "/bin/zsh -c source ~/.claude/shell-snapshots/snapshot-zsh-1.sh "
+                      "&& eval 'python3 serve.py' < /dev/null", cwd, ppid=101)
+        row = self.row(self.live(), "local_1")
+        self.assertFalse(row["live"])
+        self.assertEqual(row["status"], "Closed")
 
     def test_running_subagent_keeps_the_session_working(self):
         cwd = self.env.folder("alpha")
@@ -623,6 +655,36 @@ class Parsers(unittest.TestCase):
                          [("Second thing shipped.", "Added", 1700100000000),
                           ("First thing.", "Fixed", 1700000000000)])
         self.assertEqual(rows[1]["detail"], "With detail continues here.")
+
+    def test_host_session_id_reads_ps_and_proc_environ_text(self):
+        ps_text = ("/x/claude.app/Contents/MacOS/claude --output-format stream-json "
+                   "PATH=/bin CLAUDE_CODE_OAUTH_TOKEN=sk-test CLAUDE_CODE_HOST_SESSION_ID=local_ab-1 "
+                   "HOME=/h\n")
+        self.assertEqual(fleet.host_session_id(ps_text), "local_ab-1")
+        environ = "PATH=/bin\0CLAUDE_CODE_HOST_SESSION_ID=local_cd-2\0HOME=/h\0"
+        self.assertEqual(fleet.host_session_id(environ), "local_cd-2")
+        self.assertIsNone(fleet.host_session_id("claude PATH=/bin X_CLAUDE_CODE_HOST_SESSION_ID=local_x"))
+        self.assertIsNone(fleet.host_session_id(""))
+
+    def test_host_session_of_keeps_only_the_id_and_retries_a_failed_read(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            ok = len(calls) > 1
+            return mock.Mock(returncode=0 if ok else 1, stdout=(
+                "claude CLAUDE_CODE_OAUTH_TOKEN=sk-test CLAUDE_CODE_HOST_SESSION_ID=local_ab\n"
+                if ok else ""))
+
+        procs = fleet.Procs()
+        p = dict(pid=101, secs=60)
+        with mock.patch.object(fleet.sys, "platform", "darwin"), \
+                mock.patch.object(fleet.subprocess, "run", run):
+            self.assertIsNone(procs.host_session_of(p))            # ps failed: not cached
+            self.assertEqual(procs.host_session_of(p), "local_ab")
+            self.assertEqual(procs.host_session_of(p), "local_ab")  # cached
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("sk-test", repr(procs.hosts))
 
 
 
