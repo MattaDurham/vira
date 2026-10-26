@@ -663,6 +663,38 @@ body > .forge-library.is-detached .forge-panel-head:active { cursor: grabbing; }
 .forge-native-part p, .forge-native-part code { display: block; padding: 0 6px 5px; color: var(--text-faint); font: 7px/1.4 var(--mono); }
 .forge-native-part pre { max-height: 330px; margin: 0 6px 6px; padding: 7px; overflow: auto; color: var(--text-dim); background: var(--bg-window); font: 7.5px/1.45 var(--mono); white-space: pre-wrap; user-select: text; }
 
+/* A command routine's runs (forge.js commandRunsView): every run with its
+   counts, errors and log lines, and Run now / Pause beside them. */
+.forge-cmd { margin-bottom: 9px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.forge-cmd-state { margin-bottom: 6px; color: var(--text); font: 9px/1.45 var(--sans); }
+.forge-cmd-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.forge-cmd-scroll { max-width: 100%; min-width: 0; overflow-x: auto; }
+.forge-cmd-runs { width: 100%; border-collapse: collapse; font: 8px/1.4 var(--mono); }
+.forge-cmd-runs th { padding: 4px 5px; color: var(--text-faint); border-bottom: 1px solid var(--line); font-weight: 500; text-align: left; text-transform: uppercase; white-space: nowrap; }
+.forge-cmd-runs td { padding: 4px 5px; color: var(--text-dim); border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+.forge-cmd-runs td.has-errors { color: var(--red); }
+.forge-cmd-chip { padding: 1px 5px; border: 1px solid var(--line); }
+.forge-cmd-chip.is-ok { color: var(--green); border-color: var(--green-line); }
+.forge-cmd-chip.is-failed, .forge-cmd-chip.is-interrupted { color: var(--red); border-color: var(--red-line); }
+.forge-cmd-chip.is-running, .forge-cmd-chip.is-starting { color: var(--accent-bright); border-color: var(--accent-line); }
+.forge-cmd-chip.is-skipped { color: var(--text-faint); }
+.forge-cmd-logrow td { padding: 6px; white-space: normal; background: var(--bg-card); }
+.forge-cmd-logrow strong { display: block; margin: 5px 0 3px; color: var(--text); font-size: 8px; }
+.forge-cmd-log { max-height: 320px; margin: 0; padding: 7px; overflow: auto; color: var(--text-dim); background: var(--bg-window); font: 7.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.forge-cmd-errors { margin: 0 0 4px 16px; color: var(--red); font: 7.5px/1.45 var(--mono); white-space: normal; overflow-wrap: anywhere; }
+.forge-cmd-note { color: var(--text-faint); font: 8px/1.4 var(--sans); }
+.forge-cmd-foot { margin: 5px 0; color: var(--text-faint); font: 8px var(--mono); }
+
+/* This Mac library tab (forge.js macNote / macDetail): read-only. */
+.forge-mac-note { display: grid; gap: 5px; margin-bottom: 8px; }
+.forge-mac-note .hint { margin: 0; }
+.forge-library-card[data-tone="running"] small { color: var(--green); }
+.forge-library-card[data-tone="off"] small, .forge-library-card[data-tone="disabled"] small { color: var(--text-faint); }
+.forge-mac-detail { display: grid; gap: 4px; margin: -2px 0 6px; padding: 6px; border: 1px solid var(--line); background: var(--bg-card); }
+.forge-mac-detail div { min-width: 0; }
+.forge-mac-detail span { display: block; color: var(--text-faint); font: 7px var(--mono); text-transform: uppercase; }
+.forge-mac-detail code { display: block; color: var(--text-dim); font: 8px/1.4 var(--mono); overflow-wrap: anywhere; white-space: normal; user-select: text; }
+
 .forge-port {
   position: absolute;
   top: var(--port-y, 55px);

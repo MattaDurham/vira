@@ -8,6 +8,25 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Command routines. A standing loop can now run a program instead of an
+  agent: kind `command`, with an argv, a working folder, environment
+  overrides (PATH, typically), an optional log file its output is also
+  appended to, and log files to watch. The scheduler starts each run as
+  its own detached process (`python -m server.routinerun`), so a long run
+  never slows the server and a restart never kills it, and a per-routine
+  lock keeps two runs from overlapping across every instance of the
+  checkout. Each run is recorded in `data/routine-runs.json` (trigger,
+  start, end, exit status, the counts from its last `done: N word, ...`
+  line, its FAILED / Traceback / Error lines) with a copy of its log lines
+  in `data/routine-runs/<run>/`; a run whose runner died is closed as
+  interrupted. In The Forge the routine is a native Flow like Muse, and
+  its node lists every run with its log, beside Run now and Pause /
+  Resume. A new This Mac tab in the Forge library lists every launchd job
+  in `~/Library/LaunchAgents`, `/Library/LaunchAgents` and
+  `/Library/LaunchDaemons`, read-only, with the program each runs, when,
+  and whether it is loaded. Code: `server/routinerun.py`,
+  `server/launchdjobs.py`.
+
 - Grok on your Grok subscription. When the Grok Build CLI (`grok`) is
   installed and signed in with `grok login`, xAI sessions run through
   `grok agent stdio` (the Agent Client Protocol) and drafts through
@@ -106,6 +125,10 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   rebuildable).
 
 ### Changed
+
+- A daily loop's run now counts as that day's run only if it started at or
+  after its time. A Run now earlier in the day no longer cancels the
+  evening's scheduled run, which is how a launchd calendar job behaves.
 
 - A Resume session runs the tests that cover its change and the full
   suite at most once, to a file, and only when the change is wide or

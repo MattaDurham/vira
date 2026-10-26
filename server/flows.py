@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -223,13 +224,18 @@ def _graph_for_routine(row):
         "every_hours": row.get("every_hours"),
         "enabled": bool(row.get("enabled")), "notify": bool(row.get("notify")),
     }
+    # A command routine's "source" is the line it runs, shown where a
+    # prompt would be.
+    prompt = (" ".join(shlex.quote(a) for a in row.get("command") or [])
+              if row.get("kind") == "command" else row.get("prompt") or "")
     native = {
         "id": f"{rid}:native", "type": "native", "name": row.get("name") or rid,
         "description": row.get("description") or "Native Vira operation.",
         "x": 470, "y": 170, "width": 280, "height": 148,
-        "prompt": row.get("prompt") or "", "model": row.get("model") or "",
+        "prompt": prompt, "model": row.get("model") or "",
         "mode": row.get("mode") or "", "source": "routine-native",
         "routine_id": rid, "source_ref": rid, "locked": True,
+        "engine": "command" if row.get("kind") == "command" else "",
     }
     return {
         "id": f"routine:{rid}", "source_id": rid,
@@ -246,7 +252,9 @@ def _cadence(row):
     if row.get("daily_at"):
         return f"Daily at {row['daily_at']}"
     hours = row.get("every_hours")
-    return f"Every {hours:g} hours" if isinstance(hours, (int, float)) else "Manual"
+    if not isinstance(hours, (int, float)):
+        return "Manual"
+    return "Every hour" if hours == 1 else f"Every {hours:g} hours"
 
 
 def list_flows():
