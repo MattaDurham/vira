@@ -315,6 +315,15 @@ def permission_checks(tool_call, spec):
              raw if isinstance(raw, dict) else {})]
 
 
+def offered_models(options):
+    """The model ids a session's configOptions offer, or [] if unstated."""
+    for option in options or []:
+        if isinstance(option, dict) and option.get("id") == "model":
+            return [str(o.get("value")) for o in option.get("options") or []
+                    if isinstance(o, dict) and o.get("value")]
+    return []
+
+
 def pick_option(options, allowed):
     """The ACP outcome for a gate verdict.
 
@@ -392,6 +401,7 @@ class GrokSession:
         self.segment = ""
         self.message_id = uuid.uuid4().hex
         self.calls = {}
+        self.open_receipts = set()
         self.denied = None
 
     # ------------------------------------------------- agent -> client ---
@@ -498,6 +508,14 @@ class GrokSession:
         options = result.get("configOptions") or []
         model = self.spec.get("model_resolved") or self.spec.get("model")
         if model:
+            offered = offered_models(options)
+            if offered and model not in offered:
+                # Refuse by name rather than run another model: an API-lane
+                # id, or one this account's plan does not include.
+                raise AcpUnavailable(
+                    f"{model} is not a model your Grok subscription offers "
+                    f"here ({', '.join(offered)}) - pick one of those, or "
+                    "leave the model empty for the CLI's default")
             options = await self._set_option("model", model)
         if self.spec.get("effort"):
             options = await self._set_option("reasoning_effort", self.spec["effort"])
@@ -586,6 +604,7 @@ class GrokSession:
         if call.get("status") not in ("completed", "failed"):
             if kind == "tool_call" and hasattr(self.runner, "native_tool"):
                 self.runner.native_tool(call_id, name, args)
+                self.open_receipts.add(call_id)
             return
         piece = render_tool(call)
         if piece:
@@ -605,6 +624,17 @@ class GrokSession:
         else:
             self.runner.record_tool(name, {"query": str(args)[:200]})
         self.calls.pop(call_id, None)
+        self.open_receipts.discard(call_id)
+
+    def _close_open_receipts(self):
+        """A cancelled turn can leave a started call with no final update;
+        its receipt must not read "running" forever."""
+        for call_id in list(self.open_receipts):
+            call = self.calls.pop(call_id, {})
+            self.runner.native_tool(call_id, _native_name(call), {},
+                                    error="the turn ended before this call finished",
+                                    completed=True)
+        self.open_receipts.clear()
 
     async def _prompt(self, text):
         """One session/prompt; streams its updates. Returns the stop reason."""
@@ -657,11 +687,13 @@ class GrokSession:
             # The turn record must close whatever ended it; the runner
             # reports the error itself.
             self._close_segment()
+            self._close_open_receipts()
             if hasattr(self.runner, "end_turn"):
                 self.runner.end_turn("interrupted" if self.runner.interrupted
                                      else "failed", "")
             raise
         self._close_segment()
+        self._close_open_receipts()
         if self.runner.interrupted:
             status = "interrupted"
         elif stop == "end_turn":

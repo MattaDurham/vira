@@ -330,7 +330,9 @@ def ask(method, params):
 def update(sid, upd):
     send({"method": "session/update", "params": {"sessionId": sid, "update": upd}})
 def options():
-    return [{"id": k, "currentValue": v} for k, v in state["opts"].items()]
+    out = [{"id": k, "currentValue": v} for k, v in state["opts"].items()]
+    out[0]["options"] = [{"value": "grok-default"}, {"value": "grok-pick"}]
+    return out
 def tool(sid, tid, kind, name, raw, path=None):
     update(sid, {"sessionUpdate": "tool_call", "toolCallId": tid, "title": name,
                  "rawInput": raw,
@@ -584,6 +586,15 @@ class GrokAcpProtocolTest(unittest.TestCase):
         transcript = "".join(runner.out)
         self.assertNotIn("OLD ANSWER", transcript)
         self.assertEqual(self.received("session/load")[0]["params"]["sessionId"], "s-1")
+
+    def test_a_model_the_subscription_does_not_offer_is_refused_by_name(self):
+        runner = FakeRunner(self.cwd, model="grok-api-only-id")
+        with self.assertRaises(grokacp.AcpUnavailable) as ctx:
+            self.run_turn(runner)
+        self.assertIn("grok-api-only-id", str(ctx.exception))
+        self.assertIn("grok-pick", str(ctx.exception))
+        self.assertEqual(self.received("session/set_config_option"), [])
+        self.assertEqual(self.received("session/prompt"), [])
 
     def test_resume_refuses_a_session_from_another_lane(self):
         self.joblog.get_record.return_value = {"session_transport": "xai-function-api"}
