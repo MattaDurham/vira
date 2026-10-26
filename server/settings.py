@@ -37,12 +37,16 @@ def strip_env():
     """A child-process environment with every ANTHROPIC_*/CLAUDE* var
     removed. A session-scoped var makes a spawned claude CLI ignore its
     own stored login (the CRM call_claude gotcha), so children must run
-    on the persistent credential. The one home for the strip — except
-    aihealth.py, which keeps its own copy BY DESIGN (health must not
+    on the persistent credential. XAI_API_KEY goes for the same reason:
+    the grok CLI lets it outrank `grok login`, which would bill a "use my
+    subscription" run to the per-token API (Vira's own xAI key is
+    VIRA_XAI_KEY and never reaches a child). The one home for the strip —
+    except aihealth.py, which keeps its own copy BY DESIGN (health must not
     depend on modules it checks). Distinct from session._sdk_env, which
     BLANKS vars to "" because SDK options merge over os.environ."""
     return {k: v for k, v in os.environ.items()
-            if not (k.startswith("ANTHROPIC_") or k.startswith("CLAUDE"))}
+            if not (k.startswith("ANTHROPIC_") or k.startswith("CLAUDE")
+                    or k == "XAI_API_KEY")}
 CONFIG_PATH = ROOT / "data" / "config.json"
 FIXTURES = ROOT / "fixtures"
 FIXTURE_CRM = ROOT / "data" / "fixture-crm"

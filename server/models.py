@@ -133,9 +133,9 @@ PROVIDERS = {
         # codex exec remains a compatibility fallback for older binaries.
         "can": {"draft": True, "sessions": True},
     },
-    # The API-function rows. Both have CLIs that may exist on a machine
-    # (gemini, grok), but Vira's verified session path is their public
-    # function-calling API; status therefore derives from the API key.
+    # Google is an API-function row: the gemini CLI may exist on a machine,
+    # but Vira's verified session path is its public function-calling API,
+    # so status derives from the API key. xAI has both lanes (below).
     "google": {
         "label": "Google",
         "sub_name": "Gemini",
@@ -154,19 +154,37 @@ PROVIDERS = {
         "config_keys": {"api": "google_api_model"},
         "can": {"draft": True, "sessions": True},
     },
+    # Two lanes. The Grok Build CLI (`grok`) signed in with `grok login`
+    # draws on the owner's Grok subscription; a pasted key bills the xAI
+    # API per token. The CLI lane is the subscription one, so it wins whenever
+    # it is signed in (agentbackend.session_backend).
     "xai": {
         "label": "xAI",
         "sub_name": "Grok",
         "bin": "grok",
-        "paths": ["~/.grok/bin/grok", "/opt/homebrew/bin/grok"],
-        "status_cmd": None,
-        "login_args": [],
+        # The official installer links ~/.grok/bin/grok and, when that
+        # folder is on PATH, ~/.local/bin/grok.
+        "paths": ["~/.grok/bin/grok", "~/.local/bin/grok",
+                  "/opt/homebrew/bin/grok"],
+        # Grok Build has no `auth status`. `grok models` is the cheapest
+        # tell: no model call, ~0.3 s, and signed out it prints "You are
+        # not authenticated." with exit 0 (grok 1.0.70, 2026-10-26).
+        # --no-auto-update keeps a probe from starting a background update.
+        "status_cmd": ["--no-auto-update", "models"],
+        # With no terminal, plain `grok login` already picks the device-code
+        # flow; the flag pins it. The URL it prints carries the code, so the
+        # owner approves in any browser and pastes nothing back.
+        "login_args": ["login", "--device-auth"],
+        "login_paste": False,
         "api_env": "VIRA_XAI_KEY",
         "key_url": "https://console.x.ai",
-        "install_url": "",
+        "install_url": "https://docs.x.ai/build/overview",
+        "install_cmd": "curl -fsSL https://x.ai/cli/install.sh | bash",
+        "install_cmd_win": "irm https://x.ai/cli/install.ps1 | iex",
+        # No aliases: cli_models reads the installed CLI's own list.
         "models": {"cli": [], "api": []},
         "models_url": "https://api.x.ai/v1/models",
-        "config_keys": {"api": "xai_api_model"},
+        "config_keys": {"cli": "xai_cli_model", "api": "xai_api_model"},
         "can": {"draft": True, "sessions": True},
     },
 }
@@ -247,6 +265,8 @@ def cli_models(pid):
         bundled = _codex_bundled_models()
         if bundled:
             return bundled
+    if pid == "xai":
+        return _grok_models()
     found = cli_default_model(pid)
     if found and spec.get("cli_config"):
         return [{"id": found, "label": spec["cli_config"]["label"]}]
@@ -287,6 +307,45 @@ def _codex_bundled_models(refresh=False):
                     "reasoning": [str(level.get("effort"))
                                   for level in row.get("supported_reasoning_levels", [])
                                   if level.get("effort")]})
+    with _lock:
+        _cli_catalog_cache[binary] = (time.monotonic(), list(out))
+    return out
+
+
+# One row of `grok models`: "  * grok-4.6 (default)" or "  - grok-4.5".
+_GROK_MODEL_ROW = re.compile(r"^\s*[*-]\s+(\S+)(\s+\(default\))?\s*$")
+
+
+def _grok_models(refresh=False):
+    """The installed Grok CLI's own model list, or an empty list.
+
+    `grok models` makes no model call; signed in it lists what the account
+    may run. Its output is text, parsed loosely: a row the pattern does not
+    match is skipped, never guessed at. The default row is labelled so a
+    picker can say which one "Let xAI choose" means."""
+    binary = find_binary("xai")
+    if not binary:
+        return []
+    with _lock:
+        hit = _cli_catalog_cache.get(binary)
+        if hit and not refresh and time.monotonic() - hit[0] < MODELS_TTL:
+            return list(hit[1])
+    try:
+        proc = subprocess.run(
+            [binary] + PROVIDERS["xai"]["status_cmd"],
+            capture_output=True, text=True, encoding="utf-8", timeout=8,
+            env=settings.strip_env())
+        text = proc.stdout if proc.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        text = ""
+    out = []
+    for line in text.splitlines():
+        m = _GROK_MODEL_ROW.match(line)
+        if m and m.group(1) not in {row["id"] for row in out}:
+            # Pickers append the id to a label that differs from it, so
+            # the default row reads "CLI default · grok-4.7".
+            out.append({"id": m.group(1),
+                        "label": "CLI default" if m.group(2) else m.group(1)})
     with _lock:
         _cli_catalog_cache[binary] = (time.monotonic(), list(out))
     return out
@@ -385,6 +444,7 @@ LOGIN_TIMEOUT = 600
 _login_lock = threading.Lock()
 _login = {"pid": "", "proc": None, "out": None, "started": 0.0, "error": ""}
 _LOGIN_URL_RE = re.compile(r"https://\S+")
+_LOGIN_CODE_RE = re.compile(r"[?&]user_code=([A-Za-z0-9-]+)")
 
 # Demo mode only (settings.demo — a sandbox served with --demo). Providers the
 # owner has "connected" while walking the flow. In-process and deliberately not
@@ -509,8 +569,14 @@ def login_status(pid):
     if mine and not running and exit_code not in (None, 0) and not error:
         tail = [ln.strip() for ln in out.splitlines() if ln.strip()]
         error = tail[-1][:200] if tail else f"sign-in exited ({exit_code})"
+    code = _LOGIN_CODE_RE.search(m.group(0)) if m else None
     return {"provider": pid, "running": running,
             "url": m.group(0) if m else "",
+            # A device-code flow (grok) finishes when the owner approves in
+            # the browser: there is nothing to paste back, only a code to
+            # check against the page.
+            "paste": bool((PROVIDERS.get(pid) or {}).get("login_paste", True)),
+            "code": code.group(1) if code else "",
             "connected": connected, "error": error}
 
 
@@ -568,9 +634,33 @@ def _probe_auth(pid, binary):
     low = out.lower()
     if res.returncode != 0 or any(t in low for t in (
             "not logged in", "not signed in", "no credentials",
-            "please log in", "please sign in", "unauthenticated")):
+            "please log in", "please sign in", "unauthenticated",
+            "not authenticated")):
         return LOGGED_OUT, (out.splitlines() or ["not signed in"])[0][:160]
     return SIGNED_IN, (out.splitlines() or ["signed in"])[0][:160]
+
+
+SIGNED_IN_TTL = 5.0      # one Config paint asks per module; spawn once
+_signed_in_cache = {}
+
+
+def cli_signed_in(pid):
+    """Whether this provider's CLI is installed AND signed in to the
+    owner's own account - the subscription lane, with any API key ignored.
+    probe() folds a key in after this question; a lane choice must not.
+    Reused for a few seconds: a module snapshot asks once per module, and a
+    sign-in is read fresh by probe() itself, so nothing waits on the TTL."""
+    binary = find_binary(pid)
+    if not binary or not (PROVIDERS.get(pid) or {}).get("status_cmd"):
+        return False
+    with _lock:
+        hit = _signed_in_cache.get(binary)
+    if hit and time.monotonic() - hit[0] < SIGNED_IN_TTL:
+        return hit[1]
+    ok = _probe_auth(pid, binary)[0] == SIGNED_IN
+    with _lock:
+        _signed_in_cache[binary] = (time.monotonic(), ok)
+    return ok
 
 
 class ProviderDisabled(ValueError):
@@ -625,12 +715,14 @@ def probe(pid):
         return None
     binary = find_binary(pid)
     key = api_key(pid)
+    cli_auth = ABSENT
     if settings.demo() and pid in _demo_connected:
         # Stage prop, labelled as one: the whole point of demo mode is that
         # `ai` reaches done so the splash and the reveal actually run.
         auth, detail = SIGNED_IN, "demo mode — not a real sign-in"
     elif binary:
         auth, detail = _probe_auth(pid, binary)
+        cli_auth = auth
         # A logged-out CLI with a key on file is still usable, via the API.
         if auth == LOGGED_OUT and key:
             auth, detail = KEY, "using the API key on file"
@@ -643,7 +735,11 @@ def probe(pid):
 
     login_cmd = login_command(pid, binary)
     from . import agentbackend
-    caps = agentbackend.capabilities(pid)
+    # The lane a session would take now, from the login just probed rather
+    # than a second probe (agentbackend.session_backend would run one).
+    backend = agentbackend.default_lane(pid, cli_auth == SIGNED_IN,
+                                        bool(binary), bool(key))
+    caps = agentbackend.capabilities(pid, backend)
     disabled = is_disabled(pid)
     auth_ok = auth in (SIGNED_IN, KEY)
     return {
@@ -659,6 +755,7 @@ def probe(pid):
         "can": {"draft": bool(caps.get("draft")),
                 "sessions": bool(caps.get("sessions"))},
         "capabilities": caps,
+        "session_backend": backend,
         "sessions_quality": _sessions_quality(pid, spec["can"]["sessions"]),
         "login_cmd": login_cmd,
         "key_url": spec.get("key_url", ""),
@@ -867,9 +964,15 @@ def catalog(pid, refresh=False):
         return {"cli": [], "api": [], "api_live": False,
                 "api_detail": "", "cli_detail": ""}
     live, detail = _live_models(pid, refresh)
-    cli = cli_models(pid) if pid != "openai" else []
+    cli = cli_models(pid) if pid not in ("openai", "xai") else []
     if pid == "openai":
         cli, cli_detail = _codex_catalog(refresh)
+    elif pid == "xai":
+        # The CLI's list is the subscription's own; API ids are a different
+        # account and are not unioned in below.
+        cli = _grok_models(refresh)
+        cli_detail = (f"from `grok models` - {len(cli)} models" if cli
+                      else "")
     elif spec["models"]["cli"]:
         cli_detail = ("CLI aliases; the installed CLI chooses the version. "
                       "The session shows the exact model after startup.")
@@ -877,7 +980,7 @@ def catalog(pid, refresh=False):
         cli_detail = f"read from {spec['cli_config']['path']}"
     else:
         cli_detail = ""
-    if cli and live and pid != "openai":
+    if cli and live and pid not in ("openai", "xai"):
         known = {m["id"] for m in cli}
         cli = cli + [m for m in live if m["id"] not in known]
         cli_detail += f" + {len(live)} live ids from your API key"

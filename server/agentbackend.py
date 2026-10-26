@@ -69,46 +69,14 @@ CLI_EXEC = {
         "label": "Codex",
         "argv": _codex_argv,
     },
-    # xAI's grok CLI advertises the whole headless surface (--single /
-    # --output-format streaming-json / --permission-mode) and still does NOT
-    # get a row: the blocker is measured below, not a guess.
-    #
-    # The 2026-07-28 "hung before its first byte" note was imprecise. Probed
-    # again on 2026-07-30 (grok 0.2.14, signed OUT): it emits bytes fine and
-    # then blocks on an INTERACTIVE OAUTH FLOW — it prints an auth.x.ai
-    # sign-in URL and waits on a loopback browser callback that never comes.
-    # So the failure is an auth flow, not a wedged transport, and that is the
-    # dangerous shape: a detached runner has no terminal and nobody to click,
-    # so it would park at that prompt with a live heartbeat, doing nothing —
-    # the silent-stall class ask_owner exists to end. Whoever lands this row
-    # needs an auth PRECHECK before spawn, not just an argv function; the
-    # CLI offers no cheap `auth status` (hence status_cmd None in
-    # models.PROVIDERS), and `grok models` answering "You are not
-    # authenticated" is the cheapest tell found so far.
-    #
-    # The mechanism Vira would actually use IS verified: exporting
-    # XAI_API_KEY diverts it off OAuth straight to api.x.ai/v1/responses
-    # ("the API key takes precedence over browser credentials"), which is why
-    # the xai row already carries api_env + key_url. A deliberately bogus key
-    # failed fast and honestly — exit 1, one JSONL line on stdout. Wire shape
-    # for the renderer: stdout is JSONL in a {"type": ...} envelope, the same
-    # family _run_turn already parses (an error turn is
-    # {"type":"error","message":...}); stderr is ANSI tracing noise and must
-    # be drained concurrently exactly as codex's is. The permission ladder
-    # also maps nearly 1:1 — grok's --permission-mode takes default,
-    # acceptEdits, auto, dontAsk, bypassPermissions and plan, so three of
-    # Vira's rungs are spelled identically, and it has its own --sandbox
-    # profile for sandbox_for() to target.
-    #
-    # What is still UNMEASURED is precisely what a row needs: the event names
-    # of a SUCCESSFUL turn (assistant message, tool call, thread/session id)
-    # and whether -r/--resume continues a conversation — the two things
-    # _render_item and the resume argument are built out of. No xAI credential
-    # exists on this machine (no env var, no shell profile, no keychain entry,
-    # nothing in the secrets ladder), so a successful turn could not be run.
-    # Guessing those names would ship a renderer that blanks transcripts.
-    # Honesty over reach: a key pasted in Config, or `grok login
-    # --device-auth`, is all that stands between this comment and a row.
+    # xAI's Grok Build CLI has no row here on purpose: its session lane is
+    # `grok agent stdio`, the Agent Client Protocol (grokacp.py), which
+    # carries approvals, cancel and resume over one process. A one-process-
+    # per-turn `grok -p` row would be a worse lane, not a fallback. The
+    # 2026-07-30 blocker (a signed-out CLI parks on an OAuth page nobody will
+    # click) is answered by grokacp's auth precheck: ACP's initialize lists
+    # the auth methods, and with no stored login the session stops by name
+    # before any prompt is sent.
 }
 
 
@@ -142,10 +110,84 @@ CAPABILITIES = {
     },
 }
 
+# A provider with more than one session lane: the contract of each lane
+# that differs from the provider row above. xAI's CLI lane is Grok Build
+# over ACP (grokacp.py): Grok's own shell and file tools, every one of them
+# asked of runner.gate through session/request_permission; Vira's registry
+# through the session's MCP bridge (mcpbridge.py); session/cancel stops a
+# turn in flight. ACP has no in-turn steering, so a steer waits for the
+# turn boundary, as on the API lane.
+LANE_CAPABILITIES = {
+    ("xai", "cli"): {
+        "draft": True, "sessions": True, "native_tools": True,
+        "workspace_tools": True,
+        "approvals": True, "owner_questions": True, "resume": True,
+        "steering": False, "interrupt": True, "model_catalog": True,
+    },
+}
 
-def capabilities(pid):
-    """A copy of the verified feature contract for one provider."""
+# The lanes each provider's sessions can run on, the subscription lane
+# first. One lane means there is nothing to choose.
+SESSION_LANES = {"anthropic": ("cli",), "openai": ("cli",),
+                 "google": ("api",), "xai": ("cli", "api")}
+
+
+def capabilities(pid, backend=None):
+    """A copy of the verified feature contract for one provider - for the
+    lane a session would run on now, unless `backend` names one."""
+    if len(SESSION_LANES.get(pid, ())) > 1:
+        lane = backend if backend in SESSION_LANES[pid] else session_backend(pid)
+        if (pid, lane) in LANE_CAPABILITIES:
+            return dict(LANE_CAPABILITIES[(pid, lane)])
     return dict(CAPABILITIES.get(pid, {}))
+
+
+def default_lane(pid, cli_signed_in, cli_present, has_key):
+    """The lane a session on `pid` takes when nothing pins one.
+
+    The subscription lane wins whenever its CLI is signed in: that is the
+    point of having it, since the API lane bills per token. Otherwise a key
+    on file means the API lane works. With neither, the CLI lane is named
+    when the CLI is installed, so the refusal says "sign in" rather than
+    "paste a key" - the cheaper fix for someone who has the subscription."""
+    lanes = SESSION_LANES.get(pid, ("cli",))
+    if len(lanes) == 1:
+        return lanes[0]
+    if cli_signed_in:
+        return "cli"
+    if has_key:
+        return "api"
+    return "cli" if cli_present else "api"
+
+
+def session_backend(pid, requested=None, resumed_from=None):
+    """"cli" | "api" - which lane a session on `pid` runs on.
+
+    A resume stays on the lane its conversation lives in: a Grok Build
+    session id means nothing to the function API and the reverse. Then an
+    explicit pick (a module's backend, a pinned runtime) wins. Then
+    default_lane, which probes the CLI's login - no model call."""
+    lanes = SESSION_LANES.get(pid, ("cli",))
+    if len(lanes) == 1:
+        return lanes[0]
+    if resumed_from:
+        from . import joblog
+        prior = joblog.get_record(resumed_from) or {}
+        recorded = lane_of_transport(pid, prior.get("session_transport"))
+        if recorded:
+            return recorded
+    want = str(requested or "").strip().lower()
+    if want in lanes:
+        return want
+    return default_lane(pid, models.cli_signed_in(pid),
+                        bool(models.find_binary(pid)),
+                        bool(models.api_key(pid)))
+
+
+def lane(spec):
+    """The lane a launched session runs on: the one recorded at launch."""
+    pid = spec.get("provider") or "anthropic"
+    return session_backend(pid, spec.get("backend"))
 
 
 def validate_effort(provider, effort):
@@ -158,24 +200,37 @@ def validate_effort(provider, effort):
     if not value:
         return None
     allowed = {"anthropic": {"low", "medium", "high", "xhigh", "max"},
-               "openai": {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}}
+               "openai": {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+               # grok --reasoning-effort, as its bundled README lists it
+               # (1.0.70); the model itself refuses a level it lacks.
+               "xai": {"none", "minimal", "low", "medium", "high", "xhigh", "max"}}
     if value not in allowed.get(provider, set()):
         raise ValueError(f"reasoning effort {value!r} is not supported by the {provider} adapter")
     return value
 
 
 # The transport each adapter STAMPS on the ledger row (joblog.record_session
-# `transport`). A parity check reads this to ask "did the session run on the
-# lane its provider is supposed to run on", so the strings here must be the
-# ones the adapters actually write - tests/test_parity_flows.py pins each
-# against the adapter's source, because a table that drifts from the writers
-# would grade every session as off-lane while nothing was wrong.
-EXPECTED_TRANSPORT = {
-    "anthropic": "claude-sdk",
-    "openai": "codex-app-server",
-    "google": "google-function-api",
-    "xai": "xai-function-api",
+# `transport`), per lane. A parity check reads this to ask "did the session
+# run on a lane its provider is supposed to run on", so the strings here must
+# be the ones the adapters actually write - tests/test_parity_flows.py pins
+# each against the adapter's source, because a table that drifts from the
+# writers would grade every session as off-lane while nothing was wrong.
+LANE_TRANSPORT = {
+    "anthropic": {"cli": "claude-sdk"},
+    "openai": {"cli": "codex-app-server"},
+    "google": {"api": "google-function-api"},
+    "xai": {"cli": "grok-acp", "api": "xai-function-api"},
 }
+EXPECTED_TRANSPORT = {pid: tuple(by_lane.values())
+                      for pid, by_lane in LANE_TRANSPORT.items()}
+
+
+def lane_of_transport(pid, transport):
+    """The lane a recorded transport belongs to, or None when unrecorded."""
+    for lane, stamped in LANE_TRANSPORT.get(pid, {}).items():
+        if transport and transport == stamped:
+            return lane
+    return None
 
 
 def provider_of_model(model):
@@ -300,13 +355,14 @@ def sandbox_for(spec):
     return "workspace-write"
 
 
-def default_model(pid):
-    """The provider's configured CLI model, for a launch that names none."""
+def default_model(pid, backend=None):
+    """The provider's configured model for the session's lane (its CLI
+    model unless the lane is the API), for a launch that names none."""
     from .suggest import config
     cfg = config()
-    key = (models.PROVIDERS.get(pid, {}).get("config_keys") or {}).get("cli") \
-        or (models.PROVIDERS.get(pid, {}).get("config_keys") or {}).get("api")
-    return cfg.get(key) or ""
+    keys = models.PROVIDERS.get(pid, {}).get("config_keys") or {}
+    key = keys.get(backend) if backend else None
+    return cfg.get(key or keys.get("cli") or keys.get("api")) or ""
 
 
 # ---------------------------------------------------------------- the run ---
@@ -568,6 +624,20 @@ async def run_provider_session(runner):
                 f"[vira] Codex App Server unavailable ({e}); falling back "
                 "to compatibility exec mode without native Vira cards\n")
         return await run_cliexec(runner)
+    if spec.get("provider") == "xai" and lane(spec) == "cli":
+        binary = models.find_binary("xai")
+        if not binary:
+            runner.append("[vira] Grok CLI not found - install it from "
+                          "Config > AI (or paste an xAI API key) and start "
+                          "the session again\n")
+            return "", False
+        from . import grokacp
+        runner.append(
+            "[vira] Grok session via Grok Build (ACP) on your Grok "
+            "subscription - Grok's own tools ask Vira's permission gate, "
+            "Vira tools come through the session's MCP bridge, Stop cancels "
+            "the turn\n")
+        return await grokacp.run_session(runner, binary, settings.strip_env())
     if spec.get("provider") in ("google", "xai"):
         from . import functionagent
         return await functionagent.run_session(runner, spec["provider"])

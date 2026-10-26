@@ -34,7 +34,7 @@ MODULES = {
 ALIASES = {"feed": "people", "find-cloud": "find", "find-related": "find",
            "brain": "find", "search": "find", "radar": "people"}
 SESSION_BACKENDS = {"anthropic": ["cli"], "openai": ["cli"],
-                    "google": ["api"], "xai": ["api"]}
+                    "google": ["api"], "xai": ["cli", "api"]}
 _active = ContextVar("vira_model_module", default=None)
 
 
@@ -150,7 +150,9 @@ def _effective(cfg, module_id):
         pid, backend = cfg["ai_provider"], cfg["ai_backend"]
         error = str(exc)
     if MODULES[module_id][2] == "session" and not cfg.get("_module_model_explicit"):
-        backend = SESSION_BACKENDS.get(pid, [backend])[0]
+        from . import agentbackend
+        backend = (agentbackend.session_backend(pid) if pid in SESSION_BACKENDS
+                   else backend)
     key = models.PROVIDERS.get(pid, {}).get("config_keys", {}).get(backend)
     return {"provider": pid, "backend": backend,
             "model": cfg.get(key, "") if key else ""}, error

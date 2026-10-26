@@ -5533,6 +5533,7 @@ class ConfigReq(BaseModel):
     openai_cli_model: str | None = None
     openai_api_model: str | None = None
     google_api_model: str | None = None
+    xai_cli_model: str | None = None
     xai_api_model: str | None = None
     # The curated picker roster (Cursor-style); [] restores "everything".
     model_roster: list[str] | None = None

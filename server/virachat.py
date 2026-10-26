@@ -257,13 +257,14 @@ def default_model_selection():
     model = (settings.get("chat_model") or "").strip() or None
     if model:
         provider = agentbackend.session_provider(model=model)
+        backend = agentbackend.session_backend(provider)
     else:
         provider, _native = chat_provider()
         provider = provider or agentbackend.default_session_provider()
+        backend = agentbackend.session_backend(provider)
         with modulemodels.scope(None):
-            model = agentbackend.default_model(provider)
-    return {"provider": provider, "model": model or "",
-            "backend": "cli" if provider in ("anthropic", "openai") else "api"}
+            model = agentbackend.default_model(provider, backend)
+    return {"provider": provider, "model": model or "", "backend": backend}
 
 
 def _conversation_context(turns, route):

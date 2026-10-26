@@ -105,6 +105,17 @@ screen walks the human through it, but you can close most of the distance:
   ChatGPT.app is detected automatically; otherwise
   `npm install -g @openai/codex`.
 
+- **If the owner wants Grok on their Grok subscription**: install the
+  Grok Build CLI with its piped installer (same disclosure as above; it
+  writes `~/.grok/bin` and a PATH block in the shell profile, no sudo):
+
+      curl -fsSL https://x.ai/cli/install.sh | bash    # macOS / Linux
+      irm https://x.ai/cli/install.ps1 | iex           # Windows
+
+  Sign-in is a device code: the Grok card's **Sign in with Grok** opens
+  the page and finishes on its own once the owner approves. There is no
+  code to paste back.
+
 - **Sign-in is the owner's act, and Vira drives it** — it is their
   subscription and their browser, but there is no terminal step: Vira's
   Connect screen runs the login flow itself. The owner clicks **Sign in**,

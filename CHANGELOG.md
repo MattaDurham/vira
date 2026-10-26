@@ -8,6 +8,19 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Grok on your Grok subscription. When the Grok Build CLI (`grok`) is
+  installed and signed in with `grok login`, xAI sessions run through
+  `grok agent stdio` (the Agent Client Protocol) and drafts through
+  `grok -p`, so they draw on the subscription instead of the per-token
+  API. Sessions get Grok's own shell and file tools, each write asked of
+  Vira's permission gate (a denial goes back to Grok and the turn carries
+  on), Vira's tools through a session-scoped MCP server, Stop, and
+  resume. Drafts run with every Grok tool removed. Config > AI signs the
+  CLI in with a device code (nothing to paste) and lists the account's
+  models; a new `xai_cli_model` setting picks one. With the CLI signed
+  out, Grok keeps running on an xAI API key as before. Code:
+  `server/grokacp.py`, `server/mcpbridge.py`.
+
 - Childcare coverage gaps. A new Childcare window holds the owner's pickup
   routine: each child's pickup time, who normally covers each school day,
   and optionally the school's calendar (a Calendar.app calendar or an ICS

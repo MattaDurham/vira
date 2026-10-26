@@ -9357,10 +9357,14 @@ async function instanceConfig() {
 // the idea-run sheet, so no picker can offer a model that isn't there.
 let _modelCat = null;
 let _modelCatAt = 0;
+// The last catalog that arrived, for synchronous readers (the run sheet's
+// quality note) that cannot await one.
+let _modelCatSeen = null;
 function modelCatalog(refresh) {
   if (!_modelCat || refresh || Date.now() - _modelCatAt > 30000) {
     _modelCatAt = Date.now();
     _modelCat = api("/api/models" + (refresh ? "?refresh=true" : ""))
+      .then((cat) => { _modelCatSeen = cat; return cat; })
       .catch((e) => { _modelCat = null; return { providers: [], active: "", error: e.message }; });
   }
   return _modelCat;
@@ -9404,8 +9408,12 @@ function providerOfModel(mid) {
 }
 
 // "" for a gated adapter; a caveat only for compatibility-grade engines.
+// The provider's record says which lane its sessions take now: xAI on the
+// Grok Build CLI has the shell/file harness, on its API key it does not.
 function sessionQualityNote(mid) {
   const p = providerOfModel(mid);
+  const rec = ((_modelCatSeen || {}).providers || []).find((r) => r.id === p);
+  if (rec && rec.capabilities && rec.capabilities.workspace_tools) return "";
   if (p === "google" || p === "xai")
     return " Vira tools, approvals, owner questions, and resume are native; "
       + "this API adapter does not provide local shell/file tools, in-flight "
@@ -15016,6 +15024,22 @@ function provCard(card, pr, st, ai) {
         (r) => `Vira now runs on ${r.provider.label}`);
       row.appendChild(use);
     }
+    // Connected on a key alone while a subscription CLI exists: the key
+    // bills per token, so say how to move onto the subscription.
+    if (pr.auth === "key" && pr.present && pr.login_cmd) {
+      card.appendChild(el("p", "hint",
+        `Running on your API key. Sign the ${pr.sub_name} CLI in to use ` +
+        "your subscription instead:"));
+      loginFlow(pr.id, pr.sub_name, card, () => loadSetup());
+    } else if (pr.auth === "key" && !pr.present && pr.install_cmd) {
+      card.appendChild(el("p", "hint",
+        `Running on your API key. To use your ${pr.sub_name} subscription ` +
+        "instead, install its command line, then sign in here:"));
+      const cmd = el("code", "setup-cmd", pr.install_cmd);
+      cmd.title = "click to copy";
+      cmd.onclick = () => { copyText(pr.install_cmd); toast("Command copied"); };
+      card.appendChild(cmd);
+    }
   } else if (pr.present && pr.login_cmd) {
     // Vira drives the auth flow itself (owner's ruling, 2026-07-28 — the
     // copy-a-command-into-a-terminal round trip was the disaster). The
@@ -15298,10 +15322,16 @@ function loginFlow(pid, subName, mount, onDone, big) {
     if (st.running) {
       btn.textContent = "waiting for the browser…";
       stat.hidden = false;
-      stat.textContent = st.demo ||
-        "Approve in the browser window that just opened, " +
-        "then paste the code it gives you:";
-      row.hidden = false;
+      // A device-code sign-in (Grok) finishes on its own once the owner
+      // approves; there is no code to paste back, only one to check.
+      const paste = st.paste !== false || !!st.demo;
+      stat.textContent = st.demo || (paste
+        ? "Approve in the browser window that just opened, " +
+          "then paste the code it gives you:"
+        : "Approve in the browser" +
+          (st.code ? " - the page should show the code " + st.code : "") +
+          ". This card notices when you are done.");
+      row.hidden = !paste;
       if (st.url && linkP.hidden) {
         linkP.hidden = false;
         linkP.appendChild(el("span", "", "Browser didn't open? "));

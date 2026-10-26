@@ -406,10 +406,16 @@ class Gates(Base):
         self.assertFalse(self.gate("guard_held", run=run)[0])
         run = self.probe_run(record={}, log=denial)
         self.assertFalse(self.gate("guard_held", run=run)[0])
-        run = self.probe_run(provider="xai", record={})
+        # xAI is judged by the lane the session ran on: its API lane has no
+        # workspace tools to guard, its Grok Build lane does.
+        run = self.probe_run(provider="xai", record={
+            "session_id": "f1", "transport": "xai-function-api"})
         ok, why = self.gate("guard_held", run=run)
         self.assertTrue(ok)
         self.assertIn("no workspace tools", why)
+        run = self.probe_run(provider="xai", record={
+            "session_id": "g1", "transport": "grok-acp"})
+        self.assertFalse(self.gate("guard_held", run=run)[0])
 
     def test_read_only_honored_and_worktree_gates(self):
         run = self.probe_run(record={"read_only": True})
@@ -597,18 +603,27 @@ class TransportContract(unittest.TestCase):
     def test_expected_transport_names_every_provider_the_way_its_adapter_does(self):
         self.assertEqual(set(agentbackend.EXPECTED_TRANSPORT),
                          set(agentbackend.CAPABILITIES))
+        self.assertEqual(set(agentbackend.LANE_TRANSPORT),
+                         set(agentbackend.CAPABILITIES))
         runner_src = (ROOT / "server" / "runner.py").read_text(encoding="utf-8")
         codex_src = (ROOT / "server" / "codexapp.py").read_text(encoding="utf-8")
         fa_src = (ROOT / "server" / "functionagent.py").read_text(encoding="utf-8")
+        grok_src = (ROOT / "server" / "grokacp.py").read_text(encoding="utf-8")
         self.assertIn('transport="claude-sdk"', runner_src)
         self.assertIn('transport="codex-app-server"', codex_src)
+        self.assertIn('TRANSPORT = "grok-acp"', grok_src)
+        self.assertIn("transport=TRANSPORT", grok_src)
         m = re.search(r'return f"\{self\.provider\}-(function-api)"', fa_src)
         self.assertIsNotNone(m, "functionagent's transport shape moved")
-        exp = agentbackend.EXPECTED_TRANSPORT
-        self.assertEqual(exp["anthropic"], "claude-sdk")
-        self.assertEqual(exp["openai"], "codex-app-server")
+        lanes = agentbackend.LANE_TRANSPORT
+        self.assertEqual(lanes["anthropic"], {"cli": "claude-sdk"})
+        self.assertEqual(lanes["openai"], {"cli": "codex-app-server"})
         for pid in ("google", "xai"):
-            self.assertEqual(exp[pid], f"{pid}-{m.group(1)}")
+            self.assertEqual(lanes[pid]["api"], f"{pid}-{m.group(1)}")
+        self.assertEqual(lanes["xai"]["cli"], "grok-acp")
+        exp = agentbackend.EXPECTED_TRANSPORT
+        for pid, by_lane in lanes.items():
+            self.assertEqual(set(exp[pid]), set(by_lane.values()))
 
     def test_the_forge_offers_exactly_the_engines_gates(self):
         src = (ROOT / "static" / "forge.js").read_text(encoding="utf-8")

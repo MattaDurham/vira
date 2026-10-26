@@ -563,8 +563,13 @@ history stays in place. A notice identifies the switch and any context limit.
 
 Coding jobs (Ideas > Plan / Implement, the Actions run buttons, the free
 prompt) run as persistent sessions on the selected provider. Claude uses
-the Claude Agent SDK; OpenAI uses Codex App Server. Gemini and Grok use
-API tools and do not provide local shell or file tools.
+the Claude Agent SDK; OpenAI uses Codex App Server. Grok uses the Grok
+Build CLI (`grok agent stdio`) when it is signed in with `grok login`, so
+sessions and drafts draw on your Grok subscription: Grok's own shell and
+file tools ask the same permission gate, and Vira's tools reach it through
+a session-scoped MCP server. Without that login, Grok runs on an xAI API
+key, as Gemini always does; the API adapters do not provide local shell
+or file tools.
 
 - **Permissions.** `manual` gates risky calls; `acceptEdits` allows file
   edits while gating commands; `bypassPermissions` allows calls except

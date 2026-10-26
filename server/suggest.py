@@ -29,13 +29,19 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 AI_KEYS = (
     "ai_provider", "providers_disabled", "ai_backend", "cli_model",
     "model_alias_overrides", "api_model", "api_key_env", "openai_cli_model",
-    "openai_api_model", "google_api_model", "xai_api_model", "model_roster",
-    "module_models", "timeout",
+    "openai_api_model", "google_api_model", "xai_cli_model", "xai_api_model",
+    "model_roster", "module_models", "timeout",
 )
 DEFAULTS = settingschema.defaults_for(AI_KEYS)
 
 # Providers with no CLI draft path — their backend is always the API.
-API_ONLY = ("google", "xai")
+API_ONLY = ("google",)
+
+# Every Grok Build tool, by the ids its --disallowed-tools takes (bundled
+# README, grok 1.0.70). A draft is a completion: Grok gets none of them.
+GROK_TOOLS = ("run_terminal_cmd", "read_file", "grep", "list_dir",
+              "search_replace", "write", "web_search", "web_fetch",
+              "todo_write", "task", "Agent")
 
 
 def base_config():
@@ -256,6 +262,43 @@ def _call_codex_cli(prompt, model, timeout, restricted=False):
     return res.stdout
 
 
+def _call_grok_cli(prompt, model, timeout):
+    """xAI's subscription path, the mirror of _call_codex_cli: one `grok -p`
+    turn on the `grok login` account rather than the per-token API.
+
+    A plain completion, as complete() promises every non-Anthropic backend:
+    every Grok tool is removed, web search and subagents are off, and the
+    turn runs in an empty scratch folder so no project rules, AGENTS.md or
+    .grok config can hand a capability back. The prompt rides in a file,
+    never argv, where a private thread would show in the process list."""
+    from . import models as provider
+    binary = provider.find_binary("xai")
+    if not binary:
+        raise RuntimeError("grok CLI not found on this machine")
+    with tempfile.TemporaryDirectory(prefix="vira-grok-") as scratch:
+        prompt_file = Path(scratch) / "prompt.txt"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        cmd = [binary, "--no-auto-update", "--prompt-file", str(prompt_file),
+               "--output-format", "json", "--cwd", scratch,
+               "--disallowed-tools", ",".join(GROK_TOOLS),
+               "--disable-web-search", "--no-subagents", "--no-plan"]
+        if model:                   # empty = the CLI's own default model
+            cmd += ["--model", model]
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", cwd=scratch, timeout=timeout,
+                             env=settings.strip_env())
+    if res.returncode != 0:
+        detail = (res.stderr.strip() or res.stdout.strip())[-400:]
+        raise RuntimeError(f"grok exit {res.returncode}: {detail}")
+    try:
+        envelope = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        return res.stdout
+    if not isinstance(envelope, dict):
+        return res.stdout
+    return str(envelope.get("text") or "")
+
+
 def _call_openai_api(prompt, model, timeout, key):
     body = json.dumps({
         "model": model,
@@ -318,7 +361,7 @@ def _provider_models(cfg, pid):
     if pid == "google":
         return "", cfg.get("google_api_model", "")
     if pid == "xai":
-        return "", cfg.get("xai_api_model", "")
+        return cfg.get("xai_cli_model", ""), cfg.get("xai_api_model", "")
     return cfg.get("cli_model", ""), cfg.get("api_model", "")
 
 
@@ -353,6 +396,13 @@ def effective_backend(cfg):
     if pid in API_ONLY:
         # No CLI to fall back to: the API is the only path, and a missing
         # key fails honestly rather than silently switching providers.
+        return pid, "api"
+    if pid == "xai" and backend == "cli" and key \
+            and not provider.cli_signed_in(pid):
+        # The grok CLI is optional: an install that drafted on its key
+        # before the CLI lane existed keeps doing so until `grok login`
+        # signs the subscription in. Asked of the CLI itself, because the
+        # health probe folds the key in and would call a dead login green.
         return pid, "api"
     if backend == "api" and not key:
         backend = "cli"
@@ -434,6 +484,9 @@ def _run_admitted(prompt, cfg, tools=None):
             if tools == []:
                 return _call_codex_cli(prompt, cli_model, cfg["timeout"], restricted=True), backend
             return _call_codex_cli(prompt, cli_model, cfg["timeout"]), backend
+        if pid == "xai":
+            # Always the restricted shape: no tools on any draft.
+            return _call_grok_cli(prompt, cli_model, cfg["timeout"]), backend
         return _call_cli(prompt, cli_model, cfg["timeout"], tools), backend
     except Exception as e:  # noqa: BLE001 — classify + record, then re-raise
         aihealth.note_failure(str(e), source="reply-draft")
