@@ -287,6 +287,17 @@ class HoodTests(Base):
         self.assertEqual(h["runs"][0]["status"], "ok")
         self.assertFalse(h["live"])
 
+    def test_an_interpreter_or_binary_is_never_shown_as_the_program(self):
+        # Windows CI: sys.executable is python.exe, which once came back
+        # as "the program" read as text.
+        for name in ("python.exe", "mytool"):
+            binary = self.work / name
+            binary.write_bytes(b"MZ\x90\x00\x03\x00binary")
+            h = routinesrc.hood(self.routine(command=[str(binary),
+                                                      str(self.program)]))
+            program = next(p for p in h["parts"] if p["id"] == "file:program")
+            self.assertEqual(program["path"], str(self.program), name)
+
     def test_an_inline_script_is_not_mistaken_for_a_file(self):
         row = self.routine(command=["/bin/bash", "-c", "echo hi\n" * 200])
         h = routinesrc.hood(row)

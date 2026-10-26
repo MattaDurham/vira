@@ -182,9 +182,9 @@ KIND_EFFECTS = {
 }
 
 # Interpreters a command routine's argv may start with; the file after one
-# is the program the panel shows in full.
-_INTERPRETERS = {"bash", "sh", "zsh", "python", "python3", "node", "env",
-                 "caffeinate"}
+# is the program the panel shows in full. Matched on the name without its
+# extension, so python.exe and python3.13 count too.
+_INTERPRETER = re.compile(r"(python[0-9.]*w?|bash|sh|zsh|node|env|caffeinate)")
 # A program file shown in the panel is read up to this size; a larger one
 # is named with its size instead of being shown.
 MAX_PROGRAM = 200 * 1024
@@ -364,18 +364,23 @@ def parts(r) -> list:
 
 def _program_file(r):
     """The program a command routine runs, as a read-only part: the first
-    argument after any interpreter that names a readable file."""
+    argument after any interpreter that names a readable text file. A
+    binary (a compiled tool, an interpreter by another name) is passed
+    over, so the panel never shows a binary as text."""
     cwd = Path(r.get("cwd") or ".")
     for arg in r.get("command") or []:
         if arg.startswith("-"):
             continue
-        if Path(arg).name in _INTERPRETERS:
+        if _INTERPRETER.fullmatch(Path(arg).stem.lower()):
             continue
         path = Path(arg) if Path(arg).is_absolute() else cwd / arg
         try:
             if not path.is_file():
                 return None
             size = path.stat().st_size
+            with open(path, "rb") as f:
+                if b"\0" in f.read(4096):
+                    continue
         except (OSError, ValueError):    # an inline script, not a file name
             return None
         text = (path.read_text(encoding="utf-8", errors="replace")
