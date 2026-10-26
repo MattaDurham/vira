@@ -54,7 +54,7 @@ RUNS = ROOT / "data" / "routine-runs"
 # records and their log folders are dropped, and "pruned" counts them so
 # the panel can say how many went. 3000 is four months of an hourly routine.
 KEEP_PER_ROUTINE = 3000
-# The record carries only the first errors, for the runs table; every line
+# The record carries only the first errors, for the Runs list; every line
 # stays in the run's log files.
 MAX_ERRORS = 20
 MAX_ERROR_CHARS = 400

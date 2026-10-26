@@ -576,7 +576,7 @@ def steps(r) -> list:
                     "Traceback or Error line as the errors."})
         out.append({
             "title": "Every run is listed",
-            "body": "The runs table in this panel: start, end, exit "
+            "body": "The Runs list in this panel: start, end, exit "
                     "status, counts, errors and the run's log lines. A run "
                     "whose runner died is marked interrupted on the next "
                     "tick."})

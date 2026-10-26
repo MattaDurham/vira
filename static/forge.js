@@ -1231,18 +1231,13 @@
     const pause = make("button", "fchip sm", "");
     pause.type = "button";
     actions.append(runNow, pause);
-    const scroller = make("div", "forge-cmd-scroll");
-    const table = make("table", "forge-cmd-runs");
-    const head = make("tr");
-    ["Start", "End", "Took", "Trigger", "Status", "Exit", "Counts", "Errors", ""].forEach((h) => head.appendChild(make("th", "", h)));
-    const thead = make("thead"); thead.appendChild(head);
-    const tbody = make("tbody");
-    table.append(thead, tbody);
-    scroller.appendChild(table);
+    // Two lines per run rather than a nine-column table: the node and the
+    // inspector are under 400px wide.
+    const list = make("div", "forge-cmd-runs");
     const foot = make("p", "forge-cmd-foot");
     const more = make("button", "fchip sm", "Show older runs");
     more.type = "button";
-    wrap.append(line, actions, scroller, foot, more);
+    wrap.append(line, actions, list, foot, more);
 
     let data = source;
     let older = [];
@@ -1290,37 +1285,39 @@
       }).catch((e) => cell.replaceChildren(make("p", "hint", `Could not load the log: ${e.message}`)));
     }
     function paintRows() {
-      tbody.replaceChildren();
+      list.replaceChildren();
       const rows = [...(data.runs || []), ...older];
       rows.forEach((r) => {
-        const tr = make("tr", `run-${r.status}`);
-        tr.append(make("td", "", stamp(r.started || r.queued)), make("td", "", LIVE_RUN.has(r.status) ? "-" : stamp(r.finished)),
-          make("td", "", took(r.started, r.finished)), make("td", "", r.trigger === "schedule" ? "schedule" : "Run now"));
-        const status = make("td"); status.appendChild(make("span", `forge-cmd-chip is-${r.status}`, r.status)); tr.appendChild(status);
-        tr.append(make("td", "", r.exit_code == null ? "-" : String(r.exit_code)), make("td", "", counts(r)));
-        const err = make("td", r.error_count ? "has-errors" : "", String(r.error_count || 0));
+        const row = make("div", `forge-cmd-run run-${r.status}`);
+        const top = make("div", "forge-cmd-run-top");
+        const end = LIVE_RUN.has(r.status) ? "still running" : stamp(r.finished);
+        const span = took(r.started, r.finished);
+        top.append(make("span", `forge-cmd-chip is-${r.status}`, r.status),
+          make("span", "", `${stamp(r.started || r.queued)} to ${end}${span ? ` (${span})` : ""}`),
+          make("span", "forge-cmd-dim", r.trigger === "schedule" ? "schedule" : "Run now"),
+          make("span", "forge-cmd-dim", `exit ${r.exit_code == null ? "-" : r.exit_code}`));
+        const bottom = make("div", "forge-cmd-run-bottom");
+        bottom.appendChild(make("span", "", counts(r)));
+        const err = make("span", r.error_count ? "has-errors" : "forge-cmd-dim",
+          `${r.error_count || 0} error line${r.error_count === 1 ? "" : "s"}`);
         if (r.errors?.length) err.title = r.errors[0];
-        tr.appendChild(err);
-        const logCell = make("td");
+        bottom.appendChild(err);
         const log = make("button", "fchip sm", open.has(r.id) ? "Hide log" : "Log");
         log.type = "button";
-        logCell.appendChild(log); tr.appendChild(logCell);
-        tbody.appendChild(tr);
+        bottom.appendChild(log);
+        row.append(top, bottom);
         if (open.has(r.id)) {
-          const extra = make("tr", "forge-cmd-logrow");
-          const cell = make("td"); cell.colSpan = 9;
-          extra.appendChild(cell); tbody.appendChild(extra);
+          const cell = make("div", "forge-cmd-logbox");
+          row.appendChild(cell);
           logRow(r, cell);
         }
         log.addEventListener("click", () => {
           if (open.has(r.id)) open.delete(r.id); else open.add(r.id);
           paintRows();
         });
+        list.appendChild(row);
       });
-      if (!rows.length) {
-        const tr = make("tr"); const td = make("td", "hint", "No runs yet."); td.colSpan = 9;
-        tr.appendChild(td); tbody.appendChild(tr);
-      }
+      if (!rows.length) list.appendChild(make("p", "hint", "No runs yet."));
       const shown = rows.length;
       foot.textContent = `${shown} of ${data.total || 0} runs shown${data.pruned ? `; ${data.pruned} older runs were dropped past the history limit` : ""}.`;
       more.hidden = shown >= (data.total || 0);
@@ -1353,10 +1350,16 @@
       const enabled = !data.enabled;
       try {
         await send(`/api/routines/${encodeURIComponent(rid)}`, "PUT", { enabled });
+        // markEnabled repaints the board, which rebuilds this node from its
+        // cached source; update the cache first so the new view is right,
+        // then refresh every live view (this one is detached by then).
+        data = { ...data, enabled, next_run: null };
+        if (node) node.source_detail = data;
         markEnabled(rid, enabled);
         toast(enabled ? "Resumed: it runs on its schedule again" : "Paused: it will not start on its schedule");
       } catch (e) { toast(`Could not ${enabled ? "resume" : "pause"}: ${e.message}`); }
-      refresh();
+      if (wrap.isConnected) refresh();
+      commandViews.forEach((f) => { if (f !== refresh) f(); });
     });
     more.addEventListener("click", async () => {
       try {
@@ -2536,7 +2539,7 @@
         idea_id: linked,
       });
       if (result.command_run) {
-        toast(`Run started (${result.command_run}). Its row is in the node's Runs table.`);
+        toast(`Run started (${result.command_run}). Its row is in the node's Runs list.`);
         commandViews.forEach((refresh) => refresh());
         return;
       }
