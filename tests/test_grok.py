@@ -77,7 +77,8 @@ class GrokRegistryTest(unittest.TestCase):
             got = models._grok_models()
         self.assertEqual([m["id"] for m in got],
                          ["grok-4.7", "grok-4.7-build-fast", "grok-4.6"])
-        self.assertIn("CLI default", got[0]["label"])
+        self.assertEqual(got[0]["label"], "CLI default")
+        self.assertEqual(got[1]["label"], "grok-4.7-build-fast")
 
     def test_signed_in_cli_puts_sessions_on_the_subscription_lane(self):
         with mock.patch.object(models, "find_binary", return_value="/x/grok"), \

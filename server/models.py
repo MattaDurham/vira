@@ -342,9 +342,10 @@ def _grok_models(refresh=False):
     for line in text.splitlines():
         m = _GROK_MODEL_ROW.match(line)
         if m and m.group(1) not in {row["id"] for row in out}:
+            # Pickers append the id to a label that differs from it, so
+            # the default row reads "CLI default · grok-4.7".
             out.append({"id": m.group(1),
-                        "label": m.group(1) + (" (CLI default)"
-                                               if m.group(2) else "")})
+                        "label": "CLI default" if m.group(2) else m.group(1)})
     with _lock:
         _cli_catalog_cache[binary] = (time.monotonic(), list(out))
     return out
