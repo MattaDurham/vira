@@ -849,8 +849,10 @@ def set_provider(pid, api_key=None, model=None):
                "ai_backend": "cli" if rec and rec["auth"] == provider.SIGNED_IN
                              else "api"}
     if model:
+        # The model belongs to the lane just chosen: xAI has both, and a
+        # key-only connection must not write the subscription CLI's model.
         ck = provider.PROVIDERS[pid]["config_keys"]
-        updates[ck.get("cli") or ck["api"]] = model
+        updates[ck.get(updates["ai_backend"]) or ck.get("cli") or ck["api"]] = model
     config_set(**updates)
     return {"provider": rec, "backend": updates["ai_backend"]}
 

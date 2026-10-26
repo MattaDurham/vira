@@ -341,6 +341,10 @@ SCHEMA = [
       "Empty runs whatever ~/.codex/config.toml is set to.", control="ai"),
     S("openai_api_model", "ai", "str", "", "OpenAI API model", control="ai"),
     S("google_api_model", "ai", "str", "", "Google API model", control="ai"),
+    S("xai_cli_model", "ai", "str", "", "xAI CLI model",
+      "The model the Grok Build CLI runs on your Grok subscription. Empty "
+      "runs the CLI's own default (the one `grok models` marks).",
+      control="ai"),
     S("xai_api_model", "ai", "str", "", "xAI API model", control="ai"),
     S("model_roster", "ai", "list", [], "Model roster",
       "The model ids enabled for pickers across every provider. Empty means "

@@ -121,6 +121,8 @@
   "_openai_cli_model": "Empty runs whatever ~/.codex/config.toml is set to.",
   "openai_api_model": "",
   "google_api_model": "",
+  "xai_cli_model": "",
+  "_xai_cli_model": "The model the Grok Build CLI runs on your Grok subscription. Empty runs the CLI's own default (the one `grok models` marks).",
   "xai_api_model": "",
   "model_roster": [],
   "_model_roster": "The model ids enabled for pickers across every provider. Empty means everything the catalog offers, so a future model arrives enabled unless you have curated. Edited in Config > Advanced AI settings.",

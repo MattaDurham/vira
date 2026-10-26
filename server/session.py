@@ -600,13 +600,14 @@ def module_session_model(choice):
     """
     provider = str(choice.get("provider") or "").strip().lower()
     backend = str(choice.get("backend") or "").strip().lower()
-    expected = "cli" if provider in ("anthropic", "openai") else "api"
+    lanes = agentbackend.SESSION_LANES.get(provider, ("api",))
     if not agentbackend.sessions_quality(provider):
         raise ValueError(f"{provider or 'This provider'} cannot host live agent sessions")
-    if backend != expected:
+    if backend not in lanes:
+        expected = " or ".join(lane.upper() for lane in lanes)
         raise ValueError(
-            f"{provider} conversations use the {expected.upper()} connection; "
-            f"choose its {expected.upper()} model for this module")
+            f"{provider} conversations use the {expected} connection; "
+            f"choose its {expected} model for this module")
     model = str(choice.get("model") or "").strip() or None
     # Includes the owner's provider-disable decision even when a caller
     # continues a parked session rather than dispatching a new runner.
@@ -711,14 +712,21 @@ class Sessions:
                     "folder, or connect the project's folder in Ideas")
         # Module defaults fill an unpinned dispatch. A run sheet, saved flow
         # stage, or resumed session already names its own engine and wins.
+        picked_backend = None
         if not model and not provider and not resume_session:
             choice = config().get("_module_model_explicit")
             if choice:
                 provider, model = module_session_model(choice)
+                picked_backend = choice.get("backend")
         # Which engine drives this session: an explicit provider wins, else
         # the model names it, else the configured session-capable go-to. A
         # CLI-exec provider runs the detached runner even without the SDK.
         prov = agentbackend.session_provider(model=model, provider=provider)
+        # And on which lane, for a provider that has two (xAI: the Grok
+        # subscription CLI or the API key). Chosen once, here, and recorded
+        # on the job: the runner and every later resume read it back.
+        backend = agentbackend.session_backend(prov, picked_backend,
+                                               resumed_from)
         effort = agentbackend.validate_effort(prov, effort)
         if not agentbackend.sessions_quality(prov):
             raise ValueError(
@@ -726,7 +734,7 @@ class Sessions:
                 "provider whose capability record includes sessions")
         live = SDK_AVAILABLE or agentbackend.uses_cli_exec({"provider": prov})
         workspace_tools = bool(
-            agentbackend.capabilities(prov).get("workspace_tools"))
+            agentbackend.capabilities(prov, backend).get("workspace_tools"))
         # Branch-first placement, decided HERE rather than asked of the model.
         # A session that can write lands in its own worktree; the gate then
         # refuses any write aimed back at the live checkout. Read-only
@@ -809,8 +817,7 @@ class Sessions:
                         f"({detail}); refusing to run in the live checkout "
                         f"at {cwd}")
         from . import answer_runtime
-        runtime = answer_runtime.manifest(prov, model, effort, runtime,
-                                         "api" if prov in ("google", "xai") else "cli")
+        runtime = answer_runtime.manifest(prov, model, effort, runtime, backend)
         machine = any((meta or {}).get(key) for key in ("machine", "routine_id", "circuit_run", "judge_of"))
         runtime.setdefault("work_class", "background" if machine else "foreground")
         runtime.setdefault("evidence_scope", {"vault_context": vault_context})
@@ -823,7 +830,7 @@ class Sessions:
                                     else permission_mode),
                 "model": (resolve_model(model) if prov == "anthropic"
                           else (model or "").strip() or None),
-                "provider": prov,
+                "provider": prov, "backend": backend,
                 "effort": effort, "runtime": runtime,
                 "publish_plan": publish_plan,
                 "vault_destination": vault_destination,
@@ -894,7 +901,7 @@ class Sessions:
         with modulemodels.scope(None):
             default_model = (resolve_model(config()["cli_model"])
                              if prov == "anthropic"
-                             else agentbackend.default_model(prov))
+                             else agentbackend.default_model(prov, data.get("backend")))
         spec.update({
             "provider": prov,
             # A launch that names no model runs the PROVIDER's configured
@@ -907,7 +914,7 @@ class Sessions:
         from . import answer_runtime
         spec.setdefault("runtime", answer_runtime.manifest(prov, spec["model_resolved"], spec.get("effort")))
         spec["runtime"]["configured"] = {"provider": prov,
-                                          "backend": "api" if prov in ("google", "xai") else "cli",
+                                          "backend": data.get("backend") or agentbackend.session_backend(prov),
                                           "model": spec["model_resolved"] or None,
                                           "effort": spec.get("effort")}
         data["runtime"] = spec["runtime"]

@@ -209,7 +209,15 @@ class CapabilityTest(unittest.TestCase):
         self.assertTrue(models.PROVIDERS["xai"]["can"]["sessions"])
         self.assertFalse(
             agentbackend.capabilities("google")["workspace_tools"])
-        self.assertFalse(agentbackend.capabilities("xai")["interrupt"])
+        # xAI's contract depends on the lane: its API adapter cannot stop a
+        # turn in flight or touch the workspace; Grok Build over ACP can.
+        api = agentbackend.capabilities("xai", "api")
+        self.assertFalse(api["interrupt"])
+        self.assertFalse(api["workspace_tools"])
+        cli = agentbackend.capabilities("xai", "cli")
+        self.assertTrue(cli["interrupt"])
+        self.assertTrue(cli["workspace_tools"])
+        self.assertFalse(cli["steering"])
 
     def test_codex_capabilities_are_first_class(self):
         from server import agentbackend
@@ -553,16 +561,16 @@ class ApiOnlyProviderTest(unittest.TestCase):
     def test_keyless_action_says_paste_a_key_not_install(self):
         with mock.patch.object(models, "find_binary", return_value=""), \
              mock.patch.object(models, "api_key", return_value=""):
-            r = models.probe("xai")
+            r = models.probe("google")
         self.assertIn("API key", r["action"])
         self.assertNotIn("install", r["action"])
 
     def test_a_present_cli_is_not_treated_as_signed_in(self):
-        # The grok/gemini CLIs exist on some machines, but neither exposes
-        # a cheap auth probe — presence must not read as connected.
-        with mock.patch.object(models, "find_binary", return_value="/x/grok"), \
+        # The gemini CLI exists on some machines but exposes no cheap auth
+        # probe — presence must not read as connected.
+        with mock.patch.object(models, "find_binary", return_value="/x/gemini"), \
              mock.patch.object(models, "api_key", return_value=""):
-            r = models.probe("xai")
+            r = models.probe("google")
         self.assertEqual(r["auth"], models.LOGGED_OUT)
         self.assertFalse(r["connected"])
         self.assertEqual(r["login_cmd"], "")

@@ -1312,7 +1312,10 @@ def logic_passes(operation, expected, combined, run, st_def):
     rec, state, log = probe["record"], probe["state"], probe["log"]
     provider = str(rec.get("provider") or state.get("provider")
                    or "anthropic")
-    caps = agentbackend.capabilities(provider)
+    # Judged by the lane the session ran on, not by what a launch now would
+    # pick: an xAI stage on the Grok CLI had shell and file tools.
+    caps = agentbackend.capabilities(provider, agentbackend.lane_of_transport(
+        provider, rec.get("session_transport")))
     want = expected.strip()
     tools = [_bare_tool(t.get("name")) for t in (state.get("tools") or [])]
     cards = [str(c.get("kind") or "") for c in (state.get("cards") or [])]
@@ -1326,10 +1329,10 @@ def logic_passes(operation, expected, combined, run, st_def):
         return got == want, f"transport {got or 'unrecorded'}"
     if operation == "transport_matches_provider":
         got = str(rec.get("session_transport") or "")
-        exp = agentbackend.EXPECTED_TRANSPORT.get(provider, "")
-        return bool(exp) and got == exp, (
+        exp = agentbackend.EXPECTED_TRANSPORT.get(provider, ())
+        return got in exp, (
             f"{provider} ran on {got or 'an unrecorded transport'}"
-            + (f", expected {exp}" if exp else ""))
+            + (f", expected {' or '.join(exp)}" if exp else ""))
     if operation == "model_used_contains":
         got = str(rec.get("model_used") or state.get("model_used") or "")
         return needle in got.casefold(), f"model_used {got or 'unrecorded'}"
