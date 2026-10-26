@@ -48,6 +48,7 @@ import ast
 import hashlib
 import os
 import re
+import shlex
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -180,6 +181,14 @@ KIND_EFFECTS = {
         "nothing builds until you approve one.",
 }
 
+# Interpreters a command routine's argv may start with; the file after one
+# is the program the panel shows in full. Matched on the name without its
+# extension, so python.exe and python3.13 count too.
+_INTERPRETER = re.compile(r"(python[0-9.]*w?|bash|sh|zsh|node|env|caffeinate)")
+# A program file shown in the panel is read up to this size; a larger one
+# is named with its size instead of being shown.
+MAX_PROGRAM = 200 * 1024
+
 SHARED = [
     ("routines", "is_due", "Whether a loop is due",
      "The cadence test. Reads the loop's last run against its schedule."),
@@ -308,6 +317,15 @@ def parts(r) -> list:
                                   "function to change it."))
         except Exception:  # noqa: BLE001
             pass
+    elif kind == "command":
+        prog = _program_file(r)
+        if prog:
+            out.append(prog)
+        out.append(_code_part(
+            "code:runner", "routinerun", "_run", "How each run is carried out",
+            "Runs in its own detached process, not in the server: the "
+            "program's output goes to the run's log and to the routine's "
+            "own log file, and the result is read from that text."))
     elif kind == "circuit":
         out.append(_part("field:circuit", "The recipe it runs",
                          r.get("circuit_id") or "(none chosen)",
@@ -344,6 +362,40 @@ def parts(r) -> list:
     return out
 
 
+def _program_file(r):
+    """The program a command routine runs, as a read-only part: the first
+    argument after any interpreter that names a readable text file. A
+    binary (a compiled tool, an interpreter by another name) is passed
+    over, so the panel never shows a binary as text."""
+    cwd = Path(r.get("cwd") or ".")
+    for arg in r.get("command") or []:
+        if arg.startswith("-"):
+            continue
+        if _INTERPRETER.fullmatch(Path(arg).stem.lower()):
+            continue
+        path = Path(arg) if Path(arg).is_absolute() else cwd / arg
+        try:
+            if not path.is_file():
+                return None
+            size = path.stat().st_size
+            with open(path, "rb") as f:
+                if b"\0" in f.read(4096):
+                    continue
+        except (OSError, ValueError):    # an inline script, not a file name
+            return None
+        text = (path.read_text(encoding="utf-8", errors="replace")
+                if size <= MAX_PROGRAM else
+                f"({size} bytes; larger than the {MAX_PROGRAM}-byte panel "
+                "limit, so open it from its folder)")
+        part = _part("file:program", "The program it runs", text,
+                     kind="file", note="Read from disk each time this panel "
+                     "opens, so it is the version the next run will use. "
+                     "Edit it where it lives; this panel does not write it.")
+        part["path"] = str(path)
+        return part
+    return None
+
+
 # ---------------------------------------------------------------- explain
 
 def _next_due(r):
@@ -375,7 +427,9 @@ def _next_due(r):
 
 
 def engine_of(r) -> str:
-    """internal | session | circuit — the three ways a loop can run."""
+    """internal | session | circuit | command — the ways a loop can run."""
+    if r.get("kind") == "command":
+        return "command"
     if r.get("kind") == "circuit":
         return "circuit"
     token = (r.get("prompt") or "").strip()
@@ -409,8 +463,22 @@ def facts(r) -> list:
                 "internal": "in process — no model call, no cost",
                 "circuit": "a multi-stage recipe",
                 "session": "a live agent session, with a terminal",
+                "command": "a program, in its own process — Vira makes no "
+                           "model call",
             }[engine])},
     ]
+    if engine == "command":
+        env = r.get("env") or {}
+        rows.append({"label": "Command",
+                     "value": " ".join(shlex.quote(a)
+                                       for a in r.get("command") or [])})
+        rows.append({"label": "Folder", "value": r.get("cwd") or "(Vira's)"})
+        rows.append({"label": "PATH",
+                     "value": env.get("PATH") or "Vira's own PATH"})
+        if r.get("output_log"):
+            rows.append({"label": "Log", "value": r["output_log"]})
+        for path in r.get("watch_logs") or []:
+            rows.append({"label": "Watches", "value": path})
     if engine == "session":
         rows.append({"label": "Permission",
                      "value": _mode_label(r.get("mode"))})
@@ -424,6 +492,9 @@ def facts(r) -> list:
         last.append(_when(_parse(r["last_run"])))
     if r.get("last_status"):
         last.append(r["last_status"])
+    if engine == "command" and r.get("last_summary") \
+            and r.get("last_status") != "running":
+        last.append(r["last_summary"])
     rows.append({"label": "Last run",
                  "value": " · ".join(last) if last else "never run",
                  "tone": "warn" if "skip" in (r.get("last_status") or "")
@@ -432,6 +503,12 @@ def facts(r) -> list:
 
 
 def effect_of(r) -> str:
+    if r.get("kind") == "command":
+        tail = (f" Its output is also appended to {r['output_log']}."
+                if r.get("output_log") else "")
+        return ("whatever the program writes. Vira writes only each run's "
+                "record and a copy of its log lines (data/routine-runs/)."
+                + tail)
     token = (r.get("prompt") or "").strip()
     if token in EFFECTS:
         return EFFECTS[token]
@@ -480,6 +557,34 @@ def steps(r) -> list:
             "body": "There is no terminal to open — nothing was dispatched. "
                     "The row below records the run, and the module it "
                     "refreshed shows the new data."})
+        return out
+    if engine == "command":
+        out.append({
+            "title": "It starts the program in its own process",
+            "body": "A detached runner (python -m server.routinerun) starts "
+                    "the command in its folder, with Vira's environment and "
+                    "this routine's overrides. The runner holds a lock for "
+                    "the whole run, so this routine never runs twice at "
+                    "once, and it survives a Vira restart."})
+        out.append({
+            "title": "Its output is kept",
+            "body": "Everything the program prints goes to the run's own "
+                    "log" + (" and is appended to " + r["output_log"]
+                             if r.get("output_log") else "")
+                    + ". Watched log files get their new lines copied into "
+                      "the run, so a program that logs elsewhere still "
+                      "shows this run's lines here."})
+        out.append({
+            "title": "The result is read",
+            "body": "The exit status, the last 'done: N captured, N "
+                    "failed, ...' line for the counts, and every FAILED, "
+                    "Traceback or Error line as the errors."})
+        out.append({
+            "title": "Every run is listed",
+            "body": "The Runs list in this panel: start, end, exit "
+                    "status, counts, errors and the run's log lines. A run "
+                    "whose runner died is marked interrupted on the next "
+                    "tick."})
         return out
     if engine == "circuit":
         out.append({
@@ -600,11 +705,19 @@ def hood(r) -> dict:
     # stack, so a revert offered on one is the same revert offered on the
     # other. Answering it once keeps the two buttons from disagreeing.
     files = {p["module"]: state(p["module"]) for p in ps if p["module"]}
-    return {"id": r["id"], "name": r.get("name") or r["id"],
-            "engine": engine_of(r), "kind": r.get("kind"),
-            "description": r.get("description") or "",
-            "facts": facts(r), "steps": steps(r), "parts": ps,
-            "files": files, "writable": writable()}
+    out = {"id": r["id"], "name": r.get("name") or r["id"],
+           "engine": engine_of(r), "kind": r.get("kind"),
+           "description": r.get("description") or "",
+           "facts": facts(r), "steps": steps(r), "parts": ps,
+           "files": files, "writable": writable()}
+    if r.get("kind") == "command":
+        from . import routinerun
+        nxt = _next_due(r)
+        out.update(routinerun.runs(r["id"]),
+                   enabled=bool(r.get("enabled")),
+                   live=routinerun.live(r["id"]),
+                   next_run=nxt.isoformat(timespec="seconds") if nxt else None)
+    return out
 
 
 # ---------------------------------------------------------------- writing

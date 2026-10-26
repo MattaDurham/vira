@@ -80,7 +80,9 @@ from . import (
                reviewqueue,
                roomvault,
                routines,
+               routinerun,
                routinesrc,
+               launchdjobs,
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings, settingschema, restart, runtimework,
                genreroutes,
@@ -4815,6 +4817,11 @@ class RoutineReq(BaseModel):
     daily_at: str | None = None
     enabled: bool | None = None
     notify: bool | None = None
+    # kind "command" only (routines._command_fields validates them)
+    command: list[str] | str | None = None
+    env: dict[str, str] | None = None
+    output_log: str | None = None
+    watch_logs: list[str] | None = None
 
 
 @app.post("/api/routines")
@@ -4851,6 +4858,30 @@ def api_routines_run(rid: str):
         raise HTTPException(404, "unknown routine")
     try:
         return routines.dispatch(r)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/routines/background")
+def api_routines_background():
+    """Every launchd job on this Mac, read-only (The Forge's This Mac tab)."""
+    return launchdjobs.inventory()
+
+
+@app.get("/api/routines/{rid}/runs")
+def api_routine_runs(rid: str, offset: int = 0, limit: int = 50):
+    if not routines.get_routine(rid):
+        raise HTTPException(404, "unknown routine")
+    return routinerun.runs(rid, offset=offset, limit=limit)
+
+
+@app.get("/api/routines/{rid}/runs/{run_id}/log")
+def api_routine_run_log(rid: str, run_id: str):
+    rec = routinerun.get(run_id)
+    if not rec or rec.get("routine_id") != rid:
+        raise HTTPException(404, "unknown run")
+    try:
+        return {"run": rec, "files": routinerun.log_files(run_id)}
     except ValueError as e:
         raise HTTPException(400, str(e))
 

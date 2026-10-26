@@ -73,6 +73,10 @@
     loading: false,
     flows: [],
     kit: [],
+    // This Mac library tab: the launchd inventory, and which cards are open
+    mac: null,
+    macLoading: false,
+    macOpen: new Set(),
     current: null,
     selectedNode: null,
     selectedEdge: null,
@@ -661,6 +665,7 @@
   }
 
   function libraryItems() {
+    if (state.library === "mac") return macItems();
     if (state.library === "flows") return state.flows;
     if (state.library === "starters") return state.flows.filter((flow) => flow.builtin && flow.kind === "flow");
     if (state.library === "kit") return state.kit;
@@ -668,6 +673,7 @@
   }
 
   function libraryKind(item) {
+    if (state.library === "mac") return item.group;
     if (state.library === "flows" || state.library === "starters") return item.kind === "native" ? "native systems" : (item.builtin ? "built in" : "my flows");
     if (state.library === "context") return item.kind || "reference";
     return item.kind || item.type || "parts";
@@ -678,8 +684,10 @@
       const schedule = item.triggers?.[0];
       const cadence = schedule?.daily_at ? `Daily ${schedule.daily_at}`
         : schedule?.every_hours ? `Every ${schedule.every_hours}h` : "Manual";
-      return `${item.nodes?.length || 0} parts · ${cadence}`;
+      const paused = schedule && schedule.enabled === false ? " · paused" : "";
+      return `${item.nodes?.length || 0} parts · ${cadence}${paused}`;
     }
+    if (state.library === "mac") return `${item.state} · ${(item.when || []).join("; ")}`;
     return item.description || item.note || item.ref || item.invoke || "";
   }
 
@@ -690,6 +698,7 @@
     svg.setAttribute("aria-hidden", "true");
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     const key = (state.library === "flows" || state.library === "starters") ? "flow"
+      : state.library === "mac" ? "command"
       : state.library === "context" ? "context" : (item.kind || item.type || "tool");
     path.setAttribute("d", ICON[key] || ICON[item.type] || ICON.tool);
     svg.appendChild(path); span.appendChild(svg);
@@ -735,14 +744,16 @@
       }
       const card = make("button", "forge-library-card");
       card.type = "button";
-      card.draggable = true;
+      card.draggable = state.library !== "mac";
       if (item.id === state.current?.id) card.classList.add("is-active");
+      if (state.library === "mac" && item.tone) card.dataset.tone = item.tone;
       const icon = libraryIcon(item);
       const copyNode = make("span");
       copyNode.appendChild(make("strong", "", item.name || item.title || "Untitled"));
       copyNode.appendChild(make("small", "", libraryDescription(item)));
       card.append(icon, copyNode);
       card.addEventListener("click", () => {
+        if (state.library === "mac") return toggleMac(item.id);
         if (state.library === "flows" || state.library === "starters") selectFlow(item.id);
         else addLibraryPart(item);
       });
@@ -752,8 +763,71 @@
         event.dataTransfer.setData("text/plain", item.id || item.name || "part");
       });
       body.appendChild(card);
+      if (state.library === "mac" && state.macOpen.has(item.id)) body.appendChild(macDetail(item));
     });
+    if (state.library === "mac") body.prepend(macNote());
     if (!items.length) body.appendChild(make("p", "hint", "Nothing in this view matches."));
+  }
+
+  // ----- This Mac: every launchd job on the machine, read-only -----
+  // server/launchdjobs.py reads ~/Library/LaunchAgents, /Library/LaunchAgents
+  // and /Library/LaunchDaemons. Vira only reports these; launchd runs them.
+  function macItems() {
+    if (!state.mac) return [];
+    return (state.mac.groups || []).flatMap((group) => (group.jobs || []).map((job) => ({
+      ...job, id: `mac:${job.path}`, name: job.label, group: group.title,
+      description: job.program, kind: group.title,
+    })));
+  }
+
+  function macNote() {
+    const note = make("div", "forge-mac-note");
+    if (state.macLoading) {
+      note.appendChild(make("p", "hint", "Reading launchd's job folders"));
+      return note;
+    }
+    const mac = state.mac;
+    if (mac?.status === "not_mac") note.appendChild(make("p", "hint", mac.note));
+    else note.appendChild(make("p", "hint", `Read-only. launchd runs these, not Vira. Every file in ~/Library/LaunchAgents, /Library/LaunchAgents and /Library/LaunchDaemons${mac?.checked ? `, checked ${stamp(mac.checked)}` : ""}.`));
+    (mac?.groups || []).filter((g) => g.error).forEach((g) => note.appendChild(make("p", "hint", `${g.dir}: ${g.error}`)));
+    const refresh = make("button", "fchip sm", "Check again");
+    refresh.type = "button";
+    refresh.addEventListener("click", () => loadMac());
+    note.appendChild(refresh);
+    return note;
+  }
+
+  function macDetail(item) {
+    const box = make("div", "forge-mac-detail");
+    const rows = [["Runs", item.program || "(no program)"], ["When", (item.when || []).join("; ")],
+      ["State", item.state], ["File", item.path]];
+    if (item.error) rows.push(["Problem", item.error]);
+    rows.forEach(([label, value]) => {
+      const row = make("div");
+      row.append(make("span", "", label), make("code", "", value));
+      box.appendChild(row);
+    });
+    return box;
+  }
+
+  function toggleMac(itemId) {
+    if (state.macOpen.has(itemId)) state.macOpen.delete(itemId);
+    else state.macOpen.add(itemId);
+    renderLibrary();
+  }
+
+  async function loadMac() {
+    state.macLoading = true;
+    renderLibrary();
+    try {
+      state.mac = await request("/api/routines/background");
+    } catch (error) {
+      state.mac = { status: "error", groups: [] };
+      toast(`Could not read launchd's jobs: ${error.message}`);
+    } finally {
+      state.macLoading = false;
+    }
+    if (state.library === "mac") renderLibrary();
   }
 
   function switchLibrary(tab) {
@@ -761,7 +835,8 @@
     state.filter = "all";
     state.query = "";
     q("#forge-library-search").value = "";
-    if (tab === "context") loadContextSearch("");
+    if (tab === "mac") loadMac();
+    else if (tab === "context") loadContextSearch("");
     else renderLibrary();
   }
 
@@ -1045,10 +1120,10 @@
     );
     detail.appendChild(typeLine);
     if (node.type === "system") detail.appendChild(systemPreview(node));
-    if (node.source_detail) detail.appendChild(nativeSourceView(node.source_detail));
+    if (node.source_detail) detail.appendChild(nativeSourceView(node.source_detail, node));
     detail.appendChild(field("Purpose", textareaControl(node.description, (value) => { node.description = value; setDirty(); }, 3)));
 
-    if (node.type === "agent" || node.type === "judge" || node.type === "native") {
+    if (node.type === "agent" || node.type === "judge" || (node.type === "native" && node.engine !== "command")) {
       const config = make("div", "forge-node-detail-row");
       config.append(
         field("Model", inputControl(node.model || "", (value) => { node.model = value; setDirty(); })),
@@ -1090,8 +1165,9 @@
     return detail;
   }
 
-  function nativeSourceView(source) {
+  function nativeSourceView(source, node) {
     const wrap = make("section", "forge-native-source");
+    if (source.engine === "command") wrap.appendChild(commandRunsView(source, node));
     wrap.appendChild(make("h4", "", "Complete native source"));
     const facts = make("div", "forge-native-facts");
     (source.facts || []).forEach((fact) => {
@@ -1112,6 +1188,203 @@
       wrap.appendChild(details);
     });
     return wrap;
+  }
+
+  // ----- command routines: every run, Run now, Pause / Resume -----
+  // A command routine (server/routinerun.py) runs a program in its own
+  // process. Its native node carries the whole history: each run's start,
+  // end, exit status, counts, errors and log lines. The view refreshes
+  // itself from the hood while a run is live, and stops once it leaves the
+  // page.
+  const commandViews = new Set();
+  const LIVE_RUN = new Set(["starting", "running"]);
+  const RUN_POLL_MS = 5000;
+  const stamp = (iso) => {
+    if (!iso) return "-";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString([], {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
+  const took = (a, b) => {
+    if (!a || !b) return "";
+    const s = Math.max(0, Math.round((new Date(b) - new Date(a)) / 1000));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  };
+  const untilText = (iso) => {
+    const ms = new Date(iso) - Date.now();
+    if (Number.isNaN(ms)) return "";
+    if (ms <= 60000) return "within a minute";
+    const m = Math.round(ms / 60000);
+    return m < 90 ? `in ${m} min` : `in ${Math.floor(m / 60)} h ${m % 60} min`;
+  };
+
+  function commandRunsView(source, node) {
+    const rid = source.id;
+    const wrap = make("section", "forge-cmd");
+    wrap.appendChild(make("h4", "", "Runs"));
+    const line = make("p", "forge-cmd-state");
+    const actions = make("div", "forge-cmd-actions");
+    const runNow = make("button", "btn primary", "Run now");
+    runNow.type = "button";
+    const pause = make("button", "fchip sm", "");
+    pause.type = "button";
+    actions.append(runNow, pause);
+    // Two lines per run rather than a nine-column table: the node and the
+    // inspector are under 400px wide.
+    const list = make("div", "forge-cmd-runs");
+    const foot = make("p", "forge-cmd-foot");
+    const more = make("button", "fchip sm", "Show older runs");
+    more.type = "button";
+    wrap.append(line, actions, list, foot, more);
+
+    let data = source;
+    let older = [];
+    const open = new Set();
+    let timer = null;
+
+    const isLive = () => Boolean(data.live) || (data.runs || []).some((r) => LIVE_RUN.has(r.status));
+    function paintState() {
+      const trig = (data.facts || []).find((f) => f.label === "Runs")?.value || "";
+      if (isLive()) {
+        const cur = (data.runs || []).find((r) => LIVE_RUN.has(r.status));
+        line.textContent = `Running now${cur?.started ? `, started ${stamp(cur.started)}` : ""}. It runs in its own process, so closing this panel or restarting Vira does not stop it.`;
+      } else if (!data.enabled) {
+        line.textContent = `Paused. Vira will not start it on its schedule (${trig}). Run now still works.`;
+      } else {
+        line.textContent = data.next_run
+          ? `Runs ${trig}. Next run ${stamp(data.next_run)} (${untilText(data.next_run)}).`
+          : `Runs ${trig}.`;
+      }
+      runNow.disabled = isLive();
+      pause.textContent = data.enabled ? "Pause" : "Resume";
+      pause.title = data.enabled ? "Stop starting it on its schedule" : "Start it on its schedule again";
+    }
+    function counts(r) {
+      const c = r.counts || {};
+      const keys = Object.keys(c);
+      return keys.length ? keys.map((k) => `${c[k]} ${k}`).join(" · ") : "-";
+    }
+    function logRow(r, cell) {
+      cell.replaceChildren(make("p", "hint", "Loading this run's log"));
+      request(`/api/routines/${encodeURIComponent(rid)}/runs/${encodeURIComponent(r.id)}/log`).then((res) => {
+        cell.replaceChildren();
+        if (res.run?.note) cell.appendChild(make("p", "forge-cmd-note", res.run.note));
+        if (res.run?.errors?.length) {
+          const list = make("ul", "forge-cmd-errors");
+          res.run.errors.forEach((e) => list.appendChild(make("li", "", e)));
+          cell.append(make("strong", "", `Errors (${res.run.error_count})`), list);
+        }
+        (res.files || []).forEach((f) => {
+          const title = f.source ? `${f.source} (this run's new lines)` : "Output";
+          cell.appendChild(make("strong", "", `${title}${f.cut ? ", last 1 MB" : ""}`));
+          cell.appendChild(make("pre", "forge-cmd-log", f.text || "(empty)"));
+        });
+        if (!(res.files || []).length) cell.appendChild(make("p", "hint", "This run wrote no log."));
+      }).catch((e) => cell.replaceChildren(make("p", "hint", `Could not load the log: ${e.message}`)));
+    }
+    function paintRows() {
+      list.replaceChildren();
+      const rows = [...(data.runs || []), ...older];
+      rows.forEach((r) => {
+        const row = make("div", `forge-cmd-run run-${r.status}`);
+        const top = make("div", "forge-cmd-run-top");
+        const end = LIVE_RUN.has(r.status) ? "still running" : stamp(r.finished);
+        const span = took(r.started, r.finished);
+        top.append(make("span", `forge-cmd-chip is-${r.status}`, r.status),
+          make("span", "", `${stamp(r.started || r.queued)} to ${end}${span ? ` (${span})` : ""}`),
+          make("span", "forge-cmd-dim", r.trigger === "schedule" ? "schedule" : "Run now"),
+          make("span", "forge-cmd-dim", `exit ${r.exit_code == null ? "-" : r.exit_code}`));
+        const bottom = make("div", "forge-cmd-run-bottom");
+        bottom.appendChild(make("span", "", counts(r)));
+        const err = make("span", r.error_count ? "has-errors" : "forge-cmd-dim",
+          `${r.error_count || 0} error line${r.error_count === 1 ? "" : "s"}`);
+        if (r.errors?.length) err.title = r.errors[0];
+        bottom.appendChild(err);
+        const log = make("button", "fchip sm", open.has(r.id) ? "Hide log" : "Log");
+        log.type = "button";
+        bottom.appendChild(log);
+        row.append(top, bottom);
+        if (open.has(r.id)) {
+          const cell = make("div", "forge-cmd-logbox");
+          row.appendChild(cell);
+          logRow(r, cell);
+        }
+        log.addEventListener("click", () => {
+          if (open.has(r.id)) open.delete(r.id); else open.add(r.id);
+          paintRows();
+        });
+        list.appendChild(row);
+      });
+      if (!rows.length) list.appendChild(make("p", "hint", "No runs yet."));
+      const shown = rows.length;
+      foot.textContent = `${shown} of ${data.total || 0} runs shown${data.pruned ? `; ${data.pruned} older runs were dropped past the history limit` : ""}.`;
+      more.hidden = shown >= (data.total || 0);
+    }
+    async function refresh() {
+      if (!wrap.isConnected) return stop();
+      try {
+        data = await request(`/api/routines/${encodeURIComponent(rid)}/hood`);
+        if (node) node.source_detail = data;
+        paintState(); paintRows();
+      } catch (e) { line.textContent = `Could not refresh: ${e.message}`; }
+      schedule();
+    }
+    function schedule() {
+      clearTimeout(timer);
+      timer = isLive() && wrap.isConnected ? setTimeout(refresh, RUN_POLL_MS) : null;
+    }
+    function stop() { clearTimeout(timer); commandViews.delete(refresh); }
+    commandViews.add(refresh);
+
+    runNow.addEventListener("click", async () => {
+      runNow.disabled = true;
+      try {
+        const res = await send(`/api/routines/${encodeURIComponent(rid)}/run`, "POST", {});
+        toast(`Run started (${res.command_run})`);
+      } catch (e) { toast(`Run refused: ${e.message}`); }
+      refresh();
+    });
+    pause.addEventListener("click", async () => {
+      const enabled = !data.enabled;
+      try {
+        await send(`/api/routines/${encodeURIComponent(rid)}`, "PUT", { enabled });
+        // markEnabled repaints the board, which rebuilds this node from its
+        // cached source; update the cache first so the new view is right,
+        // then refresh every live view (this one is detached by then).
+        data = { ...data, enabled, next_run: null };
+        if (node) node.source_detail = data;
+        markEnabled(rid, enabled);
+        toast(enabled ? "Resumed: it runs on its schedule again" : "Paused: it will not start on its schedule");
+      } catch (e) { toast(`Could not ${enabled ? "resume" : "pause"}: ${e.message}`); }
+      if (wrap.isConnected) refresh();
+      commandViews.forEach((f) => { if (f !== refresh) f(); });
+    });
+    more.addEventListener("click", async () => {
+      try {
+        const page = await request(`/api/routines/${encodeURIComponent(rid)}/runs?offset=${(data.runs || []).length + older.length}&limit=50`);
+        older = older.concat(page.runs || []);
+        paintRows();
+      } catch (e) { toast(`Could not load older runs: ${e.message}`); }
+    });
+    paintState(); paintRows();
+    // the poll starts once the inspector has attached this view
+    setTimeout(schedule, 0);
+    return wrap;
+  }
+
+  // Pause / Resume changes the trigger's enabled flag; keep the board's
+  // trigger part and the library card in step without reloading the board.
+  function markEnabled(routineId, enabled) {
+    const touch = (flow) => {
+      (flow?.nodes || []).forEach((n) => { if (n.type === "trigger" && n.routine_id === routineId) n.enabled = enabled; });
+      (flow?.triggers || []).forEach((t) => { if (t.id === routineId) t.enabled = enabled; });
+    };
+    touch(state.current);
+    touch(state.flows.find((f) => f.id === `routine:${routineId}`));
+    renderBoard();
+    renderLibrary();
   }
 
   function systemPreview(node) {
@@ -2265,6 +2538,11 @@
         provider: q("#forge-run-provider")?.value || null,
         idea_id: linked,
       });
+      if (result.command_run) {
+        toast(`Run started (${result.command_run}). Its row is in the node's Runs list.`);
+        commandViews.forEach((refresh) => refresh());
+        return;
+      }
       const runId = result.id || result.run_id || result.job_id;
       toast(runId ? `Launched ${runId}` : "Flow launched");
       if (typeof window.openSession === "function" && result.job_id) window.openSession(result.job_id);

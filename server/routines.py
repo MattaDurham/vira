@@ -12,6 +12,10 @@ dispatch — a prompt (or a whole circuit) on a cadence. Kinds:
   digest  — a synthesizer: periodic summary/analysis runs.
   circuit — dispatch a whole circuits.py pipeline on a cadence.
   custom  — any prompt, any cadence.
+  command — run a program (an argv, a folder, an environment) as its own
+            detached process: a capture script, an export. No model call
+            by Vira. Each run's record and log copy live in
+            server/routinerun.py's store, and The Forge lists them.
 
 Cadence: every_hours (float) OR daily_at "HH:MM" (local). The Scheduler
 thread (60s tick) dispatches due routines as normal durable jobs / circuit
@@ -30,12 +34,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import re
+import shlex
+
 from .filelock import locked
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "routines.json"
 
-KINDS = ("muse", "watch", "digest", "circuit", "custom")
+KINDS = ("muse", "watch", "digest", "circuit", "custom", "command")
 TICK_S = 60
 
 _lock = threading.Lock()
@@ -268,17 +275,76 @@ def save_routine(data, rid=None):
                 r[k] = bool(data[k])
         if r.get("kind") not in KINDS:
             r["kind"] = "custom"
+        _command_fields(r, data)
         if not (r.get("name") or "").strip():
             raise ValueError("a routine needs a name")
         if not r.get("daily_at") and not r.get("every_hours"):
             raise ValueError("a routine needs a cadence "
                              "(every_hours or daily_at)")
+        if r["kind"] == "command" and not r.get("command"):
+            raise ValueError("a command routine needs a command to run")
         if not instance.owns(r):
             r.update(instance_id=instance.id(), last_run=None, last_job=None,
                      last_run_id=None, last_status=None)
         r["updated"] = _now_iso()
         _save(s)
         return r
+
+
+_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _abs(value, what):
+    text = str(value or "").strip()
+    if text and not Path(text).expanduser().is_absolute():
+        raise ValueError(f"{what} must be an absolute path: {text}")
+    return str(Path(text).expanduser()) if text else ""
+
+
+def _split_command(line):
+    """One command line into argv. POSIX rules on a Mac; on Windows,
+    backslashes are path separators, so the non-POSIX split is used and
+    each argument loses one pair of matching outer quotes, which that
+    mode keeps."""
+    from . import settings
+    if not settings.IS_WIN:
+        return shlex.split(line)
+    return [a[1:-1] if len(a) >= 2 and a[0] == a[-1] and a[0] in "\"'"
+            else a for a in shlex.split(line, posix=False)]
+
+
+def _command_fields(r, data):
+    """The fields only a command routine carries, validated in place:
+    command (an argv list, or one line split like a shell would), cwd,
+    env (name -> value overrides), output_log (where the program's output
+    is also appended) and watch_logs (files whose new lines each run
+    copies)."""
+    if "command" in data and data["command"] is not None:
+        cmd = data["command"]
+        if isinstance(cmd, str):
+            cmd = _split_command(cmd)
+        if not isinstance(cmd, list) or not all(
+                isinstance(a, str) and a.strip() for a in cmd):
+            raise ValueError("command must be a list of arguments")
+        r["command"] = [a for a in cmd]
+    if r.get("kind") != "command":
+        return
+    if "cwd" in data and data["cwd"] is not None:
+        r["cwd"] = _abs(data["cwd"], "the folder")
+    if "env" in data and data["env"] is not None:
+        env = data["env"]
+        if not isinstance(env, dict) or not all(
+                isinstance(k, str) and _ENV_KEY.fullmatch(k)
+                and isinstance(v, str) for k, v in env.items()):
+            raise ValueError("env must map variable names to text")
+        r["env"] = dict(env)
+    if "output_log" in data and data["output_log"] is not None:
+        r["output_log"] = _abs(data["output_log"], "the output log")
+    if "watch_logs" in data and data["watch_logs"] is not None:
+        logs = data["watch_logs"]
+        if not isinstance(logs, list):
+            raise ValueError("watch_logs must be a list of paths")
+        r["watch_logs"] = [_abs(x, "a watched log") for x in logs if x]
 
 
 def delete_routine(rid):
@@ -330,9 +396,12 @@ def is_due(r, now=None):
         if now < gate:
             return False
         if last:
+            # Today's run is one that started at or after today's gate. A
+            # Run now earlier in the day does not use up the evening's
+            # scheduled run, as a launchd calendar job behaves.
             try:
                 last_dt = datetime.fromisoformat(last).astimezone()
-                if last_dt.date() >= now.date():
+                if last_dt >= gate:
                     return False
             except ValueError:
                 pass
@@ -422,10 +491,24 @@ def _ai_ready():
 
 
 @modulemodels.scoped("work")
-def dispatch(r):
-    """Dispatch one routine now. Returns {job_id} or {run_id}."""
+def dispatch(r, trigger="manual"):
+    """Dispatch one routine now. Returns {job_id}, {run_id} or
+    {command_run}."""
     from . import circuits
     from . import session
+    if r.get("kind") == "command":
+        # A program, not a model session: no AI gate. Only the instance
+        # that owns the row may start it, because a branch instance's
+        # copy of the store points at the same real files.
+        from . import routinerun
+        if not instance.owns(r):
+            raise ValueError("this routine belongs to another Vira "
+                             "instance; run it there")
+        rec = routinerun.start(r, trigger=trigger)
+        _stamp(r["id"], last_run=_now_iso(), last_job=None,
+               last_run_id=None, last_command_run=rec["id"],
+               last_status="running")
+        return {"command_run": rec["id"], "status": rec["status"]}
     if (r.get("prompt") or "") not in _INTERNAL_TOKENS and not _ai_ready():
         # last_run is deliberately NOT stamped: the routine stays due, so
         # it fires within a probe-cache window of the owner connecting an
@@ -534,6 +617,9 @@ def dispatch(r):
 
 def _previous_live(r):
     from . import circuits, joblog, session
+    if r.get("kind") == "command":
+        from . import routinerun
+        return routinerun.live(r["id"])
     if r.get("last_job"):
         snap = (session.sessions.get(r["last_job"])
                 or joblog.get_record(r["last_job"]))
@@ -573,7 +659,7 @@ class Scheduler(threading.Thread):
                     continue
                 self._settle(r)
                 if is_due(r) and not _previous_live(r):
-                    dispatch(r)
+                    dispatch(r, trigger="schedule")
             except Exception:  # noqa: BLE001 — one routine never kills the rest
                 pass
 
@@ -581,10 +667,33 @@ class Scheduler(threading.Thread):
         """When a dispatched job/run has finished since we last looked,
         record the outcome and notify once."""
         from . import circuits, joblog, session
+        if r.get("kind") == "command":
+            from . import routinerun
+            routinerun.settle(r["id"])
         if r.get("last_status") != "running":
             return
         status = None
         detail = ""
+        if r.get("kind") == "command":
+            rec = routinerun.get(r.get("last_command_run")) or {}
+            status = rec.get("status")
+            if status in routinerun.LIVE:
+                return
+            counts = rec.get("counts") or {}
+            if counts:
+                detail = " — " + ", ".join(f"{n} {k}"
+                                           for k, n in counts.items())
+            _stamp(r["id"], last_status=status or "unknown",
+                   last_summary=detail[3:])
+            if r.get("notify"):
+                try:
+                    from . import notify
+                    notify.agent_ping(
+                        f"Vira: routine '{r['name']}' {status}{detail}",
+                        key=f"routine:{r['id']}:{r.get('last_run')}")
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         if r.get("last_job"):
             snap = (session.sessions.get(r["last_job"])
                     or joblog.get_record(r["last_job"]) or {})

@@ -164,6 +164,13 @@ DEFAULT_MODULES = [
              "last outcome.",
      "links": [], "keywords": ["routine", "cadence"],
      "updated": TODAY},
+    {"id": "routine-runs-store", "name": "Routine runs", "layer": "store",
+     "group": "operate", "kind": "data/routine-runs.json + data/routine-runs/",
+     "what": "Every run of a command routine: trigger, start, end, exit "
+             "status, the counts from its done line, its first error "
+             "lines, and a copy of that run's log lines.",
+     "links": [], "keywords": ["routine runs", "run history", "command"],
+     "updated": TODAY},
     {"id": "module-registry", "name": "Module registry", "layer": "store",
      "group": "know", "kind": "data/modules.json",
      "what": "This map's own data: one record per module, refreshed "
@@ -340,9 +347,13 @@ DEFAULT_MODULES = [
      "group": "operate", "kind": "60s tick",
      "what": "Dispatches standing loops on their cadence: Muse proposes "
              "ideas each morning, watchers watch, digests digest, the "
-             "System map refresh keeps this very page current. Skips while "
-             "the previous run is live; pings when a run finishes.",
+             "System map refresh keeps this very page current, and "
+             "command routines start a program in its own detached "
+             "process (server/routinerun.py) that survives a restart. "
+             "Skips while the previous run is live; pings when a run "
+             "finishes.",
      "links": [{"to": "routines-store", "how": "reads + stamps"},
+               {"to": "routine-runs-store", "how": "records command runs in"},
                {"to": "sessions", "how": "dispatches jobs through"}],
      "endpoints": ["/api/routines"],
      "keywords": ["routine", "muse", "scheduler", "loop", "digest"],
@@ -667,7 +678,10 @@ DEFAULT_MODULES = [
      "group": "operate", "kind": "Forge parts (legacy window alias)",
      "what": "Scheduled trigger parts attached to Flows: cadence, next and "
              "last run, status, and editable instance configuration. Muse's "
-             "proposals land in Cues for approval.",
+             "proposals land in Cues for approval. A command routine's node "
+             "lists every run with its counts, errors and log lines, with "
+             "Run now and Pause; the library's This Mac tab lists every "
+             "launchd job on the machine, read-only.",
      "links": [{"to": "scheduler", "how": "manages"}],
      "keywords": ["agent loops", "routines window"],
      "updated": TODAY},

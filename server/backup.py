@@ -78,6 +78,10 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # The applied skin's look. Usually a manifest's values, but a skin
          # moved out of the tracked stylesheets keeps any later tuning only here.
          "active-skin.json",
+         # Command routines' run history (start, end, exit, counts, errors).
+         # The programs' own log files keep their lines, but the record of
+         # which run did what exists only here.
+         "routine-runs.json",
          "pii-patterns.txt")     # anonymization scanner's learned patterns
 # Sole-copy DIRECTORIES: one dated tree copy per day, same 14-day window.
 DIRS = (
