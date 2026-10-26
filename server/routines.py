@@ -301,6 +301,18 @@ def _abs(value, what):
     return str(Path(text).expanduser()) if text else ""
 
 
+def _split_command(line):
+    """One command line into argv. POSIX rules on a Mac; on Windows,
+    backslashes are path separators, so the non-POSIX split is used and
+    each argument loses one pair of matching outer quotes, which that
+    mode keeps."""
+    from . import settings
+    if not settings.IS_WIN:
+        return shlex.split(line)
+    return [a[1:-1] if len(a) >= 2 and a[0] == a[-1] and a[0] in "\"'"
+            else a for a in shlex.split(line, posix=False)]
+
+
 def _command_fields(r, data):
     """The fields only a command routine carries, validated in place:
     command (an argv list, or one line split like a shell would), cwd,
@@ -310,8 +322,7 @@ def _command_fields(r, data):
     if "command" in data and data["command"] is not None:
         cmd = data["command"]
         if isinstance(cmd, str):
-            from . import settings
-            cmd = shlex.split(cmd, posix=not settings.IS_WIN)
+            cmd = _split_command(cmd)
         if not isinstance(cmd, list) or not all(
                 isinstance(a, str) and a.strip() for a in cmd):
             raise ValueError("command must be a list of arguments")

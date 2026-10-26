@@ -16,7 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from server import flows, instance, launchdjobs, routinerun, routines, routinesrc
+from server import (flows, instance, launchdjobs, routinerun, routines,
+                    routinesrc, settings)
 
 PROGRAM = textwrap.dedent('''\
     import os, sys
@@ -225,6 +226,15 @@ class RoutineTests(Base):
             "cwd": str(self.work), "env": {"PATH": "/x"},
             "watch_logs": [str(self.watched)], "enabled": False})
         self.assertEqual(r["command"], ["bash", "my script.sh", "--limit", "3"])
+        for is_win in (False, True):
+            with mock.patch.object(settings, "IS_WIN", is_win):
+                self.assertEqual(routines._split_command(
+                    'bash "my script.sh" --limit 3'),
+                    ["bash", "my script.sh", "--limit", "3"], is_win)
+        with mock.patch.object(settings, "IS_WIN", True):
+            self.assertEqual(routines._split_command(
+                r'C:\tools\run.cmd --dir "C:\My Files"'),
+                [r"C:\tools\run.cmd", "--dir", r"C:\My Files"])
         self.assertEqual(r["env"], {"PATH": "/x"})
         self.assertFalse(r["enabled"])
 
