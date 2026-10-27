@@ -1,0 +1,14 @@
+{
+  "id": "money",
+  "name": "Money",
+  "group": "money",
+  "rank": 10,
+  "summary": "What the owner actually pays for, at what cadence, and the bank connection behind it.",
+  "windows": [
+    "subs"
+  ],
+  "submodules": [
+    "subscriptions",
+    "banking"
+  ]
+}

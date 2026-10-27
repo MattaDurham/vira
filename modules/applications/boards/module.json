@@ -1,0 +1,30 @@
+{
+  "id": "applications/boards",
+  "name": "Boards",
+  "summary": "The live job-board feed, the posting readable inside Vira, and where the work happens.",
+  "owns": [
+    "server/jobboards.py",
+    "server/jobdesc.py",
+    "server/workplace.py",
+    "tests/test_jobboards.py",
+    "tests/test_jobdesc.py",
+    "tests/test_workplace.py"
+  ],
+  "routes": [
+    "/api/jobboards",
+    "/api/applications/{uid}/description"
+  ],
+  "stores": [
+    "data/job-boards.json",
+    "data/job-descriptions/"
+  ],
+  "reads": [
+    "core/settings"
+  ],
+  "feeds": [
+    "applications/catalog"
+  ],
+  "registry": [
+    "job-boards"
+  ]
+}

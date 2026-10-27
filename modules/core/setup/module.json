@@ -1,0 +1,57 @@
+{
+  "id": "core/setup",
+  "name": "Setup",
+  "summary": "First run: the fixture demo, onboarding, module front doors, data connections, the folder picker.",
+  "owns": [
+    "server/onboard.py",
+    "server/frontdoor.py",
+    "server/sources.py",
+    "server/dataconnections.py",
+    "server/fixtures.py",
+    "server/folders.py",
+    "server/pickfolder.py",
+    "server/systembrowser.py",
+    "server/agentslocal.py",
+    "static/folder-picker.css",
+    "static/folder-picker.js",
+    "static/tour/**",
+    "fixtures/**",
+    "scripts/agent-install.sh",
+    "tests/test_dataconnections_ui.py",
+    "tests/test_folder_picker_ui.py",
+    "tests/test_agents_files.py",
+    "tests/test_demo_reset.py",
+    "tests/test_work_tour.py",
+    "tests/test_onboard.py",
+    "tests/test_frontdoor.py",
+    "tests/test_sources.py",
+    "tests/test_dataconnections.py",
+    "tests/test_folders.py",
+    "tests/test_systembrowser.py"
+  ],
+  "routes": [
+    "/api/onboard",
+    "/api/frontdoor",
+    "/api/folders",
+    "/api/pick-folder",
+    "/api/demo",
+    "/api/data/connections"
+  ],
+  "stores": [
+    "data/onboard.json",
+    "data/connections.json"
+  ],
+  "reads": [
+    "core/settings",
+    "models/backends",
+    "people/crm",
+    "find/notes"
+  ],
+  "feeds": [
+    "core/shell"
+  ],
+  "registry": [
+    "front-doors",
+    "setup-win"
+  ]
+}

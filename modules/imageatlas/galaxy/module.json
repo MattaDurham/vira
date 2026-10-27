@@ -1,0 +1,33 @@
+{
+  "id": "imageatlas/galaxy",
+  "name": "Galaxy",
+  "summary": "The chaska adapter, its HTTP surface, the mobile view, and gated vault operations.",
+  "owns": [
+    "server/imageatlas.py",
+    "server/imageatlasroutes.py",
+    "server/atlasops.py",
+    "static/imageatlas-mobile.css",
+    "static/imageatlas-mobile.js",
+    "tests/test_galaxy_links.py",
+    "tests/test_imageatlas.py",
+    "tests/test_atlasops.py"
+  ],
+  "routes": [
+    "/api/imageatlas",
+    "/imageatlas"
+  ],
+  "stores": [
+    "data/image-atlas/"
+  ],
+  "reads": [
+    "find/notes",
+    "find/media",
+    "world/graph"
+  ],
+  "feeds": [
+    "find/notes"
+  ],
+  "registry": [
+    "image-atlas"
+  ]
+}

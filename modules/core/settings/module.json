@@ -1,0 +1,33 @@
+{
+  "id": "core/settings",
+  "name": "Settings",
+  "summary": "The one table of owner settings, the Config window's forms, and the Keychain.",
+  "owns": [
+    "server/settings.py",
+    "server/settingschema.py",
+    "server/secrets.py",
+    "static/settings.js",
+    "config.example.json",
+    "tests/test_config_ui.py",
+    "tests/config_frontend_harness.js",
+    "tests/test_provider_disable.py",
+    "tests/test_settingschema.py",
+    "tests/test_secrets.py"
+  ],
+  "routes": [
+    "/api/settings",
+    "/api/config"
+  ],
+  "stores": [
+    "data/config.json",
+    "Keychain (per-instance service)"
+  ],
+  "reads": [],
+  "feeds": [
+    "core/shell",
+    "core/runtime",
+    "core/setup",
+    "models/backends"
+  ],
+  "registry": []
+}

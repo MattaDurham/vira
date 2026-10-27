@@ -1,0 +1,61 @@
+{
+  "id": "work/automations",
+  "name": "Automations",
+  "title": "The Forge",
+  "summary": "The Forge: flows, circuits, routines, command routines, and the action library.",
+  "owns": [
+    "server/flows.py",
+    "server/circuits.py",
+    "server/routines.py",
+    "server/routinerun.py",
+    "server/routinesrc.py",
+    "server/actions.py",
+    "server/launchdjobs.py",
+    "static/forge.css",
+    "static/forge.js",
+    "static/forge-spatial.js",
+    "tests/test_forge_spatial.py",
+    "tests/test_forge_tools.py",
+    "tests/test_parity_flows.py",
+    "tests/test_flow_trace_contract.py",
+    "tests/test_judge_circuits_budget.py",
+    "tests/test_agentic.py",
+    "tests/test_flows.py",
+    "tests/test_routinerun.py",
+    "tests/test_routinesrc.py"
+  ],
+  "routes": [
+    "/api/flows",
+    "/api/circuits",
+    "/api/routines",
+    "/api/actions"
+  ],
+  "stores": [
+    "data/flows.json",
+    "data/circuits.json",
+    "data/routines.json",
+    "data/routine-runs.json",
+    "data/routine-runs/<run>/"
+  ],
+  "reads": [
+    "models/sessions",
+    "work/sessions",
+    "models/backends"
+  ],
+  "feeds": [
+    "work/sessions",
+    "reader/rooms",
+    "research/topics",
+    "maps/system",
+    "attention/now"
+  ],
+  "registry": [
+    "circuits-engine",
+    "scheduler",
+    "routines-store",
+    "routine-runs-store",
+    "circuits-win",
+    "routines-win",
+    "actions-win"
+  ]
+}

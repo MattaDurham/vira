@@ -1,0 +1,21 @@
+{
+  "id": "aquarium/koi",
+  "name": "Koi",
+  "summary": "The articulated koi: mechanics, fins, pigment, optics, the asset pipeline, and its studies.",
+  "owns": [
+    "static/aquarium-*",
+    "static/aquarium/**",
+    "scripts/aquarium/**",
+    "tests/test_aquarium_*.py",
+    "tests/aquarium_*.mjs"
+  ],
+  "routes": [],
+  "stores": [
+    ".aquarium-build/ (git-ignored authoring cache)"
+  ],
+  "reads": [],
+  "feeds": [
+    "aquarium/backgrounds"
+  ],
+  "registry": []
+}

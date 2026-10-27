@@ -1,0 +1,24 @@
+{
+  "id": "evidence/changelog",
+  "name": "Change log",
+  "summary": "Every shipped change, keyed by the day it actually happened.",
+  "owns": [
+    "server/changelog.py",
+    "CHANGELOG.md",
+    "tests/test_changelog.py"
+  ],
+  "routes": [
+    "/api/changelog"
+  ],
+  "stores": [],
+  "reads": [
+    "work/branches"
+  ],
+  "feeds": [
+    "maps/system",
+    "evidence/ledger"
+  ],
+  "registry": [
+    "changelog-engine"
+  ]
+}

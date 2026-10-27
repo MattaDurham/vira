@@ -1,0 +1,22 @@
+{
+  "id": "evidence/walkthroughs",
+  "name": "Walkthroughs",
+  "summary": "The films of how each feature was built, and the anonymizer that lets them be public.",
+  "owns": [
+    "server/walkthroughs.py",
+    "walkthroughs/**",
+    "walkthrough_anon/**",
+    "scripts/walkthrough-capture.py",
+    "tests/test_walkthrough_anon.py",
+    "tests/test_walkthroughs.py"
+  ],
+  "routes": [],
+  "stores": [],
+  "reads": [
+    "work/sessions"
+  ],
+  "feeds": [
+    "library/documents"
+  ],
+  "registry": []
+}

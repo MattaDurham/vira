@@ -1,0 +1,49 @@
+{
+  "id": "incoming/feed",
+  "name": "Feed",
+  "summary": "The one live feed: item state, the reply channel, sends and pushes.",
+  "owns": [
+    "server/feedstate.py",
+    "server/channels.py",
+    "server/notify.py",
+    "server/send.py",
+    "server/sendpref.py",
+    "server/threadread.py",
+    "server/inbound.py",
+    "tests/test_chat_delivery_ui.py",
+    "tests/chat_delivery_ui.js",
+    "tests/test_chat_enrichment_capacity.py",
+    "tests/test_notify_budgets.py",
+    "tests/test_inbound.py",
+    "tests/test_send.py",
+    "tests/test_threadread.py",
+    "tests/test_channels.py"
+  ],
+  "routes": [
+    "/api/feed",
+    "/api/send",
+    "/api/notify",
+    "/api/inbound"
+  ],
+  "stores": [
+    "data/feed-state.json",
+    "data/send-prefs.json",
+    "data/notify-ledger.json"
+  ],
+  "reads": [
+    "incoming/imessage",
+    "incoming/mail",
+    "incoming/whatsapp",
+    "incoming/companion",
+    "people/crm"
+  ],
+  "feeds": [
+    "attention/now",
+    "attention/brief",
+    "incoming/triage"
+  ],
+  "registry": [
+    "feed-win",
+    "watcher"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "fleet",
+  "name": "Fleet",
+  "group": "operate",
+  "rank": 40,
+  "summary": "Every Claude Code, Codex and Vira session on this machine, live, with the repositories around them.",
+  "windows": [
+    "fleet"
+  ],
+  "submodules": [
+    "window",
+    "readers"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "core",
+  "name": "Core",
+  "group": "operate",
+  "rank": 10,
+  "summary": "The shell, the runtime, settings, and first-run setup that every other module stands on.",
+  "windows": [
+    "launchpad",
+    "setup"
+  ],
+  "submodules": [
+    "shell",
+    "runtime",
+    "settings",
+    "setup"
+  ]
+}

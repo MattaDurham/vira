@@ -1,0 +1,44 @@
+{
+  "id": "people/crm",
+  "name": "CRM",
+  "summary": "The person record, its card, its dossier, its search, and group threads.",
+  "owns": [
+    "server/data.py",
+    "server/crmindex.py",
+    "server/contactcard.py",
+    "server/profilerefresh.py",
+    "server/vaultpeople.py",
+    "server/groupchat.py",
+    "tests/test_crmindex.py",
+    "tests/test_contactcard.py",
+    "tests/test_profilerefresh.py",
+    "tests/test_vaultpeople.py",
+    "tests/test_groupchat.py"
+  ],
+  "routes": [
+    "/api/person",
+    "/api/people",
+    "/api/group",
+    "/api/vault/people",
+    "/api/vault/person"
+  ],
+  "stores": [
+    "data/crm-index.sqlite",
+    "data/contact-overrides.json",
+    "data/group-profiles.json"
+  ],
+  "reads": [
+    "find/notes",
+    "incoming/feed"
+  ],
+  "feeds": [
+    "incoming/feed",
+    "attention/brief",
+    "world/atlas",
+    "people/networking"
+  ],
+  "registry": [
+    "crm-data",
+    "people-win"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "incoming/imessage",
+  "name": "iMessage",
+  "summary": "chat.db read in place, and the watcher that tails it for new arrivals.",
+  "owns": [
+    "server/imessage.py"
+  ],
+  "routes": [],
+  "stores": [],
+  "reads": [],
+  "feeds": [
+    "incoming/feed",
+    "find/media",
+    "people/sync"
+  ],
+  "registry": [
+    "chat-db",
+    "watcher"
+  ]
+}

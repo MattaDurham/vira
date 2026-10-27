@@ -1,0 +1,42 @@
+{
+  "id": "reader/queue",
+  "name": "Queue",
+  "summary": "The Reader's queue, done-marks, and saved plans.",
+  "owns": [
+    "server/readinglist.py",
+    "server/reading.py",
+    "server/plans.py",
+    "tests/test_plan_destinations.py",
+    "tests/test_plan_output.py",
+    "tests/test_reader_grid_reveal.py",
+    "tests/test_readinglist.py",
+    "tests/test_reading.py",
+    "tests/test_plans.py"
+  ],
+  "routes": [
+    "/api/reading/list",
+    "/api/reading/pages",
+    "/api/reading/file",
+    "/api/reading/thumb",
+    "/api/reading/source-resolve",
+    "/api/reading/{name}/done",
+    "/api/plans"
+  ],
+  "stores": [
+    "data/reading-list.json",
+    "data/reading-done.json",
+    "data/plans.json"
+  ],
+  "reads": [
+    "library/documents",
+    "work/ideas",
+    "find/notes"
+  ],
+  "feeds": [
+    "attention/brief"
+  ],
+  "registry": [
+    "reading-store",
+    "reader-win"
+  ]
+}

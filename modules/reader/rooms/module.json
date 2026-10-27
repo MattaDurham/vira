@@ -1,0 +1,38 @@
+{
+  "id": "reader/rooms",
+  "name": "Rooms",
+  "summary": "Reading rooms, full ingest into the vault, and the nightly inflow shelf.",
+  "owns": [
+    "server/readingroom.py",
+    "server/roomvault.py",
+    "server/fullingest.py",
+    "server/ingestfeed.py",
+    "static/reading-room.css",
+    "static/reading-room.js",
+    "scripts/stage_tcil_selection.py",
+    "tests/test_roomvault_resolve.py",
+    "tests/test_readingroom.py",
+    "tests/test_roomvault.py",
+    "tests/test_fullingest.py",
+    "tests/test_ingestfeed.py"
+  ],
+  "routes": [
+    "/api/reading/rooms",
+    "/api/ingestfeed",
+    "/reading/{slug}.html"
+  ],
+  "stores": [
+    "data/reading-rooms.json",
+    "data/ingest/",
+    "static/reading/ (git-ignored)"
+  ],
+  "reads": [
+    "find/notes",
+    "work/automations"
+  ],
+  "feeds": [
+    "reader/queue",
+    "find/notes"
+  ],
+  "registry": []
+}

@@ -1,0 +1,20 @@
+{
+  "id": "find",
+  "name": "Find",
+  "group": "know",
+  "rank": 10,
+  "summary": "One search box over four corpora, with grounded answers and definitions.",
+  "windows": [
+    "find",
+    "find-cloud",
+    "find-related",
+    "find-define"
+  ],
+  "submodules": [
+    "search",
+    "notes",
+    "media",
+    "ask",
+    "define"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "world/graph",
+  "name": "Graph",
+  "summary": "The temporal World graph, its semantic 3D layout, subsets, and the WebGL renderer.",
+  "owns": [
+    "server/worldgraph.py",
+    "server/worldlayout.py",
+    "server/worldsubsets.py",
+    "static/atlas.js",
+    "static/atlas3d.js",
+    "tests/test_atlas3d_context.py",
+    "tests/test_atlas3d_nav.py",
+    "tests/test_atlas_freshness.py",
+    "tests/test_worldgraph_ui.py",
+    "tests/test_worldgraph.py",
+    "tests/test_worldlayout.py",
+    "tests/test_worldsubsets.py"
+  ],
+  "routes": [
+    "/api/world"
+  ],
+  "stores": [
+    "data/world-graph.json",
+    "data/world-layout.json"
+  ],
+  "reads": [
+    "find/notes",
+    "people/crm",
+    "find/ask"
+  ],
+  "feeds": [
+    "imageatlas/galaxy"
+  ],
+  "registry": [
+    "atlas-win"
+  ]
+}

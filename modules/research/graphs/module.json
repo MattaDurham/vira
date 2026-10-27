@@ -1,0 +1,32 @@
+{
+  "id": "research/graphs",
+  "name": "Graphs",
+  "summary": "Read-only adapters over the research databases, and the claim browser.",
+  "owns": [
+    "server/research.py",
+    "static/research.css",
+    "static/research.js",
+    "tests/research_frontend_harness.js",
+    "tests/test_research_chat.py",
+    "tests/test_research.py"
+  ],
+  "routes": [
+    "/api/research$",
+    "/api/research/destinations",
+    "/api/research/{graph_id}"
+  ],
+  "stores": [
+    "data/research-cache/"
+  ],
+  "reads": [
+    "core/settings"
+  ],
+  "feeds": [
+    "find/ask",
+    "find/notes"
+  ],
+  "registry": [
+    "research-graphs",
+    "research-win"
+  ]
+}

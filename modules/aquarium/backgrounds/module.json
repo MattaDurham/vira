@@ -1,0 +1,28 @@
+{
+  "id": "aquarium/backgrounds",
+  "name": "Backgrounds",
+  "summary": "The background adapter, the pond, and the photographic landscapes.",
+  "owns": [
+    "static/desktop-backgrounds.css",
+    "static/desktop-backgrounds.js",
+    "static/koi-pond.js",
+    "static/koi-pond-3d.js",
+    "static/backgrounds/**",
+    "tests/koi_pond.js",
+    "tests/koi_pond_3d.mjs",
+    "tests/test_desktop_backgrounds_ui.py",
+    "tests/desktop_backgrounds_ui.js"
+  ],
+  "routes": [],
+  "stores": [
+    "data/background.json"
+  ],
+  "reads": [
+    "aquarium/koi",
+    "design/skins"
+  ],
+  "feeds": [
+    "core/shell"
+  ],
+  "registry": []
+}

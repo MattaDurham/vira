@@ -1,0 +1,29 @@
+{
+  "id": "find/define",
+  "name": "Define",
+  "summary": "Right-click any selected text: a definition card, and the Mac service that reaches it.",
+  "owns": [
+    "server/define.py",
+    "server/atlasterms.py",
+    "scripts/install-define-service.py",
+    "tests/define_link_ui.js",
+    "tests/test_definition_ingest_destinations.py",
+    "tests/test_mac_define_service.py",
+    "tests/test_define.py",
+    "tests/test_atlasterms.py"
+  ],
+  "routes": [
+    "/api/define"
+  ],
+  "stores": [
+    "data/definitions.json"
+  ],
+  "reads": [
+    "find/notes",
+    "models/backends"
+  ],
+  "feeds": [
+    "find/notes"
+  ],
+  "registry": []
+}

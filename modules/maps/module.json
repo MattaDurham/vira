@@ -1,0 +1,15 @@
+{
+  "id": "maps",
+  "name": "Maps",
+  "group": "know",
+  "rank": 80,
+  "summary": "The System Map (this registry, live) and layered diagrams any request can fill.",
+  "windows": [
+    "map",
+    "maps"
+  ],
+  "submodules": [
+    "system",
+    "diagrams"
+  ]
+}

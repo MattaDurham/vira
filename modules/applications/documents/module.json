@@ -1,0 +1,32 @@
+{
+  "id": "applications/documents",
+  "name": "Documents",
+  "summary": "The resume viewport and the markup of a hand-written draft against a role.",
+  "owns": [
+    "server/resumeview.py",
+    "server/resumeviewroutes.py",
+    "server/draftcheck.py",
+    "tests/test_resume_onepage.py",
+    "tests/test_resumeview.py",
+    "tests/test_draftcheck.py"
+  ],
+  "routes": [
+    "/api/applications/{uid}/document",
+    "/api/applications/{uid}/draft-check",
+    "/api/applications/{uid}/ask",
+    "/api/applications/{uid}/claim",
+    "/api/applications/{uid}/term",
+    "/api/applications/{uid}/line-note",
+    "/api/applications/{uid}/feedback"
+  ],
+  "stores": [
+    "data/resume-annotations.json"
+  ],
+  "reads": [
+    "applications/catalog",
+    "evidence/ledger",
+    "models/backends"
+  ],
+  "feeds": [],
+  "registry": []
+}

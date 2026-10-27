@@ -1,0 +1,24 @@
+{
+  "id": "money/banking",
+  "name": "Banking",
+  "summary": "Bank connection setup; credentials never enter an agent prompt or config.",
+  "owns": [
+    "server/banking.py",
+    "tests/test_banking.py"
+  ],
+  "routes": [
+    "/api/banking"
+  ],
+  "stores": [
+    "Keychain (per-instance service)"
+  ],
+  "reads": [
+    "core/settings"
+  ],
+  "feeds": [
+    "money/subscriptions"
+  ],
+  "registry": [
+    "mercury-src"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "imageatlas",
+  "name": "Image Atlas",
+  "group": "know",
+  "rank": 60,
+  "summary": "The vault's images as a navigable 3D galaxy, and the Genre Studio that composes new genres.",
+  "windows": [
+    "imageatlas"
+  ],
+  "submodules": [
+    "galaxy",
+    "genres"
+  ]
+}

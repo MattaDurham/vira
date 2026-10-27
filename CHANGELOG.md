@@ -8,6 +8,25 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- The module tree. `modules/<module>/<submodule>/` is the map of the
+  code laid out the way the app is: nineteen modules (Incoming, People,
+  Find, Library, Reader, Research, World, Image Atlas, Evidence, Maps,
+  Core, Models, Work, Fleet, Applications, Design, Aquarium, Attention,
+  Money), fifty-seven submodules, a README in every folder. The root README
+  indexes the modules one line each; a module's README indexes its
+  submodules; a submodule's README carries hand-written prose and a
+  generated block listing every file it owns with one line on what it is,
+  what it reads from and feeds (links to those pages), its routes, its
+  stores under `data/`, and its System Map records. `python -m
+  server.moduletree` keeps it true: `check` fails when a tracked file is
+  owned by no submodule or by two, a link dangles, or a generated block is
+  stale (`tests/test_moduletree.py` runs it on every PR); `index --write`
+  re-renders; `brief work/automations` prints a submodule's page plus the
+  full docstring of every server file it owns; `where <path>` names a
+  file's submodule; `plan <id>` prints the `git mv` list that would gather
+  its files. The tree describes where things belong; the files have not
+  moved. `AGENTS.md` routes an agent looking for one module's code to it.
+
 - Command routines. A standing loop can now run a program instead of an
   agent: kind `command`, with an argv, a working folder, environment
   overrides (PATH, typically), an optional log file its output is also

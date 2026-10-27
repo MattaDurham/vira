@@ -1,0 +1,20 @@
+{
+  "id": "world/orbits",
+  "name": "Orbits",
+  "summary": "The network as time: a second view of the World window.",
+  "owns": [
+    "static/orbits.css",
+    "static/orbits.js",
+    "tests/orbits_layout_harness.mjs",
+    "tests/orbits_refresh_harness.mjs",
+    "tests/test_orbits_view.py"
+  ],
+  "routes": [],
+  "stores": [],
+  "reads": [
+    "world/graph",
+    "people/crm"
+  ],
+  "feeds": [],
+  "registry": []
+}

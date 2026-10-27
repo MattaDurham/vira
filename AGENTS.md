@@ -11,6 +11,7 @@ This repository is public. Personal data never enters git.
 | Installing Vira on a machine | [AGENTS.install.md](AGENTS.install.md). That file is the whole job. |
 | Adding research, documents, or other content to an installed Vira | [AGENTS.local.md](AGENTS.local.md), section 1 |
 | Changing the code: a feature, a fix, a review, a dispatched task | [AGENTS.local.md](AGENTS.local.md) |
+| Finding the code for one module (Work, Find, Incoming, ...) or one of its submodules | [modules/README.md](modules/README.md), then down one README at a time, or `python -m server.moduletree brief work/automations` |
 
 `AGENTS.local.md` is the owner's private operating file, and git ignores
 it. Any agent edits it, in the session whose work makes a sentence there
@@ -42,5 +43,9 @@ These hold even before you open `AGENTS.local.md`:
   merge. Git-ignored owner files (`AGENTS.local.md`, `data/`) are written
   in place; that is what they are for.
 - Never restart, stop, or kill the Vira server.
+- Every tracked file belongs to exactly one submodule in `modules/`. A
+  new file goes into one `module.json` there, then
+  `python -m server.moduletree index --write`; `check` (and CI) says
+  which files are unplaced.
 - Merge and push only when the owner says so. "Merge it" from the owner
   covers the whole landing; the steps are in `AGENTS.local.md`, section 3.

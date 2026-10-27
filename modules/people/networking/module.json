@@ -1,0 +1,33 @@
+{
+  "id": "people/networking",
+  "name": "Networking",
+  "summary": "Radar, reconnect, and circles: who deserves attention and who should meet whom.",
+  "owns": [
+    "server/radar.py",
+    "server/reconnect.py",
+    "server/circles.py",
+    "tests/test_reconnect.py",
+    "tests/test_circles.py"
+  ],
+  "routes": [
+    "/api/radar",
+    "/api/reconnect",
+    "/api/atlas/circles"
+  ],
+  "stores": [
+    "data/radar.json",
+    "data/circles.json"
+  ],
+  "reads": [
+    "people/crm",
+    "incoming/feed",
+    "world/atlas",
+    "models/backends"
+  ],
+  "feeds": [
+    "attention/brief"
+  ],
+  "registry": [
+    "radar-engine"
+  ]
+}

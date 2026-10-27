@@ -1,0 +1,47 @@
+{
+  "id": "models/backends",
+  "name": "Backends",
+  "summary": "The capability probe, prompt budgets, per-module model choices, admission, and health.",
+  "owns": [
+    "server/models.py",
+    "server/modelbudget.py",
+    "server/modeladmission.py",
+    "server/modulemodels.py",
+    "server/suggest.py",
+    "server/aihealth.py",
+    "static/module-models.js",
+    "tests/model_ledgers.py",
+    "tests/test_module_models_ui.py",
+    "tests/module_models_ui.js",
+    "tests/test_module_model_sessions.py",
+    "tests/test_module_context_budget.py",
+    "tests/test_prompt_budget_joins.py",
+    "tests/test_models.py",
+    "tests/test_modelbudget.py",
+    "tests/test_modulemodels.py",
+    "tests/test_aihealth.py"
+  ],
+  "routes": [
+    "/api/models",
+    "/api/module-models",
+    "/api/suggest",
+    "/api/health/ai"
+  ],
+  "stores": [
+    "data/model-ledger.json",
+    "data/module-models.json",
+    "data/ai-health.json"
+  ],
+  "reads": [
+    "core/settings"
+  ],
+  "feeds": [
+    "models/sessions",
+    "find/ask",
+    "attention/brief",
+    "people/networking"
+  ],
+  "registry": [
+    "suggest"
+  ]
+}

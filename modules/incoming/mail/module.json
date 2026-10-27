@@ -1,0 +1,50 @@
+{
+  "id": "incoming/mail",
+  "name": "Mail",
+  "summary": "IMAP and Microsoft 365 inboxes, the local mail archive, and reading or answering an email.",
+  "owns": [
+    "server/mail.py",
+    "server/mailarchive.py",
+    "server/mailindex.py",
+    "server/mailread.py",
+    "server/msgraph.py",
+    "server/msgraphbrowser.py",
+    "server/msgraphsetup.py",
+    "server/calinvite.py",
+    "static/microsoft-callback.css",
+    "static/microsoft-callback.html",
+    "static/microsoft-callback.js",
+    "static/microsoft-launch.html",
+    "static/microsoft-launch.js",
+    "tests/test_mail_attachment_provenance.py",
+    "tests/test_mailread_resources.py",
+    "tests/test_msgraph_setup.py",
+    "tests/microsoft_frontend_harness.js",
+    "tests/test_index_from_archive.py",
+    "tests/test_mail.py",
+    "tests/test_mailarchive.py",
+    "tests/test_mailread.py",
+    "tests/test_calinvite.py"
+  ],
+  "routes": [
+    "/api/mail"
+  ],
+  "stores": [
+    "data/mail-archive/",
+    "data/mail-index.sqlite",
+    "data/mail-watermarks.json"
+  ],
+  "reads": [
+    "core/settings",
+    "people/crm"
+  ],
+  "feeds": [
+    "incoming/feed",
+    "find/media",
+    "money/subscriptions"
+  ],
+  "registry": [
+    "mail-src",
+    "mail-engine"
+  ]
+}

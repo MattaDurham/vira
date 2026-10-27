@@ -1,0 +1,14 @@
+{
+  "id": "design",
+  "name": "Design",
+  "group": "operate",
+  "rank": 60,
+  "summary": "The Design Studio hosted from the design-foundation repo, and the skins Vira can wear.",
+  "windows": [
+    "design"
+  ],
+  "submodules": [
+    "studio",
+    "skins"
+  ]
+}

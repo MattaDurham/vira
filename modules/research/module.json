@@ -1,0 +1,14 @@
+{
+  "id": "research",
+  "name": "Research",
+  "group": "know",
+  "rank": 40,
+  "summary": "Claim-centred evidence over local, read-only research graphs.",
+  "windows": [
+    "research"
+  ],
+  "submodules": [
+    "graphs",
+    "topics"
+  ]
+}

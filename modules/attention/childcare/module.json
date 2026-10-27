@@ -1,0 +1,24 @@
+{
+  "id": "attention/childcare",
+  "name": "Childcare",
+  "summary": "Childcare coverage: notice a pickup nobody is covering, block it, ask once.",
+  "owns": [
+    "server/coverage.py",
+    "tests/test_coverage.py"
+  ],
+  "routes": [
+    "/api/coverage"
+  ],
+  "stores": [
+    "data/coverage.json"
+  ],
+  "reads": [
+    "core/settings",
+    "incoming/feed"
+  ],
+  "feeds": [
+    "attention/now",
+    "incoming/feed"
+  ],
+  "registry": []
+}

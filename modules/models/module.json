@@ -1,0 +1,12 @@
+{
+  "id": "models",
+  "name": "Models",
+  "group": "operate",
+  "rank": 20,
+  "summary": "Which AI backends this Mac has, how much a prompt may carry, and the harness a live session runs in.",
+  "windows": [],
+  "submodules": [
+    "backends",
+    "sessions"
+  ]
+}

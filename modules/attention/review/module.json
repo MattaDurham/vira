@@ -1,0 +1,30 @@
+{
+  "id": "attention/review",
+  "name": "Review",
+  "summary": "One queue for every decision waiting on the owner, and how often each standing rule breaks.",
+  "owns": [
+    "server/reviewqueue.py",
+    "server/lessonwatch.py",
+    "tests/test_reviewqueue.py",
+    "tests/test_lessonwatch.py"
+  ],
+  "routes": [
+    "/api/review",
+    "/api/lessons"
+  ],
+  "stores": [
+    "data/review-queue.json",
+    "data/lesson-watch.json"
+  ],
+  "reads": [
+    "work/ideas",
+    "work/sessions"
+  ],
+  "feeds": [
+    "attention/now"
+  ],
+  "registry": [
+    "review-engine",
+    "lesson-recurrence"
+  ]
+}
