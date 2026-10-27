@@ -6,7 +6,8 @@
     "server/modulemap.py",
     "server/modulestory.py",
     "server/moduletree.py",
-    "tests/test_modulestory.py"
+    "tests/test_modulestory.py",
+    "tests/test_moduletree.py"
   ],
   "routes": [
     "/api/map",

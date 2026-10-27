@@ -19,7 +19,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 ### Submodules
 
-- [System](system/README.md) - The module registry, the build story behind a window, and the module tree itself. (4 files)
+- [System](system/README.md) - The module registry, the build story behind a window, and the module tree itself. (5 files)
 - [Diagrams](diagrams/README.md) - Layered diagrams as a type any request can fill, and the page that draws them. (3 files)
 
 ### Neighbours
@@ -32,6 +32,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Windows: `map`, `maps` (ids from `WINDOWS` in `static/app.js`).
 
-7 tracked files across 2 submodules. `python -m server.moduletree brief maps` prints every submodule's page in one go.
+8 tracked files across 2 submodules. `python -m server.moduletree brief maps` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

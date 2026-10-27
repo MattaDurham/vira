@@ -21,7 +21,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Core / Shell](../../core/shell/README.md)
 
-### Files (4)
+### Files (5)
 
 **Server**
 
@@ -36,6 +36,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | File | What it is |
 |---|---|
 | `tests/test_modulestory.py` | The module story: right-click a window, "What is this?". |
+| `tests/test_moduletree.py` | The module tree: every tracked file placed exactly once, every README's generated block current, every link resolving. |
 
 ### Routes (4)
 

@@ -161,10 +161,13 @@ def find(tree, ident):
 # ----------------------------------------------------------- the tracked tree
 
 def tracked_files():
-    """Every tracked path under ROOT, posix-relative. git first; a walk when
-    git is unavailable (an exported tree), skipping what .gitignore would."""
+    """Every tracked path under ROOT, posix-relative, plus any new file git
+    does not ignore: a file just written shows up as unplaced before it is
+    added, not after CI runs. git first; a walk when git is unavailable (an
+    exported tree), skipping what .gitignore would."""
     try:
-        out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
+        out = subprocess.run(["git", "ls-files", "-z", "--cached", "--others",
+                              "--exclude-standard"], cwd=str(ROOT),
                              capture_output=True, timeout=30, check=True)
         files = [f for f in out.stdout.decode("utf-8", "replace").split("\0")
                  if f]
