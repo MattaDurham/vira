@@ -3,8 +3,14 @@
 the save power the standalone page lacks: POST /api/design/save rewrites
 token values inside themes/<theme>/theme.css in place, commits with a
 message naming the changed tokens, and pushes. The repo path comes from
-config ``design_foundation_root``; when the directory is missing the
-studio is dormant (mount skipped, save 404s).
+config ``design_foundation_root``; when the checkout is missing the
+studio is dormant: GET /api/design/status says so and where it looked,
+the window shows that instead of framing a 404, and save 404s.
+
+The path is read on every request, never at import. A fresh install
+starts without the checkout (installing Vira touches nothing outside its
+own repo), so the checkout usually arrives AFTER the server is up; a
+mount decided at startup kept the studio a 404 until a restart.
 
 The rewrite is line-based and conservative: only the value between
 ``--token:`` and the first ``;`` changes, so trailing comments (the
@@ -19,6 +25,8 @@ import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import gitutil, settings
@@ -48,6 +56,38 @@ VIRA_PATHS = {"static/style.css"}
 
 def root() -> Path:
     return Path(settings.get("design_foundation_root")).expanduser()
+
+
+# the page the window frames; a folder without it is not a studio checkout
+STUDIO_PAGE = "studio.html"
+
+
+def status() -> dict:
+    """Whether the studio can be served, and if not, why, named for the
+    owner: the folder Vira looked in and what it found there."""
+    d = root()
+    if (d / STUDIO_PAGE).is_file():
+        return {"ready": True, "root": str(d), "reason": ""}
+    if d.is_dir():
+        reason = f"{d} has no {STUDIO_PAGE}, so it is not a design-system checkout"
+    else:
+        reason = f"no design-system checkout at {d}"
+    return {"ready": False, "root": str(d), "reason": reason}
+
+
+class CheckoutFiles:
+    """The /design mount: the checkout's files, looked up per request so a
+    checkout cloned (or a path changed in Config) after startup is served
+    at once. A StaticFiles per request is cheap (it only records the
+    directory) and keeps Starlette's path-escape and index.html handling."""
+
+    async def __call__(self, scope, receive, send):
+        d = root()
+        if scope["type"] != "http" or not d.is_dir():
+            await JSONResponse({"detail": status()["reason"]},
+                               status_code=404)(scope, receive, send)
+            return
+        await StaticFiles(directory=d, html=True)(scope, receive, send)
 
 
 # ---------------------------------------------------------------- rewrite
@@ -235,6 +275,11 @@ class SaveReq(BaseModel):
     target: str = "foundation"              # foundation | vira (this checkout)
     changes: dict[str, str] | None = None   # token-level path (API/tests)
     files: dict[str, str] | None = None     # whole-file path (the studio editor)
+
+
+@router.get("/status")
+def get_status():
+    return status()
 
 
 @router.post("/save")

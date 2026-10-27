@@ -17567,8 +17567,7 @@ function viewLoad(id) {
   if (id === "fleet") window.loadFleet?.().catch(() => {});
   if (id === "imageatlas") loadImageAtlas().catch(() => {});
   if (id === "design") {
-    const f = $("#design-frame");          // load the studio on first open
-    if (f && !f.getAttribute("src")) f.src = "/design/studio.html";
+    loadDesignStudio().catch(() => {});    // the studio frame, or why not
     loadDesignSkins().catch(() => {});     // the skins picker above the frame
   }
   if (id === "reader") loadReader().catch(() => {});
@@ -17827,6 +17826,41 @@ function openApp(id) {
   viewLoad(id);
   window.scrollTo(0, 0);
   mdockRefresh();   // the access bar lights whichever of its five is up
+}
+
+// ----- Design Studio: the studio frame -----
+// The studio page lives in a separate design-system checkout, which a fresh
+// install does not have. Framing it unasked showed a JSON 404 in the window
+// and behind Open full tab, so ask first and say what is missing. Re-asked
+// on every open: the server finds the checkout per request, so one cloned
+// while Vira runs comes up here without a restart.
+async function loadDesignStudio() {
+  const frame = $("#design-frame"), door = $("#design-door"),
+        full = $("#design-fulltab");
+  if (!frame || !door) return;
+  let st;
+  try {
+    st = await api("/api/design/status");
+  } catch (e) {
+    st = { ready: false, reason: "studio status unavailable: " + errText(e) };
+  }
+  if (st.ready) {
+    door.style.display = "none";
+    frame.style.display = "";
+    if (full) full.style.display = "";
+    if (!frame.getAttribute("src")) frame.src = "/design/studio.html";
+    return;
+  }
+  frame.style.display = "none";
+  frame.removeAttribute("src");
+  if (full) full.style.display = "none";
+  door.innerHTML = "";
+  door.appendChild(el("div", "", "The studio is not set up on this install: "
+    + (st.reason || "no design-system checkout") + "."));
+  door.appendChild(el("div", "", "Clone the design-system repo there, or point "
+    + "Config > Advanced settings > System > Design system checkout at your copy. "
+    + "This window picks it up the next time it opens. The skins above work without it."));
+  door.style.display = "";
 }
 
 // ----- Design Studio: the skins picker -----

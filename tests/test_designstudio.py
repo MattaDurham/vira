@@ -246,5 +246,54 @@ class ViraSaveSyncsTheBaseSkin(unittest.TestCase):
 
 
 
+class CheckoutServingTests(unittest.TestCase):
+    """THE JOIN, through the real app: a fresh install has no design-system
+    checkout, and the owner clones one while Vira runs. The mount used to be
+    decided at import, so the studio stayed a JSON 404 until a restart."""
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from server import main
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.checkout = self.tmp / "design-foundation"
+        # pinned, never the real config's path
+        self.enterContext(mock.patch.object(ds, "root", lambda: self.checkout))
+        self.client = TestClient(main.app)
+
+    def _clone(self):
+        self.checkout.mkdir()
+        (self.checkout / "studio.html").write_text("<p>studio</p>", encoding="utf-8")
+        (self.checkout / "index.html").write_text("<p>specimens</p>", encoding="utf-8")
+
+    def test_missing_checkout_is_named_not_framed(self):
+        st = self.client.get("/api/design/status").json()
+        self.assertFalse(st["ready"])
+        self.assertIn(str(self.checkout), st["reason"])
+        r = self.client.get("/design/studio.html")
+        self.assertEqual(r.status_code, 404)
+        self.assertIn(str(self.checkout), r.json()["detail"])
+
+    def test_checkout_cloned_after_startup_is_served_without_restart(self):
+        self.assertEqual(self.client.get("/design/studio.html").status_code, 404)
+        self._clone()
+        self.assertTrue(self.client.get("/api/design/status").json()["ready"])
+        r = self.client.get("/design/studio.html")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("studio", r.text)
+        self.assertIn("specimens", self.client.get("/design/").text)
+
+    def test_a_folder_without_the_studio_page_is_not_ready(self):
+        self.checkout.mkdir()
+        st = self.client.get("/api/design/status").json()
+        self.assertFalse(st["ready"])
+        self.assertIn("studio.html", st["reason"])
+
+    def test_paths_cannot_escape_the_checkout(self):
+        self._clone()
+        (self.tmp / "secret.txt").write_text("private", encoding="utf-8")
+        for path in ("/design/../secret.txt", "/design/%2e%2e/secret.txt"):
+            r = self.client.get(path)
+            self.assertNotIn("private", r.text, path)
+
+
 if __name__ == "__main__":
     unittest.main()

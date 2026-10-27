@@ -5665,13 +5665,12 @@ app.include_router(subs_visuals.router)
 # ---------- Design Studio (the design-foundation repo, served in place) ----
 # /design/ = the specimen book; /design/studio.html = the IDE frame. The
 # save endpoint (designstudio.router) rewrites theme tokens, commits, and
-# pushes in that repo. Dormant when the repo directory is missing.
+# pushes in that repo. Dormant when the repo directory is missing; always
+# mounted, because the mount finds the checkout per request (a checkout that
+# appears after startup is served without a restart).
 
 app.include_router(designstudio.router)
-_design_root = designstudio.root()
-if _design_root.is_dir():
-    app.mount("/design", StaticFiles(directory=_design_root, html=True),
-              name="design")
+app.mount("/design", designstudio.CheckoutFiles(), name="design")
 
 # ---------- Skins (genre-compiled jumping-off points the studio can wear) --
 # GET /api/skins lists them; POST /api/skins/{id}/apply records the look in
