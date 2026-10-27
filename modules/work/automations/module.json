@@ -2,7 +2,7 @@
   "id": "work/automations",
   "name": "Automations",
   "title": "The Forge",
-  "summary": "The Forge: flows, circuits, routines, command routines, and the action library.",
+  "summary": "The Forge: Flows (cards wired on a board), circuits, standing loops (routines and command routines), and the source library.",
   "owns": [
     "server/flows.py",
     "server/circuits.py",
@@ -13,8 +13,6 @@
     "server/launchdjobs.py",
     "static/forge.css",
     "static/forge.js",
-    "static/forge-spatial.js",
-    "tests/test_forge_spatial.py",
     "tests/test_forge_tools.py",
     "tests/test_parity_flows.py",
     "tests/test_flow_trace_contract.py",

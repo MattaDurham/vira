@@ -4,11 +4,11 @@ Vira > [Modules](../README.md) > Work
 
 The cockpit: live agent sessions, the ideas backlog, The Forge's automations, and every branch.
 
-Work is one window with three tabs. Live is the sessions Vira runs
-(detached, durable, steerable) and the branches they land on. Queue is the
-ideas backlog, Vira's own cross-session roadmap. Dispatch is The Forge:
-flows, circuits, routines and the action library, every standing loop and
-scheduled program. Five older windows (Jobs, Ideas, Actions, Circuits,
+Work is one window with three tabs. Results is the sessions Vira runs
+(detached, durable, steerable) and the branches they land on. Ideas is the
+backlog, Vira's own cross-session roadmap. Automations is The Forge:
+Flows as boards of cards, the standing loops and scheduled programs, and
+the library of sources. Five older windows (Jobs, Ideas, Actions, Circuits,
 Routines, Showroom) fold into these tabs through `WORK_ALIAS`.
 
 ## Where to go next
@@ -22,7 +22,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 - [Sessions](sessions/README.md) - Live agent sessions that outlive the server: launch, steer, record, judge, resume. (23 files)
 - [Branches](branches/README.md) - Branch-first enforcement, the Showroom of draft branches, orphan work, and the merge gate. (31 files)
 - [Ideas](ideas/README.md) - The backlog: Vira's own cross-session roadmap, its tags, images, and the Approve & build path. (9 files)
-- [Automations](automations/README.md) - The Forge: flows, circuits, routines, command routines, and the action library. (19 files)
+- [Automations](automations/README.md) - The Forge: Flows (cards wired on a board), circuits, standing loops (routines and command routines), and the source library. (17 files)
 
 ### Neighbours
 
@@ -34,6 +34,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `work` (ids from `WINDOWS` in `static/app.js`).
 
-82 tracked files across 4 submodules. `python -m server.moduletree brief work` prints every submodule's page in one go.
+80 tracked files across 4 submodules. `python -m server.moduletree brief work` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

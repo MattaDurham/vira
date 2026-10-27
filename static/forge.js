@@ -1,5 +1,15 @@
-/* The Forge: Vira's integrated Flow editor. The product shell, persistence,
-   and execution live in Vira; this file owns only the graph interaction. */
+/* The Forge: Vira's Flow editor. The product shell, persistence and
+   execution live in Vira; this file owns the board, the library and the
+   right-column editor.
+
+   A Flow is a board of cards wired in one direction. Nine kinds of card:
+   six that run (agent, judge, gate, ask me, output, native), a schedule,
+   and two sources (a skill, script or file; a Find reference). A card is
+   who runs it, what it must do and what it may touch; the board shows it
+   small and the right column is the only editor. A wire means the
+   finished text of the card before goes into the card after, and it may
+   carry a note. The server (server/flows.py) reads nothing else, so the
+   editor draws nothing else (2026-10-27). */
 (() => {
   "use strict";
 
@@ -29,32 +39,74 @@
     body: JSON.stringify(body),
   });
 
-  const TYPE = {
-    agent: { mark: "A", name: "Agent", inputs: ["input", "context", "tools"], outputs: ["result", "event"] },
-    judge: { mark: "J", name: "Judge", inputs: ["result", "criteria"], outputs: ["verdict", "retry"] },
-    trigger: { mark: "T", name: "Trigger", inputs: ["event"], outputs: ["start"] },
-    context: { mark: "C", name: "Context", inputs: ["source"], outputs: ["packet"] },
-    tool: { mark: "K", name: "Tool", inputs: ["call"], outputs: ["capability", "result"] },
-    logic: { mark: "L", name: "Logic", inputs: ["value", "condition"], outputs: ["pass", "fail"] },
-    approval: { mark: "H", name: "Approval", inputs: ["proposal"], outputs: ["approved", "declined"] },
-    output: { mark: "O", name: "Output", inputs: ["result", "metadata"], outputs: ["record"] },
-    native: { mark: "N", name: "Native", inputs: ["input", "context"], outputs: ["result"] },
-    system: { mark: "S", name: "System", inputs: ["input", "context"], outputs: ["result", "event"] },
-    connector: { mark: "IO", name: "Connector", inputs: ["in"], outputs: ["out"] },
-  };
+  /* ---------- vocabulary ------------------------------------------------ */
 
-  const OUTPUT_KIND = {
-    start: "signal", event: "signal", packet: "context",
-    capability: "capability", result: "data", verdict: "decision",
-    retry: "decision", pass: "data", fail: "data", approved: "decision",
-    declined: "decision", record: "data",
+  const KIND = {
+    agent: { name: "Agent", hint: "A session: a model, a permission, an instruction." },
+    judge: { name: "Judge", hint: "Grades the card before it and can send it back." },
+    logic: { name: "Gate", hint: "Passes or stops on what the card before it did." },
+    approval: { name: "Ask me", hint: "Pauses until you answer." },
+    output: { name: "Output", hint: "Where the result lands and what shape it takes." },
+    trigger: { name: "Schedule", hint: "Runs the Flow on a cadence." },
+    native: { name: "Vira routine", hint: "Runs one of Vira's own loops inside this Flow." },
+    tool: { name: "Source", hint: "A skill, command, script or file the card is told about." },
+    context: { name: "Reference", hint: "A note or file from Find the card is told about." },
   };
-  const INPUT_ACCEPT = {
-    input: ["data", "signal", "decision"], context: ["context"], tools: ["capability"],
-    event: ["signal"], source: ["data", "context"], call: ["data", "signal"],
-    result: ["data"], criteria: ["context", "data"], value: ["data", "decision"],
-    condition: ["decision", "data"], proposal: ["data"], metadata: ["decision", "data"],
+  const EXEC = new Set(["agent", "judge", "logic", "approval", "output", "native"]);
+  const SOURCE = new Set(["tool", "context"]);
+  const CARD_W = 264;
+
+  // Who runs a card. One picker: the model aliases Vira resolves, or a
+  // whole provider (its own default model). Mirrors server/models.py
+  // PROVIDERS and agentbackend.provider_of_model.
+  const MODEL_CHOICES = [
+    ["", "Vira default"], ["provider:anthropic", "Claude"], ["fable", "Fable"],
+    ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"],
+    ["provider:openai", "Codex"], ["provider:google", "Gemini"], ["provider:xai", "Grok"],
+    ["other", "Another model id"],
+  ];
+  const MODEL_LABEL = Object.fromEntries(MODEL_CHOICES);
+  const PROVIDER_LABEL = { anthropic: "Claude", openai: "Codex", google: "Gemini", xai: "Grok" };
+  const PERMS = [["read", "read"], ["ask", "ask"], ["edit", "edit"], ["full", "full"]];
+  const PERM_HINT = {
+    read: "Read-only. It can look but not change anything.",
+    ask: "It may write, and asks you before each write.",
+    edit: "It may edit files on its own.",
+    full: "Full execution, no questions. Use for a build you trust.",
   };
+  const GRADES = [["", "no grade gate"], ["A", "A"], ["B", "B"], ["C", "C"], ["D", "D"], ["F", "F"]];
+  const DESTINATIONS = [["record", "a Vira record"], ["artifact", "an artifact"],
+    ["decision_brief", "a decision brief"], ["notification", "a notification"],
+    ["plan", "a plan dossier"]];
+  const DESTINATION_LABEL = Object.fromEntries(DESTINATIONS);
+
+  // Two families of gate, and the split is what the labels say: the first
+  // reads what the card before it WROTE, the second reads how it RAN - its
+  // ledger row, the tools it called, the cards it raised, its transcript.
+  // Mirrors server/circuits.py LOGIC_OPS; the server refuses an unknown one.
+  const LOGIC_OPS = [
+    ["What it wrote", [["always", "always passes"], ["has_output", "wrote anything"],
+      ["contains", "wrote text containing"], ["not_contains", "wrote nothing containing"],
+      ["equals", "wrote exactly"]]],
+    ["How it ran", [["provider_is", "ran on provider"],
+      ["transport_matches_provider", "ran on its provider's own lane"],
+      ["transport_is", "ran on transport"], ["model_used_contains", "used a model containing"],
+      ["outcome_is", "ended with status"], ["tool_called", "called the Vira tool"],
+      ["tool_not_called", "did not call the Vira tool"],
+      ["card_raised", "raised a card of kind"],
+      ["log_contains", "has a transcript containing"], ["log_not_contains", "has no transcript line containing"],
+      ["placed_in_worktree", "was placed in a worktree"], ["not_in_worktree", "ran with no worktree"],
+      ["read_only_honored", "stayed read-only"], ["guard_held", "was held by the branch-first guard"],
+      ["interrupt_honored", "was interrupted by its timeout"]]],
+  ];
+  const NO_VALUE_OPS = new Set(["always", "has_output", "transport_matches_provider",
+    "placed_in_worktree", "not_in_worktree", "read_only_honored", "guard_held",
+    "interrupt_honored"]);
+  const OP_LABEL = Object.fromEntries(LOGIC_OPS.flatMap(([, ops]) => ops));
+
+  // The gate editor's menu, flat: every operation the engine offers.
+  function logicControls() { return LOGIC_OPS; }
+
   const ICON = {
     flow: "M4 6h5v5H4zM15 4h5v5h-5zM15 15h5v5h-5zM9 8.5h3c2 0 3-1 3-2M9 8.5h2c3 0 4 4 4 9",
     skill: "M12 3l2.2 4.5L19 8l-3.5 3.4.9 4.8L12 14l-4.4 2.2.9-4.8L5 8l4.8-.5z",
@@ -63,9 +115,7 @@
     agent: "M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8M5 21c.6-4 3-6 7-6s6.4 2 7 6",
     context: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5",
     tool: "M14 5a4 4 0 0 0-5 5L4 15l5 5 5-5a4 4 0 0 0 5-5l-3 3-3-3 3-3z",
-    trigger: "M12 3v8l5 3-5 7v-8l-5-3z",
-    output: "M5 4h14v16H5zM9 12h6M13 8l4 4-4 4",
-    connector: "M4 8h5l2 3h2l2-3h5M4 16h5l2-3h2l2 3h5",
+    loop: "M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4",
   };
 
   const state = {
@@ -73,18 +123,15 @@
     loading: false,
     flows: [],
     kit: [],
-    // This Mac library tab: the launchd inventory, and which cards are open
+    loops: [],
     mac: null,
-    macLoading: false,
-    macOpen: new Set(),
     current: null,
     selectedNode: null,
     selectedEdge: null,
+    selectedLoop: null,
     library: "flows",
     query: "",
-    filter: "all",
-    view: "board",
-    outlineOpen: false,
+    findRows: [],
     zoom: 1,
     panX: 25,
     panY: 55,
@@ -93,16 +140,13 @@
     connect: null,
     tempPoint: null,
     libraryDrag: null,
-    libraryHome: null,
-    libraryFloatRect: null,
     runs: [],
-    boardLayerFocus: null,
+    heights: {},
     // The armed run trace: { runId, run (stash for runs older than the
     // fetch window), sig (repaint guard) }. The overlay is a STATE laid
-    // over the flow's own board — one renderer, never a second one.
+    // over the flow's own board: one renderer, never a second one.
     trace: null,
   };
-  let spatial = null;
 
   function flowPayload(flow = state.current) {
     return {
@@ -119,8 +163,8 @@
   /* ---------- Edit history ------------------------------------------------
      setDirty() is the Forge's one mutation choke point - every edit on the
      board already calls it - so the undo stack hangs off it rather than off
-     the forty individual call sites, which is what keeps a newly added
-     mutation undoable without anyone remembering this file exists.
+     the individual call sites, which is what keeps a newly added mutation
+     undoable without anyone remembering this file exists.
 
      A snapshot is the DOCUMENT only. Server-owned identity (id, revision,
      created, updated) is deliberately left out: an undo restores content and
@@ -138,11 +182,9 @@
       name: flow.name || "",
       description: flow.description || "",
       kind: flow.kind || "flow",
-      // source_loading is a spinner flag, not content: captured mid-hydration
-      // and restored, it would leave a card spinning forever.
       nodes: (flow.nodes || []).map((node) => {
         const clean = { ...node };
-        delete clean.source_loading;
+        delete clean.z;
         return clean;
       }),
       edges: flow.edges || [],
@@ -166,8 +208,7 @@
 
   // A text field fires change() on every keystroke, so without coalescing one
   // typed sentence would be sixty undo steps and would evict every structural
-  // edit behind it. The key is stamped on the element itself, which keeps all
-  // the existing inputControl/textareaControl call sites untouched.
+  // edit behind it. The key is stamped on the element itself.
   function editKey() {
     const el = document.activeElement;
     if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA")) return null;
@@ -183,7 +224,6 @@
     if (after == null || before === after) return;
     const key = editKey();
     const now = Date.now();
-    // Same field, still typing: fold into the entry already on the stack.
     const merge = key && key === history.key && now - history.at < COALESCE_MS;
     history.key = key;
     history.at = now;
@@ -213,26 +253,20 @@
     historyLock = true;
     try {
       restoreDoc(snap);
-      // The inspector holds live closures over the node and edge objects this
+      // The editor holds live closures over the node and edge objects this
       // restore just replaced; left open, further typing writes into orphans.
-      closeInspector();
       if (!state.current.nodes.some((node) => node.id === state.selectedNode)) state.selectedNode = null;
-      // Stepping back to exactly what was saved is not an unsaved change.
+      if (!state.current.edges.some((edge) => edge.id === state.selectedEdge)) state.selectedEdge = null;
       setDirty(snap !== history.saved);
     } finally {
       historyLock = false;
     }
     renderIdentity();
     renderBoard();
-    renderOutline();
-    renderSpatial();
-    renderRunContext();
+    renderInspector();
   }
 
-  /* ---------- Clipboard ---------------------------------------------------
-     Held in localStorage rather than a variable so a component can be copied
-     in one Flow and pasted into another, which is the whole point of having
-     it alongside Duplicate. */
+  /* ---------- Clipboard --------------------------------------------------- */
 
   function readClip() {
     try {
@@ -248,9 +282,6 @@
     return state.current?.nodes.find((node) => node.id === state.selectedNode) || null;
   }
 
-  // Placement for a pasted/duplicated part: step off the original until the
-  // slot is clear, so pasting three times gives three readable cards rather
-  // than one stack.
   function freeSpot(node) {
     let x = clamp((Number(node.x) || 0) + 42, 0, 3900);
     let y = clamp((Number(node.y) || 0) + 42, 60, 2550);
@@ -267,15 +298,11 @@
     const node = currentNode();
     if (!node) return;
     const clean = { ...node };
-    // Anything that points at THIS Flow's other parts cannot survive the trip,
-    // and a dangling reference would be worse than not carrying it.
-    ["source_loading", "source_loaded", "source_detail", "source_files",
-      "source_truncated", "proposal_for", "source_system", "locked", "z",
-    ].forEach((key) => delete clean[key]);
+    ["z", "routine_id", "forge", "continues"].forEach((key) => delete clean[key]);
     try {
       localStorage.setItem(CLIP_KEY, JSON.stringify({ node: clean, from: state.current?.name || "" }));
     } catch (error) {
-      toast("Could not copy that component");
+      toast("Could not copy that card");
       return;
     }
     syncTools();
@@ -284,27 +311,30 @@
 
   function pasteNode() {
     const clip = readClip();
-    if (!clip || !state.current || state.current.kind === "native") return;
+    if (!clip || !editable()) return;
     const clone = copy(clip.node);
-    clone.id = id(clone.type === "agent" ? "stage" : clone.type || "part");
+    clone.id = cardId(clone.name, clone.type);
+    if (clone.id.startsWith("routine:")) clone.id = cardId("schedule", "trigger");
     const spot = freeSpot(clone);
     clone.x = spot.x;
     clone.y = spot.y;
-    clone.expanded = false;
-    clone.locked = false;
     clone.z = ++state.z;
     state.current.nodes.push(clone);
     state.selectedNode = clone.id;
+    state.selectedEdge = null;
     setDirty();
     renderBoard();
-    renderOutline();
+    renderInspector();
     toast(`Pasted "${clone.name}"`);
+  }
+
+  function editable() {
+    return !!state.current && state.current.kind !== "trace";
   }
 
   function syncTools() {
     const flow = state.current;
     const node = currentNode();
-    const editable = !!flow && flow.kind !== "native";
     const set = (selector, enabled) => {
       const button = q(selector);
       if (button) button.disabled = !enabled;
@@ -312,9 +342,9 @@
     set("#forge-undo", !!flow && history.past.length > 0);
     set("#forge-redo", !!flow && history.future.length > 0);
     set("#forge-copy", !!node);
-    set("#forge-paste", editable && !!readClip());
-    set("#forge-duplicate", editable && !!node);
-    set("#forge-delete", editable && !!node && !node.locked);
+    set("#forge-paste", editable() && !!readClip());
+    set("#forge-duplicate", editable() && !!node);
+    set("#forge-delete", editable() && (!!node || !!state.selectedEdge));
   }
 
   function setDirty(value = true) {
@@ -326,9 +356,12 @@
     syncTools();
     const line = q("#forge-status");
     if (!line) return;
-    line.textContent = value
-      ? "Unsaved instance changes"
-      : (state.current?.kind === "native" ? "Core source locked; instance schedule is live" : "Editable instance · source unchanged");
+    const flow = state.current;
+    line.textContent = !flow ? "Live definitions"
+      : value ? "Unsaved changes"
+        : flow.kind === "trace" ? "A finished run's own cards; nothing to save"
+          : flow.builtin ? "Shipped starter. Save as makes your own copy."
+            : flow.id ? "Saved" : "Not saved yet";
   }
 
   function toast(message) {
@@ -337,8 +370,10 @@
     q(".forge-toast", shell)?.remove();
     const note = make("div", "forge-toast", message);
     shell.appendChild(note);
-    setTimeout(() => note.remove(), 3200);
+    setTimeout(() => note.remove(), 3600);
   }
+
+  /* ---------- loading ----------------------------------------------------- */
 
   async function loadForge(options = {}) {
     if (state.loading) return;
@@ -347,7 +382,7 @@
       return;
     }
     state.loading = true;
-    q("#forge-status").textContent = "Loading live systems";
+    q("#forge-status").textContent = "Loading";
     try {
       const [flowData, kitData] = await Promise.all([
         request("/api/flows"),
@@ -355,7 +390,7 @@
       ]);
       state.flows = flowData.flows || [];
       state.kit = kitData.items || [];
-      const wanted = options.flowId || state.current?.id || localStorage.getItem("vira-forge-flow") || "council";
+      const wanted = options.flowId || state.current?.id || localStorage.getItem("vira-forge-flow") || "plan-build-judge";
       const selected = state.flows.find((flow) => flow.id === wanted) || state.flows[0] || null;
       state.current = selected ? copy(selected) : null;
       state.ready = true;
@@ -363,7 +398,6 @@
       state.selectedEdge = null;
       setDirty(false);
       renderAll();
-      hydrateNativeSources();
     } catch (error) {
       q("#forge-status").textContent = "Forge unavailable";
       toast(`Could not load the Forge: ${error.message}`);
@@ -375,32 +409,30 @@
   async function selectFlow(flowId) {
     if (state.dirty && !await forgeDialog({
       title: "Open another Flow?",
-      message: "This instance has unsaved changes. Discard them and open the selected Flow?",
+      message: "This board has unsaved changes. Discard them and open the other Flow?",
       confirm: "Discard changes",
     })) return;
     const flow = state.flows.find((item) => item.id === flowId);
     if (!flow) return;
     state.current = copy(flow);
-    // The Queue link is a fact about ONE Flow, so opening another drops it —
+    // The Queue link is a fact about ONE Flow, so opening another drops it;
     // otherwise a later run would close out an idea it has nothing to do with.
     if (state.idea && state.idea.flow_id !== flow.id) state.idea = null;
-    // An armed trace is equally a fact about one Flow: opening another drops
-    // it rather than leaving an overlay pointed at a board it cannot paint.
-    if (state.trace && (tracedRun() || {}).circuit_id !== flow.id)
-      state.trace = null;
+    // An armed trace is equally a fact about one Flow.
+    if (state.trace && (tracedRun() || {}).circuit_id !== flow.id) state.trace = null;
     state.selectedNode = null;
     state.selectedEdge = null;
+    state.selectedLoop = null;
     state.zoom = 1;
     state.panX = 25;
     state.panY = 55;
     localStorage.setItem("vira-forge-flow", flow.id);
     setDirty(false);
     renderAll();
-    hydrateNativeSources();
     if (matchMedia("(max-width: 1099px)").matches) closeLibrary();
   }
 
-  function forgeDialog({ title, message, value = null, confirm = "Continue" }) {
+  function forgeDialog({ title, message, value = null, confirm = "Continue", choices = null }) {
     return new Promise((resolve) => {
       const shell = q("#forge-shell");
       q(".forge-dialog-backdrop", shell)?.remove();
@@ -414,44 +446,32 @@
       }
       const actions = make("div", "forge-dialog-actions");
       const cancel = make("button", "fchip sm", "Cancel"); cancel.type = "button";
-      const accept = make("button", "btn primary", confirm); accept.type = "submit";
-      actions.append(cancel, accept); dialog.appendChild(actions); backdrop.appendChild(dialog); shell.appendChild(backdrop);
+      actions.appendChild(cancel);
       const finish = (result) => { backdrop.remove(); resolve(result); };
-      cancel.addEventListener("click", () => finish(value == null ? false : null));
+      cancel.addEventListener("click", () => finish(value == null && !choices ? false : null));
+      if (choices) {
+        choices.forEach(([key, label], index) => {
+          const button = make("button", index === choices.length - 1 ? "btn primary" : "fchip sm", label);
+          button.type = "button";
+          button.addEventListener("click", () => finish(key));
+          actions.appendChild(button);
+        });
+      } else {
+        const accept = make("button", "btn primary", confirm); accept.type = "submit";
+        actions.appendChild(accept);
+      }
+      dialog.appendChild(actions); backdrop.appendChild(dialog); shell.appendChild(backdrop);
       backdrop.addEventListener("pointerdown", (event) => {
-        if (event.target === backdrop) finish(value == null ? false : null);
+        if (event.target === backdrop) finish(value == null && !choices ? false : null);
       });
       dialog.addEventListener("submit", (event) => {
         event.preventDefault();
+        if (choices) return;
         const result = value == null ? true : input.value.trim();
         if (value != null && !result) { input.focus(); return; }
         finish(result);
       });
-      setTimeout(() => (input || accept).focus(), 0);
-    });
-  }
-
-  function saveDecision() {
-    return new Promise((resolve) => {
-      const shell = q("#forge-shell");
-      q(".forge-dialog-backdrop", shell)?.remove();
-      const backdrop = make("div", "forge-dialog-backdrop");
-      const dialog = make("div", "forge-dialog");
-      dialog.append(make("span", "forge-kicker", "Version this instance"),
-        make("h3", "", "Where should these changes go?"),
-        make("p", "", "The source has not changed. Save a new Flow to preserve it, or explicitly update the source definition."));
-      const actions = make("div", "forge-dialog-actions");
-      const cancel = make("button", "fchip sm", "Cancel");
-      const update = make("button", "fchip sm", "Update source");
-      const version = make("button", "btn primary", "Save new Flow");
-      [cancel, update, version].forEach((button) => { button.type = "button"; actions.appendChild(button); });
-      dialog.appendChild(actions); backdrop.appendChild(dialog); shell.appendChild(backdrop);
-      const finish = (value) => { backdrop.remove(); resolve(value); };
-      cancel.addEventListener("click", () => finish(null));
-      update.addEventListener("click", () => finish("update"));
-      version.addEventListener("click", () => finish("copy"));
-      backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) finish(null); });
-      version.focus();
+      setTimeout(() => (input || q("button:last-child", actions)).focus(), 0);
     });
   }
 
@@ -459,30 +479,37 @@
     renderIdentity();
     renderLibrary();
     renderBoard();
-    renderSpatial();
-    renderOutline();
-    renderRunContext();
+    renderInspector();
     renderTraceBar();
   }
 
+  function renderIdentity() {
+    const flow = state.current;
+    q("#forge-flow-name").textContent = flow?.name || "Choose a Flow";
+    q("#forge-flow-description").textContent = flow?.description
+      || "Who runs each step, what it must do, and what it may touch. Wire the cards; the finished text of one is the input of the next.";
+    q("#forge-flow-revision").textContent = flow ? `v${flow.revision || 1}` : "";
+    const ghost = flow?.kind === "trace";
+    q("#forge-save").disabled = !flow || ghost;
+    q("#forge-save-as").disabled = !flow || ghost;
+    q("#forge-run").disabled = !flow || ghost || !flow.id;
+    syncTools();
+  }
+
   /* ---------- Run trace ---------------------------------------------------
-     Selecting a run paints its state onto the flow's OWN board: per-node
-     status, the active handoff pulsing, a judge wearing its grade, and a
-     click on a stage that ran opening that stage's terminal. A FINISHED run
-     traces exactly the same way — status tones, grades and terminals all
-     still answer; only the live pulse is running-only. */
+     Selecting a run paints its state onto the flow's OWN board: per-card
+     status, the active handoff pulsing, a judge wearing its grade, and the
+     badge on a card that ran opening that stage's terminal. */
 
   function tracedRun() {
     if (!state.trace) return null;
-    return state.runs.find((run) => run.id === state.trace.runId)
-      || state.trace.run || null;
+    return state.runs.find((run) => run.id === state.trace.runId) || state.trace.run || null;
   }
 
   function runFitsFlow(run) {
     return Boolean(run && state.current
       && (state.current.id === run.circuit_id
-          || (state.current.kind === "trace"
-              && state.current.trace_run === run.id)));
+          || (state.current.kind === "trace" && state.current.trace_run === run.id)));
   }
 
   function currentRun() {
@@ -492,18 +519,10 @@
     return state.runs.find((run) => run.circuit_id === state.current.id) || null;
   }
 
-  // The run stage behind a board node, or null when no trace is armed for
-  // this flow. Stage ids equal node ids for every circuit-backed Flow; a
-  // decomposed system's children run as `parent__child`, the same suffix
-  // rule the spatial view's stageStatus has always used.
   function runStage(nodeId) {
     const run = tracedRun();
     if (!run || !runFitsFlow(run)) return null;
-    const stages = run.stages || {};
-    if (stages[nodeId]) return stages[nodeId];
-    const nested = Object.entries(stages)
-      .find(([stageId]) => stageId.endsWith(`__${nodeId}`));
-    return nested ? nested[1] : null;
+    return (run.stages || {})[nodeId] || null;
   }
 
   function stopTrace() {
@@ -511,7 +530,6 @@
     state.trace = null;
     if (state.current?.kind === "trace") state.current = null;
     renderBoard();
-    renderSpatial();
     renderTraceBar();
     renderIdentity();
   }
@@ -529,15 +547,14 @@
     const grades = defs.map((d) => (states[d.id] || {}).grade).filter(Boolean);
     bar.appendChild(make("i", `forge-trace-dot is-${run.status || "done"}`));
     const label = make("span", "forge-trace-label");
-    label.appendChild(make("strong", "",
-      `Tracing ${run.circuit_name || run.circuit_id || "run"}`));
+    label.appendChild(make("strong", "", `Tracing ${run.circuit_name || run.circuit_id || "run"}`));
     label.appendChild(make("small", "", [
       run.id,
       run.status === "running"
-        ? `running — ${done}/${defs.length || Object.keys(states).length} steps done`
+        ? `running, ${done}/${defs.length || Object.keys(states).length} steps done`
         : run.status,
       grades.length ? `graded ${grades.join(", ")}` : "",
-    ].filter(Boolean).join(" · ")));
+    ].filter(Boolean).join(" / ")));
     bar.appendChild(label);
     const stop = make("button", "fchip sm", "Stop tracing");
     stop.type = "button";
@@ -545,12 +562,10 @@
     bar.appendChild(stop);
   }
 
-  /* A run can outlive its circuit (a deleted Flow — builtins and saved
-     Flows always graph via /api/flows). The trace then compiles the run's
-     OWN frozen stages_def into a display graph: topo columns from `needs`
-     (the same deterministic layout the server's flows._layout uses),
-     judge/logic/approval/output modes as their node types. Marked kind
-     "trace" so nothing offers to save or launch a ghost. */
+  /* A run can outlive its circuit (a deleted Flow). The trace then compiles
+     the run's OWN frozen stages_def into a display graph: topo columns from
+     `needs`, the same deterministic layout the server's flows._layout uses.
+     Marked kind "trace" so nothing offers to save or launch a ghost. */
   function traceFlowFromRun(run) {
     const defs = (run.stages_def || []).filter((d) => d && d.id);
     const byId = Object.fromEntries(defs.map((d) => [d.id, d]));
@@ -561,8 +576,7 @@
       if (seen.has(sid)) return 0;
       seen.add(sid);
       const needs = (byId[sid].needs || []).filter((n) => byId[n]);
-      depth[sid] = needs.length
-        ? Math.max(...needs.map((n) => visit(n, seen))) + 1 : 0;
+      depth[sid] = needs.length ? Math.max(...needs.map((n) => visit(n, seen))) + 1 : 0;
       return depth[sid];
     };
     defs.forEach((d) => visit(d.id));
@@ -572,30 +586,25 @@
       const row = rows[col] || 0;
       rows[col] = row + 1;
       const mode = d.mode;
-      const type = ["judge", "logic", "approval", "output", "native"]
-        .includes(mode) ? mode : "agent";
+      const type = ["judge", "logic", "approval", "output", "native"].includes(mode) ? mode : "agent";
       return {
         id: d.id, type, name: d.name || d.id,
-        description: "From the run's frozen stage definition.",
-        x: 150 + col * 310, y: 130 + row * 180, width: 244, height: 148,
-        model: d.model || "", mode: d.mode || "",
-        read_only: Boolean(d.read_only), prompt: d.prompt || "",
-        judge: copy(d.judge || {}), locked: true, source: "trace",
+        x: 150 + col * 310, y: 130 + row * 180,
+        model: d.model || "", provider: d.provider || "", mode: d.mode || "",
+        read_only: Boolean(d.read_only),
+        prompt: (type === "judge" ? d.extra : d.prompt) || "",
+        judge: copy(d.judge || {}), logic: copy(d.logic || {}),
+        output: copy(d.output || {}), approval: copy(d.approval || {}),
       };
     });
     const edges = [];
     defs.forEach((d) => (d.needs || []).forEach((need) => {
-      if (byId[need]) edges.push({
-        id: `edge:${need}:${d.id}`, from: need, to: d.id,
-        from_port: "result", to_port: "input",
-        label: "", instructions: "", direction: "forward",
-      });
+      if (byId[need]) edges.push({ id: `edge:${need}:${d.id}`, from: need, to: d.id, instructions: "" });
     }));
     return {
       id: run.circuit_id || `trace:${run.id}`, trace_run: run.id,
       name: run.circuit_name || run.circuit_id || "Traced run",
-      description: "This Flow's definition is gone — the board shows the "
-        + "run's own frozen stages.",
+      description: "This Flow's definition is gone; the board shows the run's own frozen cards.",
       kind: "trace", builtin: false, revision: 1,
       nodes, edges, contexts: [], triggers: [], executable: false,
     };
@@ -608,8 +617,6 @@
     if (!state.ready) await loadForge();
     let run = state.runs.find((r) => r.id === runId);
     if (!run) {
-      // The shared runs fetch is a window of the newest 24; a traced run
-      // may sit past it, so reach for the full retained set once.
       try {
         const data = await request("/api/circuits/runs?limit=200");
         if (data.runs?.length) state.runs = data.runs;
@@ -624,8 +631,7 @@
     } else {
       if (state.dirty && !await forgeDialog({
         title: "Trace this run?",
-        message: "This instance has unsaved changes. Discard them and show "
-          + "the traced run's own stage graph?",
+        message: "This board has unsaved changes. Discard them and show the traced run's own cards?",
         confirm: "Discard changes",
       })) return;
       state.current = traceFlowFromRun(run);
@@ -634,91 +640,48 @@
       setDirty(false);
     }
     state.trace = { runId: run.id, run, sig: "" };
-    setView("board");
     renderAll();
-    // The overlay follows the existing runs refresh — loadRuns arms the
-    // 3s live poll while the run is running; no poller of its own.
     loadForgeRuns();
   }
 
-  function renderSpatial() {
-    spatial?.render(state.current, state.selectedNode, currentRun());
-    if (state.view === "spatial" && spatial) q("#forge-zoom-value").textContent = `${Math.round(spatial.zoomValue * 100)}%`;
-  }
+  /* ---------- library: Flows, Sources, Loops ------------------------------ */
 
-  function renderIdentity() {
-    const flow = state.current;
-    q("#forge-flow-name").textContent = flow?.name || "Choose a Flow";
-    q("#forge-flow-description").textContent = flow?.description
-      || "Operational systems, reusable starters, and every part that makes them run.";
-    q("#forge-flow-revision").textContent = flow ? `v${flow.revision || 1}` : "";
-    // A traced ghost (kind "trace") is the board of a DELETED circuit —
-    // there is nothing to save it over and nothing for a launch to run, so
-    // every control that would act on a definition goes dark.
-    const ghost = flow?.kind === "trace";
-    q("#forge-save").disabled = !flow || flow.kind === "native" || ghost;
-    q("#forge-save").textContent = flow?.id ? "Save instance" : "Save";
-    q("#forge-save-as").disabled = !flow || ghost;
-    q("#forge-test").disabled = !flow || ghost;
-    q("#forge-run").disabled = !flow || ghost;
-    syncTools();
-  }
-
-  function libraryItems() {
-    if (state.library === "mac") return macItems();
-    if (state.library === "flows") return state.flows;
-    if (state.library === "starters") return state.flows.filter((flow) => flow.builtin && flow.kind === "flow");
-    if (state.library === "kit") return state.kit;
-    return state.current?.contexts || [];
-  }
-
-  function libraryKind(item) {
-    if (state.library === "mac") return item.group;
-    if (state.library === "flows" || state.library === "starters") return item.kind === "native" ? "native systems" : (item.builtin ? "built in" : "my flows");
-    if (state.library === "context") return item.kind || "reference";
-    return item.kind || item.type || "parts";
-  }
-
-  function libraryDescription(item) {
-    if (state.library === "flows" || state.library === "starters") {
-      const schedule = item.triggers?.[0];
-      const cadence = schedule?.daily_at ? `Daily ${schedule.daily_at}`
-        : schedule?.every_hours ? `Every ${schedule.every_hours}h` : "Manual";
-      const paused = schedule && schedule.enabled === false ? " · paused" : "";
-      return `${item.nodes?.length || 0} parts · ${cadence}${paused}`;
-    }
-    if (state.library === "mac") return `${item.state} · ${(item.when || []).join("; ")}`;
-    return item.description || item.note || item.ref || item.invoke || "";
-  }
-
-  function libraryIcon(item) {
+  function icon(key) {
     const span = make("span", "forge-card-icon");
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
     svg.setAttribute("aria-hidden", "true");
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const key = (state.library === "flows" || state.library === "starters") ? "flow"
-      : state.library === "mac" ? "command"
-      : state.library === "context" ? "context" : (item.kind || item.type || "tool");
-    path.setAttribute("d", ICON[key] || ICON[item.type] || ICON.tool);
+    path.setAttribute("d", ICON[key] || ICON.tool);
     svg.appendChild(path); span.appendChild(svg);
     return span;
   }
 
-  function renderLibraryFilter() {
-    const select = q("#forge-library-filter");
-    const kinds = [...new Set(libraryItems().map(libraryKind))].sort();
-    select.replaceChildren();
-    const all = make("option", "", "All types");
-    all.value = "all";
-    select.appendChild(all);
-    kinds.forEach((kind) => {
-      const option = make("option", "", kind);
-      option.value = kind;
-      select.appendChild(option);
-    });
-    if (!["all", ...kinds].includes(state.filter)) state.filter = "all";
-    select.value = state.filter;
+  function cadenceText(row) {
+    if (!row) return "Manual";
+    if (row.daily_at) return `Daily at ${row.daily_at}`;
+    const hours = Number(row.every_hours);
+    if (!hours) return "Manual";
+    return hours === 1 ? "Every hour" : `Every ${hours} hours`;
+  }
+
+  function libraryCard({ title, line, iconKey, active, draggable, dot, tone }) {
+    const card = make("button", "forge-library-card");
+    card.type = "button";
+    card.draggable = Boolean(draggable);
+    if (active) card.classList.add("is-active");
+    const text = make("span");
+    text.appendChild(make("strong", "", title));
+    const small = make("small", tone ? `forge-tone-${tone}` : "", line);
+    text.appendChild(small);
+    card.append(icon(iconKey), text);
+    if (dot) card.appendChild(make("i", `forge-dot ${dot}`));
+    return card;
+  }
+
+  function matches(term, ...values) {
+    if (!term) return true;
+    return values.some((value) => String(value || "").toLowerCase().includes(term));
   }
 
   function renderLibrary() {
@@ -726,283 +689,392 @@
     if (!body) return;
     qa("#forge-library-tabs .seg-btn").forEach((button) =>
       button.classList.toggle("on", button.dataset.forgeLibrary === state.library));
-    renderLibraryFilter();
     body.replaceChildren();
     const term = state.query.trim().toLowerCase();
-    const items = libraryItems().filter((item) => {
-      if (state.filter !== "all" && libraryKind(item) !== state.filter) return false;
-      if (!term) return true;
-      return [item.name, item.description, item.kind, item.type, item.ref]
-        .some((value) => String(value || "").toLowerCase().includes(term));
+    if (state.library === "flows") renderFlowsTab(body, term);
+    else if (state.library === "sources") renderSourcesTab(body, term);
+    else renderLoopsTab(body, term);
+  }
+
+  function renderFlowsTab(body, term) {
+    const groups = [["Starters", state.flows.filter((f) => f.builtin)],
+      ["My Flows", state.flows.filter((f) => !f.builtin)]];
+    let any = false;
+    groups.forEach(([label, flows]) => {
+      const rows = flows.filter((f) => matches(term, f.name, f.description));
+      if (!rows.length) return;
+      any = true;
+      body.appendChild(make("div", "forge-library-group", label));
+      rows.forEach((flow) => {
+        const schedule = flow.triggers?.[0];
+        const paused = schedule && schedule.enabled === false ? ", paused" : "";
+        const card = libraryCard({
+          title: flow.name, iconKey: "flow", active: flow.id === state.current?.id,
+          line: `${flow.nodes?.length || 0} cards, ${cadenceText(schedule).toLowerCase()}${paused}`,
+        });
+        card.addEventListener("click", () => selectFlow(flow.id));
+        body.appendChild(card);
+      });
     });
+    if (!any) body.appendChild(make("p", "hint", term ? "No Flow matches." : "No Flows yet. New starts a blank board."));
+  }
+
+  function sourceLine(item) {
+    return item.description || item.invoke || item.source_ref || "";
+  }
+
+  function renderSourcesTab(body, term) {
+    const items = state.kit.filter((item) => matches(term, item.name, item.kind, item.description));
     let previous = "";
     items.forEach((item) => {
-      const group = libraryKind(item);
+      const group = item.kind || "parts";
       if (group !== previous) {
         body.appendChild(make("div", "forge-library-group", group));
         previous = group;
       }
-      const card = make("button", "forge-library-card");
-      card.type = "button";
-      card.draggable = state.library !== "mac";
-      if (item.id === state.current?.id) card.classList.add("is-active");
-      if (state.library === "mac" && item.tone) card.dataset.tone = item.tone;
-      const icon = libraryIcon(item);
-      const copyNode = make("span");
-      copyNode.appendChild(make("strong", "", item.name || item.title || "Untitled"));
-      copyNode.appendChild(make("small", "", libraryDescription(item)));
-      card.append(icon, copyNode);
-      card.addEventListener("click", () => {
-        if (state.library === "mac") return toggleMac(item.id);
-        if (state.library === "flows" || state.library === "starters") selectFlow(item.id);
-        else addLibraryPart(item);
-      });
+      const card = libraryCard({ title: item.name, line: sourceLine(item), iconKey: ICON[item.kind] ? item.kind : "tool", draggable: true });
+      card.addEventListener("click", () => addSource(item));
       card.addEventListener("dragstart", (event) => {
         state.libraryDrag = copy(item);
         event.dataTransfer.effectAllowed = "copy";
         event.dataTransfer.setData("text/plain", item.id || item.name || "part");
       });
       body.appendChild(card);
-      if (state.library === "mac" && state.macOpen.has(item.id)) body.appendChild(macDetail(item));
     });
-    if (state.library === "mac") body.prepend(macNote());
-    if (!items.length) body.appendChild(make("p", "hint", "Nothing in this view matches."));
-  }
-
-  // ----- This Mac: every launchd job on the machine, read-only -----
-  // server/launchdjobs.py reads ~/Library/LaunchAgents, /Library/LaunchAgents
-  // and /Library/LaunchDaemons. Vira only reports these; launchd runs them.
-  function macItems() {
-    if (!state.mac) return [];
-    return (state.mac.groups || []).flatMap((group) => (group.jobs || []).map((job) => ({
-      ...job, id: `mac:${job.path}`, name: job.label, group: group.title,
-      description: job.program, kind: group.title,
-    })));
-  }
-
-  function macNote() {
-    const note = make("div", "forge-mac-note");
-    if (state.macLoading) {
-      note.appendChild(make("p", "hint", "Reading launchd's job folders"));
-      return note;
+    if (state.findRows.length) {
+      body.appendChild(make("div", "forge-library-group", "From Find"));
+      state.findRows.forEach((item) => {
+        const card = libraryCard({ title: item.name, line: item.note || item.ref, iconKey: "context", draggable: true });
+        card.addEventListener("click", () => addSource(item));
+        card.addEventListener("dragstart", (event) => {
+          state.libraryDrag = copy(item);
+          event.dataTransfer.setData("text/plain", item.id);
+        });
+        body.appendChild(card);
+      });
     }
-    const mac = state.mac;
-    if (mac?.status === "not_mac") note.appendChild(make("p", "hint", mac.note));
-    else note.appendChild(make("p", "hint", `Read-only. launchd runs these, not Vira. Every file in ~/Library/LaunchAgents, /Library/LaunchAgents and /Library/LaunchDaemons${mac?.checked ? `, checked ${stamp(mac.checked)}` : ""}.`));
-    (mac?.groups || []).filter((g) => g.error).forEach((g) => note.appendChild(make("p", "hint", `${g.dir}: ${g.error}`)));
-    const refresh = make("button", "fchip sm", "Check again");
-    refresh.type = "button";
-    refresh.addEventListener("click", () => loadMac());
-    note.appendChild(refresh);
-    return note;
+    if (!items.length && !state.findRows.length) {
+      body.appendChild(make("p", "hint", term
+        ? (term.length < 3 ? "Keep typing to search Find too." : "Nothing in the library or in Find matches.")
+        : "Skills, commands, scripts and agents from your Claude library. Type to search Find as well."));
+    }
   }
 
-  function macDetail(item) {
-    const box = make("div", "forge-mac-detail");
-    const rows = [["Runs", item.program || "(no program)"], ["When", (item.when || []).join("; ")],
-      ["State", item.state], ["File", item.path]];
-    if (item.error) rows.push(["Problem", item.error]);
-    rows.forEach(([label, value]) => {
-      const row = make("div");
-      row.append(make("span", "", label), make("code", "", value));
-      box.appendChild(row);
-    });
-    return box;
-  }
-
-  function toggleMac(itemId) {
-    if (state.macOpen.has(itemId)) state.macOpen.delete(itemId);
-    else state.macOpen.add(itemId);
-    renderLibrary();
-  }
-
-  async function loadMac() {
-    state.macLoading = true;
-    renderLibrary();
+  async function loadFindRows(term) {
+    const wanted = term.trim();
+    if (wanted.length < 3) { state.findRows = []; renderLibrary(); return; }
     try {
-      state.mac = await request("/api/routines/background");
-    } catch (error) {
-      state.mac = { status: "error", groups: [] };
-      toast(`Could not read launchd's jobs: ${error.message}`);
-    } finally {
-      state.macLoading = false;
-    }
-    if (state.library === "mac") renderLibrary();
-  }
-
-  function switchLibrary(tab) {
-    state.library = tab;
-    state.filter = "all";
-    state.query = "";
-    q("#forge-library-search").value = "";
-    if (tab === "mac") loadMac();
-    else if (tab === "context") loadContextSearch("");
-    else renderLibrary();
-  }
-
-  async function loadContextSearch(term) {
-    if (!term.trim()) {
-      renderLibrary();
-      return;
-    }
-    const body = q("#forge-library-body");
-    body.replaceChildren(make("p", "hint", "Searching Find"));
-    try {
-      const data = await request(`/api/find?q=${encodeURIComponent(term)}&limit=12`);
+      const data = await request(`/api/find?q=${encodeURIComponent(wanted)}&limit=12`);
+      if (state.query.trim() !== wanted) return;
       const rows = [];
       Object.entries(data.groups || {}).forEach(([database, group]) => {
         (group.rows || []).forEach((row, index) => {
-          const rawNote = row.snippet || row.caption || row.context?.text
-            || row.summary || row.text || "";
+          const rawNote = row.snippet || row.caption || row.context?.text || row.summary || row.text || "";
           rows.push({
             id: `find:${database}:${row.id || row.path || index}`,
+            type: "context", kind: database,
             name: row.title || row.name || row.subject || row.path || "Reference",
-            kind: database,
             ref: row.path || row.url || row.id || "",
             note: typeof rawNote === "object" ? JSON.stringify(rawNote) : String(rawNote),
           });
         });
       });
-      state.current._contextSearch = rows;
-      body.replaceChildren();
-      rows.forEach((item) => {
-        const card = make("button", "forge-library-card");
-        card.type = "button";
-        card.draggable = true;
-        card.append(libraryIcon({ type: "context", kind: "context" }));
-        const text = make("span");
-        text.append(make("strong", "", item.name), make("small", "", item.note || item.ref));
-        card.append(text);
-        card.addEventListener("click", () => addContext(item));
-        card.addEventListener("dragstart", (event) => {
-          state.libraryDrag = copy(item);
-          state.libraryDrag.type = "context";
-          event.dataTransfer.setData("text/plain", item.id);
-        });
-        body.append(card);
-      });
-      if (!rows.length) body.append(make("p", "hint", "Find returned no references."));
-    } catch {
-      body.replaceChildren(make("p", "hint", "Find is unavailable."));
+      state.findRows = rows;
+    } catch (error) {
+      state.findRows = [];
     }
+    if (state.library === "sources") renderLibrary();
   }
 
-  function addContext(item, point) {
-    if (!state.current) return;
-    const context = {
-      id: item.id?.startsWith("find:") ? item.id : id("ctx"),
-      name: item.name || item.title || "Context",
-      kind: item.kind || "reference",
-      ref: item.ref || item.path || "",
-      note: item.note || item.description || "",
-    };
-    if (!state.current.contexts.some((entry) => entry.id === context.id)) state.current.contexts.push(context);
-    addNode({ ...item, type: "context", name: context.name, description: context.note || context.ref, source_ref: context.ref }, point);
-    renderRunContext();
+  function loopDot(row) {
+    const status = String(row.last_status || "").toLowerCase();
+    if (["running", "starting"].includes(status)) return "is-live";
+    if (["error", "failed", "interrupted"].includes(status)) return "is-error";
+    return row.enabled ? "is-on" : "";
   }
 
-  function addLibraryPart(item, point) {
-    if (!state.current) return;
-    if (item.nodes && item.edges && item.id) return addSystem(item, point);
-    if (item.type === "context" || state.library === "context") return addContext(item, point);
-    addNode(item, point);
+  function stamp(iso) {
+    if (!iso) return "-";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString([], {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
-  function addSystem(flow, point) {
-    if (!state.current) return;
-    if (flow.id === state.current.id) return toast("A Flow cannot contain itself.");
-    const p = point || { x: 220, y: 180 };
-    state.current.nodes.push({
-      id: id("system"), type: "system", name: flow.name,
-      description: flow.description || `${flow.nodes.length} part Flow instance`,
-      x: clamp(Math.round(p.x), 20, 3800), y: clamp(Math.round(p.y), 70, 2500),
-      width: 300, height: 190, expanded: false, source: "flow",
-      source_ref: flow.id, source_revision: flow.revision || 1,
-      embedded: { nodes: copy(flow.nodes || []), edges: copy(flow.edges || []),
-        contexts: copy(flow.contexts || []) },
+  function renderLoopsTab(body, term) {
+    if (!state.loops.length) body.appendChild(make("p", "hint", "Reading the schedule"));
+    const rows = state.loops.filter((r) => matches(term, r.name, r.description, r.kind));
+    rows.forEach((row) => {
+      const last = row.last_run ? `last ${stamp(row.last_run)}${row.last_status ? ` (${row.last_status})` : ""}` : "never run";
+      const card = libraryCard({
+        title: row.name, iconKey: "loop", active: row.id === state.selectedLoop,
+        line: `${cadenceText(row)}${row.enabled ? "" : ", paused"}, ${last}`, dot: loopDot(row),
+      });
+      card.addEventListener("click", () => openLoop(row.id));
+      body.appendChild(card);
     });
+    if (state.loops.length && !rows.length) body.appendChild(make("p", "hint", "No loop matches."));
+    body.appendChild(macSection());
+  }
+
+  // This Mac: every launchd job on the machine, read-only. launchd runs
+  // these, not Vira (server/launchdjobs.py reads the three job folders).
+  function macSection() {
+    const details = make("details", "forge-mac");
+    details.open = Boolean(state.macOpen);
+    details.appendChild(make("summary", "", "This Mac: launchd jobs, read-only"));
+    const box = make("div");
+    details.appendChild(box);
+    const paint = () => {
+      box.replaceChildren();
+      const mac = state.mac;
+      if (!mac) { box.appendChild(make("p", "hint", "Reading launchd's job folders")); return; }
+      if (mac.status === "not_mac") { box.appendChild(make("p", "hint", mac.note || "Not a Mac.")); return; }
+      box.appendChild(make("p", "hint", `launchd runs these, not Vira. ~/Library/LaunchAgents, /Library/LaunchAgents and /Library/LaunchDaemons${mac.checked ? `, read ${stamp(mac.checked)}` : ""}.`));
+      (mac.groups || []).forEach((group) => {
+        if (group.error) box.appendChild(make("p", "hint", `${group.dir}: ${group.error}`));
+        (group.jobs || []).forEach((job) => {
+          const card = libraryCard({ title: job.label, line: `${job.state || ""}${(job.when || []).length ? ", " + job.when.join("; ") : ""}`,
+            iconKey: "command", tone: job.tone === "running" ? "running" : "" });
+          card.addEventListener("click", () => {
+            const open = card.nextElementSibling?.classList.contains("forge-path");
+            if (open) card.nextElementSibling.remove();
+            else card.after(make("code", "forge-path", `${job.program || "(no program)"}\n${job.path}${job.error ? `\n${job.error}` : ""}`));
+          });
+          box.appendChild(card);
+        });
+      });
+    };
+    details.addEventListener("toggle", async () => {
+      state.macOpen = details.open;
+      if (!details.open || state.mac) return;
+      paint();
+      try { state.mac = await request("/api/routines/background"); }
+      catch (error) { state.mac = { status: "error", groups: [], note: error.message }; }
+      paint();
+    });
+    if (details.open) paint();
+    return details;
+  }
+
+  async function loadLoops() {
+    try {
+      const data = await request("/api/routines");
+      state.loops = data.routines || [];
+    } catch (error) {
+      toast(`Could not read the schedule: ${error.message}`);
+    }
+    if (state.library === "loops") renderLibrary();
+  }
+
+  function switchLibrary(tab) {
+    state.library = tab;
+    state.query = "";
+    state.findRows = [];
+    const search = q("#forge-library-search");
+    if (search) search.value = "";
+    if (tab === "loops") loadLoops();
+    renderLibrary();
+  }
+
+  function closeLibrary() {
+    q("#forge-library")?.classList.add("is-hidden");
+    q("#forge-shell")?.classList.add("library-hidden");
+    q("#work-dispatch-pane")?.classList.add("library-away");
+  }
+
+  function openLibrary() {
+    q("#forge-library")?.classList.remove("is-hidden");
+    q("#forge-shell")?.classList.remove("library-hidden");
+    q("#work-dispatch-pane")?.classList.remove("library-away");
+  }
+
+  /* ---------- cards --------------------------------------------------------- */
+
+  // A card's id is a slug of its name, unique on this board: it is what
+  // {{stage.<id>.output}} names in another card's box, so it has to read.
+  function cardId(name, type) {
+    const base = String(name || type || "card").toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || type || "card";
+    const taken = new Set((state.current?.nodes || []).map((node) => node.id));
+    let candidate = base;
+    let n = 2;
+    while (taken.has(candidate)) { candidate = `${base}-${n}`; n += 1; }
+    return candidate;
+  }
+
+  function newCard(type, point) {
+    const base = {
+      id: cardId(KIND[type].name, type), type, name: KIND[type].name,
+      x: clamp(Math.round(point.x), 20, 3900), y: clamp(Math.round(point.y), 70, 2550),
+    };
+    if (type === "agent") Object.assign(base, {
+      model: "", provider: "", mode: "manual", read_only: true,
+      prompt: "Work on the input below and report what you found.\n\n{{input}}",
+      timeout_s: 0, on_timeout: "error", continues: "",
+    });
+    if (type === "judge") Object.assign(base, {
+      model: "", provider: "", mode: "judge", read_only: true, prompt: "",
+      judge: { min_grade: "B", max_retries: 1, retry_stage: "" },
+    });
+    if (type === "logic") base.logic = { operation: "contains", value: "" };
+    if (type === "approval") base.prompt = "Show me the result so far and ask whether to go on.";
+    if (type === "output") { base.output = { destination: "record" }; base.prompt = ""; }
+    if (type === "trigger") Object.assign(base, { daily_at: "07:30", every_hours: null, enabled: true, notify: false });
+    return base;
+  }
+
+  function addCard(type) {
+    if (!editable()) return;
+    const selected = currentNode();
+    let point;
+    if (selected) point = { x: selected.x + CARD_W + 90, y: selected.y };
+    else {
+      const rect = q("#forge-viewport").getBoundingClientRect();
+      point = boardPoint(rect.left + rect.width / 2 - CARD_W / 2, rect.top + rect.height / 2 - 60);
+    }
+    const node = newCard(type, freeSpot({ x: point.x - 42, y: point.y - 42 }));
+    node.z = ++state.z;
+    state.current.nodes.push(node);
+    // A new running card placed from a selected running card is wired from
+    // it: that is nearly always what the next card is for.
+    if (selected && EXEC.has(selected.type) && EXEC.has(type) && type !== "trigger") {
+      state.current.edges.push({ id: id("wire"), from: selected.id, to: node.id, instructions: "" });
+      if (hasExecutableCycle()) state.current.edges.pop();
+    }
+    if (selected && type === "trigger" && EXEC.has(selected.type)) {
+      node.x = selected.x - CARD_W - 90;
+      state.current.edges.push({ id: id("wire"), from: node.id, to: selected.id, instructions: "" });
+    }
+    state.selectedNode = node.id;
+    state.selectedEdge = null;
     setDirty();
     renderBoard();
-    renderOutline();
+    renderInspector();
+    return node;
+  }
+
+  function addSource(item, point) {
+    if (!editable()) return;
+    const isFind = String(item.id || "").startsWith("find:") || item.type === "context";
+    const p = point || (() => {
+      const rect = q("#forge-viewport").getBoundingClientRect();
+      return boardPoint(rect.left + 80, rect.top + rect.height / 2);
+    })();
+    const node = {
+      id: cardId(item.name, isFind ? "context" : "tool"),
+      type: isFind ? "context" : "tool",
+      name: item.name || item.title || "Source",
+      description: isFind ? String(item.note || "").slice(0, 600) : "",
+      source: item.kind || (isFind ? "find" : "library"),
+      source_ref: item.source_ref || item.invoke || item.ref || item.path || "",
+      x: clamp(Math.round(p.x), 20, 3900), y: clamp(Math.round(p.y), 70, 2550),
+      z: ++state.z,
+    };
+    state.current.nodes.push(node);
+    state.selectedNode = node.id;
+    state.selectedEdge = null;
+    setDirty();
+    renderBoard();
+    renderInspector();
+    if (matchMedia("(max-width: 1099px)").matches) closeLibrary();
+    return node;
   }
 
   function boardPoint(clientX, clientY) {
-    const viewport = q("#forge-viewport");
-    const rect = viewport.getBoundingClientRect();
+    const rect = q("#forge-viewport").getBoundingClientRect();
     return {
       x: (clientX - rect.left - state.panX) / state.zoom,
       y: (clientY - rect.top - state.panY) / state.zoom,
     };
   }
 
-  function addNode(item, point) {
-    if (!state.current) return;
-    const p = point || { x: 160 + state.current.nodes.length * 34, y: 150 + state.current.nodes.length * 26 };
-    let type = item.type || "tool";
-    if (item.kind === "primitive") type = item.type;
-    const node = {
-      id: id(type === "agent" ? "stage" : type),
-      type,
-      name: item.name || item.title || TYPE[type]?.name || "Part",
-      description: item.description || "",
-      x: clamp(Math.round(p.x), 20, 3900),
-      y: clamp(Math.round(p.y), 70, 2550),
-      width: type === "connector" ? 196 : 244,
-      height: type === "connector" ? 116 : 148,
-      expanded: false,
-      model: type === "agent" ? (item.model || "sonnet") : "",
-      mode: type === "agent" ? (item.mode || "manual") : "",
-      read_only: type === "agent" ? item.read_only !== false : false,
-      prompt: item.prompt || (type === "agent" ? "Work on the following input carefully and report the result.\n\n{{input}}" : ""),
-      source: item.kind || "forge",
-      source_ref: item.source_ref || item.invoke || item.ref || (item.kind === "primitive" ? "" : (item.id || "")),
-    };
-    if (type === "connector") {
-      node.connector_mode = item.connector_mode || "through";
-      node.input_ports = copy(item.input_ports || (node.connector_mode === "input" ? [] : ["in"]));
-      node.output_ports = copy(item.output_ports || (node.connector_mode === "output" ? [] : ["out"]));
-      node.data_kind = item.data_kind || "data";
-      node.prompt = item.prompt || "Route this connection without changing its payload.";
-    }
-    state.current.nodes.push(node);
-    setDirty();
-    state.selectedNode = node.id;
-    renderBoard();
-    renderOutline();
-    if (item.source_ref) hydrateNodeSource(node);
-    return node;
+  function modelChoice(node) {
+    if (node.model) return MODEL_LABEL[node.model] !== undefined && node.model !== "" ? node.model : "other";
+    if (node.provider) return `provider:${node.provider}`;
+    return "";
   }
 
-  async function hydrateNodeSource(node) {
-    if (!node?.source_ref || node.source_loaded) return;
-    node.source_loading = true;
-    renderBoard();
-    try {
-      const source = node.type === "native"
-        ? await request(`/api/flows/native/${encodeURIComponent(node.routine_id || node.source_ref)}/source`)
-        : await request(`/api/flows/kit/source?ref=${encodeURIComponent(node.source_ref)}`);
-      if (node.type === "native") {
-        node.source_detail = source;
-        node.source_files = (source.parts || []).map((part) => part.path || part.title);
-      } else {
-        node.prompt = source.text || node.prompt || "";
-        node.source_files = source.files || [];
-        node.source_truncated = Boolean(source.truncated);
-      }
-      node.source_loaded = true;
-      if (node.type !== "native") setDirty();
-      renderBoard();
-      renderOutline();
-    } catch (error) {
-      toast(`Could not open complete source: ${error.message}`);
-    } finally {
-      node.source_loading = false;
-    }
+  function modelLabel(node) {
+    if (node.model) return MODEL_LABEL[node.model] || node.model;
+    if (node.provider) return PROVIDER_LABEL[node.provider] || node.provider;
+    return "Vira default";
   }
 
-  function hydrateNativeSources() {
-    (state.current?.nodes || []).filter((node) => node.type === "native" && !node.source_loaded)
-      .forEach((node) => hydrateNodeSource(node));
+  function permOf(node) {
+    if (node.type === "judge" || node.read_only) return "read";
+    if (node.mode === "bypassPermissions") return "full";
+    if (node.mode === "acceptEdits") return "edit";
+    return "ask";
+  }
+
+  function setPerm(node, perm) {
+    node.read_only = perm === "read";
+    node.mode = perm === "full" ? "bypassPermissions" : perm === "edit" ? "acceptEdits" : "manual";
+  }
+
+  function wiredIn(node, onlyExec = true) {
+    const edges = (state.current?.edges || []).filter((edge) => edge.to === node.id);
+    return edges.map((edge) => state.current.nodes.find((item) => item.id === edge.from))
+      .filter((item) => item && (!onlyExec || EXEC.has(item.type)));
+  }
+
+  function nameOf(nodeId) {
+    return state.current?.nodes.find((node) => node.id === nodeId)?.name || nodeId;
+  }
+
+  function judgeSentence(node) {
+    const judge = node.judge || {};
+    if (!judge.min_grade) return "Grades the card before it; the Flow goes on whatever the grade.";
+    const retry = judge.retry_stage ? `, below that re-runs ${nameOf(judge.retry_stage)} up to ${judge.max_retries || 0} time${judge.max_retries === 1 ? "" : "s"}` : "";
+    return `Passes at ${judge.min_grade} or better${retry}.`;
+  }
+
+  function gateSentence(node) {
+    const logic = node.logic || {};
+    const op = OP_LABEL[logic.operation] || logic.operation || "always passes";
+    const value = NO_VALUE_OPS.has(logic.operation) ? "" : ` "${logic.value || ""}"`;
+    const subject = logic.subject ? nameOf(logic.subject) : "the card before this";
+    return `Passes when ${subject} ${op}${value}.`;
+  }
+
+  function cardSummary(node) {
+    const body = make("div", "forge-node-body");
+    const tags = make("div", "forge-node-meta");
+    const tag = (text, cls) => tags.appendChild(make("span", cls || "", text));
+    let text = "";
+    let path = "";
+    if (node.type === "agent") {
+      tag(modelLabel(node));
+      const perm = permOf(node);
+      tag(perm, perm === "full" ? "is-full" : "");
+      if (node.timeout_s) tag(`${node.timeout_s}s`);
+      if (node.continues) tag(`continues ${nameOf(node.continues)}`);
+      text = node.prompt || "";
+    } else if (node.type === "judge") {
+      tag(modelLabel(node));
+      text = `${judgeSentence(node)}${node.prompt ? `\n${node.prompt}` : ""}`;
+    } else if (node.type === "logic") {
+      text = gateSentence(node);
+    } else if (node.type === "approval") {
+      text = node.prompt || "";
+    } else if (node.type === "output") {
+      tag(DESTINATION_LABEL[node.output?.destination] || node.output?.destination || "a Vira record");
+      text = node.prompt || "";
+    } else if (node.type === "trigger") {
+      tag(cadenceText(node));
+      tag(node.enabled === false ? "paused" : "on", node.enabled === false ? "is-off" : "");
+      if (node.notify) tag("tells me");
+    } else if (node.type === "native") {
+      text = `Runs the Vira routine ${node.native?.routine_id || node.routine_id || ""}.`;
+    } else {
+      path = node.source_ref || "";
+      text = node.description || "";
+    }
+    if (tags.childElementCount) body.appendChild(tags);
+    if (path) body.appendChild(make("p", "forge-node-path", path));
+    if (text) body.appendChild(make("p", "", text));
+    if (!tags.childElementCount && !path && !text) body.appendChild(make("p", "", KIND[node.type]?.hint || ""));
+    return body;
   }
 
   function renderBoard() {
@@ -1011,65 +1083,58 @@
     const empty = q("#forge-empty");
     if (!world || !nodeHost) return;
     world.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
-    if (state.view === "board") q("#forge-zoom-value").textContent = `${Math.round(state.zoom * 100)}%`;
+    q("#forge-zoom-value").textContent = `${Math.round(state.zoom * 100)}%`;
     nodeHost.replaceChildren();
     const nodes = state.current?.nodes || [];
     empty.style.display = nodes.length ? "none" : "grid";
     nodes.forEach((node) => nodeHost.appendChild(nodeElement(node)));
+    measureCards();
     renderWires();
     syncTools();
   }
 
+  function measureCards() {
+    qa(".forge-node", q("#forge-nodes")).forEach((card) => {
+      state.heights[card.dataset.nodeId] = card.offsetHeight || state.heights[card.dataset.nodeId] || 120;
+    });
+  }
+
+  // Repaint one card in place after an edit in the right column, so the
+  // board follows the typing without tearing the editor down.
+  function paintNode(node) {
+    const old = q(`.forge-node[data-node-id="${CSS.escape(node.id)}"]`, q("#forge-nodes"));
+    if (!old) return renderBoard();
+    old.replaceWith(nodeElement(node));
+    measureCards();
+    renderWires();
+  }
+
   function nodeElement(node) {
-    const meta = TYPE[node.type] || TYPE.tool;
+    const meta = KIND[node.type] || KIND.tool;
     const card = make("article", "forge-node");
     card.dataset.nodeId = node.id;
     card.dataset.type = node.type;
-    card.dataset.source = node.source === "muse" || String(node.extra || "").startsWith("forge:muse:")
-      || String(node.prompt || "").startsWith("You are Muse operating inside Vira's Forge") ? "muse" : (node.source || "");
     card.style.left = `${node.x}px`;
     card.style.top = `${node.y}px`;
-    const compactWidth = node.type === "connector" ? 196 : 244;
-    card.style.width = `${node.expanded ? Math.max(node.width || 390, 390) : node.width || compactWidth}px`;
     card.style.zIndex = node.z || 1;
     if (node.id === state.selectedNode) card.classList.add("is-selected");
-    if (state.boardLayerFocus) {
-      card.classList.add(state.boardLayerFocus.has(node.id) ? "is-layer-focus" : "is-layer-muted");
-    }
-    if (node.expanded) card.classList.add("is-expanded");
 
     const head = make("header", "forge-node-head");
-    head.appendChild(make("span", "forge-node-mark", meta.mark));
     const title = make("span", "forge-node-copy");
     title.append(make("span", "forge-node-type", meta.name), make("strong", "forge-node-name", node.name || meta.name));
     head.appendChild(title);
-    const menu = make("button", "forge-node-menu", "×");
-    menu.type = "button";
-    menu.title = node.locked ? "Core source locked" : "Remove this instance part";
-    menu.disabled = Boolean(node.locked);
-    menu.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (!node.locked) removeNode(node.id);
-    });
-    head.appendChild(menu);
+    if (editable()) {
+      const menu = make("button", "forge-node-menu", "×");
+      menu.type = "button";
+      menu.title = "Remove this card";
+      menu.addEventListener("pointerdown", (event) => event.stopPropagation());
+      menu.addEventListener("click", (event) => { event.stopPropagation(); removeNode(node.id); });
+      head.appendChild(menu);
+    }
     card.appendChild(head);
-
-    const body = make("div", "forge-node-body");
-    body.appendChild(make("p", "", node.description || meta.name));
-    const tags = make("div", "forge-node-meta");
-    if (node.model) tags.appendChild(make("span", "", node.model));
-    if (node.provider) tags.appendChild(make("span", "", PROVIDER_LABEL[node.provider] || node.provider));
-    if (node.timeout_s) tags.appendChild(make("span", "", `${node.timeout_s}s budget`));
-    if (node.continues) tags.appendChild(make("span", "", `continues ${node.continues}`));
-    if (node.mode) tags.appendChild(make("span", "", node.mode));
-    if (node.read_only) tags.appendChild(make("span", "", "read only"));
-    if (node.locked) tags.appendChild(make("span", "", "source locked"));
-    body.appendChild(tags);
-    card.appendChild(body);
+    card.appendChild(cardSummary(node));
 
     // The trace overlay: this run's state, painted on the flow's own card.
-    // Status is a flag riding the card's top edge; a graded judge wears the
-    // grade beside it; a stage that ran opens its terminal on click.
     const stage = runStage(node.id);
     if (stage) {
       const status = stage.status || "pending";
@@ -1077,7 +1142,7 @@
       const badge = make("span", "forge-run-badge", status);
       if (stage.job_id) {
         badge.classList.add("is-open");
-        badge.title = "Open this stage's terminal";
+        badge.title = "Open this step's terminal";
         badge.addEventListener("pointerdown", (event) => event.stopPropagation());
         badge.addEventListener("click", (event) => {
           event.stopPropagation();
@@ -1085,22 +1150,16 @@
         });
       }
       card.appendChild(badge);
-      if (stage.grade) card.appendChild(
-        make("span", "forge-run-grade", stage.grade));
+      if (stage.grade) card.appendChild(make("span", "forge-run-grade", stage.grade));
     }
 
-    if (node.expanded) card.appendChild(nodeEditor(node));
-    const inputs = nodePorts(node, "in");
-    const outputs = nodePorts(node, "out");
-    inputs.forEach((name, index) => card.append(port(node, "in", name, index, inputs.length)));
-    outputs.forEach((name, index) => card.append(port(node, "out", name, index, outputs.length)));
-
+    if (node.type !== "trigger") card.appendChild(port(node, "in"));
+    if (node.type !== "output") card.appendChild(port(node, "out"));
     bindNodeDrag(card, head, node);
     card.addEventListener("pointerdown", () => bringNodeFront(node, card));
-    card.addEventListener("dblclick", (event) => {
-      if (event.target.closest("button,input,select,textarea,.forge-port")) return;
-      event.stopPropagation();
-      toggleNode(node.id);
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button,.forge-port")) return;
+      openNode(node.id);
     });
     card.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -1110,101 +1169,430 @@
     return card;
   }
 
-  function nodeEditor(node, options = {}) {
-    const detail = make("div", "forge-node-detail");
-    detail.appendChild(componentMap(node));
-    const typeLine = make("div", "forge-node-detail-row");
-    typeLine.append(
-      field("Part type", typeSelect(node)),
-      field("Name", inputControl(node.name, (value) => { node.name = value; setDirty(); renderIdentity(); }))
-    );
-    detail.appendChild(typeLine);
-    if (node.type === "system") detail.appendChild(systemPreview(node));
-    if (node.source_detail) detail.appendChild(nativeSourceView(node.source_detail, node));
-    detail.appendChild(field("Purpose", textareaControl(node.description, (value) => { node.description = value; setDirty(); }, 3)));
-
-    if (node.type === "agent" || node.type === "judge" || (node.type === "native" && node.engine !== "command")) {
-      const config = make("div", "forge-node-detail-row");
-      config.append(
-        field("Model", inputControl(node.model || "", (value) => { node.model = value; setDirty(); })),
-        field("Provider", providerSelect(node.provider || "", (value) => { node.provider = value; setDirty(); })),
-        field("Permission", modeSelect(node))
-      );
-      detail.appendChild(config);
-      if (node.type === "agent") detail.appendChild(agentKnobs(node));
-    }
-    if (node.type === "trigger") detail.appendChild(scheduleControls(node));
-    if (node.type === "judge") detail.appendChild(judgeControls(node));
-    if (node.type === "logic") detail.appendChild(logicControls(node));
-    if (node.type === "output") detail.appendChild(outputControls(node));
-    if (node.type === "connector") detail.appendChild(connectorControls(node));
-    if (node.type !== "judge" && node.type !== "logic" && node.type !== "output") {
-      const label = node.type === "approval" ? "Decision request"
-        : node.type === "tool" ? "Capability instructions"
-          : node.type === "context" ? "Context note"
-            : node.type === "connector" ? "Routing instructions" : "Instructions / source";
-      detail.appendChild(field(label, textareaControl(node.prompt || "", (value) => { node.prompt = value; setDirty(); }, node.type === "agent" ? 10 : 5)));
-    }
-    if (node.source_ref) detail.appendChild(field("Capability source", inputControl(node.source_ref, (value) => { node.source_ref = value; setDirty(); })));
-    if (node.source_ref && !node.source_loaded) {
-      const load = make("button", "fchip sm", node.source_loading ? "Loading source" : "Load complete source");
-      load.type = "button"; load.disabled = Boolean(node.source_loading);
-      load.addEventListener("click", () => hydrateNodeSource(node));
-      detail.appendChild(load);
-    }
-    if (node.source_files?.length) {
-      detail.appendChild(make("p", "forge-source-files",
-        `${node.source_files.length} file${node.source_files.length === 1 ? "" : "s"}${node.source_truncated ? " · source truncated at safety limit" : " · complete source loaded"}`));
-    }
-    const actions = make("div", "forge-node-detail-actions");
-    const close = make("button", "fchip sm", "Done");
-    close.type = "button";
-    close.addEventListener("click", () => options.inspector ? closeInspector() : toggleNode(node.id, false));
-    actions.appendChild(close);
-    detail.appendChild(actions);
-    return detail;
+  function bringNodeFront(node, card) {
+    node.z = ++state.z;
+    card.style.zIndex = node.z;
   }
 
-  function nativeSourceView(source, node) {
-    const wrap = make("section", "forge-native-source");
-    if (source.engine === "command") wrap.appendChild(commandRunsView(source, node));
-    wrap.appendChild(make("h4", "", "Complete native source"));
-    const facts = make("div", "forge-native-facts");
-    (source.facts || []).forEach((fact) => {
-      const tile = make("div"); tile.append(make("span", "", fact.label), make("strong", "", fact.value)); facts.appendChild(tile);
+  /* ---------- the right column: the editor --------------------------------- */
+
+  function field(label, control, grow = false) {
+    const wrap = make("label", `forge-field${grow ? " is-grow" : ""}`);
+    wrap.append(make("span", "", label), control);
+    return wrap;
+  }
+
+  function textInput(value, onInput, attrs = {}) {
+    const input = make("input");
+    input.type = attrs.type || "text";
+    Object.entries(attrs).forEach(([key, val]) => { if (key !== "type") input.setAttribute(key, val); });
+    input.value = value == null ? "" : value;
+    input.addEventListener("input", () => onInput(input.value));
+    return input;
+  }
+
+  function textArea(value, onInput, rows = 6) {
+    const area = make("textarea");
+    area.rows = rows;
+    area.value = value || "";
+    area.addEventListener("input", () => onInput(area.value));
+    return area;
+  }
+
+  function selectControl(options, value, onChange) {
+    const select = make("select");
+    options.forEach(([val, label]) => {
+      const option = make("option", "", label);
+      option.value = val;
+      select.appendChild(option);
     });
-    wrap.appendChild(facts);
-    const steps = make("ol", "forge-native-steps");
-    (source.steps || []).forEach((step) => {
-      const row = make("li"); row.append(make("strong", "", step.title), make("p", "", step.body)); steps.appendChild(row);
-    });
-    wrap.appendChild(steps);
-    (source.parts || []).forEach((part) => {
-      const details = document.createElement("details"); details.className = "forge-native-part";
-      details.appendChild(make("summary", "", `${part.title} · ${part.kind}${part.lines ? ` · ${part.lines} lines` : ""}`));
-      if (part.note) details.appendChild(make("p", "", part.note));
-      if (part.path) details.appendChild(make("code", "", `${part.path}${part.symbol ? ` · ${part.symbol}` : ""}`));
-      details.appendChild(make("pre", "", part.text || "(no source text)"));
-      wrap.appendChild(details);
+    select.value = value;
+    if (select.value !== value && options.length) select.value = options[0][0];
+    select.addEventListener("change", () => onChange(select.value));
+    return select;
+  }
+
+  function segControl(options, value, onChange, classFor) {
+    const wrap = make("div", "forge-seg");
+    options.forEach(([val, label]) => {
+      const button = make("button", `${val === value ? "on" : ""}${classFor ? ` ${classFor(val)}` : ""}`.trim(), label);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        qa("button", wrap).forEach((item) => item.classList.toggle("on", item === button));
+        onChange(val);
+      });
+      wrap.appendChild(button);
     });
     return wrap;
   }
 
-  // ----- command routines: every run, Run now, Pause / Resume -----
-  // A command routine (server/routinerun.py) runs a program in its own
-  // process. Its native node carries the whole history: each run's start,
-  // end, exit status, counts, errors and log lines. The view refreshes
-  // itself from the hood while a run is live, and stops once it leaves the
-  // page.
-  const commandViews = new Set();
+  function checkbox(label, checked, onChange) {
+    const wrap = make("label");
+    const input = make("input");
+    input.type = "checkbox";
+    input.checked = Boolean(checked);
+    input.addEventListener("change", () => onChange(input.checked));
+    wrap.append(input, document.createTextNode(label));
+    return wrap;
+  }
+
+  function touch(node) {
+    setDirty();
+    paintNode(node);
+  }
+
+  function setInspector(kind, title, content) {
+    q("#forge-inspector-kind").textContent = kind;
+    q("#forge-inspector-title").textContent = title;
+    const body = q("#forge-inspector-body");
+    body.replaceChildren(content);
+    q("#forge-inspector").classList.add("is-open");
+  }
+
+  function renderInspector() {
+    const node = currentNode();
+    if (node) return setInspector(KIND[node.type]?.name || "Card", node.name || "", nodeEditor(node));
+    const edge = state.current?.edges.find((item) => item.id === state.selectedEdge);
+    if (edge) return setInspector("Wire", `${nameOf(edge.from)} to ${nameOf(edge.to)}`, edgeEditor(edge));
+    if (state.selectedLoop) {
+      const row = state.loops.find((item) => item.id === state.selectedLoop);
+      if (row) return setInspector("Standing loop", row.name, loopDetail(row));
+    }
+    q("#forge-inspector-kind").textContent = "Selection";
+    q("#forge-inspector-title").textContent = "Nothing selected";
+    q("#forge-inspector-body").replaceChildren(make("p", "hint", "Click a card, a wire, or a loop. It opens here."));
+    q("#forge-inspector").classList.remove("is-open");
+  }
+
+  function openNode(nodeId) {
+    state.selectedNode = nodeId;
+    state.selectedEdge = null;
+    state.selectedLoop = null;
+    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.toggle("is-selected", item.dataset.nodeId === nodeId));
+    renderWires();
+    renderInspector();
+  }
+
+  function openEdge(edge) {
+    state.selectedEdge = edge.id;
+    state.selectedNode = null;
+    state.selectedLoop = null;
+    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-selected"));
+    renderWires();
+    renderInspector();
+  }
+
+  function closeInspector() {
+    state.selectedNode = null;
+    state.selectedEdge = null;
+    state.selectedLoop = null;
+    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-selected"));
+    renderWires();
+    renderInspector();
+    if (state.library === "loops") renderLibrary();
+  }
+
+  // The reference chips under an instruction box: what the card can name.
+  function refChips(node, area) {
+    const wrap = make("div", "forge-refs");
+    wrap.appendChild(make("span", "", "Insert"));
+    const insert = (text) => {
+      const start = area.selectionStart ?? area.value.length;
+      const end = area.selectionEnd ?? start;
+      area.value = area.value.slice(0, start) + text + area.value.slice(end);
+      area.selectionStart = area.selectionEnd = start + text.length;
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+      area.focus();
+    };
+    const chip = (label, text, title) => {
+      const button = make("button", "", label);
+      button.type = "button";
+      button.title = title;
+      button.addEventListener("click", () => insert(text));
+      wrap.appendChild(button);
+    };
+    chip("{{input}}", "{{input}}", "What the Flow was asked to work on");
+    wiredIn(node).filter((item) => item.type !== "trigger").forEach((item) => {
+      chip(`{{${item.name}}}`, `{{stage.${item.id}.output}}`, `The finished text of ${item.name}`);
+    });
+    return wrap;
+  }
+
+  function nameField(node) {
+    return field("Name", textInput(node.name, (value) => { node.name = value; touch(node); renderIdentity(); }));
+  }
+
+  function modelField(node, editor) {
+    const choice = modelChoice(node);
+    const wrap = make("div");
+    const other = textInput(node.model || "", (value) => { node.model = value.trim(); touch(node); }, { placeholder: "the model id" });
+    const otherField = field("Model id", other);
+    otherField.style.display = choice === "other" ? "" : "none";
+    otherField.style.marginTop = "8px";
+    const select = selectControl(MODEL_CHOICES, choice, (value) => {
+      if (value.startsWith("provider:")) { node.model = ""; node.provider = value.slice(9); }
+      else if (value === "other") { node.model = node.model && !MODEL_LABEL[node.model] ? node.model : ""; }
+      else { node.model = value; node.provider = ""; }
+      otherField.style.display = value === "other" ? "" : "none";
+      if (value === "other") other.focus();
+      touch(node);
+    });
+    wrap.append(field("Who", select), otherField);
+    return wrap;
+  }
+
+  function agentEditor(node) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    const row = make("div", "forge-row");
+    const permHint = make("p", "hint", PERM_HINT[permOf(node)]);
+    row.append(modelField(node, editor), field("May it change things", segControl(PERMS, permOf(node), (value) => {
+      setPerm(node, value);
+      permHint.textContent = PERM_HINT[value];
+      touch(node);
+    }, (val) => (val === "full" ? "is-full" : ""))));
+    editor.append(row, permHint);
+    const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 12);
+    editor.appendChild(field("What it must do", area, true));
+    editor.appendChild(refChips(node, area));
+    const advanced = make("details");
+    advanced.appendChild(make("summary", "", "Advanced: time limit, continue a conversation"));
+    const inner = make("div");
+    inner.appendChild(field("Give up after (seconds, 0 for never)", textInput(String(node.timeout_s || 0), (value) => {
+      const n = parseInt(value, 10);
+      node.timeout_s = Number.isFinite(n) && n > 0 ? n : 0;
+      touch(node);
+    }, { type: "number", min: "0" })));
+    inner.appendChild(field("When the time runs out", selectControl([["error", "the card fails"], ["continue", "what it wrote so far stands"]],
+      node.on_timeout || "error", (value) => { node.on_timeout = value; touch(node); })));
+    const others = wiredIn(node).filter((item) => item.type === "agent");
+    inner.appendChild(field("Continue the conversation of", selectControl(
+      [["", "nobody: start fresh"]].concat(others.map((item) => [item.id, item.name])),
+      node.continues || "", (value) => { node.continues = value; touch(node); })));
+    inner.appendChild(make("p", "hint", "A continued card is the next turn of that card's session, on the same model. It must be wired from the card it continues."));
+    advanced.appendChild(inner);
+    editor.appendChild(advanced);
+    return editor;
+  }
+
+  function judgeEditor(node) {
+    const judge = node.judge || (node.judge = { min_grade: "B", max_retries: 1, retry_stage: "" });
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    editor.appendChild(modelField(node, editor));
+    const sentence = make("p", "forge-sentence");
+    const paint = () => {
+      sentence.replaceChildren();
+      sentence.append("Grades the card before this with fresh eyes. Pass at ");
+      sentence.appendChild(selectControl(GRADES, judge.min_grade || "", (value) => { judge.min_grade = value; touch(node); paint(); }));
+      if (judge.min_grade) {
+        sentence.append(" or better; below that, re-run ");
+        const targets = wiredIn(node).filter((item) => item.type !== "trigger");
+        sentence.appendChild(selectControl([["", "nothing: just fail"]].concat(targets.map((item) => [item.id, item.name])),
+          judge.retry_stage || "", (value) => { judge.retry_stage = value; touch(node); paint(); }));
+        if (judge.retry_stage) {
+          sentence.append(" up to ");
+          sentence.appendChild(selectControl([1, 2, 3, 4, 5].map((n) => [String(n), String(n)]), String(judge.max_retries || 1),
+            (value) => { judge.max_retries = Number(value); touch(node); }));
+          sentence.append(` time${judge.max_retries === 1 ? "" : "s"} with the findings.`);
+        } else sentence.append(".");
+      } else sentence.append(": the Flow goes on whatever the grade.");
+    };
+    paint();
+    editor.appendChild(sentence);
+    const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 8);
+    editor.appendChild(field("What to weigh in particular (optional)", area, true));
+    editor.appendChild(make("p", "hint", "The judge reads the finished text of every card wired into it and grades it A to F against what the Flow was asked."));
+    return editor;
+  }
+
+  function gateEditor(node) {
+    const logic = node.logic || (node.logic = { operation: "contains", value: "" });
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    const sentence = make("p", "forge-sentence");
+    const paint = () => {
+      sentence.replaceChildren();
+      const sources = wiredIn(node).filter((item) => item.type !== "trigger");
+      sentence.append("Passes when ");
+      if (sources.length > 1) {
+        sentence.appendChild(selectControl([["", "the card before this"]].concat(sources.map((item) => [item.id, item.name])),
+          logic.subject || "", (value) => { if (value) logic.subject = value; else delete logic.subject; touch(node); }));
+      } else sentence.append("the card before this ");
+      const op = make("select");
+      logicControls().forEach(([groupLabel, ops]) => {
+        const group = make("optgroup"); group.label = groupLabel;
+        ops.forEach(([value, label]) => {
+          const option = make("option", "", label); option.value = value; group.appendChild(option);
+        });
+        op.appendChild(group);
+      });
+      op.value = logic.operation || "always";
+      op.addEventListener("change", () => { logic.operation = op.value; touch(node); paint(); });
+      sentence.appendChild(op);
+      if (!NO_VALUE_OPS.has(logic.operation)) {
+        sentence.append(" ");
+        sentence.appendChild(textInput(logic.value || "", (value) => { logic.value = value; touch(node); }, { placeholder: "value", class: "forge-wide" }));
+      }
+      sentence.append(".");
+    };
+    paint();
+    editor.appendChild(sentence);
+    editor.appendChild(make("p", "hint", "No model runs. A gate that fails stops every card after it and the run ends with an error."));
+    return editor;
+  }
+
+  function approvalEditor(node) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 8);
+    editor.appendChild(field("What to show me and ask", area, true));
+    editor.appendChild(make("p", "hint", "The run pauses here and raises a card in Attention. Decline ends the run."));
+    return editor;
+  }
+
+  function outputEditor(node) {
+    const output = node.output || (node.output = { destination: "record" });
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    const sentence = make("p", "forge-sentence");
+    sentence.append("Save the result as ");
+    const planNote = make("p", "hint", "A plan dossier is saved to your vault as an editable note and rendered as an HTML page with diagrams.");
+    const paintNote = () => { planNote.style.display = output.destination === "plan" ? "" : "none"; };
+    sentence.appendChild(selectControl(DESTINATIONS, output.destination || "record", (value) => { output.destination = value; paintNote(); touch(node); }));
+    sentence.append(".");
+    paintNote();
+    editor.append(sentence, planNote);
+    const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 6);
+    editor.appendChild(field("Shape it like this (optional)", area, true));
+    editor.appendChild(make("p", "hint", "The card feeding this one is told the shape before it writes."));
+    return editor;
+  }
+
+  function scheduleEditor(node) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    const sentence = make("p", "forge-sentence");
+    const paint = () => {
+      sentence.replaceChildren();
+      const kind = node.daily_at ? "daily" : (node.every_hours ? "hours" : "manual");
+      sentence.append("Run ");
+      sentence.appendChild(selectControl([["daily", "every day at"], ["hours", "every"], ["manual", "only when I run it"]], kind, (value) => {
+        if (value === "daily") { node.daily_at = "07:30"; node.every_hours = null; }
+        else if (value === "hours") { node.daily_at = ""; node.every_hours = 24; }
+        else { node.daily_at = ""; node.every_hours = null; }
+        touch(node); paint();
+      }));
+      if (kind === "daily") {
+        sentence.append(" ");
+        sentence.appendChild(textInput(node.daily_at, (value) => { node.daily_at = value; touch(node); }, { type: "time" }));
+      } else if (kind === "hours") {
+        sentence.append(" ");
+        sentence.appendChild(textInput(String(node.every_hours || 24), (value) => { node.every_hours = Number(value) || 1; touch(node); }, { type: "number", min: "0.25", step: "0.25" }));
+        sentence.append(" hours");
+      }
+      sentence.append(". ");
+      sentence.appendChild(checkbox("on", node.enabled !== false, (value) => { node.enabled = value; touch(node); }));
+      sentence.appendChild(checkbox("tell me when it has run", node.notify, (value) => { node.notify = value; touch(node); }));
+    };
+    paint();
+    editor.appendChild(sentence);
+    editor.appendChild(make("p", "hint", node.routine_id
+      ? "This schedule is a standing loop; Save applies a change. Pause or Run now from the Loops tab."
+      : "Save the Flow to put it on the schedule. It then appears in Loops."));
+    return editor;
+  }
+
+  function sourceEditor(node) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    editor.appendChild(make("code", "forge-path", node.source_ref || "(no path)"));
+    const area = textArea(node.description, (value) => { node.description = value; touch(node); }, 4);
+    editor.appendChild(field("Tell the card about it (optional)", area));
+    editor.appendChild(make("p", "hint", "Wire this to a card and the card is told its name, its path and this note. It reads the file itself."));
+    if (node.type === "tool" && node.source_ref) {
+      const actions = make("div", "forge-editor-actions");
+      const read = make("button", "fchip sm", "Read it");
+      read.type = "button";
+      const out = make("pre");
+      out.hidden = true;
+      read.addEventListener("click", async () => {
+        read.disabled = true;
+        try {
+          const source = await request(`/api/flows/kit/source?ref=${encodeURIComponent(node.source_ref)}`);
+          out.textContent = source.text || "(empty)";
+          if (source.truncated) out.textContent += "\n\n[cut at the safety limit]";
+          out.hidden = false;
+          read.hidden = true;
+        } catch (error) {
+          toast(`Could not read it: ${error.message}`);
+          read.disabled = false;
+        }
+      });
+      actions.appendChild(read);
+      editor.append(actions, out);
+    }
+    return editor;
+  }
+
+  function nativeEditor(node) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    editor.appendChild(make("code", "forge-path", `Vira routine ${node.native?.routine_id || node.routine_id || ""}`));
+    editor.appendChild(make("p", "hint", "Runs one of Vira's own loops as a step of this Flow. Open the loop itself in Loops."));
+    return editor;
+  }
+
+  function nodeEditor(node) {
+    if (!editable()) {
+      const view = make("div", "forge-editor");
+      view.appendChild(cardSummary(node));
+      if (node.prompt) view.appendChild(make("pre", "", node.prompt));
+      view.appendChild(make("p", "hint", "A traced run's card, read-only."));
+      return view;
+    }
+    const editor = node.type === "agent" ? agentEditor(node)
+      : node.type === "judge" ? judgeEditor(node)
+        : node.type === "logic" ? gateEditor(node)
+          : node.type === "approval" ? approvalEditor(node)
+            : node.type === "output" ? outputEditor(node)
+              : node.type === "trigger" ? scheduleEditor(node)
+                : node.type === "native" ? nativeEditor(node)
+                  : sourceEditor(node);
+    const actions = make("div", "forge-editor-actions");
+    const dup = make("button", "fchip sm", "Duplicate");
+    dup.type = "button";
+    dup.addEventListener("click", () => duplicateNode(node));
+    const remove = make("button", "fchip sm is-danger", "Remove card");
+    remove.type = "button";
+    remove.addEventListener("click", () => removeNode(node.id));
+    actions.append(dup, remove);
+    editor.appendChild(actions);
+    return editor;
+  }
+
+  function edgeEditor(edge) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(make("p", "hint", `The finished text of ${nameOf(edge.from)} goes into ${nameOf(edge.to)}.`));
+    if (editable()) {
+      editor.appendChild(field("Note for the card after (optional)", textArea(edge.instructions, (value) => {
+        edge.instructions = value; setDirty(); renderWires();
+      }, 5), true));
+      editor.appendChild(make("p", "hint", "The note is added to that card's instructions under CONNECTION INSTRUCTIONS."));
+      const actions = make("div", "forge-editor-actions");
+      const remove = make("button", "fchip sm is-danger", "Remove wire");
+      remove.type = "button";
+      remove.addEventListener("click", () => removeEdge(edge.id));
+      actions.appendChild(remove);
+      editor.appendChild(actions);
+    }
+    return editor;
+  }
+
+  /* ---------- standing loops in the right column --------------------------- */
+
   const LIVE_RUN = new Set(["starting", "running"]);
   const RUN_POLL_MS = 5000;
-  const stamp = (iso) => {
-    if (!iso) return "-";
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString([], {
-      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  };
   const took = (a, b) => {
     if (!a || !b) return "";
     const s = Math.max(0, Math.round((new Date(b) - new Date(a)) / 1000));
@@ -1219,803 +1607,212 @@
     const m = Math.round(ms / 60000);
     return m < 90 ? `in ${m} min` : `in ${Math.floor(m / 60)} h ${m % 60} min`;
   };
+  let loopTimer = null;
 
-  function commandRunsView(source, node) {
-    const rid = source.id;
-    const wrap = make("section", "forge-cmd");
-    wrap.appendChild(make("h4", "", "Runs"));
-    const line = make("p", "forge-cmd-state");
-    const actions = make("div", "forge-cmd-actions");
+  function openLoop(rid) {
+    state.selectedLoop = rid;
+    state.selectedNode = null;
+    state.selectedEdge = null;
+    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-selected"));
+    renderWires();
+    renderLibrary();
+    renderInspector();
+  }
+
+  function loopDetail(row) {
+    const rid = row.id;
+    const wrap = make("div", "forge-editor");
+    const stateLine = make("p", "forge-loop-state");
+    const actions = make("div", "forge-editor-actions");
     const runNow = make("button", "btn primary", "Run now");
     runNow.type = "button";
     const pause = make("button", "fchip sm", "");
     pause.type = "button";
     actions.append(runNow, pause);
-    // Two lines per run rather than a nine-column table: the node and the
-    // inspector are under 400px wide.
-    const list = make("div", "forge-cmd-runs");
-    const foot = make("p", "forge-cmd-foot");
-    const more = make("button", "fchip sm", "Show older runs");
-    more.type = "button";
-    wrap.append(line, actions, list, foot, more);
+    if (row.last_job) {
+      const open = make("button", "fchip sm", "Open the last session");
+      open.type = "button";
+      open.addEventListener("click", () => window.openSession?.(row.last_job));
+      actions.appendChild(open);
+    }
+    wrap.append(stateLine, actions);
+    if (row.description) wrap.appendChild(make("p", "hint", row.description));
+    const facts = make("div", "forge-facts");
+    const runsBox = make("div");
+    const hood = make("details");
+    hood.appendChild(make("summary", "", "Under the hood"));
+    const hoodBody = make("div");
+    hood.appendChild(hoodBody);
+    wrap.append(facts, runsBox, hood);
 
-    let data = source;
+    let data = { ...row, runs: [], total: 0 };
     let older = [];
     const open = new Set();
-    let timer = null;
+    const isLive = () => Boolean(data.live) || (data.runs || []).some((r) => LIVE_RUN.has(r.status))
+      || LIVE_RUN.has(String(data.last_status || ""));
 
-    const isLive = () => Boolean(data.live) || (data.runs || []).some((r) => LIVE_RUN.has(r.status));
     function paintState() {
-      const trig = (data.facts || []).find((f) => f.label === "Runs")?.value || "";
+      const cadence = cadenceText(data);
       if (isLive()) {
-        const cur = (data.runs || []).find((r) => LIVE_RUN.has(r.status));
-        line.textContent = `Running now${cur?.started ? `, started ${stamp(cur.started)}` : ""}. It runs in its own process, so closing this panel or restarting Vira does not stop it.`;
+        stateLine.textContent = "Running now. It runs on its own, so closing this panel does not stop it.";
       } else if (!data.enabled) {
-        line.textContent = `Paused. Vira will not start it on its schedule (${trig}). Run now still works.`;
+        stateLine.textContent = `Paused. Vira will not start it on its schedule (${cadence.toLowerCase()}). Run now still works.`;
       } else {
-        line.textContent = data.next_run
-          ? `Runs ${trig}. Next run ${stamp(data.next_run)} (${untilText(data.next_run)}).`
-          : `Runs ${trig}.`;
+        stateLine.textContent = data.next_run
+          ? `${cadence}. Next run ${stamp(data.next_run)} (${untilText(data.next_run)}).`
+          : `${cadence}.${data.last_run ? ` Last run ${stamp(data.last_run)}${data.last_status ? `, ${data.last_status}` : ""}.` : ""}`;
       }
       runNow.disabled = isLive();
       pause.textContent = data.enabled ? "Pause" : "Resume";
       pause.title = data.enabled ? "Stop starting it on its schedule" : "Start it on its schedule again";
     }
+    function paintFacts() {
+      facts.replaceChildren();
+      (data.facts || []).forEach((fact) => {
+        const tile = make("div");
+        tile.append(make("span", "", fact.label), make("strong", "", fact.value));
+        facts.appendChild(tile);
+      });
+      hoodBody.replaceChildren();
+      const steps = make("ol", "forge-steps");
+      (data.steps || []).forEach((step) => {
+        const li = make("li"); li.append(make("strong", "", step.title), make("p", "", step.body)); steps.appendChild(li);
+      });
+      if (steps.childElementCount) hoodBody.appendChild(steps);
+      (data.parts || []).forEach((part) => {
+        const details = make("details");
+        details.appendChild(make("summary", "", `${part.title}, ${part.kind}${part.lines ? `, ${part.lines} lines` : ""}`));
+        const inner = make("div");
+        if (part.note) inner.appendChild(make("p", "hint", part.note));
+        if (part.path) inner.appendChild(make("code", "", `${part.path}${part.symbol ? ` (${part.symbol})` : ""}`));
+        inner.appendChild(make("pre", "", part.text || "(no source text)"));
+        details.appendChild(inner);
+        hoodBody.appendChild(details);
+      });
+      if (!hoodBody.childElementCount) hoodBody.appendChild(make("p", "hint", "Nothing to show yet."));
+    }
     function counts(r) {
       const c = r.counts || {};
       const keys = Object.keys(c);
-      return keys.length ? keys.map((k) => `${c[k]} ${k}`).join(" · ") : "-";
+      return keys.length ? keys.map((k) => `${c[k]} ${k}`).join(", ") : "-";
     }
     function logRow(r, cell) {
       cell.replaceChildren(make("p", "hint", "Loading this run's log"));
       request(`/api/routines/${encodeURIComponent(rid)}/runs/${encodeURIComponent(r.id)}/log`).then((res) => {
         cell.replaceChildren();
-        if (res.run?.note) cell.appendChild(make("p", "forge-cmd-note", res.run.note));
+        if (res.run?.note) cell.appendChild(make("p", "hint", res.run.note));
         if (res.run?.errors?.length) {
-          const list = make("ul", "forge-cmd-errors");
+          const list = make("ul", "forge-run-errors");
           res.run.errors.forEach((e) => list.appendChild(make("li", "", e)));
           cell.append(make("strong", "", `Errors (${res.run.error_count})`), list);
         }
         (res.files || []).forEach((f) => {
           const title = f.source ? `${f.source} (this run's new lines)` : "Output";
           cell.appendChild(make("strong", "", `${title}${f.cut ? ", last 1 MB" : ""}`));
-          cell.appendChild(make("pre", "forge-cmd-log", f.text || "(empty)"));
+          cell.appendChild(make("pre", "", f.text || "(empty)"));
         });
         if (!(res.files || []).length) cell.appendChild(make("p", "hint", "This run wrote no log."));
       }).catch((e) => cell.replaceChildren(make("p", "hint", `Could not load the log: ${e.message}`)));
     }
-    function paintRows() {
-      list.replaceChildren();
+    function paintRuns() {
+      runsBox.replaceChildren();
+      if (data.engine !== "command") return;
+      runsBox.appendChild(make("span", "forge-card-kind", "Runs"));
+      const list = make("div", "forge-runs");
       const rows = [...(data.runs || []), ...older];
       rows.forEach((r) => {
-        const row = make("div", `forge-cmd-run run-${r.status}`);
-        const top = make("div", "forge-cmd-run-top");
+        const rowEl = make("div", `forge-run run-${r.status}`);
+        const top = make("div", "forge-run-top");
         const end = LIVE_RUN.has(r.status) ? "still running" : stamp(r.finished);
         const span = took(r.started, r.finished);
-        top.append(make("span", `forge-cmd-chip is-${r.status}`, r.status),
+        top.append(make("span", `forge-run-chip is-${r.status}`, r.status),
           make("span", "", `${stamp(r.started || r.queued)} to ${end}${span ? ` (${span})` : ""}`),
-          make("span", "forge-cmd-dim", r.trigger === "schedule" ? "schedule" : "Run now"),
-          make("span", "forge-cmd-dim", `exit ${r.exit_code == null ? "-" : r.exit_code}`));
-        const bottom = make("div", "forge-cmd-run-bottom");
+          make("span", "forge-run-dim", r.trigger === "schedule" ? "schedule" : "Run now"),
+          make("span", "forge-run-dim", `exit ${r.exit_code == null ? "-" : r.exit_code}`));
+        const bottom = make("div", "forge-run-bottom");
         bottom.appendChild(make("span", "", counts(r)));
-        const err = make("span", r.error_count ? "has-errors" : "forge-cmd-dim",
+        const err = make("span", r.error_count ? "has-errors" : "forge-run-dim",
           `${r.error_count || 0} error line${r.error_count === 1 ? "" : "s"}`);
         if (r.errors?.length) err.title = r.errors[0];
         bottom.appendChild(err);
         const log = make("button", "fchip sm", open.has(r.id) ? "Hide log" : "Log");
         log.type = "button";
         bottom.appendChild(log);
-        row.append(top, bottom);
+        rowEl.append(top, bottom);
         if (open.has(r.id)) {
-          const cell = make("div", "forge-cmd-logbox");
-          row.appendChild(cell);
+          const cell = make("div", "forge-run-logbox");
+          rowEl.appendChild(cell);
           logRow(r, cell);
         }
         log.addEventListener("click", () => {
           if (open.has(r.id)) open.delete(r.id); else open.add(r.id);
-          paintRows();
+          paintRuns();
         });
-        list.appendChild(row);
+        list.appendChild(rowEl);
       });
       if (!rows.length) list.appendChild(make("p", "hint", "No runs yet."));
-      const shown = rows.length;
-      foot.textContent = `${shown} of ${data.total || 0} runs shown${data.pruned ? `; ${data.pruned} older runs were dropped past the history limit` : ""}.`;
-      more.hidden = shown >= (data.total || 0);
+      runsBox.appendChild(list);
+      const foot = make("p", "forge-run-foot", `${rows.length} of ${data.total || 0} runs shown${data.pruned ? `; ${data.pruned} older runs were dropped past the history limit` : ""}.`);
+      runsBox.appendChild(foot);
+      if (rows.length < (data.total || 0)) {
+        const more = make("button", "fchip sm", "Show older runs");
+        more.type = "button";
+        more.addEventListener("click", async () => {
+          try {
+            const page = await request(`/api/routines/${encodeURIComponent(rid)}/runs?offset=${rows.length}&limit=50`);
+            older = older.concat(page.runs || []);
+            paintRuns();
+          } catch (e) { toast(`Could not load older runs: ${e.message}`); }
+        });
+        runsBox.appendChild(more);
+      }
     }
     async function refresh() {
-      if (!wrap.isConnected) return stop();
+      if (!wrap.isConnected) { clearTimeout(loopTimer); return; }
       try {
-        data = await request(`/api/routines/${encodeURIComponent(rid)}/hood`);
-        if (node) node.source_detail = data;
-        paintState(); paintRows();
-      } catch (e) { line.textContent = `Could not refresh: ${e.message}`; }
-      schedule();
+        data = { ...data, ...await request(`/api/routines/${encodeURIComponent(rid)}/hood`) };
+        paintState(); paintFacts(); paintRuns();
+      } catch (e) { stateLine.textContent = `Could not read it: ${e.message}`; }
+      clearTimeout(loopTimer);
+      loopTimer = isLive() && wrap.isConnected ? setTimeout(refresh, RUN_POLL_MS) : null;
     }
-    function schedule() {
-      clearTimeout(timer);
-      timer = isLive() && wrap.isConnected ? setTimeout(refresh, RUN_POLL_MS) : null;
-    }
-    function stop() { clearTimeout(timer); commandViews.delete(refresh); }
-    commandViews.add(refresh);
-
     runNow.addEventListener("click", async () => {
       runNow.disabled = true;
       try {
         const res = await send(`/api/routines/${encodeURIComponent(rid)}/run`, "POST", {});
-        toast(`Run started (${res.command_run})`);
+        toast(res.command_run ? `Run started (${res.command_run})` : res.job_id ? `Started session ${res.job_id}` : "Started");
+        if (res.job_id && typeof window.openSession === "function") window.openSession(res.job_id);
       } catch (e) { toast(`Run refused: ${e.message}`); }
+      await loadLoops();
       refresh();
     });
     pause.addEventListener("click", async () => {
       const enabled = !data.enabled;
       try {
         await send(`/api/routines/${encodeURIComponent(rid)}`, "PUT", { enabled });
-        // markEnabled repaints the board, which rebuilds this node from its
-        // cached source; update the cache first so the new view is right,
-        // then refresh every live view (this one is detached by then).
         data = { ...data, enabled, next_run: null };
-        if (node) node.source_detail = data;
-        markEnabled(rid, enabled);
         toast(enabled ? "Resumed: it runs on its schedule again" : "Paused: it will not start on its schedule");
+        // a paused loop is a paused Schedule card on its Flow's board too
+        const flow = state.flows.find((f) => (f.triggers || []).some((t) => t.id === rid));
+        [flow, state.current].forEach((item) => (item?.nodes || []).forEach((n) => {
+          if (n.type === "trigger" && n.routine_id === rid) n.enabled = enabled;
+        }));
+        renderBoard();
       } catch (e) { toast(`Could not ${enabled ? "resume" : "pause"}: ${e.message}`); }
-      if (wrap.isConnected) refresh();
-      commandViews.forEach((f) => { if (f !== refresh) f(); });
+      await loadLoops();
+      paintState();
     });
-    more.addEventListener("click", async () => {
-      try {
-        const page = await request(`/api/routines/${encodeURIComponent(rid)}/runs?offset=${(data.runs || []).length + older.length}&limit=50`);
-        older = older.concat(page.runs || []);
-        paintRows();
-      } catch (e) { toast(`Could not load older runs: ${e.message}`); }
-    });
-    paintState(); paintRows();
-    // the poll starts once the inspector has attached this view
-    setTimeout(schedule, 0);
+    paintState(); paintFacts(); paintRuns();
+    setTimeout(refresh, 0);
     return wrap;
   }
 
-  // Pause / Resume changes the trigger's enabled flag; keep the board's
-  // trigger part and the library card in step without reloading the board.
-  function markEnabled(routineId, enabled) {
-    const touch = (flow) => {
-      (flow?.nodes || []).forEach((n) => { if (n.type === "trigger" && n.routine_id === routineId) n.enabled = enabled; });
-      (flow?.triggers || []).forEach((t) => { if (t.id === routineId) t.enabled = enabled; });
-    };
-    touch(state.current);
-    touch(state.flows.find((f) => f.id === `routine:${routineId}`));
-    renderBoard();
-    renderLibrary();
-  }
-
-  function systemPreview(node) {
-    const wrap = make("div", "forge-system-preview");
-    const graph = make("div", "forge-system-mini");
-    const children = node.embedded?.nodes || [];
-    const edges = node.embedded?.edges || [];
-    children.slice(0, 12).forEach((child) => {
-      const chip = make("span", "", child.name || child.id);
-      chip.dataset.type = child.type || "agent";
-      graph.appendChild(chip);
-    });
-    wrap.append(make("p", "", `${children.length} parts · ${edges.length} connections · source v${node.source_revision || 1}`), graph);
-    const actions = make("div", "forge-node-detail-actions");
-    const open = make("button", "fchip sm", "Open source"); open.type = "button";
-    open.addEventListener("click", () => selectFlow(node.source_ref));
-    const decompose = make("button", "btn primary", "Decompose instance"); decompose.type = "button";
-    decompose.addEventListener("click", () => decomposeSystem(node));
-    actions.append(open, decompose); wrap.appendChild(actions);
-    return wrap;
-  }
-
-  function decomposeSystem(system) {
-    const children = copy(system.embedded?.nodes || []);
-    const internalEdges = copy(system.embedded?.edges || []);
-    if (!children.length) return toast("This system has no visual parts to decompose.");
-    const map = {};
-    const minX = Math.min(...children.map((child) => Number(child.x) || 0));
-    const minY = Math.min(...children.map((child) => Number(child.y) || 0));
-    children.forEach((child) => {
-      const old = child.id;
-      child.id = id(child.type === "agent" ? "stage" : (child.type || "part"));
-      map[old] = child.id;
-      child.x = system.x + (Number(child.x) - minX) * .7;
-      child.y = system.y + (Number(child.y) - minY) * .7;
-      child.expanded = false;
-      child.locked = false;
-      child.source_system = system.source_ref;
-    });
-    const exec = new Set(children.filter((child) => ["agent", "judge", "logic", "approval", "output"].includes(child.type)).map((child) => child.id));
-    const remapped = internalEdges.map((edge) => ({ ...edge, id: id("edge"), from: map[edge.from], to: map[edge.to] }))
-      .filter((edge) => edge.from && edge.to);
-    const incomingIds = new Set(remapped.filter((edge) => exec.has(edge.from) && exec.has(edge.to)).map((edge) => edge.to));
-    const outgoingIds = new Set(remapped.filter((edge) => exec.has(edge.from) && exec.has(edge.to)).map((edge) => edge.from));
-    const entries = children.filter((child) => exec.has(child.id) && !incomingIds.has(child.id));
-    const exits = children.filter((child) => exec.has(child.id) && !outgoingIds.has(child.id));
-    const external = state.current.edges.filter((edge) => edge.from === system.id || edge.to === system.id);
-    const retained = state.current.edges.filter((edge) => edge.from !== system.id && edge.to !== system.id);
-    external.forEach((edge) => {
-      if (edge.to === system.id) entries.forEach((entry) => retained.push({ ...edge, id: id("edge"), to: entry.id, to_port: "input" }));
-      if (edge.from === system.id) exits.forEach((exitNode) => retained.push({ ...edge, id: id("edge"), from: exitNode.id, from_port: "result" }));
-    });
-    state.current.nodes = state.current.nodes.filter((node) => node.id !== system.id).concat(children);
-    state.current.edges = retained.concat(remapped);
-    setDirty();
-    arrange();
-    toast(`${system.name} is now editable as ${children.length} instance parts. Its source is unchanged.`);
-  }
-
-  function connectedParts(node, direction, type) {
-    const edges = (state.current?.edges || []).filter((edge) => edge[direction === "in" ? "to" : "from"] === node.id);
-    const otherKey = direction === "in" ? "from" : "to";
-    return edges.map((edge) => state.current.nodes.find((item) => item.id === edge[otherKey]))
-      .filter((item) => item && (!type || item.type === type));
-  }
-
-  function componentMap(node) {
-    const map = make("div", "forge-component-map");
-    const incomingContexts = connectedParts(node, "in", "context");
-    const incomingTools = connectedParts(node, "in", "tool");
-    const outgoing = connectedParts(node, "out");
-    const parts = [
-      ["ID", node.id || "unsaved"],
-      ["Model", node.model || (node.type === "agent" ? "Vira default" : "local")],
-      ["Permission", node.read_only ? "read only" : (node.mode || "instance")],
-      ["Prompt", node.prompt ? `${node.prompt.length} characters` : "none"],
-      ["Context", incomingContexts.length ? incomingContexts.map((item) => item.name).join(", ") : "none connected"],
-      ["Capabilities", incomingTools.length ? incomingTools.map((item) => item.name).join(", ") : "standard Vira tools"],
-      ["Outputs", outgoing.length ? outgoing.map((item) => item.name).join(", ") : "unconnected"],
-    ];
-    parts.forEach(([label, value], index) => {
-      const chip = make("div", "forge-component-chip");
-      chip.append(make("span", "", label), make("strong", "", value));
-      if (index > 0) chip.appendChild(make("i", "forge-component-trace"));
-      map.appendChild(chip);
-    });
-    return map;
-  }
-
-  function field(label, control) {
-    const wrap = make("label", "", label);
-    wrap.appendChild(control);
-    return wrap;
-  }
-
-  function inputControl(value, change) {
-    const input = make("input");
-    input.value = value || "";
-    input.addEventListener("input", () => change(input.value));
-    input.addEventListener("pointerdown", (event) => event.stopPropagation());
-    return input;
-  }
-
-  function textareaControl(value, change, rows) {
-    const textarea = make("textarea");
-    textarea.rows = rows;
-    textarea.value = value || "";
-    textarea.addEventListener("input", () => change(textarea.value));
-    textarea.addEventListener("pointerdown", (event) => event.stopPropagation());
-    textarea.addEventListener("wheel", (event) => event.stopPropagation());
-    return textarea;
-  }
-
-  function cleanPortList(value) {
-    return [...new Set(String(value || "").split(",")
-      .map((name) => name.trim().replace(/\s+/g, " ").slice(0, 40)).filter(Boolean))].slice(0, 8);
-  }
-
-  function nodePorts(node, direction) {
-    if (node.type !== "connector") {
-      const meta = TYPE[node.type] || TYPE.tool;
-      return copy(direction === "out" ? (meta.outputs || ["result"]) : (meta.inputs || ["input"]));
-    }
-    const fallback = direction === "out" ? ["out"] : ["in"];
-    const key = direction === "out" ? "output_ports" : "input_ports";
-    const values = Array.isArray(node[key]) ? node[key] : fallback;
-    return values.map((name) => String(name || "").trim()).filter(Boolean).slice(0, 8);
-  }
-
-  function connectorControls(node) {
-    const wrap = make("div", "forge-connector-controls");
-    const row = make("div", "forge-node-detail-row");
-    const mode = make("select");
-    [["through", "Adapter · in and out"], ["input", "Input chip · source"], ["output", "Output chip · destination"]]
-      .forEach(([value, label]) => {
-        const option = make("option", "", label); option.value = value; mode.appendChild(option);
-      });
-    mode.value = node.connector_mode || "through";
-    mode.addEventListener("change", () => {
-      node.connector_mode = mode.value;
-      if (mode.value === "input") {
-        node.input_ports = [];
-        if (!node.output_ports?.length) node.output_ports = ["out"];
-      } else if (mode.value === "output") {
-        node.output_ports = [];
-        if (!node.input_ports?.length) node.input_ports = ["in"];
-      } else {
-        if (!node.input_ports?.length) node.input_ports = ["in"];
-        if (!node.output_ports?.length) node.output_ports = ["out"];
-      }
-      setDirty(); renderBoard();
-    });
-    const dataKind = make("select");
-    [["data", "Data"], ["capability", "Tool / capability"], ["context", "Context"],
-      ["signal", "Signal / event"], ["decision", "Decision"]].forEach(([value, label]) => {
-      const option = make("option", "", label); option.value = value; dataKind.appendChild(option);
-    });
-    dataKind.value = node.data_kind || "data";
-    dataKind.addEventListener("change", () => { node.data_kind = dataKind.value; setDirty(); renderBoard(); });
-    row.append(field("Circuit role", mode), field("Payload type", dataKind));
-    wrap.appendChild(row);
-    const ports = make("div", "forge-node-detail-row");
-    ports.append(
-      field("Input ports · comma separated", inputControl(nodePorts(node, "in").join(", "), (value) => {
-        node.input_ports = cleanPortList(value); setDirty();
-      })),
-      field("Output ports · comma separated", inputControl(nodePorts(node, "out").join(", "), (value) => {
-        node.output_ports = cleanPortList(value); setDirty();
-      }))
-    );
-    wrap.appendChild(ports);
-    const apply = make("button", "fchip sm", "Apply port layout");
-    apply.type = "button";
-    apply.addEventListener("click", () => { renderBoard(); renderOutline(); });
-    wrap.appendChild(apply);
-    return wrap;
-  }
-
-  function typeSelect(node) {
-    const select = make("select");
-    Object.entries(TYPE).forEach(([value, meta]) => {
-      const option = make("option", "", meta.name);
-      option.value = value;
-      select.appendChild(option);
-    });
-    select.value = node.type;
-    select.disabled = node.locked || node.type === "judge";
-    select.addEventListener("change", () => { node.type = select.value; setDirty(); renderBoard(); });
-    return select;
-  }
-
-  function modeSelect(node) {
-    const select = make("select");
-    [["manual", "Manual approvals"], ["acceptEdits", "Accept edits"], ["bypassPermissions", "Full execution"], ["judge", "Judge"]]
-      .forEach(([value, label]) => {
-        const option = make("option", "", label);
-        option.value = value;
-        select.appendChild(option);
-      });
-    select.value = node.type === "judge" ? "judge" : (node.mode || "manual");
-    select.disabled = node.type === "judge" || node.locked;
-    select.addEventListener("change", () => { node.mode = select.value; setDirty(); });
-    return select;
-  }
-
-  function judgeControls(node) {
-    const judge = node.judge || (node.judge = {});
-    const row = make("div", "forge-node-detail-row");
-    const grade = make("select");
-    ["", "A", "B", "C", "D", "F"].forEach((value) => {
-      const option = make("option", "", value || "No grade gate");
-      option.value = value;
-      grade.appendChild(option);
-    });
-    grade.value = judge.min_grade || "";
-    grade.addEventListener("change", () => { judge.min_grade = grade.value; setDirty(); });
-    const retries = make("input");
-    retries.type = "number";
-    retries.min = "0";
-    retries.max = "5";
-    retries.value = judge.max_retries || 0;
-    retries.addEventListener("input", () => { judge.max_retries = Number(retries.value); setDirty(); });
-    row.append(field("Minimum grade", grade), field("Retries", retries));
-    return row;
-  }
-
-  // The providers a part or a run can be pinned to. Mirrors
-  // server/models.py PROVIDERS; "" is the owner's go-to.
-  const PROVIDERS = [["", "Vira default"], ["anthropic", "Claude"],
-    ["openai", "Codex"], ["google", "Gemini"], ["xai", "Grok"]];
-  const PROVIDER_LABEL = Object.fromEntries(PROVIDERS);
-
-  function providerSelect(value, onChange) {
-    const sel = make("select");
-    PROVIDERS.forEach(([id, label]) => {
-      const option = make("option", "", label); option.value = id; sel.appendChild(option);
-    });
-    sel.value = value || "";
-    sel.addEventListener("change", () => onChange(sel.value));
-    return sel;
-  }
-
-  // Two families of gate, and the split is what the labels say: the first
-  // reads what the upstream part WROTE, the second reads how it RAN - its
-  // ledger row, the tools it called, the cards it raised, its transcript.
-  // Mirrors server/circuits.py LOGIC_OPS; the server refuses an unknown one.
-  const LOGIC_OPS = [
-    ["Output", [["always", "Always pass"], ["has_output", "Has output"],
-      ["contains", "Output contains"], ["not_contains", "Output does not contain"],
-      ["equals", "Output equals"]]],
-    ["Record", [["provider_is", "Ran on provider (blank = the run's)"],
-      ["transport_matches_provider", "Ran on its provider's own lane"],
-      ["transport_is", "Transport is"], ["model_used_contains", "Model used contains"],
-      ["outcome_is", "Ended with status"], ["tool_called", "Called Vira tool"],
-      ["tool_not_called", "Did not call Vira tool"],
-      ["card_raised", "Raised a card (ask / permission / landing)"],
-      ["log_contains", "Transcript contains"], ["log_not_contains", "Transcript does not contain"],
-      ["placed_in_worktree", "Was placed in a worktree"], ["not_in_worktree", "Ran with no worktree"],
-      ["read_only_honored", "Read-only held"], ["guard_held", "Branch-first guard held"],
-      ["interrupt_honored", "Timeout interrupted it"]]],
-  ];
-
-  function logicControls(node) {
-    const logic = node.logic || (node.logic = { operation: "always", value: "" });
-    const row = make("div", "forge-node-detail-row");
-    const operation = make("select");
-    LOGIC_OPS.forEach(([groupLabel, ops]) => {
-      const group = make("optgroup"); group.label = groupLabel;
-      ops.forEach(([value, label]) => {
-        const option = make("option", "", label); option.value = value; group.appendChild(option);
-      });
-      operation.appendChild(group);
-    });
-    operation.value = logic.operation || "always";
-    operation.addEventListener("change", () => { logic.operation = operation.value; setDirty(); });
-    const value = inputControl(logic.value || "", (next) => { logic.value = next; setDirty(); });
-    row.append(field("Gate", operation), field("Match value", value));
-    // A record gate inspects ONE upstream part - the first it is wired from
-    // unless named here. The server reads logic.subject the same way.
-    const subject = inputControl(logic.subject || "", (next) => {
-      if (next.trim()) logic.subject = next.trim(); else delete logic.subject;
-      setDirty();
-    });
-    row.append(field("Inspect part (blank = first upstream)", subject));
-    return row;
-  }
-
-  function agentKnobs(node) {
-    const wrap = make("div", "forge-node-detail-row");
-    const timeout = inputControl(String(node.timeout_s || ""), (next) => {
-      const n = parseInt(next, 10);
-      node.timeout_s = Number.isFinite(n) && n > 0 ? n : 0; setDirty();
-    });
-    const onTimeout = make("select");
-    [["error", "Timeout fails the part"], ["continue", "Timeout ends it; output stands"]]
-      .forEach(([value, label]) => {
-        const option = make("option", "", label); option.value = value; onTimeout.appendChild(option);
-      });
-    onTimeout.value = node.on_timeout || "error";
-    onTimeout.addEventListener("change", () => { node.on_timeout = onTimeout.value; setDirty(); });
-    // Continue another agent part's conversation instead of starting fresh:
-    // this part becomes that session's next turn. It must be wired FROM the
-    // part it continues; the server refuses anything else.
-    const others = (state.current?.nodes || []).filter((other) =>
-      other.id !== node.id && other.type === "agent");
-    const cont = make("select");
-    const none = make("option", "", "Start a fresh session"); none.value = ""; cont.appendChild(none);
-    others.forEach((other) => {
-      const option = make("option", "", other.name || other.id); option.value = other.id; cont.appendChild(option);
-    });
-    cont.value = node.continues || "";
-    cont.addEventListener("change", () => { node.continues = cont.value; setDirty(); });
-    wrap.append(field("Timeout (seconds)", timeout), field("On timeout", onTimeout),
-      field("Continues conversation of", cont));
-    return wrap;
-  }
-
-  function outputControls(node) {
-    const output = node.output || (node.output = { destination: "record", instructions: "" });
-    const wrap = make("div");
-    const destination = make("select");
-    [["record", "Flow record"], ["artifact", "Artifact"], ["decision_brief", "Decision brief"],
-      ["notification", "Notification"], ["plan", "Plan dossier"]].forEach(([value, label]) => {
-        const option = make("option", "", label); option.value = value; destination.appendChild(option);
-      });
-    destination.value = output.destination || "record";
-    const planNote = make("p", "hint",
-      "A plan dossier is saved to your vault as an editable note and rendered "
-      + "as an HTML page with diagrams. The step feeding this output is told "
-      + "the plan format; its permissions are whatever you set on that step.");
-    const paintNote = () => { planNote.style.display = destination.value === "plan" ? "" : "none"; };
-    destination.addEventListener("change", () => {
-      output.destination = destination.value; paintNote(); setDirty();
-    });
-    paintNote();
-    wrap.append(field("Destination", destination));
-    wrap.append(planNote);
-    wrap.append(field("Output instructions", textareaControl(output.instructions || "", (value) => {
-      output.instructions = value; setDirty();
-    }, 5)));
-    return wrap;
-  }
-
-  function scheduleControls(node) {
-    const wrap = make("div");
-    const row = make("div", "forge-node-detail-row");
-    const cadence = make("select");
-    [["manual", "Manual"], ["daily", "Daily at a time"], ["hours", "Every N hours"]]
-      .forEach(([value, label]) => {
-        const option = make("option", "", label);
-        option.value = value;
-        cadence.appendChild(option);
-      });
-    cadence.value = node.daily_at ? "daily" : (node.every_hours ? "hours" : "manual");
-    const value = make("input");
-    const paint = () => {
-      if (cadence.value === "daily") {
-        value.type = "time";
-        value.value = node.daily_at || "07:30";
-      } else if (cadence.value === "hours") {
-        value.type = "number";
-        value.min = ".25";
-        value.step = ".25";
-        value.value = node.every_hours || 24;
-      } else {
-        value.type = "text";
-        value.value = "Run from the Forge";
-        value.disabled = true;
-      }
-    };
-    cadence.addEventListener("change", () => {
-      value.disabled = false;
-      if (cadence.value === "daily") { node.daily_at = "07:30"; node.every_hours = null; }
-      else if (cadence.value === "hours") { node.daily_at = ""; node.every_hours = 24; }
-      else { node.daily_at = ""; node.every_hours = null; }
-      paint();
-      setDirty(state.current.kind !== "native");
-    });
-    value.addEventListener("input", () => {
-      if (cadence.value === "daily") node.daily_at = value.value;
-      if (cadence.value === "hours") node.every_hours = Number(value.value);
-      setDirty(state.current.kind !== "native");
-    });
-    paint();
-    row.append(field("Trigger", cadence), field("Cadence", value));
-    wrap.appendChild(row);
-    const flags = make("div", "forge-node-detail-row");
-    const enabled = make("input");
-    enabled.type = "checkbox";
-    enabled.checked = node.enabled !== false;
-    enabled.addEventListener("change", () => { node.enabled = enabled.checked; setDirty(state.current.kind !== "native"); });
-    const notify = make("input");
-    notify.type = "checkbox";
-    notify.checked = Boolean(node.notify);
-    notify.addEventListener("change", () => { node.notify = notify.checked; setDirty(state.current.kind !== "native"); });
-    flags.append(field("Enabled", enabled), field("Notify when complete", notify));
-    wrap.appendChild(flags);
-    if (node.routine_id) {
-      const save = make("button", "fchip sm", "Save schedule");
-      save.type = "button";
-      save.addEventListener("click", () => saveRoutineNode(node));
-      wrap.appendChild(save);
-    }
-    return wrap;
-  }
-
-  async function saveRoutineNode(node) {
-    if (!node.routine_id) return;
-    if (!node.daily_at && !node.every_hours) return toast("A standing trigger needs a cadence.");
-    try {
-      await send(`/api/routines/${encodeURIComponent(node.routine_id)}`, "PUT", {
-        name: node.name,
-        description: node.description,
-        daily_at: node.daily_at || null,
-        every_hours: node.every_hours || null,
-        enabled: node.enabled !== false,
-        notify: Boolean(node.notify),
-      });
-      toast("Schedule updated");
-      await loadForge({ force: true, flowId: state.current.id });
-    } catch (error) {
-      toast(`Schedule refused: ${error.message}`);
-    }
-  }
-
-  function toggleNode(nodeId, force) {
-    const node = state.current?.nodes.find((item) => item.id === nodeId);
-    if (!node) return;
-    node.expanded = force == null ? !node.expanded : force;
-    node.width = node.expanded ? Math.max(node.width || 390, 390) : (node.type === "connector" ? 196 : 244);
-    state.selectedNode = nodeId;
-    state.selectedEdge = null;
-    renderBoard();
-    renderOutline();
-  }
-
-  function openNodeInspector(nodeId) {
-    if (!nodeId) {
-      closeInspector();
-      return;
-    }
-    const node = state.current?.nodes.find((item) => item.id === nodeId);
-    if (!node) return;
-    state.selectedNode = node.id;
-    state.selectedEdge = null;
-    renderBoard();
-    renderSpatial();
-    const pane = q("#forge-inspector");
-    q("#forge-inspector-title").textContent = node.name || TYPE[node.type]?.name || "Component";
-    const body = q("#forge-inspector-body");
-    body.replaceChildren(nodeEditor(node, { inspector: true }));
-    pane.classList.add("is-open");
-  }
-
-  function bringNodeFront(node, card) {
-    state.boardLayerFocus = null;
-    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-layer-focus", "is-layer-muted"));
-    node.z = ++state.z;
-    card.style.zIndex = node.z;
-    state.selectedNode = node.id;
-    state.selectedEdge = null;
-    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.toggle("is-selected", item === card));
-    closeInspector();
-  }
-
-  function closeNodeMenu() {
-    q(".forge-node-context", q("#forge-shell"))?.remove();
-  }
-
-  function contextAction(menu, label, hint, run, danger = false) {
-    const button = make("button", `forge-node-context-action${danger ? " is-danger" : ""}`);
-    button.type = "button";
-    button.append(make("strong", "", label), make("small", "", hint));
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      closeNodeMenu();
-      run();
-    });
-    menu.appendChild(button);
-  }
-
-  function showNodeMenu(node, event) {
-    const shell = q("#forge-shell");
-    if (!shell) return;
-    closeNodeMenu();
-    bringNodeFront(node, q(`.forge-node[data-node-id="${CSS.escape(node.id)}"]`));
-    const menu = make("div", "forge-node-context");
-    const title = make("div", "forge-node-context-title");
-    title.append(make("span", "forge-kicker", TYPE[node.type]?.name || "Component"), make("strong", "", node.name));
-    menu.appendChild(title);
-    contextAction(menu, "Add connector", "Describe the relationship; Vira builds the right I/O chip.", () => addConnectorFor(node));
-    contextAction(menu, "Attach tools", "Create an expandable capability bus for tools, skills, scripts, and MCP.",
-      () => addConnectorFor(node, "Give this component access to a configurable set of tools and capabilities."));
-    contextAction(menu, "Attach context", "Create a context port for files, folders, references, or live Find results.",
-      () => addConnectorFor(node, "Feed this component a configurable set of files, folders, and reference context."));
-    contextAction(menu, "Ask Muse", "Place a Muse proposal stage in this Flow, focused on this component.", () => addMuseFor(node));
-    contextAction(menu, node.expanded ? "Collapse component" : "Open component", "Show or hide its complete instance configuration.",
-      () => toggleNode(node.id));
-    contextAction(menu, "Duplicate component", "Make an editable instance copy beside this one.", () => duplicateNode(node));
-    if (!node.locked) contextAction(menu, "Remove component", "Delete this instance and its connections.", () => removeNode(node.id), true);
-    shell.appendChild(menu);
-    const shellRect = shell.getBoundingClientRect();
-    const width = 264;
-    const left = clamp(event.clientX - shellRect.left, 8, Math.max(8, shellRect.width - width - 8));
-    const top = clamp(event.clientY - shellRect.top, 8, Math.max(8, shellRect.height - menu.offsetHeight - 8));
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-    menu.addEventListener("pointerdown", (click) => click.stopPropagation());
-    setTimeout(() => document.addEventListener("pointerdown", closeNodeMenu, { once: true }), 0);
-  }
-
-  function connectorSpec(intent) {
-    const text = intent.toLowerCase();
-    if (/tool|capabilit|skill|script|mcp|command|plugin/.test(text)) {
-      return { name: "Tool bus", data_kind: "capability", input_ports: ["tool"], output_ports: ["capability"] };
-    }
-    if (/context|reference|file|folder|document|find|reader|source/.test(text)) {
-      return { name: "Context port", data_kind: "context", input_ports: ["source"], output_ports: ["context"] };
-    }
-    if (/trigger|event|schedule|signal|start|launch/.test(text)) {
-      return { name: "Signal port", data_kind: "signal", input_ports: ["event"], output_ports: ["signal"] };
-    }
-    if (/decision|approval|verdict|judge/.test(text)) {
-      return { name: "Decision port", data_kind: "decision", input_ports: ["decision"], output_ports: ["decision"] };
-    }
-    return { name: "Data connector", data_kind: "data", input_ports: ["in"], output_ports: ["out"] };
-  }
-
-  function addQuietEdge(from, to, fromPort, toPort, instructions = "") {
-    if (!from || !to || from === to) return null;
-    const duplicate = state.current.edges.some((edge) => edge.from === from && edge.to === to
-      && edge.from_port === fromPort && edge.to_port === toPort);
-    if (duplicate) return null;
-    const edge = { id: id("edge"), from, to, from_port: fromPort, to_port: toPort,
-      label: "", instructions, direction: "forward" };
-    state.current.edges.push(edge);
-    return edge;
-  }
-
-  function attachConnector(connector, target) {
-    const kind = connector.data_kind || "data";
-    const targetPort = nodePorts(target, "in").find((name) =>
-      (INPUT_ACCEPT[name] || ["data", "signal", "context", "capability", "decision"]).includes(kind));
-    if (targetPort && nodePorts(connector, "out")[0]) {
-      addQuietEdge(connector.id, target.id, nodePorts(connector, "out")[0], targetPort, connector.prompt);
-      return;
-    }
-    const targetOutput = nodePorts(target, "out").find((name) => (OUTPUT_KIND[name] || "data") === kind)
-      || nodePorts(target, "out")[0];
-    if (targetOutput && nodePorts(connector, "in")[0]) {
-      addQuietEdge(target.id, connector.id, targetOutput, nodePorts(connector, "in")[0], connector.prompt);
-    }
-  }
-
-  async function addConnectorFor(target, suggested = "") {
-    const intent = await forgeDialog({
-      title: "Add a connector",
-      message: `What is the connector for around ${target.name}? Vira will choose its payload type, ports, and first connection.`,
-      value: suggested,
-      confirm: "Build connector",
-    });
-    if (!intent) return;
-    const spec = connectorSpec(intent);
-    const connector = addNode({
-      type: "connector", kind: "primitive", ...spec,
-      description: intent, prompt: intent, connector_mode: "through",
-    }, { x: target.x - 250, y: target.y + 18 });
-    attachConnector(connector, target);
-    connector.z = ++state.z;
-    setDirty();
-    renderBoard();
-    renderOutline();
-    toast(`${spec.name} added. Open it to rename ports or change its payload type.`);
-  }
-
-  async function addMuseFor(target) {
-    const intent = await forgeDialog({
-      title: "Ask Muse in this Flow",
-      message: `What should Muse notice, challenge, or improve around ${target.name}? The proposal stage will live here on the breadboard.`,
-      value: `Suggest missing parts, context, tools, or connections around ${target.name}.`,
-      confirm: "Add Muse",
-    });
-    if (!intent) return;
-    const graph = state.current.nodes.map((node) => `${node.name} [${node.type}]`).join("; ");
-    const prompt = [
-      "You are Muse operating inside Vira's Forge visual orchestration system.",
-      `Flow: ${state.current.name}.`,
-      `Visible parts: ${graph}.`,
-      `Focus component: ${target.name} [${target.type}] — ${target.description || "no purpose recorded"}.`,
-      `Owner's request: ${intent}`,
-      "Propose concrete additions or changes. Name the exact connector, context, tool, stage, or wire; explain where it attaches and why. Do not implement or alter the source Flow. Return a short build-ready proposal.",
-      "\nUpstream runtime input:\n{{input}}",
-    ].join("\n");
-    const muse = addNode({
-      type: "agent", kind: "muse", name: "Muse proposal",
-      description: `Forge suggestion for ${target.name}: ${intent}`,
-      model: "sonnet", mode: "manual", read_only: true, prompt,
-    }, { x: target.x + (target.width || 244) + 110, y: target.y + 12 });
-    muse.proposal_for = target.id;
-    muse.extra = `forge:muse:${target.id}`;
-    const output = nodePorts(target, "out")[0];
-    if (output) {
-      const kind = target.type === "connector" ? (target.data_kind || "data") : (OUTPUT_KIND[output] || "data");
-      const musePort = kind === "capability" ? "tools" : (kind === "context" ? "context" : "input");
-      addQuietEdge(target.id, muse.id, output, musePort, "Ask Muse to inspect this component's role and output in the surrounding Flow.");
-    }
-    muse.z = ++state.z;
-    setDirty();
-    renderBoard();
-    renderOutline();
-    toast("Muse now has a proposal stage inside this Flow. Run it like any other agent stage.");
-  }
-
-  function duplicateNode(node) {
-    const clone = copy(node);
-    clone.id = id(clone.type === "agent" ? "stage" : clone.type || "part");
-    clone.name = `${clone.name} copy`;
-    clone.x = clamp((Number(clone.x) || 0) + 42, 0, 3900);
-    clone.y = clamp((Number(clone.y) || 0) + 42, 60, 2550);
-    clone.locked = false;
-    clone.expanded = false;
-    clone.z = ++state.z;
-    state.current.nodes.push(clone);
-    state.selectedNode = clone.id;
-    setDirty(); renderBoard(); renderOutline();
-  }
+  /* ---------- drag, ports, wires ------------------------------------------- */
 
   function bindNodeDrag(card, head, node) {
     let active = null;
     head.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target.closest("button,input,select,textarea")) return;
+      if (event.button !== 0 || event.target.closest("button")) return;
       event.preventDefault();
       event.stopPropagation();
       bringNodeFront(node, card);
@@ -2040,111 +1837,75 @@
       active = null;
       card.classList.remove("is-dragging");
       if (moved) setDirty();
-      else {
-        // While a trace is armed, a click on a stage that ran opens that
-        // stage's terminal — the run is what the owner is here to read.
-        // Stages that never launched (and every non-stage part) keep the
-        // ordinary expand gesture.
-        const stage = runStage(node.id);
-        if (stage?.job_id) window.openSession?.(stage.job_id);
-        else toggleNode(node.id);
-      }
+      else openNode(node.id);
     };
     head.addEventListener("pointerup", finish);
     head.addEventListener("pointercancel", () => { active = null; card.classList.remove("is-dragging"); });
   }
 
-  function port(node, direction, name, index, count) {
+  function port(node, direction) {
     const button = make("button", `forge-port ${direction}`);
     button.type = "button";
     button.dataset.nodeId = node.id;
     button.dataset.direction = direction;
-    button.dataset.port = name;
-    button.style.setProperty("--port-y", `${58 + index * 25}px`);
-    button.title = `${direction === "out" ? "Connect from" : "Connect to"} ${name}`;
-    const label = make("span", `forge-port-name ${direction}`, name);
-    button.appendChild(label);
+    button.title = direction === "out" ? "Drag to the card this feeds" : "Drag to the card that feeds this";
     button.addEventListener("pointerdown", (event) => {
+      if (!editable()) return;
       event.preventDefault();
       event.stopPropagation();
-      beginConnection(node.id, direction, name, event);
+      beginConnection(node.id, direction, event);
     });
     return button;
   }
 
-  function beginConnection(nodeId, direction, portName, event) {
-    state.connect = { nodeId, direction, port: portName, pointerId: event.pointerId };
+  function beginConnection(nodeId, direction, event) {
+    state.connect = { nodeId, direction, pointerId: event.pointerId };
     state.tempPoint = boardPoint(event.clientX, event.clientY);
     const viewport = q("#forge-viewport");
     viewport.classList.add("connecting");
     viewport.setPointerCapture(event.pointerId);
-    paintCompatibility();
     renderWires();
-  }
-
-  function paintCompatibility() {
-    qa(".forge-port").forEach((portNode) => {
-      const compatible = state.connect && compatiblePorts(state.connect, portNode);
-      portNode.classList.toggle("is-compatible", Boolean(compatible));
-      portNode.classList.toggle("is-invalid", Boolean(state.connect && !compatible));
-    });
-  }
-
-  function compatiblePorts(source, target) {
-    if (target.dataset.nodeId === source.nodeId || target.dataset.direction === source.direction) return false;
-    const output = source.direction === "out" ? source.port : target.dataset.port;
-    const input = source.direction === "in" ? source.port : target.dataset.port;
-    const outputNodeId = source.direction === "out" ? source.nodeId : target.dataset.nodeId;
-    const inputNodeId = source.direction === "in" ? source.nodeId : target.dataset.nodeId;
-    const outputNode = state.current?.nodes.find((node) => node.id === outputNodeId);
-    const inputNode = state.current?.nodes.find((node) => node.id === inputNodeId);
-    const kind = outputNode?.type === "connector" ? (outputNode.data_kind || "data") : (OUTPUT_KIND[output] || "data");
-    const accepted = inputNode?.type === "connector"
-      ? [inputNode.data_kind || "data"]
-      : (INPUT_ACCEPT[input] || ["data", "signal", "context", "capability", "decision"]);
-    return accepted.includes(kind);
   }
 
   function finishConnection(event) {
     if (!state.connect) return;
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".forge-port");
+    const hit = document.elementFromPoint(event.clientX, event.clientY);
+    const target = hit?.closest(".forge-port") || hit?.closest(".forge-node");
     const source = state.connect;
-    if (target && compatiblePorts(source, target)) {
-      const from = source.direction === "out" ? source.nodeId : target.dataset.nodeId;
-      const to = source.direction === "out" ? target.dataset.nodeId : source.nodeId;
-      const fromPort = source.direction === "out" ? source.port : target.dataset.port;
-      const toPort = source.direction === "out" ? target.dataset.port : source.port;
-      connect(from, to, fromPort, toPort);
+    if (target) {
+      const targetId = target.dataset.nodeId;
+      const from = source.direction === "out" ? source.nodeId : targetId;
+      const to = source.direction === "out" ? targetId : source.nodeId;
+      connect(from, to);
     }
     state.connect = null;
     state.tempPoint = null;
     q("#forge-viewport").classList.remove("connecting");
-    paintCompatibility();
     renderWires();
   }
 
-  function connect(from, to, fromPort, toPort) {
-    if (!state.current || from === to) return;
-    const duplicate = state.current.edges.some((edge) => edge.from === from && edge.to === to
-      && edge.from_port === fromPort && edge.to_port === toPort);
-    if (duplicate) return toast("That connection already exists.");
-    const edge = { id: id("edge"), from, to, from_port: fromPort, to_port: toPort,
-      label: "", instructions: "", direction: "forward" };
+  function connect(from, to) {
+    if (!state.current || !from || !to || from === to) return;
+    const fromNode = state.current.nodes.find((n) => n.id === from);
+    const toNode = state.current.nodes.find((n) => n.id === to);
+    if (!fromNode || !toNode) return;
+    if (toNode.type === "trigger") return toast("A schedule starts a Flow; nothing feeds it.");
+    if (fromNode.type === "output") return toast("An output is the end of a line.");
+    if (SOURCE.has(toNode.type)) return toast("A source is told about; wire it the other way, into the card that should know it.");
+    if (state.current.edges.some((edge) => edge.from === from && edge.to === to)) return toast("That wire already exists.");
+    const edge = { id: id("wire"), from, to, instructions: "" };
     state.current.edges.push(edge);
     if (hasExecutableCycle()) {
       state.current.edges.pop();
-      return toast("That connection would create an executable cycle. Use a Judge retry gate for controlled loops.");
+      return toast("That would make a loop. A judge that re-runs a card is how a Flow repeats.");
     }
     setDirty();
-    state.selectedNode = null;
-    state.selectedEdge = edge.id;
     renderBoard();
-    openEdgeInspector(edge);
+    openEdge(edge);
   }
 
   function hasExecutableCycle() {
-    const ids = new Set((state.current?.nodes || []).filter((node) =>
-      ["agent", "judge", "logic", "approval", "output"].includes(node.type)).map((node) => node.id));
+    const ids = new Set((state.current?.nodes || []).filter((node) => EXEC.has(node.type)).map((node) => node.id));
     const next = {};
     ids.forEach((nodeId) => { next[nodeId] = []; });
     (state.current?.edges || []).forEach((edge) => {
@@ -2165,22 +1926,14 @@
   }
 
   function nodeBox(node) {
-    const width = node.expanded ? Math.max(node.width || 390, 390) : node.width || (node.type === "connector" ? 196 : 244);
-    const height = node.expanded ? Math.max(node.height || 510, 510) : node.height || 148;
-    return { x: node.x, y: node.y, width, height };
+    return { x: node.x, y: node.y, width: CARD_W, height: state.heights[node.id] || 120 };
   }
 
-  function portY(node, direction, name) {
-    const ports = nodePorts(node, direction);
-    const index = Math.max(0, (ports || []).indexOf(name));
-    return node.y + 58 + index * 25;
-  }
-
-  function wirePath(fromNode, toNode, edge) {
+  function wirePath(fromNode, toNode) {
     const a = nodeBox(fromNode);
     const b = nodeBox(toNode);
-    const start = { x: a.x + a.width + 7, y: portY(fromNode, "out", edge?.from_port) };
-    const end = { x: b.x - 7, y: portY(toNode, "in", edge?.to_port) };
+    const start = { x: a.x + a.width + 7, y: a.y + a.height / 2 };
+    const end = { x: b.x - 7, y: b.y + b.height / 2 };
     const bend = Math.max(60, Math.abs(end.x - start.x) * .45);
     return { path: `M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`,
       labelX: (start.x + end.x) / 2, labelY: (start.y + end.y) / 2 - 8 };
@@ -2194,36 +1947,30 @@
     (state.current?.edges || []).forEach((edge) => {
       const from = byId[edge.from], to = byId[edge.to];
       if (!from || !to) return;
-      const shape = wirePath(from, to, edge);
+      const shape = wirePath(from, to);
       const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
       hit.setAttribute("d", shape.path);
       hit.setAttribute("class", "forge-wire-hit");
-      hit.addEventListener("click", (event) => { event.stopPropagation(); openEdgeInspector(edge); });
-      hit.addEventListener("dblclick", (event) => { event.stopPropagation(); openEdgeInspector(edge); });
+      hit.addEventListener("click", (event) => { event.stopPropagation(); openEdge(edge); });
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", shape.path);
-      const layerMuted = state.boardLayerFocus
-        && (!state.boardLayerFocus.has(edge.from) || !state.boardLayerFocus.has(edge.to));
       // Trace overlay on the handoff itself: the wire INTO a running stage
-      // pulses (the active handoff), a wire whose source stage finished
-      // reads settled green. Same rule the 3D board's drawWire has always
-      // applied, expressed as classes so reduced-motion can switch the
-      // pulse off in CSS while the state stays readable.
+      // pulses, a wire whose source stage finished reads settled green.
       const fromStage = runStage(edge.from);
       const toStage = runStage(edge.to);
       const runLive = fromStage?.status === "running" || toStage?.status === "running";
       const runDone = fromStage?.status === "done";
-      path.setAttribute("class", `forge-wire${edge.id === state.selectedEdge ? " is-selected" : ""}${edge.direction === "both" ? " is-both" : ""}${layerMuted ? " is-layer-muted" : ""}${runLive ? " is-run-live" : (runDone ? " is-run-done" : "")}`);
-      path.addEventListener("click", (event) => { event.stopPropagation(); openEdgeInspector(edge); });
-      path.addEventListener("dblclick", (event) => { event.stopPropagation(); openEdgeInspector(edge); });
+      path.setAttribute("class", `forge-wire${edge.id === state.selectedEdge ? " is-selected" : ""}${edge.instructions ? " has-note" : ""}${runLive ? " is-run-live" : (runDone ? " is-run-done" : "")}`);
+      path.addEventListener("click", (event) => { event.stopPropagation(); openEdge(edge); });
       svg.append(hit, path);
-      if (edge.label) {
+      if (edge.instructions) {
         const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
         label.setAttribute("x", shape.labelX);
         label.setAttribute("y", shape.labelY);
         label.setAttribute("text-anchor", "middle");
-        label.setAttribute("class", "forge-wire-label");
-        label.textContent = edge.label;
+        label.setAttribute("class", "forge-wire-note");
+        const note = edge.instructions.trim().replace(/\s+/g, " ");
+        label.textContent = note.length > 42 ? `${note.slice(0, 40)}...` : note;
         svg.appendChild(label);
       }
     });
@@ -2232,8 +1979,8 @@
       if (!source) return;
       const box = nodeBox(source);
       const start = state.connect.direction === "out"
-        ? { x: box.x + box.width + 7, y: portY(source, "out", state.connect.port) }
-        : { x: box.x - 7, y: portY(source, "in", state.connect.port) };
+        ? { x: box.x + box.width + 7, y: box.y + box.height / 2 }
+        : { x: box.x - 7, y: box.y + box.height / 2 };
       const temp = document.createElementNS("http://www.w3.org/2000/svg", "path");
       temp.setAttribute("class", "forge-wire is-selected");
       temp.setAttribute("d", `M ${start.x} ${start.y} L ${state.tempPoint.x} ${state.tempPoint.y}`);
@@ -2241,65 +1988,118 @@
     }
   }
 
-  function openEdgeInspector(edge) {
-    state.selectedEdge = edge.id;
-    state.selectedNode = null;
-    renderWires();
-    const pane = q("#forge-inspector");
-    q("#forge-inspector-title").textContent = "Connection";
-    const body = q("#forge-inspector-body");
-    body.replaceChildren();
-    body.append(
-      field("Label", inputControl(edge.label || "", (value) => { edge.label = value; setDirty(); renderWires(); })),
-      field("Direction", edgeDirection(edge)),
-      field("Connection instructions", textareaControl(edge.instructions || "", (value) => { edge.instructions = value; setDirty(); }, 6))
-    );
-    body.appendChild(make("p", "hint", "Shared reference returns proposed updates in the downstream output; executable feedback loops use a Judge retry gate."));
-    const remove = make("button", "fchip sm", "Remove connection");
-    remove.type = "button";
-    remove.addEventListener("click", () => {
-      state.current.edges = state.current.edges.filter((item) => item.id !== edge.id);
-      state.selectedEdge = null;
-      setDirty();
-      closeInspector();
-      renderBoard();
-      renderOutline();
-    });
-    body.appendChild(remove);
-    pane.classList.add("is-open");
-  }
-
-  function edgeDirection(edge) {
-    const select = make("select");
-    [["forward", "One-way execution"], ["both", "Shared reference"]].forEach(([value, label]) => {
-      const option = make("option", "", label);
-      option.value = value;
-      select.appendChild(option);
-    });
-    select.value = edge.direction || "forward";
-    select.addEventListener("change", () => { edge.direction = select.value; setDirty(); renderWires(); });
-    return select;
-  }
-
-  function closeInspector() {
-    q("#forge-inspector")?.classList.remove("is-open");
-    state.selectedEdge = null;
-    if (state.view === "spatial") state.selectedNode = null;
-    renderWires();
-    renderSpatial();
-    syncTools();
+  function removeEdge(edgeId) {
+    if (!state.current) return;
+    state.current.edges = state.current.edges.filter((item) => item.id !== edgeId);
+    if (state.selectedEdge === edgeId) state.selectedEdge = null;
+    setDirty();
+    renderBoard();
+    renderInspector();
   }
 
   function removeNode(nodeId) {
     const node = state.current?.nodes.find((item) => item.id === nodeId);
-    if (!node || node.locked) return;
+    if (!node || !editable()) return;
     state.current.nodes = state.current.nodes.filter((item) => item.id !== nodeId);
     state.current.edges = state.current.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
-    state.selectedNode = null;
+    state.current.nodes.forEach((item) => {
+      if (item.continues === nodeId) item.continues = "";
+      if (item.judge?.retry_stage === nodeId) item.judge.retry_stage = "";
+      if (item.logic?.subject === nodeId) delete item.logic.subject;
+    });
+    if (state.selectedNode === nodeId) state.selectedNode = null;
     setDirty();
     renderBoard();
-    renderOutline();
+    renderInspector();
   }
+
+  function duplicateNode(node) {
+    if (!editable()) return;
+    const clone = copy(node);
+    clone.id = cardId(`${clone.name} copy`, clone.type);
+    clone.name = `${clone.name} copy`;
+    delete clone.routine_id;
+    clone.x = clamp((Number(clone.x) || 0) + 42, 0, 3900);
+    clone.y = clamp((Number(clone.y) || 0) + 42, 60, 2550);
+    clone.z = ++state.z;
+    state.current.nodes.push(clone);
+    state.selectedNode = clone.id;
+    state.selectedEdge = null;
+    setDirty(); renderBoard(); renderInspector();
+  }
+
+  /* ---------- menus ---------------------------------------------------------- */
+
+  function closeMenu() {
+    q(".forge-menu", q("#forge-shell"))?.remove();
+  }
+
+  function menuAction(menu, label, hint, run, danger = false) {
+    const button = make("button", `forge-menu-action${danger ? " is-danger" : ""}`);
+    button.type = "button";
+    button.append(make("strong", "", label), make("small", "", hint));
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeMenu();
+      run();
+    });
+    menu.appendChild(button);
+  }
+
+  function placeMenu(menu, clientX, clientY) {
+    const shell = q("#forge-shell");
+    shell.appendChild(menu);
+    const shellRect = shell.getBoundingClientRect();
+    const width = 250;
+    const left = clamp(clientX - shellRect.left, 8, Math.max(8, shellRect.width - width - 8));
+    const top = clamp(clientY - shellRect.top, 8, Math.max(8, shellRect.height - menu.offsetHeight - 8));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.addEventListener("pointerdown", (click) => click.stopPropagation());
+    setTimeout(() => document.addEventListener("pointerdown", closeMenu, { once: true }), 0);
+  }
+
+  function showAddMenu(anchor) {
+    if (!editable()) return toast("Pick a Flow or start a new one first.");
+    closeMenu();
+    const menu = make("div", "forge-menu");
+    const title = make("div", "forge-menu-title");
+    title.append(make("span", "forge-kicker", "Add a card"), make("strong", "", currentNode() ? `after ${currentNode().name}` : "to the board"));
+    menu.appendChild(title);
+    ["agent", "judge", "logic", "approval", "output", "trigger"].forEach((type) => {
+      menuAction(menu, KIND[type].name, KIND[type].hint, () => addCard(type));
+    });
+    menuAction(menu, "A skill, script or file", "From the Sources tab: click one, or drag it onto the board.", () => {
+      openLibrary();
+      switchLibrary("sources");
+      q("#forge-library-search")?.focus();
+    });
+    const rect = anchor.getBoundingClientRect();
+    placeMenu(menu, rect.left, rect.bottom + 6);
+  }
+
+  function showNodeMenu(node, event) {
+    if (!q("#forge-shell")) return;
+    closeMenu();
+    openNode(node.id);
+    const menu = make("div", "forge-menu");
+    const title = make("div", "forge-menu-title");
+    title.append(make("span", "forge-kicker", KIND[node.type]?.name || "Card"), make("strong", "", node.name));
+    menu.appendChild(title);
+    if (editable()) {
+      if (EXEC.has(node.type) && node.type !== "output") {
+        menuAction(menu, "Add a card after it", "An agent wired from this one.", () => addCard("agent"));
+        menuAction(menu, "Add a judge after it", "Grades this card's result.", () => addCard("judge"));
+      }
+      menuAction(menu, "Duplicate", "A copy beside this one.", () => duplicateNode(node));
+      menuAction(menu, "Remove", "Delete this card and its wires.", () => removeNode(node.id), true);
+    } else {
+      menuAction(menu, "Open", "Read this card.", () => openNode(node.id));
+    }
+    placeMenu(menu, event.clientX, event.clientY);
+  }
+
+  /* ---------- board: arrange, zoom, pan ------------------------------------- */
 
   function arrange() {
     if (!state.current) return;
@@ -2321,271 +2121,14 @@
       const col = depth(node.id);
       const row = rows[col] || 0;
       rows[col] = row + 1;
-      node.x = 140 + col * 340;
-      node.y = 135 + row * 210;
+      node.x = 60 + col * (CARD_W + 90);
+      node.y = 90 + row * 190;
     });
+    state.zoom = 1;
+    state.panX = 25;
+    state.panY = 55;
     setDirty();
     renderBoard();
-  }
-
-  function renderOutline() {
-    const host = q("#forge-outline");
-    if (!host) return;
-    host.replaceChildren();
-    const flow = state.current;
-    if (!flow) return;
-    const head = make("header", "forge-outline-head");
-    const identityTitle = make("div");
-    identityTitle.append(make("span", "forge-kicker", "Reference"), make("strong", "", "Flow outline"));
-    const close = make("button", "fchip sm", "Close");
-    close.type = "button";
-    close.addEventListener("click", () => toggleOutline(false));
-    head.append(identityTitle, close);
-    host.appendChild(head);
-    const identity = make("section", "forge-outline-section");
-    identity.appendChild(make("h3", "", "Flow definition"));
-    identity.appendChild(outlineDetails("Identity", {
-      id: flow.id, name: flow.name, description: flow.description,
-      kind: flow.kind, revision: flow.revision, builtin: flow.builtin,
-      created: flow.created, updated: flow.updated,
-    }, true));
-    host.appendChild(identity);
-
-    const parts = make("section", "forge-outline-section");
-    parts.appendChild(make("h3", "", `Parts · ${flow.nodes.length}`));
-    flow.nodes.forEach((node) => parts.appendChild(outlineDetails(`${TYPE[node.type]?.name || node.type} · ${node.name}`, node, true)));
-    host.appendChild(parts);
-
-    const wires = make("section", "forge-outline-section");
-    wires.appendChild(make("h3", "", `Connections · ${flow.edges.length}`));
-    flow.edges.forEach((edge) => wires.appendChild(outlineDetails(`${edge.from}:${edge.from_port || "result"} to ${edge.to}:${edge.to_port || "input"}`, edge, true)));
-    host.appendChild(wires);
-
-    const contexts = make("section", "forge-outline-section");
-    contexts.appendChild(make("h3", "", `Context · ${flow.contexts?.length || 0}`));
-    (flow.contexts || []).forEach((context) => contexts.appendChild(outlineDetails(context.name, context, true)));
-    host.appendChild(contexts);
-
-    const triggers = make("section", "forge-outline-section");
-    triggers.appendChild(make("h3", "", `Triggers · ${flow.triggers?.length || 0}`));
-    (flow.triggers || []).forEach((trigger) => triggers.appendChild(outlineDetails(trigger.name || trigger.id, trigger, true)));
-    host.appendChild(triggers);
-  }
-
-  function outlineDetails(title, object, open = false) {
-    const details = make("details", "forge-outline-node");
-    details.open = open;
-    details.appendChild(make("summary", "", title));
-    const list = make("dl");
-    Object.entries(object || {}).forEach(([key, value]) => {
-      if (value == null || key.startsWith("_")) return;
-      const shown = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
-      list.append(make("dt", "", key.replaceAll("_", " ")), make("dd", "", shown));
-    });
-    details.appendChild(list);
-    return details;
-  }
-
-  function setView(view) {
-    if (view === "outline") return toggleOutline();
-    state.view = view;
-    qa("#forge-view-toggle .seg-btn").forEach((button) => {
-      button.classList.toggle("on", button.dataset.forgeView === "outline" ? state.outlineOpen : button.dataset.forgeView === view);
-    });
-    q("#forge-viewport").hidden = view !== "board";
-    q("#forge-spatial").hidden = view !== "spatial";
-    spatial?.setVisible(view === "spatial");
-    if (view === "spatial") {
-      renderSpatial();
-      if (state.ready) loadForgeRuns();
-    } else if (view === "board") {
-      q("#forge-zoom-value").textContent = `${Math.round(state.zoom * 100)}%`;
-    }
-  }
-
-  function toggleOutline(force) {
-    state.outlineOpen = force == null ? !state.outlineOpen : Boolean(force);
-    const pane = q("#forge-outline");
-    pane.hidden = !state.outlineOpen;
-    q('[data-forge-view="outline"]')?.classList.toggle("on", state.outlineOpen);
-    if (state.outlineOpen) renderOutline();
-  }
-
-  function openSpatialLayer(layerId, layerName, nodeIds) {
-    const ids = new Set((nodeIds || []).filter((nodeId) => state.current?.nodes.some((node) => node.id === nodeId)));
-    if (!ids.size) return toast(`${layerName} has no components in this Flow.`);
-    state.boardLayerFocus = ids;
-    state.selectedNode = null;
-    state.selectedEdge = null;
-    closeInspector();
-    setView("board");
-    const nodes = state.current.nodes.filter((node) => ids.has(node.id));
-    const boxes = nodes.map(nodeBox);
-    const minX = Math.min(...boxes.map((box) => box.x));
-    const minY = Math.min(...boxes.map((box) => box.y));
-    const maxX = Math.max(...boxes.map((box) => box.x + box.width));
-    const maxY = Math.max(...boxes.map((box) => box.y + box.height));
-    const viewport = q("#forge-viewport");
-    const rect = viewport.getBoundingClientRect();
-    const width = Math.max(220, maxX - minX);
-    const height = Math.max(160, maxY - minY);
-    state.zoom = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), .45, 1.65);
-    state.panX = rect.width / 2 - ((minX + maxX) / 2) * state.zoom;
-    state.panY = rect.height / 2 - ((minY + maxY) / 2) * state.zoom;
-    renderBoard();
-    toast(`${layerName} · ${ids.size} component${ids.size === 1 ? "" : "s"} on the Breadboard`);
-  }
-
-  function moveSpatialNode(nodeId, change) {
-    const node = state.current?.nodes.find((item) => item.id === nodeId);
-    if (!node) return;
-    node.spatial_layer = clamp(Number(change.spatial_layer), 0, 3);
-    node.x = clamp(Number(change.x) || node.x || 0, 0, 4000);
-    node.y = clamp(Number(change.y) || node.y || 0, 0, 2600);
-    state.selectedNode = node.id;
-    setDirty();
-    renderBoard();
-    renderOutline();
-    renderSpatial();
-    toast(`${node.name} moved to ${["Inputs + substrate", "Execution", "Decision + verification", "Outputs + interface"][node.spatial_layer]}`);
-  }
-
-  function renderRunContext() {
-    const select = q("#forge-run-context");
-    if (!select) return;
-    const current = select.value;
-    select.replaceChildren();
-    const all = make("option", "", "Attached context");
-    all.value = "";
-    select.appendChild(all);
-    (state.current?.contexts || []).forEach((context) => {
-      const option = make("option", "", context.name);
-      option.value = context.id;
-      select.appendChild(option);
-    });
-    select.value = [...select.options].some((option) => option.value === current) ? current : "";
-  }
-
-  async function saveFlow(mode = null) {
-    if (!state.current || (state.current.kind === "native" && mode !== "copy")) return;
-    if (!mode && state.current.id) mode = await saveDecision();
-    if (!mode) mode = state.current.id ? null : "copy";
-    if (!mode) return;
-    const saveAs = mode === "copy";
-    let name = state.current.name;
-    const create = saveAs || !state.current.id;
-    if (create) {
-      name = await forgeDialog({
-        title: "Save a new Flow",
-        message: "The new definition keeps this instance's complete graph and leaves the source untouched.",
-        value: state.current.id ? `${name} copy` : name,
-        confirm: "Save Flow",
-      });
-      if (!name) return;
-    }
-    const payload = flowPayload();
-    payload.name = name;
-    const path = create ? "/api/flows" : `/api/flows/${encodeURIComponent(state.current.id)}`;
-    try {
-      const saved = await send(path, create ? "POST" : "PUT", payload);
-      const index = state.flows.findIndex((flow) => flow.id === saved.id);
-      if (index >= 0) state.flows[index] = saved;
-      else state.flows.push(saved);
-      state.current = copy(saved);
-      localStorage.setItem("vira-forge-flow", saved.id);
-      setDirty(false);
-      renderAll();
-      toast(create ? "New Flow saved" : "Flow definition updated");
-    } catch (error) {
-      toast(`Save refused: ${error.message}`);
-    }
-  }
-
-  async function newFlow() {
-    if (state.dirty && !await forgeDialog({
-      title: "Start a blank Flow?",
-      message: "Discard the unsaved changes in this instance and start with a new board?",
-      confirm: "Start blank",
-    })) return;
-    const trigger = { id: id("trigger"), type: "trigger", name: "Manual start", description: "Starts when you run this Flow.", x: 120, y: 180, width: 210, height: 126 };
-    const agent = { id: id("stage"), type: "agent", name: "Work", description: "A Vira agent stage.", x: 455, y: 165, width: 244, height: 148, model: "sonnet", mode: "manual", read_only: true, prompt: "Work on the following input carefully and report the result.\n\n{{input}}" };
-    const output = { id: id("output"), type: "output", name: "Record result", description: "Preserve the result in Vira's record.", x: 800, y: 180, width: 220, height: 126 };
-    state.current = { id: null, name: "Untitled Flow", description: "A new executable Vira Flow.", kind: "flow", builtin: false, revision: 0, nodes: [trigger, agent, output], edges: [
-      { id: id("edge"), from: trigger.id, to: agent.id, from_port: "start", to_port: "input", label: "", instructions: "", direction: "forward" },
-      { id: id("edge"), from: agent.id, to: output.id, from_port: "result", to_port: "result", label: "", instructions: "", direction: "forward" },
-    ], contexts: [], triggers: [], executable: true };
-    state.selectedNode = null;
-    state.selectedEdge = null;
-    setDirty();
-    renderAll();
-  }
-
-  async function runFlow(test = false) {
-    if (!state.current) return;
-    if (state.dirty) return toast("Save this instance before launching it.");
-    const input = q("#forge-run-input").value.trim();
-    if (state.current.kind !== "native" && !input) return toast("Give the Flow something to work on.");
-    const contextId = q("#forge-run-context").value;
-    const context = state.current.contexts?.find((item) => item.id === contextId);
-    const composed = [test ? "TEST THIS FLOW INSTANCE." : "", input,
-      context ? `\nAttached context: ${context.name}\n${context.note || context.ref || ""}` : ""]
-      .filter(Boolean).join("\n");
-    try {
-      const linked = state.idea && state.idea.flow_id === state.current.id
-        ? state.idea.idea_id : null;
-      const result = await send(`/api/flows/${encodeURIComponent(state.current.id)}/run`, "POST", {
-        input: composed, notify: false, output: q("#forge-run-output").value,
-        provider: q("#forge-run-provider")?.value || null,
-        idea_id: linked,
-      });
-      if (result.command_run) {
-        toast(`Run started (${result.command_run}). Its row is in the node's Runs list.`);
-        commandViews.forEach((refresh) => refresh());
-        return;
-      }
-      const runId = result.id || result.run_id || result.job_id;
-      toast(runId ? `Launched ${runId}` : "Flow launched");
-      if (typeof window.openSession === "function" && result.job_id) window.openSession(result.job_id);
-      if (typeof window.setWorkTab === "function") window.setWorkTab("live");
-      loadForgeRuns();
-    } catch (error) {
-      toast(`Launch refused: ${error.message}`);
-    }
-  }
-
-  // The runs LIST lives in Work · Record now, as one chronological stream
-  // over flows, stage sessions and unlanded work (app.js `loadRuns`) —
-  // ordering three sections by source put the newest run below two other
-  // lists. The Forge's own call sites (launching a Flow, opening the
-  // spatial view) drive that one loader rather than a second fetch and a
-  // second card shape. `setRuns` is how it feeds the spatial overlay back.
-  async function loadForgeRuns() {
-    if (typeof window.loadRuns === "function") return window.loadRuns();
-    try {
-      const data = await request("/api/circuits/runs?limit=24");
-      setRuns(data.runs || []);
-    } catch (error) { /* the spatial view simply shows no run overlay */ }
-  }
-
-  function setRuns(runs) {
-    state.runs = runs || [];
-    if (state.trace) {
-      const fresh = state.runs.find((run) => run.id === state.trace.runId);
-      if (fresh) state.trace.run = fresh;
-      const run = tracedRun();
-      // Repaint the board only when the run's overlay-visible state moved
-      // (the runsSig discipline): a blind repaint every 3s poll would tear
-      // an open node editor out from under the owner's typing.
-      const sig = run ? JSON.stringify([run.status,
-        Object.entries(run.stages || {}).map(([sid, s]) =>
-          [sid, s.status, s.grade || "", s.job_id || ""])]) : "";
-      if (sig !== state.trace.sig) {
-        state.trace.sig = sig;
-        renderBoard();
-        renderTraceBar();
-      }
-    }
-    renderSpatial();
   }
 
   function zoomAt(next, clientX, clientY) {
@@ -2607,14 +2150,10 @@
     const viewport = q("#forge-viewport");
     let pan = null;
     viewport.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target.closest(".forge-node,.forge-wire-hit,.forge-port")) return;
-      state.boardLayerFocus = null;
-      qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-layer-focus", "is-layer-muted"));
-      renderWires();
-      pan = { id: event.pointerId, x: event.clientX, y: event.clientY, px: state.panX, py: state.panY };
+      if (event.button !== 0 || event.target.closest(".forge-node,.forge-wire-hit,.forge-port,.forge-boardbar")) return;
+      pan = { id: event.pointerId, x: event.clientX, y: event.clientY, px: state.panX, py: state.panY, moved: false };
       viewport.setPointerCapture(event.pointerId);
       viewport.classList.add("is-panning");
-      closeInspector();
     });
     viewport.addEventListener("pointermove", (event) => {
       if (state.connect && state.connect.pointerId === event.pointerId) {
@@ -2623,6 +2162,7 @@
         return;
       }
       if (!pan || pan.id !== event.pointerId) return;
+      if (Math.hypot(event.clientX - pan.x, event.clientY - pan.y) > 3) pan.moved = true;
       state.panX = pan.px + event.clientX - pan.x;
       state.panY = pan.py + event.clientY - pan.y;
       renderBoard();
@@ -2630,8 +2170,11 @@
     viewport.addEventListener("pointerup", (event) => {
       if (state.connect) finishConnection(event);
       if (pan?.id === event.pointerId) {
+        const moved = pan.moved;
         pan = null;
         viewport.classList.remove("is-panning");
+        // a click on empty board clears the selection; a pan keeps it
+        if (!moved && (state.selectedNode || state.selectedEdge)) closeInspector();
       }
     });
     viewport.addEventListener("pointercancel", () => {
@@ -2639,12 +2182,9 @@
       state.connect = null;
       state.tempPoint = null;
       viewport.classList.remove("is-panning", "connecting");
-      paintCompatibility();
       renderWires();
     });
     viewport.addEventListener("wheel", (event) => {
-      const scrollable = event.target.closest("textarea,.forge-node-detail,.forge-inspector,.forge-library-body");
-      if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) return;
       event.preventDefault();
       zoomAt(state.zoom * (event.deltaY < 0 ? 1.09 : .92), event.clientX, event.clientY);
     }, { passive: false });
@@ -2652,178 +2192,135 @@
     viewport.addEventListener("drop", (event) => {
       event.preventDefault();
       if (!state.libraryDrag) return;
-      addLibraryPart(state.libraryDrag, boardPoint(event.clientX, event.clientY));
+      addSource(state.libraryDrag, boardPoint(event.clientX, event.clientY));
       state.libraryDrag = null;
     });
   }
 
-  function closeLibrary() {
-    const panel = q("#forge-library");
-    panel?.classList.add("is-hidden");
-    q("#forge-shell")?.classList.add("library-hidden");
-    q("#work-dispatch-pane")?.classList.add("library-away");
-  }
+  /* ---------- save, new, run ------------------------------------------------- */
 
-  function openLibrary() {
-    const panel = q("#forge-library");
-    if (!panel) return;
-    panel.classList.remove("is-hidden");
-    const detached = panel.classList.contains("is-detached");
-    q("#forge-shell")?.classList.toggle("library-hidden", detached);
-    q("#work-dispatch-pane")?.classList.toggle("library-away", detached);
-    if (detached) panel.style.zIndex = "4050";
-  }
-
-  function clampLibraryRect(rect) {
-    const w = Math.min(rect.width, Math.max(320, innerWidth - 24));
-    const h = Math.min(rect.height, Math.max(260, innerHeight - 68));
-    return {
-      left: clamp(rect.left, 12, Math.max(12, innerWidth - w - 12)),
-      top: clamp(rect.top, 48, Math.max(48, innerHeight - h - 12)),
-      width: w,
-      height: h,
-    };
-  }
-
-  function paintDetachedLibrary(rect) {
-    const panel = q("#forge-library");
-    if (!panel) return;
-    const next = clampLibraryRect(rect);
-    panel.style.left = `${next.left}px`;
-    panel.style.top = `${next.top}px`;
-    panel.style.width = `${next.width}px`;
-    panel.style.height = `${next.height}px`;
-    state.libraryFloatRect = next;
-  }
-
-  function detachLibrary() {
-    const panel = q("#forge-library");
-    const shell = q("#forge-shell");
-    if (!panel || !shell || panel.classList.contains("is-detached")) return;
-    const source = panel.getBoundingClientRect();
-    state.libraryHome ||= { parent: panel.parentNode, next: panel.nextSibling };
-    const width = Math.min(680, innerWidth - 24);
-    const height = Math.min(720, innerHeight - 80);
-    let left = shell.getBoundingClientRect().right + 12;
-    if (left + width > innerWidth - 12) left = source.left;
-    const initial = state.libraryFloatRect || {
-      left, top: Math.max(52, source.top), width, height,
-    };
-    panel.classList.remove("is-hidden");
-    panel.classList.add("is-floating", "is-detached");
-    document.body.appendChild(panel);
-    panel.style.zIndex = "4050";
-    paintDetachedLibrary(initial);
-    shell.classList.add("library-hidden");
-    q("#work-dispatch-pane")?.classList.add("library-away");
-    q("#forge-library-float").textContent = "Dock";
-  }
-
-  function dockLibrary() {
-    const panel = q("#forge-library");
-    const shell = q("#forge-shell");
-    if (!panel || !shell || !panel.classList.contains("is-detached")) return;
-    const home = state.libraryHome;
-    (home?.parent || shell).insertBefore(panel, home?.next || shell.firstChild);
-    panel.classList.remove("is-floating", "is-detached");
-    ["left", "top", "width", "height", "z-index"].forEach((name) =>
-      panel.style.removeProperty(name));
-    shell.classList.toggle("library-hidden", panel.classList.contains("is-hidden"));
-    q("#work-dispatch-pane")?.classList.toggle("library-away", panel.classList.contains("is-hidden"));
-    q("#forge-library-float").textContent = "Pop out";
-  }
-
-  function toggleLibraryFloat() {
-    const panel = q("#forge-library");
-    if (!panel) return;
-    if (panel.classList.contains("is-detached")) dockLibrary();
-    else detachLibrary();
-  }
-
-  function bindLibraryDrag() {
-    const panel = q("#forge-library");
-    const head = q("#forge-library-head");
-    let drag = null;
-    head.addEventListener("pointerdown", (event) => {
-      if (!panel.classList.contains("is-detached") || event.button !== 0 || event.target.closest("button")) return;
-      const rect = panel.getBoundingClientRect();
-      panel.style.zIndex = "4050";
-      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
-      head.setPointerCapture(event.pointerId);
-    });
-    head.addEventListener("pointermove", (event) => {
-      if (!drag || drag.id !== event.pointerId) return;
-      paintDetachedLibrary({
-        left: drag.left + event.clientX - drag.x,
-        top: drag.top + event.clientY - drag.y,
-        width: panel.offsetWidth,
-        height: panel.offsetHeight,
+  async function saveFlow(mode = null) {
+    if (!editable()) return;
+    let create = mode === "copy" || !state.current.id;
+    if (!create && state.current.builtin) {
+      const choice = await forgeDialog({
+        title: "This is a shipped starter",
+        message: "Save your own copy and keep the starter as it is, or change the starter itself for every Flow built from it?",
+        choices: [["update", "Change the starter"], ["copy", "Save my copy"]],
       });
-    });
-    head.addEventListener("pointerup", () => { drag = null; });
-    head.addEventListener("pointercancel", () => { drag = null; });
-    panel.addEventListener("pointerdown", () => {
-      if (panel.classList.contains("is-detached")) panel.style.zIndex = "4050";
-    });
-    window.addEventListener("resize", () => {
-      if (!panel.classList.contains("is-detached")) return;
-      paintDetachedLibrary(state.libraryFloatRect || panel.getBoundingClientRect());
-    });
-  }
-
-  // A popped-out Library is a Vira surface, so its whole perimeter behaves
-  // like a Vira window: four edges and four corners, not one tiny southeast
-  // affordance. Bounds are position-aware so an edge never grows invisibly
-  // past the viewport and creates a dead reverse-drag zone.
-  function bindLibraryResize() {
-    const panel = q("#forge-library");
-    if (!panel) return;
-    const minWidth = 340, minHeight = 260;
-    let resize = null;
-    const move = (event) => {
-      if (!resize || resize.id !== event.pointerId) return;
-      const { start, direction } = resize;
-      const dx = event.clientX - resize.x, dy = event.clientY - resize.y;
-      let left = start.left, top = start.top;
-      let width = start.width, height = start.height;
-      if (direction.includes("e"))
-        width = clamp(start.width + dx, minWidth, innerWidth - start.left - 12);
-      if (direction.includes("s"))
-        height = clamp(start.height + dy, minHeight, innerHeight - start.top - 12);
-      if (direction.includes("w")) {
-        width = clamp(start.width - dx, minWidth, start.right - 12);
-        left = start.right - width;
-      }
-      if (direction.includes("n")) {
-        height = clamp(start.height - dy, minHeight, start.bottom - 48);
-        top = start.bottom - height;
-      }
-      paintDetachedLibrary({ left, top, width, height });
-    };
-    const end = (event) => {
-      if (resize && resize.id === event.pointerId) resize = null;
-    };
-    document.addEventListener("pointermove", move);
-    document.addEventListener("pointerup", end);
-    document.addEventListener("pointercancel", end);
-    ["n", "e", "s", "w", "ne", "nw", "se", "sw"].forEach((direction) => {
-      const grip = make("div", `rz rz-${direction} forge-library-resize`);
-      grip.setAttribute("aria-hidden", "true");
-      grip.addEventListener("pointerdown", (event) => {
-        if (!panel.classList.contains("is-detached") || event.button !== 0) return;
-        event.stopPropagation();
-        panel.style.zIndex = "4050";
-        const start = panel.getBoundingClientRect();
-        resize = { direction, id: event.pointerId, start, x: event.clientX, y: event.clientY };
-        grip.setPointerCapture(event.pointerId);
+      if (!choice) return;
+      create = choice === "copy";
+    }
+    let name = state.current.name;
+    if (create) {
+      name = await forgeDialog({
+        title: mode === "copy" || state.current.id ? "Save a copy" : "Save this Flow",
+        message: "Name it. The board, its cards and its wires are saved under that name.",
+        value: state.current.id ? `${name} copy` : name,
+        confirm: "Save",
       });
-      panel.appendChild(grip);
-    });
+      if (!name) return;
+    }
+    const payload = flowPayload();
+    payload.name = name;
+    const path = create ? "/api/flows" : `/api/flows/${encodeURIComponent(state.current.id)}`;
+    const keep = state.selectedNode;
+    try {
+      const saved = await send(path, create ? "POST" : "PUT", payload);
+      const index = state.flows.findIndex((flow) => flow.id === saved.id);
+      if (index >= 0) state.flows[index] = saved;
+      else state.flows.push(saved);
+      state.current = copy(saved);
+      state.selectedNode = saved.nodes.some((n) => n.id === keep) ? keep : null;
+      state.selectedEdge = null;
+      localStorage.setItem("vira-forge-flow", saved.id);
+      setDirty(false);
+      renderAll();
+      if ((saved.triggers || []).length) loadLoops();
+      toast(create ? `Saved as "${saved.name}"` : "Saved");
+    } catch (error) {
+      toast(`Save refused: ${error.message}`);
+    }
   }
 
-  /* The shortcuts are document-level, so every guard here is about NOT firing:
+  async function newFlow() {
+    if (state.dirty && !await forgeDialog({
+      title: "Start a new Flow?",
+      message: "Discard the unsaved changes on this board and start a blank one?",
+      confirm: "Start blank",
+    })) return;
+    state.current = { id: null, name: "Untitled Flow", description: "", kind: "flow", builtin: false,
+      revision: 0, nodes: [], edges: [], contexts: [], triggers: [], executable: true };
+    state.trace = null;
+    state.idea = null;
+    const agent = newCard("agent", { x: 120, y: 150 });
+    agent.name = "Work";
+    agent.id = "work";
+    state.current.nodes.push(agent);
+    state.selectedNode = agent.id;
+    state.selectedEdge = null;
+    state.zoom = 1; state.panX = 25; state.panY = 55;
+    setDirty();
+    renderAll();
+    q("#forge-inspector-body textarea")?.focus();
+  }
+
+  async function runFlow() {
+    if (!editable() || !state.current.id) return;
+    if (state.dirty) return toast("Save first, then run.");
+    const input = q("#forge-run-input").value.trim();
+    if (!input) return toast("Say what the Flow should work on.");
+    try {
+      const linked = state.idea && state.idea.flow_id === state.current.id ? state.idea.idea_id : null;
+      const result = await send(`/api/flows/${encodeURIComponent(state.current.id)}/run`, "POST", {
+        input, notify: false, output: "",
+        provider: q("#forge-run-provider")?.value || null,
+        idea_id: linked,
+      });
+      const runId = result.id || result.run_id || result.job_id;
+      toast(runId ? `Started ${runId}` : "Started");
+      if (typeof window.openSession === "function" && result.job_id) window.openSession(result.job_id);
+      if (typeof window.setWorkTab === "function") window.setWorkTab("live");
+      loadForgeRuns();
+    } catch (error) {
+      toast(`Run refused: ${error.message}`);
+    }
+  }
+
+  // The runs LIST lives in Work > Results, one chronological stream (app.js
+  // loadRuns). The Forge drives that one loader; setRuns is how it feeds
+  // the trace overlay back.
+  async function loadForgeRuns() {
+    if (typeof window.loadRuns === "function") return window.loadRuns();
+    try {
+      const data = await request("/api/circuits/runs?limit=24");
+      setRuns(data.runs || []);
+    } catch (error) { /* the board simply shows no run overlay */ }
+  }
+
+  function setRuns(runs) {
+    state.runs = runs || [];
+    if (!state.trace) return;
+    const fresh = state.runs.find((run) => run.id === state.trace.runId);
+    if (fresh) state.trace.run = fresh;
+    const run = tracedRun();
+    // Repaint the board only when the run's visible state moved: a blind
+    // repaint every 3s poll would tear an open editor out from under the
+    // owner's typing.
+    const sig = run ? JSON.stringify([run.status,
+      Object.entries(run.stages || {}).map(([sid, s]) => [sid, s.status, s.grade || "", s.job_id || ""])]) : "";
+    if (sig !== state.trace.sig) {
+      state.trace.sig = sig;
+      renderBoard();
+      renderTraceBar();
+    }
+  }
+
+  /* ---------- keys and binding ------------------------------------------------
+     The shortcuts are document-level, so every guard here is about NOT firing:
      the Forge has to be the thing on screen, a dialog must not be up, and a
      text field must keep its own native undo and clipboard. */
+
   function forgeShowing() {
     const pane = q("#work-dispatch-pane");
     return !!pane && pane.getClientRects().length > 0 && !!state.current;
@@ -2843,7 +2340,7 @@
       return;
     }
     if (mod && key === "c") {
-      // Never steal a real text selection - that is what the user meant.
+      // Never steal a real text selection: that is what the user meant.
       if (typing || !currentNode() || !window.getSelection()?.isCollapsed) return;
       event.preventDefault();
       copyNode();
@@ -2857,62 +2354,50 @@
     }
     if (mod && key === "d") {
       const node = currentNode();
-      if (typing || !node || state.current.kind === "native") return;
+      if (typing || !node || !editable()) return;
       event.preventDefault();
       duplicateNode(node);
       return;
     }
     if ((key === "delete" || key === "backspace") && !mod) {
-      const node = currentNode();
-      if (typing || !node || node.locked || state.current.kind === "native") return;
-      event.preventDefault();
-      removeNode(node.id);
+      if (typing || !editable()) return;
+      if (state.selectedNode) { event.preventDefault(); removeNode(state.selectedNode); }
+      else if (state.selectedEdge) { event.preventDefault(); removeEdge(state.selectedEdge); }
     }
   }
 
   function bind() {
     if (!q("#forge-shell") || state.bound) return;
     state.bound = true;
-    spatial = window.ForgeSpatial?.create({
-      onSelectNode: openNodeInspector,
-      onOpenLayer: openSpatialLayer,
-      onMoveNode: moveSpatialNode,
-      onZoom: (value) => {
-        if (state.view === "spatial") q("#forge-zoom-value").textContent = `${Math.round(value * 100)}%`;
-      },
-    }) || null;
     qa("#forge-library-tabs .seg-btn").forEach((button) => button.addEventListener("click", () => switchLibrary(button.dataset.forgeLibrary)));
-    qa("#forge-view-toggle .seg-btn").forEach((button) => button.addEventListener("click", () => setView(button.dataset.forgeView)));
     q("#forge-library-search").addEventListener("input", (event) => {
       state.query = event.target.value;
       clearTimeout(state.searchTimer);
-      if (state.library === "context") state.searchTimer = setTimeout(() => loadContextSearch(state.query), 280);
-      else renderLibrary();
+      renderLibrary();
+      if (state.library === "sources") state.searchTimer = setTimeout(() => loadFindRows(state.query), 280);
     });
-    q("#forge-library-filter").addEventListener("change", (event) => { state.filter = event.target.value; renderLibrary(); });
     q("#forge-undo").addEventListener("click", () => stepHistory(true));
     q("#forge-redo").addEventListener("click", () => stepHistory(false));
     q("#forge-copy").addEventListener("click", copyNode);
     q("#forge-paste").addEventListener("click", pasteNode);
     q("#forge-duplicate").addEventListener("click", () => { const node = currentNode(); if (node) duplicateNode(node); });
-    q("#forge-delete").addEventListener("click", () => removeNode(state.selectedNode));
+    q("#forge-delete").addEventListener("click", () => {
+      if (state.selectedNode) removeNode(state.selectedNode);
+      else if (state.selectedEdge) removeEdge(state.selectedEdge);
+    });
     document.addEventListener("keydown", forgeKeys);
     q("#forge-library-toggle").addEventListener("click", openLibrary);
-    q("#forge-library-float").addEventListener("click", toggleLibraryFloat);
     q("#forge-inspector-close").addEventListener("click", closeInspector);
     q("#forge-new").addEventListener("click", newFlow);
     q("#forge-save").addEventListener("click", () => saveFlow());
     q("#forge-save-as").addEventListener("click", () => saveFlow("copy"));
-    q("#forge-test").addEventListener("click", () => runFlow(true));
-    q("#forge-run").addEventListener("click", () => runFlow(false));
+    q("#forge-run").addEventListener("click", runFlow);
+    q("#forge-add").addEventListener("click", (event) => { event.stopPropagation(); showAddMenu(event.currentTarget); });
     q("#forge-arrange").addEventListener("click", arrange);
-    q("#forge-zoom-in").addEventListener("click", () => state.view === "spatial" ? spatial?.zoom(1.12) : zoomAt(state.zoom * 1.12));
-    q("#forge-zoom-out").addEventListener("click", () => state.view === "spatial" ? spatial?.zoom(.88) : zoomAt(state.zoom * .88));
-    q("#forge-run-input").addEventListener("keydown", (event) => { if (event.key === "Enter") runFlow(false); });
+    q("#forge-zoom-in").addEventListener("click", () => zoomAt(state.zoom * 1.12));
+    q("#forge-zoom-out").addEventListener("click", () => zoomAt(state.zoom * .88));
+    q("#forge-run-input").addEventListener("keydown", (event) => { if (event.key === "Enter") runFlow(); });
     bindViewport();
-    bindLibraryDrag();
-    bindLibraryResize();
-    setView("board");
   }
 
   /** Open a Flow the Queue just minted for an idea, with the idea as its
@@ -2926,13 +2411,12 @@
     await selectFlow(payload.flow_id);
     const box = q("#forge-run-input");
     if (box) box.value = payload.input || "";
-    toast("Loaded into the Forge — edit the graph, test it, then run it.");
+    toast("Loaded into the Forge. Read the cards, change what you like, Save, then Run.");
   }
 
   window.loadForge = loadForge;
   window.loadForgeRuns = loadForgeRuns;
   window.initForge = () => { bind(); };
   window.Forge = { state, load: loadForge, selectFlow, render: renderAll,
-    setLibrary: switchLibrary, openLibrary, openIdea, setRuns,
-    traceRun, stopTrace };
+    setLibrary: switchLibrary, openLibrary, openIdea, setRuns, traceRun, stopTrace };
 })();

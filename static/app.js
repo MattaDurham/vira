@@ -8921,7 +8921,7 @@ async function refreshJobs() {
 async function refreshFlowRuns() {
   const data = await api("/api/circuits/runs?limit=24");
   runsState.flow = data.runs || [];
-  // The Forge's spatial view overlays the current Flow's run, so it is
+  // The Forge's run trace overlays the current Flow's board, so it is
   // fed from the same fetch rather than paying for a second one.
   window.Forge?.setRuns?.(runsState.flow);
   renderRuns();
@@ -8995,11 +8995,9 @@ function scheduleRunsPoll() {
   if (runsFlowTimer) { clearTimeout(runsFlowTimer); runsFlowTimer = null; }
   const live = runsState.flow.some((r) => r.status === "running"
     || Object.values(r.stages || {}).some((s) => s && s.status === "waiting"));
-  // The breadboard joined the overlay surfaces with the run trace, so an
-  // armed trace on the Flows tab follows the same poll the spatial view
-  // always has — never a poller of its own.
+  // An armed trace on the Flows board follows this same poll — never a
+  // poller of its own.
   const visible = $("#work-live-pane")?.offsetParent
-    || $("#forge-spatial")?.offsetParent
     || $("#forge-viewport")?.offsetParent;
   if (!live || !visible) return;
   runsFlowTimer = setTimeout(() => {
@@ -17671,7 +17669,7 @@ function setWorkSub(sub, opts = {}) {
     if (p) p.style.display = s === sub ? "" : "none";
   });
   if (window.Forge) {
-    window.Forge.setLibrary(sub === "library" ? "kit" : "flows");
+    window.Forge.setLibrary(sub === "library" ? "sources" : "flows");
     window.Forge.openLibrary();
   }
   if (opts.defer) return;
