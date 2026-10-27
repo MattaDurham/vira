@@ -5852,6 +5852,9 @@ h2 { font-weight: 300; letter-spacing: 0.05em; color: var(--text-head); }
 #win-design .design-frame { flex: 1; height: auto; min-height: 260px; }
 /* the skins strip sits above the studio frame and never grows into it */
 #win-design .skins-strip { flex: none; }
+/* shown in the frame's place when there is no design-system checkout */
+.design-door { display: grid; gap: 6px; padding: 2px; overflow-wrap: anywhere; }
+#win-design .design-door { flex: none; }
 
 /* ---------- the skins picker (top of the Design Studio module) ---------- */
 /* every value reads a token, so the picker wears whatever skin is applied */
