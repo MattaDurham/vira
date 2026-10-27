@@ -33,8 +33,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASELINE="$ROOT/scripts/preflight-baseline.txt"
 cd "$ROOT" || exit 2
 
-CHECKS=(base deps encoding capdoc pii ci)
-PRE_MERGE=(base deps encoding capdoc pii ci)
+CHECKS=(base deps encoding capdoc pii ci tree)
+PRE_MERGE=(base deps encoding capdoc pii ci tree)
 
 SLUG="${PREFLIGHT_SLUG:-}"
 fails=0
@@ -284,6 +284,89 @@ check_ci() {
     say "        fix: gh run view --log-failed $rid"
     say "        the Windows job is the ONLY Windows machine — a green Mac suite is not evidence."
   fi
+}
+
+# ---------------------------------------------------------------- tree ----
+desc_tree="the module tree is complete and current on the tree main will have AFTER the merge"
+incident_tree="2026-10-27: modules/ became a gate (PR 148: tests/test_moduletree.py
+      fails on an unplaced file or a stale generated README block). Minutes
+      after that branch's 'has main moved' check, another branch landed on
+      main and added a route. Each branch was consistent on its own and each
+      had green CI; only the MERGED tree had a README that no longer matched
+      the code, so main's CI went red and PR 150 was a fix-forward. The merge
+      gate never ran the tree check, and a check of the branch tip could not
+      have caught it either: the stale page exists only where the two meet."
+fix_tree="rebase onto main; then python -m server.moduletree index --write (stale README) or add the file to ONE modules/<m>/<s>/module.json (unplaced)"
+check_tree() {
+  # WHAT IS JUDGED IS THE MERGED TREE. A merge of a branch that already
+  # contains main produces the branch's own tree, so checking the branch's
+  # worktree IS checking what main becomes - but only then. A branch behind
+  # main is refused outright rather than trial-merged: the tree the merge
+  # would produce exists nowhere yet, so nothing can have checked it, and
+  # catching up with main is already step 2 of the landing. This makes that
+  # step the gate's business instead of the session's memory.
+  local wt="" where="$ROOT" label="this checkout" n out rc tmp="" ceil=""
+  if [[ -n "$SLUG" ]] && git show-ref --verify --quiet "refs/heads/claude/$SLUG"; then
+    n=$(git rev-list --count "claude/$SLUG..main" 2>/dev/null || echo 0)
+    if [[ "$n" -gt 0 ]]; then
+      wt="$(branch_worktree "$SLUG" 2>/dev/null || true)"
+      bad tree "main has $n commit(s) claude/$SLUG lacks - the tree this merge would produce exists nowhere yet, so nothing has checked it"
+      say "        fix: cd ${wt:-<worktree>} && git rebase main   # re-run the tests, push, then merge again"
+      say "             (if the base check says main's history was rewritten: git rebase --onto main <recorded-base>)"
+      return 0
+    fi
+    if wt="$(branch_worktree "$SLUG")" && [[ -n "$wt" && -d "$wt" ]]; then
+      # The worktree's working files, not only its tip: cmd_merge has already
+      # refused a dirty worktree, and a standalone run should see the file a
+      # session just wrote.
+      where="$wt"; label="claude/$SLUG, worktree"
+    else
+      # No worktree: export the branch tip and judge that, rather than judge
+      # the live tree and call it a pass (the 2026-08-29 pii lesson, in the
+      # other direction). The export has no .git, and the ceiling keeps git
+      # from finding some repository above the temp dir, so moduletree falls
+      # back to its own walk of the export.
+      tmp=$(mktemp -d 2>/dev/null) || {
+        bad tree "no worktree for claude/$SLUG and no temp dir to export it into"; return 0; }
+      if git archive --format=tar "claude/$SLUG" 2>/dev/null | tar -xf - -C "$tmp" 2>/dev/null; then
+        where="$tmp"; label="claude/$SLUG, exported tip (no worktree)"
+        ceil="$(cd "$tmp/.." && pwd -P)"
+      else
+        rm -rf "$tmp"
+        bad tree "no worktree for claude/$SLUG and the branch could not be exported to judge it"
+        say "        fix: scripts/branch.sh adopt $SLUG   # then run this again"
+        return 0
+      fi
+    fi
+  fi
+  if [[ ! -f "$where/server/moduletree.py" ]]; then
+    warn tree "no server/moduletree.py in $label - there is no module tree to judge"
+    [[ -n "$tmp" ]] && rm -rf "$tmp"
+    return 0
+  fi
+  out=$(cd "$where" && GIT_CEILING_DIRECTORIES="$ceil" python3 -m server.moduletree check 2>&1); rc=$?
+  [[ -n "$tmp" ]] && rm -rf "$tmp"
+  if [[ $rc -eq 0 ]]; then
+    ok tree "complete and current [$label]"
+    return 0
+  fi
+  bad tree "the module tree is stale or incomplete [$label]"
+  printf '%s\n' "$out" | grep -E '^error:' | head -8 | sed 's/^/        /'
+  local stale=0 unplaced=0
+  printf '%s\n' "$out" | grep -q 'generated block is stale' && stale=1
+  printf '%s\n' "$out" | grep -q '^error: unplaced:' && unplaced=1
+  if [[ $stale -eq 1 ]]; then
+    say "        fix: cd ${wt:-$where} && python -m server.moduletree index --write   # then commit the READMEs"
+  fi
+  if [[ $unplaced -eq 1 ]]; then
+    say "        fix: add each unplaced file to the 'owns' list of ONE modules/<module>/<submodule>/module.json,"
+    say "             then python -m server.moduletree index --write. (python -m server.moduletree where <a file"
+    say "             beside it> names the submodule that owns its neighbours.)"
+  fi
+  if [[ $stale -eq 0 && $unplaced -eq 0 ]]; then
+    say "        fix: python -m server.moduletree check   # and fix what it names"
+  fi
+  return 0
 }
 
 # --------------------------------------------------------------- driver ---
