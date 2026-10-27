@@ -139,7 +139,10 @@ merely to make that document appear locally.
   that page plus the module docstrings. A file you add is placed in one
   `modules/<m>/<s>/module.json` (`owns`), then `python -m server.moduletree
   index --write` refreshes the READMEs; `tests/test_moduletree.py` fails on
-  an unplaced or doubly placed file and on a stale README.
+  an unplaced or doubly placed file and on a stale README. The merge gate
+  runs the same check on the tree `main` will have after the merge
+  (preflight `tree`), so a page another branch made stale is caught at
+  `branch.sh merge`, not on `main`'s CI.
 
 ---
 
@@ -183,15 +186,19 @@ authorization for the whole landing**, run end to end without stopping:
 
 1. Commit anything outstanding with a real message (ASCII, no emoji).
 2. If `main` moved, rebase in the worktree, never in the live tree, and
-   push. If the rebase was clean and the commits on `main` touch none of
-   your files, merge straight away: CI runs on `main` after the push, so
-   watch that run and fix forward if it goes red. Only when files overlap
-   do you re-run the affected tests and wait for the branch's CI again. If
-   preflight's `base` check says main's history was rewritten, use
-   `git rebase --onto main <old-base>`, not `git rebase main`.
+   push. The merge gate refuses a branch behind `main` (preflight `tree`),
+   so this step is never skipped. If the rebase was clean and the commits
+   on `main` touch none of your files, merge straight away: CI runs on
+   `main` after the push, so watch that run and fix forward if it goes
+   red. Only when files overlap do you re-run the affected tests and wait
+   for the branch's CI again. If preflight's `base` check says main's
+   history was rewritten, use `git rebase --onto main <old-base>`, not
+   `git rebase main`.
 3. `scripts/branch.sh pr <slug> --ready`.
-4. `scripts/branch.sh merge <slug>`: preflight, the merge into `main`, and
-   the teardown of the spent worktree.
+4. `scripts/branch.sh merge <slug>`: preflight (it also judges the module
+   tree on the merged `main`: a stale README or an unplaced file refuses
+   the merge and prints the fix), the merge into `main`, and the teardown
+   of the spent worktree.
 5. Push: `git -C <live checkout> push`, then `scripts/branch.sh discard
    <slug>` to remove the remote branch once the PR reads Merged.
 6. If `server/` changed, say so and give the restart command. A session

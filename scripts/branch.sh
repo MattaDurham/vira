@@ -15,7 +15,8 @@
 #   branch.sh pr <slug>        push the branch + open/update its GitHub PR
 #                              (draft by default; --title T --body-file F --ready)
 #   branch.sh merge <slug>     fast, clean merge into live main (aborts on conflict);
-#                              tears the worktree down on success (--keep to hold)
+#                              tears the worktree down on success (--keep to hold);
+#                              refuses a branch behind main (preflight `tree`)
 #   branch.sh discard <slug>   remove worktree + branch (refuses if dirty;
 #                              closes an unmerged PR; never a merged one)
 
@@ -1059,6 +1060,10 @@ cmd_merge() {
   # already shipped once; see scripts/preflight.sh --list. A MISSING preflight
   # is announced rather than silently skipped — an absent check that reads as a
   # pass is the exact failure mode this whole gate exists to end.
+  # Since 2026-10-27 the set judges the tree main will have AFTER the merge,
+  # not the branch tip: preflight's `tree` check refuses a branch that is
+  # behind main until it is rebased, because only then is the worktree the
+  # merged tree, and then runs the module-tree check there.
   # Output is captured to a file (then shown whole) so pr_merge_hook can post
   # the rows as the PR's merge-gate comment; capture-then-cat rather than tee,
   # because a pipeline would hide preflight's exit status under set -eu.
