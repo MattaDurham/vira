@@ -1,0 +1,54 @@
+{
+  "id": "core/shell",
+  "name": "Shell",
+  "summary": "The FastAPI app and the single-page desktop: windows, palette, deep links, UI state.",
+  "owns": [
+    "server/main.py",
+    "server/__init__.py",
+    "server/uistate.py",
+    "server/omniroute.py",
+    "static/app.js",
+    "static/index.html",
+    "static/style.css",
+    "static/manifest.webmanifest",
+    "static/favicon.ico",
+    "static/favicon.svg",
+    "static/icon.svg",
+    "static/icon-192.png",
+    "static/icon-512.png",
+    "static/icon-maskable.svg",
+    "static/icon-maskable-512.png",
+    "static/apple-touch-icon.png",
+    "static/vendor/**",
+    "static/layouts/**",
+    "static/stage.html",
+    "static/viewer.html",
+    "static/gallery.html",
+    "scripts/make-icons.sh",
+    "tests/test_omni_palette.py",
+    "tests/test_drag_handle_controls.py",
+    "tests/test_touch_selection.py",
+    "tests/test_uistate.py",
+    "tests/test_omniroute.py"
+  ],
+  "routes": [
+    "/api/ui-state",
+    "/api/omni",
+    "/api/reveal",
+    "/api/instance",
+    "/api/favicon",
+    "/api/stream"
+  ],
+  "stores": [
+    "data/ui-state.json"
+  ],
+  "reads": [
+    "core/settings",
+    "core/runtime"
+  ],
+  "feeds": [],
+  "registry": [
+    "vira-state",
+    "quick"
+  ]
+}

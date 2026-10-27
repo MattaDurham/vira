@@ -1,0 +1,38 @@
+{
+  "id": "work/ideas",
+  "name": "Ideas",
+  "summary": "The backlog: Vira's own cross-session roadmap, its tags, images, and the Approve & build path.",
+  "owns": [
+    "server/ideas.py",
+    "server/ideatags.py",
+    "server/ideaimages.py",
+    "tests/test_dupgate_absolute.py",
+    "tests/test_approve_builds.py",
+    "tests/approve_builds_ui.js",
+    "tests/test_ideas.py",
+    "tests/test_ideatags.py",
+    "tests/test_ideaimages.py"
+  ],
+  "routes": [
+    "/api/ideas"
+  ],
+  "stores": [
+    "data/ideas.json",
+    "data/idea-images/",
+    "data/idea-tags.json"
+  ],
+  "reads": [
+    "models/backends",
+    "find/notes"
+  ],
+  "feeds": [
+    "work/sessions",
+    "library/documents",
+    "reader/queue",
+    "attention/review"
+  ],
+  "registry": [
+    "ideas-store",
+    "ideas-win"
+  ]
+}

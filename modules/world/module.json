@@ -1,0 +1,15 @@
+{
+  "id": "world",
+  "name": "World",
+  "group": "know",
+  "rank": 50,
+  "summary": "The owner's world as a typed, temporal 3D graph: people, notes, concepts, time.",
+  "windows": [
+    "atlas"
+  ],
+  "submodules": [
+    "graph",
+    "atlas",
+    "orbits"
+  ]
+}

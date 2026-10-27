@@ -1,0 +1,26 @@
+{
+  "id": "design/skins",
+  "name": "Skins",
+  "summary": "Skins: the :root rewrite, manifest validation, apply and reset.",
+  "owns": [
+    "server/skins.py",
+    "static/skins/**",
+    "static/skin-active.css",
+    "tests/skin_background_ui.js",
+    "tests/test_skins.py"
+  ],
+  "routes": [
+    "/api/skins"
+  ],
+  "stores": [
+    "data/skin-active.json"
+  ],
+  "reads": [
+    "imageatlas/genres"
+  ],
+  "feeds": [
+    "core/shell",
+    "design/studio"
+  ],
+  "registry": []
+}

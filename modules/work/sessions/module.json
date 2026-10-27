@@ -1,0 +1,58 @@
+{
+  "id": "work/sessions",
+  "name": "Sessions",
+  "summary": "Live agent sessions that outlive the server: launch, steer, record, judge, resume.",
+  "owns": [
+    "server/session.py",
+    "server/runner.py",
+    "server/jobfiles.py",
+    "server/joblog.py",
+    "server/sessiondiag.py",
+    "server/judge.py",
+    "server/workresults.py",
+    "static/work-results.css",
+    "static/work-results.js",
+    "tests/test_session_*.py",
+    "tests/session_agents_ui.js",
+    "tests/session_launch_ui.js",
+    "tests/test_runner_agents.py",
+    "tests/test_durable.py",
+    "tests/test_record_merge.py",
+    "tests/test_resume_evidence.py",
+    "tests/test_turn_closeout.py",
+    "tests/test_session.py",
+    "tests/test_runner.py",
+    "tests/test_jobfiles.py",
+    "tests/test_joblog.py",
+    "tests/test_workresults.py"
+  ],
+  "routes": [
+    "/api/jobs",
+    "/api/session",
+    "/api/sessions",
+    "/api/judge",
+    "/api/work"
+  ],
+  "stores": [
+    "data/jobs/",
+    "data/jobs-log.json",
+    "data/sessions.json"
+  ],
+  "reads": [
+    "models/sessions",
+    "models/backends",
+    "work/branches",
+    "core/runtime"
+  ],
+  "feeds": [
+    "work/branches",
+    "fleet/window",
+    "attention/now",
+    "evidence/ledger",
+    "work/automations"
+  ],
+  "registry": [
+    "sessions",
+    "work-win"
+  ]
+}

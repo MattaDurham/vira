@@ -1,0 +1,29 @@
+{
+  "id": "evidence/ledger",
+  "name": "Ledger",
+  "summary": "Build provenance mined into case studies.",
+  "owns": [
+    "server/evidence.py",
+    "tests/test_budget_joins_evidence_receipts_resolver_reconnect.py",
+    "tests/test_evidence.py"
+  ],
+  "routes": [
+    "/api/evidence"
+  ],
+  "stores": [
+    "data/evidence.json"
+  ],
+  "reads": [
+    "work/sessions",
+    "work/branches",
+    "evidence/changelog",
+    "models/backends"
+  ],
+  "feeds": [
+    "applications/documents"
+  ],
+  "registry": [
+    "evidence-engine",
+    "evidence-win"
+  ]
+}

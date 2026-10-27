@@ -1,0 +1,16 @@
+{
+  "id": "applications",
+  "name": "Applications",
+  "group": "operate",
+  "rank": 50,
+  "summary": "The job search: a merged role catalog, live boards, per-role scores, and the documents behind an application.",
+  "windows": [
+    "applications"
+  ],
+  "submodules": [
+    "catalog",
+    "boards",
+    "scoring",
+    "documents"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "library",
+  "name": "Library",
+  "group": "know",
+  "rank": 20,
+  "summary": "Browse a vault by subject and read it whole; the documents Vira serves itself.",
+  "windows": [
+    "library"
+  ],
+  "submodules": [
+    "browse",
+    "documents"
+  ]
+}

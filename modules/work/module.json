@@ -1,0 +1,16 @@
+{
+  "id": "work",
+  "name": "Work",
+  "group": "operate",
+  "rank": 30,
+  "summary": "The cockpit: live agent sessions, the ideas backlog, The Forge's automations, and every branch.",
+  "windows": [
+    "work"
+  ],
+  "submodules": [
+    "sessions",
+    "branches",
+    "ideas",
+    "automations"
+  ]
+}

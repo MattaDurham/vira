@@ -1,0 +1,12 @@
+{
+  "id": "aquarium",
+  "name": "Aquarium",
+  "group": "operate",
+  "rank": 70,
+  "summary": "The desktop's living backgrounds: a metre-scaled koi pond with articulated fish, and photographic landscapes.",
+  "windows": [],
+  "submodules": [
+    "koi",
+    "backgrounds"
+  ]
+}

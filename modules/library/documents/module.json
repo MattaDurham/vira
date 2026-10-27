@@ -1,0 +1,33 @@
+{
+  "id": "library/documents",
+  "name": "Documents",
+  "summary": "Site documents served from Vira, their tags, their thumbnails, and the blog.",
+  "owns": [
+    "server/sitedocs.py",
+    "server/doctags.py",
+    "server/docthumbs.py",
+    "server/blog.py",
+    "tests/test_sitedocs.py",
+    "tests/test_doctags.py",
+    "tests/test_docthumbs.py",
+    "tests/test_blog.py"
+  ],
+  "routes": [],
+  "stores": [
+    "static/docs/ (git-ignored)",
+    "data/sitedocs.json",
+    "data/doc-tags.json",
+    "data/doc-thumbs/",
+    "data/blog.json"
+  ],
+  "reads": [
+    "work/ideas"
+  ],
+  "feeds": [
+    "reader/queue",
+    "library/browse"
+  ],
+  "registry": [
+    "reading-store"
+  ]
+}

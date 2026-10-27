@@ -1,0 +1,26 @@
+{
+  "id": "imageatlas/genres",
+  "name": "Genres",
+  "summary": "The Genre Studio: compose a genre from reference pieces and generate images in it.",
+  "owns": [
+    "server/genrestudio.py",
+    "server/genreroutes.py",
+    "server/genregen.py",
+    "static/genre.html",
+    "tests/test_genrestudio.py"
+  ],
+  "routes": [
+    "/api/genre"
+  ],
+  "stores": [
+    "data/genres/"
+  ],
+  "reads": [
+    "imageatlas/galaxy",
+    "models/backends"
+  ],
+  "feeds": [
+    "design/skins"
+  ],
+  "registry": []
+}

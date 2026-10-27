@@ -1,0 +1,59 @@
+{
+  "id": "core/runtime",
+  "name": "Runtime",
+  "summary": "Admission control, locks and stores, backups, restart, update, workers, and the stall detector.",
+  "owns": [
+    "server/admission.py",
+    "server/instance.py",
+    "server/restart.py",
+    "server/runtimework.py",
+    "server/loopwatch.py",
+    "server/workers.py",
+    "server/filelock.py",
+    "server/jsonstore.py",
+    "server/backup.py",
+    "server/gitutil.py",
+    "server/update.py",
+    "run.sh",
+    "scripts/run.ps1",
+    "requirements.txt",
+    ".github/**",
+    "tests/__init__.py",
+    "tests/datadir_guard.py",
+    "tests/test_zz_data_untouched.py",
+    "tests/test_platform.py",
+    "tests/test_timezone_portability.py",
+    "tests/test_bucket_a.py",
+    "tests/test_async_controls.py",
+    "tests/test_instance_runtime.py",
+    "tests/test_backup_assistant.py",
+    "tests/restart_ui.js",
+    "static/restart.js",
+    "tests/test_admission.py",
+    "tests/test_restart.py",
+    "tests/test_jsonstore.py",
+    "tests/test_update.py"
+  ],
+  "routes": [
+    "/api/workers",
+    "/api/restart",
+    "/api/update",
+    "/api/health/loop"
+  ],
+  "stores": [
+    "data/backups/",
+    "data/server.log",
+    "data/instance.json",
+    "data/jobs-log.json (shared with Work / Sessions)"
+  ],
+  "reads": [
+    "core/settings"
+  ],
+  "feeds": [
+    "core/shell",
+    "work/sessions"
+  ],
+  "registry": [
+    "housekeeping"
+  ]
+}

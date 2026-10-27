@@ -1,0 +1,14 @@
+{
+  "id": "reader",
+  "name": "Reader",
+  "group": "know",
+  "rank": 30,
+  "summary": "Everything worth reading, wherever it lives, and the rooms that ingest it whole.",
+  "windows": [
+    "reader"
+  ],
+  "submodules": [
+    "queue",
+    "rooms"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "evidence",
+  "name": "Evidence",
+  "group": "know",
+  "rank": 70,
+  "summary": "Vira's own build provenance: the ledger, the change log, and the walkthrough films.",
+  "windows": [
+    "evidence"
+  ],
+  "submodules": [
+    "ledger",
+    "changelog",
+    "walkthroughs"
+  ]
+}

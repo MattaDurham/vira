@@ -1,0 +1,38 @@
+{
+  "id": "attention/brief",
+  "name": "Brief",
+  "summary": "The Daily Brief, its dismissed-row state, and the Journal typed into it.",
+  "owns": [
+    "server/brief.py",
+    "server/briefstate.py",
+    "server/journal.py",
+    "tests/test_brief_edit.py"
+  ],
+  "routes": [
+    "/api/brief$",
+    "/api/brief/dismiss",
+    "/api/brief/journal",
+    "/api/brief/loop",
+    "/api/brief/narrative",
+    "/api/brief/note"
+  ],
+  "stores": [
+    "data/brief-state.json",
+    "data/journal.json"
+  ],
+  "reads": [
+    "people/crm",
+    "incoming/feed",
+    "people/networking",
+    "applications/catalog",
+    "reader/queue",
+    "models/backends"
+  ],
+  "feeds": [
+    "attention/now"
+  ],
+  "registry": [
+    "brief-engine",
+    "journal-win"
+  ]
+}

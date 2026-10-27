@@ -1,0 +1,19 @@
+{
+  "id": "incoming",
+  "name": "Incoming",
+  "group": "communicate",
+  "rank": 10,
+  "summary": "Every channel a message can arrive on, merged into one live feed.",
+  "windows": [
+    "feed",
+    "admin"
+  ],
+  "submodules": [
+    "feed",
+    "imessage",
+    "mail",
+    "whatsapp",
+    "companion",
+    "triage"
+  ]
+}

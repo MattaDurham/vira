@@ -1,0 +1,19 @@
+{
+  "id": "attention",
+  "name": "Attention",
+  "group": "rhythm",
+  "rank": 10,
+  "summary": "What Vira is doing right now, what is waiting on the owner, the Daily Brief, and the standing assistant.",
+  "windows": [
+    "attention",
+    "journal",
+    "coverage"
+  ],
+  "submodules": [
+    "now",
+    "brief",
+    "review",
+    "assistant",
+    "childcare"
+  ]
+}

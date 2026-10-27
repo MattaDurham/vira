@@ -1,0 +1,29 @@
+{
+  "id": "library/browse",
+  "name": "Browse",
+  "summary": "The subject tree over a vault, and reading a subject whole.",
+  "owns": [
+    "server/library.py",
+    "static/library.css",
+    "static/library.js",
+    "tests/library_frontend_harness.js",
+    "tests/test_library.py"
+  ],
+  "routes": [
+    "/api/library"
+  ],
+  "stores": [
+    "data/library-cache/"
+  ],
+  "reads": [
+    "find/notes"
+  ],
+  "feeds": [
+    "reader/queue"
+  ],
+  "registry": [
+    "library-src",
+    "library-engine",
+    "library-win"
+  ]
+}

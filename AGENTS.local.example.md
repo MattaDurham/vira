@@ -132,6 +132,14 @@ merely to make that document appear locally.
   the one that lands it: `branch.sh merge` runs the live checkout's copy.
 - **An artifact that keeps landing in the repo root gets a `.gitignore`
   line**, not a sentence asking people to remember it.
+- **Start from the module tree.** `modules/README.md` indexes every
+  module; each module's README indexes its submodules; each submodule's
+  README lists every file it owns, what it reads and feeds, its routes and
+  stores. `python -m server.moduletree brief <module>/<submodule>` prints
+  that page plus the module docstrings. A file you add is placed in one
+  `modules/<m>/<s>/module.json` (`owns`), then `python -m server.moduletree
+  index --write` refreshes the READMEs; `tests/test_moduletree.py` fails on
+  an unplaced or doubly placed file and on a stale README.
 
 ---
 

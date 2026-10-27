@@ -1,0 +1,41 @@
+{
+  "id": "applications/catalog",
+  "name": "Catalog",
+  "summary": "The role catalog, the application evidence map, shared job logic, and the employer's vault page.",
+  "owns": [
+    "server/applications.py",
+    "server/applicationmap.py",
+    "server/jobshared.py",
+    "server/companywiki.py",
+    "tests/test_applications.py",
+    "tests/test_applicationmap.py",
+    "tests/test_jobshared.py",
+    "tests/test_companywiki.py"
+  ],
+  "routes": [
+    "/api/applications$",
+    "/api/applications/{uid}/state",
+    "/api/applications/{uid}/apply",
+    "/api/applications/{uid}/apply-prompt",
+    "/api/applications/{uid}/evidence-map"
+  ],
+  "stores": [
+    "data/applications.json",
+    "data/application-map.json"
+  ],
+  "reads": [
+    "applications/boards",
+    "find/notes",
+    "evidence/ledger"
+  ],
+  "feeds": [
+    "applications/scoring",
+    "applications/documents",
+    "attention/brief"
+  ],
+  "registry": [
+    "job-ledger",
+    "applications-win",
+    "jobs-win"
+  ]
+}

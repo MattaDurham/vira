@@ -1,0 +1,23 @@
+{
+  "id": "research/topics",
+  "name": "Topics",
+  "summary": "Reusable research topics: evidence, packets, and recurring refreshes.",
+  "owns": [
+    "server/researchtopics.py",
+    "tests/test_researchtopics.py"
+  ],
+  "routes": [
+    "/api/research/topics"
+  ],
+  "stores": [
+    "data/research-topics.json"
+  ],
+  "reads": [
+    "research/graphs",
+    "work/automations"
+  ],
+  "feeds": [
+    "research/graphs"
+  ],
+  "registry": []
+}

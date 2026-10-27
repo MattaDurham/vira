@@ -1,0 +1,22 @@
+{
+  "id": "design/studio",
+  "name": "Studio",
+  "summary": "The hosted studio page and its save path into the design-foundation checkout.",
+  "owns": [
+    "server/designstudio.py",
+    "tests/test_designstudio.py"
+  ],
+  "routes": [
+    "/api/design"
+  ],
+  "stores": [
+    "the design-foundation checkout (outside data/)"
+  ],
+  "reads": [
+    "core/settings"
+  ],
+  "feeds": [],
+  "registry": [
+    "design-studio"
+  ]
+}

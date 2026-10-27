@@ -1,0 +1,54 @@
+{
+  "id": "attention/assistant",
+  "name": "Assistant",
+  "summary": "The standing executive: commitments, quiet reminders, desktop pins, calendar suggestions, event prep.",
+  "owns": [
+    "server/executive.py",
+    "server/commitments.py",
+    "server/commitmentresources.py",
+    "server/assistantresources.py",
+    "server/reminderstickies.py",
+    "server/calendarplan.py",
+    "server/eventprep.py",
+    "static/assistant.css",
+    "static/assistant.js",
+    "static/assistant-page.css",
+    "static/assistant-page.html",
+    "static/assistant-page.js",
+    "static/reminder-stickies.css",
+    "static/reminder-stickies.js",
+    "tests/test_assistant_*.py",
+    "tests/assistant_frontend_harness.js",
+    "tests/test_executive_calendar.py",
+    "tests/test_notify_assistant_budget.py",
+    "tests/test_executive.py",
+    "tests/test_commitmentresources.py",
+    "tests/test_reminderstickies.py",
+    "tests/test_calendarplan.py",
+    "tests/test_eventprep.py"
+  ],
+  "routes": [
+    "/api/assistant",
+    "/api/reminder-stickies",
+    "/api/brief/events",
+    "/assistant"
+  ],
+  "stores": [
+    "data/commitments.json",
+    "data/reminder-stickies.json",
+    "data/calendar-plan.json",
+    "data/event-prep.json"
+  ],
+  "reads": [
+    "incoming/feed",
+    "incoming/triage",
+    "people/crm",
+    "models/backends",
+    "core/settings"
+  ],
+  "feeds": [
+    "attention/now",
+    "incoming/feed"
+  ],
+  "registry": []
+}

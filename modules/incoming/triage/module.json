@@ -1,0 +1,40 @@
+{
+  "id": "incoming/triage",
+  "name": "Triage",
+  "summary": "Unknown senders, institutional chores, and correspondence that is evidence first.",
+  "owns": [
+    "server/triage.py",
+    "server/resolver.py",
+    "server/admininbox.py",
+    "server/correspondence.py",
+    "static/workspace-intake.js",
+    "static/workspace.css",
+    "tests/test_triage_brief_flags.py",
+    "tests/test_resolver.py",
+    "tests/test_admininbox.py",
+    "tests/test_correspondence.py"
+  ],
+  "routes": [
+    "/api/triage",
+    "/api/brief/admin",
+    "/api/correspondence",
+    "/api/crm/add"
+  ],
+  "stores": [
+    "data/triage.json",
+    "data/admin-inbox.json",
+    "data/correspondence/"
+  ],
+  "reads": [
+    "incoming/feed",
+    "people/crm",
+    "models/backends"
+  ],
+  "feeds": [
+    "people/crm",
+    "attention/assistant"
+  ],
+  "registry": [
+    "triage-engine"
+  ]
+}

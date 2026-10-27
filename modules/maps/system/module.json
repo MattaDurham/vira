@@ -1,0 +1,30 @@
+{
+  "id": "maps/system",
+  "name": "System",
+  "summary": "The module registry, the build story behind a window, and the module tree itself.",
+  "owns": [
+    "server/modulemap.py",
+    "server/modulestory.py",
+    "server/moduletree.py",
+    "tests/test_modulestory.py",
+    "tests/test_moduletree.py"
+  ],
+  "routes": [
+    "/api/map",
+    "/api/module"
+  ],
+  "stores": [
+    "data/modules.json"
+  ],
+  "reads": [
+    "evidence/changelog",
+    "models/sessions"
+  ],
+  "feeds": [
+    "core/shell"
+  ],
+  "registry": [
+    "module-registry",
+    "map-win"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "world/atlas",
+  "name": "Atlas",
+  "summary": "The Contact Atlas: a face-graph of the CRM, four lenses, and the vault web joined on.",
+  "owns": [
+    "server/atlas.py",
+    "server/atlaslens.py",
+    "server/atlasvault.py",
+    "tests/test_atlas.py",
+    "tests/test_atlaslens.py",
+    "tests/test_atlasvault.py"
+  ],
+  "routes": [
+    "/api/atlas$",
+    "/api/atlas/face",
+    "/api/atlas/node",
+    "/api/atlas/refresh",
+    "/api/atlas/groups"
+  ],
+  "stores": [
+    "data/atlas-cache.json"
+  ],
+  "reads": [
+    "people/crm",
+    "incoming/feed",
+    "find/notes"
+  ],
+  "feeds": [
+    "world/graph",
+    "people/networking"
+  ],
+  "registry": [
+    "atlas-win"
+  ]
+}

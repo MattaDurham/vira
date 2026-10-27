@@ -1,0 +1,27 @@
+{
+  "id": "incoming/whatsapp",
+  "name": "WhatsApp",
+  "summary": "Receive-only WhatsApp through a linked-device sidecar process.",
+  "owns": [
+    "server/whatsapp.py",
+    "bridge/**",
+    "scripts/whatsapp-sidecar.sh",
+    "tests/whatsapp_sidecar_ownership.js",
+    "tests/test_whatsapp.py"
+  ],
+  "routes": [
+    "/api/whatsapp"
+  ],
+  "stores": [
+    "data/whatsapp/session/"
+  ],
+  "reads": [
+    "people/crm"
+  ],
+  "feeds": [
+    "incoming/feed"
+  ],
+  "registry": [
+    "whatsapp-src"
+  ]
+}

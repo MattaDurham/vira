@@ -1,0 +1,35 @@
+{
+  "id": "money/subscriptions",
+  "name": "Subscriptions",
+  "summary": "The merchant registry, the charge ledger, the cadence engine, and both evidence streams.",
+  "owns": [
+    "server/subscriptions.py",
+    "server/receipts.py",
+    "server/mercury.py",
+    "server/subs_visuals.py",
+    "scripts/seed-subscriptions.py",
+    "tests/test_subscriptions.py"
+  ],
+  "routes": [
+    "/api/subs",
+    "/api/subs-visuals"
+  ],
+  "stores": [
+    "data/subscriptions.json",
+    "data/subs-charges.json",
+    "data/subs-evidence.json"
+  ],
+  "reads": [
+    "incoming/mail",
+    "money/banking",
+    "models/backends"
+  ],
+  "feeds": [
+    "attention/brief"
+  ],
+  "registry": [
+    "mercury-src",
+    "subs-engine",
+    "subs-win"
+  ]
+}

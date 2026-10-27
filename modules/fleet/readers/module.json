@@ -1,0 +1,23 @@
+{
+  "id": "fleet/readers",
+  "name": "Readers",
+  "summary": "The Claude Code, Codex and git readers, and the one-call Analyze.",
+  "owns": [
+    "server/fleetclaude.py",
+    "server/fleetcodex.py",
+    "server/fleetgit.py",
+    "server/fleetread.py"
+  ],
+  "routes": [],
+  "stores": [],
+  "reads": [
+    "work/branches",
+    "models/backends"
+  ],
+  "feeds": [
+    "fleet/window"
+  ],
+  "registry": [
+    "fleet-engine"
+  ]
+}

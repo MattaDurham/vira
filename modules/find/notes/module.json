@@ -1,0 +1,38 @@
+{
+  "id": "find/notes",
+  "name": "Notes",
+  "summary": "The vault index and grounded ask (a thin adapter over qocha), and every confined vault write.",
+  "owns": [
+    "server/vault.py",
+    "server/brainchat.py",
+    "server/vaultwrite.py",
+    "tests/test_vault_*.py",
+    "tests/test_multivault.py",
+    "tests/vault_fixture.py",
+    "tests/test_brainchat.py"
+  ],
+  "routes": [
+    "/api/vault"
+  ],
+  "stores": [
+    "data/vault-index/",
+    "data/brain-chat.json"
+  ],
+  "reads": [
+    "core/settings",
+    "models/backends"
+  ],
+  "feeds": [
+    "find/search",
+    "find/ask",
+    "reader/rooms",
+    "library/browse",
+    "world/graph"
+  ],
+  "registry": [
+    "vault-src",
+    "vault-index",
+    "vault-engine",
+    "brain-win"
+  ]
+}

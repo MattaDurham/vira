@@ -1,0 +1,43 @@
+{
+  "id": "find/ask",
+  "name": "Ask",
+  "summary": "Grounded answering: hybrid retrieval, policy-checked local evidence, and the durable Find chat.",
+  "owns": [
+    "server/answer_runtime.py",
+    "server/answer_sources.py",
+    "server/answer_eval_guard.py",
+    "server/retrieval.py",
+    "server/virachat.py",
+    "scripts/answer_eval.py",
+    "tests/fixtures/answer_eval/**",
+    "tests/test_answer_eval.py",
+    "tests/test_ask_landing.py",
+    "tests/test_chat_contract.py",
+    "tests/test_retrieval_contract.py",
+    "tests/test_answer_runtime.py",
+    "tests/test_answer_sources.py",
+    "tests/test_retrieval.py",
+    "tests/test_virachat.py"
+  ],
+  "routes": [
+    "/api/answer",
+    "/api/vira",
+    "/api/find/ask",
+    "/api/find/chat"
+  ],
+  "stores": [
+    "data/answer-sources/",
+    "data/vira-chat/"
+  ],
+  "reads": [
+    "find/notes",
+    "find/media",
+    "people/crm",
+    "models/sessions",
+    "models/backends"
+  ],
+  "feeds": [
+    "find/search"
+  ],
+  "registry": []
+}

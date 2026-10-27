@@ -1,0 +1,21 @@
+{
+  "id": "incoming/companion",
+  "name": "Companion",
+  "summary": "The Android companion app: pairing, message ingest, and phone pings.",
+  "owns": [
+    "server/companion.py",
+    "android/**",
+    "tests/test_companion.py"
+  ],
+  "routes": [
+    "/api/companion"
+  ],
+  "stores": [
+    "data/companion.json"
+  ],
+  "reads": [],
+  "feeds": [
+    "incoming/feed"
+  ],
+  "registry": []
+}

@@ -1,0 +1,30 @@
+{
+  "id": "applications/scoring",
+  "name": "Scoring",
+  "summary": "One score per role, rescoring against today's canon, and deterministic comparison.",
+  "owns": [
+    "server/jobscores.py",
+    "server/jobrescore.py",
+    "server/jobcompare.py",
+    "tests/test_jobscores.py",
+    "tests/test_jobrescore.py",
+    "tests/test_jobcompare.py"
+  ],
+  "routes": [
+    "/api/applications/compare",
+    "/api/applications/rescore-bulk",
+    "/api/applications/{uid}/rescore"
+  ],
+  "stores": [
+    "data/job-scores.json"
+  ],
+  "reads": [
+    "applications/catalog",
+    "models/backends",
+    "find/notes"
+  ],
+  "feeds": [
+    "applications/catalog"
+  ],
+  "registry": []
+}

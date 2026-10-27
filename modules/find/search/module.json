@@ -1,0 +1,26 @@
+{
+  "id": "find/search",
+  "name": "Search",
+  "summary": "The sorter: which of the four corpora answers this query.",
+  "owns": [
+    "server/find.py",
+    "tests/test_find.py"
+  ],
+  "routes": [
+    "/api/find$",
+    "/api/find/status"
+  ],
+  "stores": [],
+  "reads": [
+    "find/notes",
+    "find/media",
+    "people/crm",
+    "find/ask"
+  ],
+  "feeds": [
+    "core/shell"
+  ],
+  "registry": [
+    "search-win"
+  ]
+}

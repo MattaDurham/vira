@@ -1,0 +1,52 @@
+{
+  "id": "work/branches",
+  "name": "Branches",
+  "summary": "Branch-first enforcement, the Showroom of draft branches, orphan work, and the merge gate.",
+  "owns": [
+    "server/worktree.py",
+    "server/showroom.py",
+    "server/orphanwork.py",
+    "server/prindex.py",
+    "static/showroom-launch.html",
+    "scripts/branch.sh",
+    "scripts/preflight.sh",
+    "scripts/preflight_*.py",
+    "scripts/preflight-baseline.txt",
+    "scripts/check-pii.sh",
+    "scripts/install-hooks.sh",
+    "scripts/sandbox.sh",
+    "tests/test_branch_*.py",
+    "tests/test_check_pii_worktree.py",
+    "tests/test_preflight.py",
+    "tests/test_sandbox.py",
+    "tests/test_sandbox_script.py",
+    "tests/test_landing_card.py",
+    "tests/test_worktree.py",
+    "tests/test_showroom.py",
+    "tests/test_orphanwork.py"
+  ],
+  "routes": [
+    "/api/showroom",
+    "/api/orphanwork"
+  ],
+  "stores": [
+    "data/showroom.json",
+    "data/orphan-work.json",
+    ".worktrees/ (git-ignored)",
+    ".test-instance.json"
+  ],
+  "reads": [
+    "work/sessions",
+    "core/runtime"
+  ],
+  "feeds": [
+    "work/sessions",
+    "fleet/readers",
+    "evidence/ledger",
+    "evidence/changelog"
+  ],
+  "registry": [
+    "showroom",
+    "orphan-sweeper"
+  ]
+}

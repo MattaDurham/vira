@@ -1,0 +1,45 @@
+{
+  "id": "find/media",
+  "name": "Media",
+  "summary": "The local index over everything ever shared: photos, documents, voice memos, links, message bodies.",
+  "owns": [
+    "server/mediaindex.py",
+    "server/mediaarchive.py",
+    "server/media.py",
+    "server/search.py",
+    "server/photosfaces.py",
+    "server/localmodels.py",
+    "server/textindex.py",
+    "server/ftsguard.py",
+    "tests/test_media_evicted.py",
+    "tests/test_mediaindex_fts.py",
+    "tests/test_textindex_sources.py",
+    "tests/test_mediaarchive.py",
+    "tests/test_textindex.py",
+    "tests/test_ftsguard.py"
+  ],
+  "routes": [
+    "/api/search",
+    "/api/media"
+  ],
+  "stores": [
+    "data/media-index.sqlite",
+    "data/media-archive/",
+    "data/text-index.sqlite",
+    "data/media-index.log",
+    "data/text-index.log"
+  ],
+  "reads": [
+    "incoming/imessage",
+    "incoming/mail"
+  ],
+  "feeds": [
+    "find/search",
+    "people/crm",
+    "imageatlas/galaxy"
+  ],
+  "registry": [
+    "media-index",
+    "media-engine"
+  ]
+}

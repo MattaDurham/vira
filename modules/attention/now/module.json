@@ -1,0 +1,31 @@
+{
+  "id": "attention/now",
+  "name": "Now",
+  "summary": "The aggregator: what Vira is doing right now and what is waiting on the owner right now.",
+  "owns": [
+    "server/attention.py",
+    "tests/test_attention_consolidation.py",
+    "tests/attention_inspect_ui.js",
+    "tests/test_attention.py"
+  ],
+  "routes": [
+    "/api/attention"
+  ],
+  "stores": [
+    "data/attention.json"
+  ],
+  "reads": [
+    "work/sessions",
+    "work/automations",
+    "incoming/feed",
+    "attention/review",
+    "attention/assistant"
+  ],
+  "feeds": [
+    "core/shell"
+  ],
+  "registry": [
+    "attention-engine",
+    "attention-win"
+  ]
+}

@@ -627,7 +627,10 @@ Everything personal lives outside the repo by construction:
 ## Architecture
 
 One FastAPI process (`server/`), one static front-end (`static/` - vanilla
-HTML/CSS/JS, no build step), one `data/` directory of state. Everything
+HTML/CSS/JS, no build step), one `data/` directory of state. The map of
+which file belongs to which module is [`modules/`](modules/README.md): one
+folder per module, one per submodule, a README in each that lists every
+file it owns and links to what it reads and feeds. Everything
 deterministic is deterministic: sqlite reads of chat.db / Calendar /
 AddressBook, JSON file stores, AppleScript sends. The AI (local `claude`
 CLI or the Anthropic API) is invoked only for reply drafting, the brief

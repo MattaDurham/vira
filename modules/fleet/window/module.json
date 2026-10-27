@@ -1,0 +1,27 @@
+{
+  "id": "fleet/window",
+  "name": "Window",
+  "summary": "The live Fleet window and the stream that feeds it.",
+  "owns": [
+    "server/fleet.py",
+    "static/fleet.css",
+    "static/fleet.js",
+    "tests/fleet_ui.js",
+    "tests/test_fleet.py"
+  ],
+  "routes": [
+    "/api/fleet"
+  ],
+  "stores": [
+    "data/fleet-cache.json"
+  ],
+  "reads": [
+    "fleet/readers",
+    "work/sessions"
+  ],
+  "feeds": [],
+  "registry": [
+    "fleet-engine",
+    "fleet-win"
+  ]
+}

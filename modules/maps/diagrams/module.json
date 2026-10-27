@@ -1,0 +1,24 @@
+{
+  "id": "maps/diagrams",
+  "name": "Diagrams",
+  "summary": "Layered diagrams as a type any request can fill, and the page that draws them.",
+  "owns": [
+    "server/maps.py",
+    "static/maps/**",
+    "tests/test_maps.py"
+  ],
+  "routes": [
+    "/api/maps"
+  ],
+  "stores": [
+    "data/maps.json"
+  ],
+  "reads": [
+    "models/backends"
+  ],
+  "feeds": [],
+  "registry": [
+    "maps-engine",
+    "maps-win"
+  ]
+}

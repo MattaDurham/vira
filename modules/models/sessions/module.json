@@ -1,0 +1,37 @@
+{
+  "id": "models/sessions",
+  "name": "Sessions",
+  "summary": "The provider-agnostic session harness, every adapter, and Vira's native tools.",
+  "owns": [
+    "server/agentbackend.py",
+    "server/codexapp.py",
+    "server/grokacp.py",
+    "server/functionagent.py",
+    "server/mcpbridge.py",
+    "server/viratools.py",
+    "server/toolresult.py",
+    "tests/test_codexapp_live.py",
+    "tests/test_grokacp_live.py",
+    "tests/test_grok.py",
+    "tests/test_agentbackend.py",
+    "tests/test_codexapp.py",
+    "tests/test_functionagent.py",
+    "tests/test_viratools.py"
+  ],
+  "routes": [],
+  "stores": [
+    "data/tool-ledger.json"
+  ],
+  "reads": [
+    "models/backends",
+    "core/settings"
+  ],
+  "feeds": [
+    "work/sessions",
+    "work/automations",
+    "find/ask"
+  ],
+  "registry": [
+    "sessions"
+  ]
+}
