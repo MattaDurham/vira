@@ -31,10 +31,11 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 |---|---|
 | `tests/test_designstudio.py` | Design Studio save machinery: theme-block token rewriting (value-only, comment-preserving), studio-addition appends for un-overridden tokens, change validati... |
 
-### Routes (2)
+### Routes (3)
 
 Prefixes: `/api/design`
 
+- `GET /api/design/status` (server/designstudio.py)
 - `POST /api/design/save` (server/designstudio.py)
 - `GET /api/design/history` (server/designstudio.py)
 
