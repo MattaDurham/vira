@@ -240,7 +240,10 @@ MERGE_STEER = (
     "live checkout: Vira merges, pushes and tears the branch down the moment "
     "your turn ends, because the merge deletes the worktree you are running "
     "in. If something stops you, say what and end your turn; Vira's merge "
-    "refuses an uncommitted or conflicting branch on its own.")
+    "refuses an uncommitted or conflicting branch on its own. End with one "
+    "line, 'Ready for Vira to merge', naming the commit. Do not list what "
+    "you left to Vira: its merge, push and teardown write their own lines "
+    "under yours in this transcript.")
 SERVE_TIMEOUT = 600          # clone + provision + boot can take a minute+
 PR_TIMEOUT = 120
 
@@ -1261,7 +1264,8 @@ class Runner:
             self.finished_by_owner = True
             self.append(f"[vira] landing verdict on file: "
                         f"{self.landing.get('verdict')} - closing the "
-                        "session so Vira can act on it\n")
+                        "session; Vira acts on it below, in this "
+                        "transcript\n")
             return False
         if not self.landing_eligible() or self.interrupted:
             return True

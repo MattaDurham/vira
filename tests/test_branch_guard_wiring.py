@@ -424,7 +424,7 @@ class TidyIsWired(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
         self.reg = session.Sessions()
 
-    def _handle(self, status, awaiting=None):
+    def _handle(self, status, awaiting=None, landing=None):
         spec = {"id": "j1", "prompt": "Map the content ingestion",
                 "cwd": "/tmp/wt", "worktree": "/tmp/wt", "branch": "claude/x",
                 "live_root": "/tmp/live"}
@@ -432,6 +432,8 @@ class TidyIsWired(unittest.TestCase):
         h.last_state = {"id": "j1", "status": "running"}
         st = {"id": "j1", "status": status, "awaiting": awaiting,
               "heartbeat": time.time(), "pid": os.getpid(), "pending": []}
+        if landing:
+            st["landing"] = landing      # runner.handle_landing's stamp
         jobfiles.write_json_atomic(self.jdir / "state.json", st)
         self.reg.sessions["j1"] = h
         return h
@@ -456,6 +458,27 @@ class TidyIsWired(unittest.TestCase):
         log = (self.jdir / "output.log").read_text(encoding="utf-8")
         self.assertIn("/tmp/wt", log)
         self.assertIn("uncommitted", log)
+
+    def test_a_landing_on_file_leaves_the_worktree_to_it(self):
+        """Merge it / Discard on file: orphanwork.land_session is waiting
+        for this end to run branch.sh, which removes the worktree itself.
+        Tidy neither races it nor claims to keep what is merged a second
+        later (owner, 2026-10-28: "worktree kept ... keeping them" over a
+        merged branch read as a session that silently ended)."""
+        self._handle("done", landing="merge")
+        self.reg._poll_once()
+        self.assertEqual(self.calls, [], "tidy ran under a pending landing")
+        log = (self.jdir / "output.log").read_text(encoding="utf-8")
+        self.assertIn("[vira] worktree handed to the landing - Vira merges "
+                      "claude/x next, below", log)
+        self.assertNotIn("worktree kept", log)
+
+    def test_a_discard_on_file_reads_the_same_way(self):
+        self._handle("done", landing="discard")
+        self.reg._poll_once()
+        self.assertEqual(self.calls, [])
+        log = (self.jdir / "output.log").read_text(encoding="utf-8")
+        self.assertIn("Vira discards claude/x next", log)
 
     def test_a_ui_read_that_sees_the_end_first_does_not_swallow_it(self):
         """2026-10-08: a map session the owner finished while watching it kept

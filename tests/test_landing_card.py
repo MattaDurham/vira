@@ -343,6 +343,17 @@ class TheVerdict(_Placed):
         self.assertIn("Do NOT run branch.sh merge", s)
         self.assertIn("do NOT push main", s)
 
+    def test_the_merge_steer_says_how_to_end(self):
+        """Told three things not to do, a session ends on the three things
+        it did not do ("Not done, as instructed: I did not run branch.sh
+        merge, push main, or touch the live checkout"), which the owner
+        read as a refusal of the very thing they had just asked for
+        (2026-10-28). The steer names the ending instead."""
+        s = runner_mod.MERGE_STEER
+        self.assertIn("Ready for Vira to merge", s)
+        self.assertIn("Do not list what you left to Vira", s)
+        self.assertIn("in this transcript", s)
+
     def test_merge_over_a_dirty_tree_steers_then_finishes(self):
         """The Implement prompt says never commit, so delivered work is
         usually uncommitted - and branch.sh merge refuses a dirty tree. The
@@ -486,11 +497,27 @@ class TheAnswerRoute(unittest.TestCase):
 class LandSession(_BranchShCase):
     """orphanwork.land_session waits for the SESSION to end, then acts."""
 
+    JID = "j" * 12
+
     def setUp(self):
         super().setUp()
         fast = mock.patch.object(orphanwork, "SESSION_END_POLL_S", 0.01)
         fast.start()
         self.addCleanup(fast.stop)
+        # The session's own transcript, which the landing writes under.
+        self.jobs = Path(self.tmp.name) / "jobs"
+        self.jdir = self.jobs / self.JID
+        self.jdir.mkdir(parents=True)
+        self.log = self.jdir / "output.log"
+        self.log.write_text("Ready for Vira to merge.\n", encoding="utf-8")
+        mock.patch.object(jobfiles, "JOBS_DIR", self.jobs).start()
+        self.pokes = []
+        mock.patch.object(orphanwork, "_poke_session",
+                          self.pokes.append).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def transcript(self):
+        return self.log.read_text(encoding="utf-8")
 
     def _rows(self, running_polls, worktree):
         seen = {"n": 0}
@@ -586,6 +613,137 @@ class LandSession(_BranchShCase):
         self.assertEqual(a["name"], "discard")
         self.assertEqual(a["status"], "ok")
         self.assertIn("branch.sh discard t", a["output"])
+
+    # ----- the landing reads on from the session's last words -----
+    #
+    # Owner, 2026-10-28: the merge ran in a server thread whose only trace
+    # was an in-memory action on an unlanded row, and that row vanished the
+    # moment the branch merged. The transcript ended on the session saying
+    # it had NOT merged, which read as a session that silently ended.
+
+    def test_the_landing_writes_under_the_sessions_last_turn(self):
+        job_row, _ = self._rows(2, self.root)
+        text = ("merging claude/t into main...\nMerge made by the 'ort' "
+                "strategy.\npush: To origin\nteardown: branch.sh discard t")
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_dirty_lines", lambda p: []), \
+             mock.patch.object(orphanwork, "_ahead_behind", lambda b: (1, 0)), \
+             mock.patch.object(orphanwork, "_merge_sync",
+                               lambda slug: (True, text)), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session(self.JID, "claude/t", "merge")
+            self._wait("claude/t")
+        log = self.transcript()
+        # in order: the session's words, the start, the verdict, the words
+        i_start = log.index("[vira] landing: merging claude/t into main")
+        i_done = log.index("[vira] landed: claude/t merged into main, "
+                           "pushed, branch and worktree removed")
+        self.assertLess(log.index("Ready for Vira"), i_start)
+        self.assertLess(i_start, i_done)
+        self.assertIn("  push: To origin\n", log)       # branch.sh's words, indented
+        self.assertIn("  teardown: branch.sh discard t\n", log)
+        self.assertEqual(self.pokes, [self.JID, self.JID])
+
+    def test_the_transcript_is_complete_before_the_action_reports_done(self):
+        """A reader polling the action for completion (the Runs list, a
+        test) must find the transcript already written: the note goes in
+        BEFORE the status flips, like the re-sweep."""
+        job_row, _ = self._rows(0, self.root)
+        seen = []
+        real = orphanwork._set_action
+
+        def spy(branch, name, status, output):
+            if status != "running":
+                seen.append(self.transcript())
+            real(branch, name, status, output)
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_dirty_lines", lambda p: []), \
+             mock.patch.object(orphanwork, "_ahead_behind", lambda b: (1, 0)), \
+             mock.patch.object(orphanwork, "_merge_sync",
+                               lambda slug: (True, "merged")), \
+             mock.patch.object(orphanwork, "_set_action", spy), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session(self.JID, "claude/t", "merge")
+            self._wait("claude/t")
+        self.assertEqual(len(seen), 1)
+        self.assertIn("[vira] landed:", seen[0])
+
+    def test_a_refused_landing_says_so_in_the_transcript(self):
+        job_row, _ = self._rows(0, self.root)
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_dirty_lines",
+                               lambda p: ["?? x.py"]), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session(self.JID, "claude/t", "merge")
+            self._wait("claude/t")
+        log = self.transcript()
+        self.assertIn("[vira] landing failed: claude/t was NOT merged", log)
+        self.assertIn("uncommitted changes", log)
+
+    def test_the_notes_the_owner_must_act_on_get_their_own_lines(self):
+        """The restart when server/ changed, a failed push, a held
+        teardown: each is a [vira] line of its own, not a line buried in
+        branch.sh's block. And a merge that did not push is not "landed,
+        pushed": main is on this machine only, and the head says so."""
+        job_row, _ = self._rows(0, self.root)
+        text = ("merging claude/t into main...\n"
+                "push FAILED: fatal: could not read from remote\n"
+                "server code changed \u2014 restart is the owner's: "
+                "launchctl kickstart -k gui/501/nyc.durham.vira")
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_dirty_lines", lambda p: []), \
+             mock.patch.object(orphanwork, "_ahead_behind", lambda b: (1, 0)), \
+             mock.patch.object(orphanwork, "_merge_sync",
+                               lambda slug: (True, text)), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session(self.JID, "claude/t", "merge")
+            self._wait("claude/t")
+        log = self.transcript()
+        self.assertIn("[vira] landed: claude/t merged into main, push FAILED "
+                      "(main is local only)", log)
+        self.assertNotIn("worktree removed", log)
+        self.assertIn("[vira] push FAILED: fatal", log)
+        self.assertIn("[vira] server code changed", log)
+        self.assertIn("launchctl kickstart", log)
+
+    def test_discard_writes_its_outcome_too(self):
+        job_row, _ = self._rows(1, self.root)
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session(self.JID, "claude/t", "discard")
+            self._wait("claude/t")
+        log = self.transcript()
+        self.assertIn("[vira] landing: discarding claude/t", log)
+        self.assertIn("[vira] discarded: claude/t", log)
+        self.assertIn("  branch.sh discard t\n", log)
+
+    def test_a_long_block_keeps_its_tail(self):
+        """The end of a merge is where the refusal or the push is; a
+        preflight that printed a suite is trimmed from the front."""
+        text = "\n".join(f"line {n}" for n in range(3000))
+        block = orphanwork._landing_block(text)
+        # the tail plus two spaces of indent per line and the trim note
+        self.assertLessEqual(len(block), orphanwork.TRANSCRIPT_TAIL
+                             + 2 * block.count("\n") + 40)
+        self.assertIn("(earlier output trimmed)", block)
+        self.assertIn("  line 2999\n", block)
+        self.assertNotIn("line 0\n", block)
+
+    def test_a_missing_transcript_never_fails_the_landing(self):
+        mock.patch.object(jobfiles, "JOBS_DIR",
+                          Path(self.tmp.name) / "nowhere").start()
+        job_row, _ = self._rows(0, self.root)
+        with mock.patch.object(orphanwork, "_job_row", job_row), \
+             mock.patch.object(orphanwork, "_dirty_lines", lambda p: []), \
+             mock.patch.object(orphanwork, "_ahead_behind", lambda b: (1, 0)), \
+             mock.patch.object(orphanwork, "_merge_sync",
+                               lambda slug: (True, "merged")), \
+             mock.patch.object(orphanwork, "refresh", lambda: None):
+            orphanwork.land_session(self.JID, "claude/t", "merge")
+            a = self._wait("claude/t")
+        self.assertEqual(a["status"], "ok")
+        self.assertEqual(self.pokes, [])
+        self.assertFalse((Path(self.tmp.name) / "nowhere").exists())
 
     def test_refusals_are_named(self):
         with self.assertRaises(ValueError):
