@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import applecontacts as ac
-from server import contactcard, contactsync as cs, data as crm
+from server import contactcard, contactsync as cs, data as crm, runtimework
 
 
 def card(uid, name, *, org="", title="", emails=(), phones=(), note="",
@@ -199,22 +199,34 @@ class InboundPassTest(SyncCase):
         self._write_registry()
         crm.invalidate()
         s = cs.survey()
-        # Zed shares Alex's card: each side's missing handle is a shared-card
-        # case, not pending work, and names the other person.
+        # Zed shares Alex's card: the card is listed once with both names,
+        # each side's missing handle is a conflict, not pending work.
+        self.assertEqual([(sc["uid"], [q["pid"] for q in sc["people"]]) for sc in s["shared_cards"]],
+                         [("A:ABPerson", ["p_a", "p_z"])])
         self.assertEqual([(h["pid"], h["other_pid"]) for h in s["handle_conflicts"]],
                          [("p_a", "p_z"), ("p_z", "p_a")])
         self.assertFalse([h for h in s["handle_adds"] if h["pid"] in ("p_a", "p_z")])
+        # and nothing would be pushed to the shared card, from either side
+        self.assertNotIn("A:ABPerson", [c["uid"] for c in s["changes"]])
         cs.apply(inbound=True)
         self.assertNotIn("5550101234", self.by_name("Alex Example")["handles"]["phones10"])
         self.assertNotIn("alex@example.com", self.by_name("Zed Example")["handles"]["emails"])
-        conflicts = [r for r in cs.read_store()["review"] if r["kind"] == "handle-conflict"]
-        self.assertEqual(sorted(r["pid"] for r in conflicts), ["p_a", "p_z"])
-        self.assertIn("Zed Example", conflicts[0]["detail"])
+        shared = [r for r in cs.read_store()["review"] if r["kind"] == "shared-card"]
+        self.assertEqual(len(shared), 1)
+        self.assertIn("Alex Example and Zed Example", shared[0]["detail"])
+        self.assertFalse([r for r in cs.read_store()["review"] if r["kind"] == "handle-conflict"])
         # a second pass files nothing new for the same shared card
         cs.apply(inbound=True)
-        again = [r for r in cs.read_store()["review"] if r["kind"] == "handle-conflict"]
-        self.assertEqual(len(again), 2)
-        self.assertEqual(cs.read_store()["report"]["handle_conflicts_total"], 2)
+        self.assertEqual(len([r for r in cs.read_store()["review"] if r["kind"] == "shared-card"]), 1)
+        self.assertEqual(cs.read_store()["report"]["shared_cards_total"], 1)
+
+    def test_push_skips_the_shared_card(self):
+        self.people.append(person("p_z", "Zed Example", phones=["5550101234"]))
+        self._write_registry()
+        crm.invalidate()
+        out = cs.apply(inbound=False, push=True)
+        self.assertEqual({p["pid"] for p in out["done"]["pushed"]}, {"p_d"})
+        self.assertFalse([x for x in self.scripts if 'person id "A:ABPerson"' in x])
 
     def test_legacy_conflict_rows_are_not_duplicated(self):
         self.people.append(person("p_z", "Zed Example", phones=["5550101234"]))
@@ -257,6 +269,27 @@ class PushPassTest(SyncCase):
             out = cs.apply(inbound=False, push=True, create=False)
         self.assertEqual(self.scripts, [])
         self.assertTrue(any("Apple push is off" in e for e in out["done"]["errors"]))
+
+    def test_push_reports_progress_to_the_tab_and_to_fleet(self):
+        seen = []
+
+        def osa(script):
+            self.scripts.append(script)
+            seen.append((dict(cs._status["progress"] or {}),
+                         [(w["title"], w["done"], w["total"], w["step"])
+                          for w in runtimework.snapshot() if w["kind"] == "sync"]))
+            return "ok"
+        with mock.patch.object(ac, "_osascript", side_effect=osa):
+            cs.apply(inbound=False, push=True, reason="sync tab")
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0][0]["total"], 2)
+        self.assertEqual([p["done"] for p, _ in seen], [1, 2])
+        self.assertEqual({p["step"] for p, _ in seen}, {"Alex Example", "Dana Example"})
+        # the same counter rides the in-process activity Fleet reads
+        self.assertEqual(seen[1][1], [("Contacts sync (sync tab)", 2, 2, seen[1][0]["step"])])
+        # and both are gone once the pass ends
+        self.assertIsNone(cs._status["progress"])
+        self.assertFalse([w for w in runtimework.snapshot() if w["kind"] == "sync"])
 
     def test_an_osascript_failure_is_logged_not_raised(self):
         with mock.patch.object(ac, "_osascript", side_effect=RuntimeError("-600")):

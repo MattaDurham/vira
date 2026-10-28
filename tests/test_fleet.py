@@ -871,6 +871,37 @@ class SlowTier(Base, Repositories):
 
 
 class InstancesAndServers(Base):
+    def test_work_inside_an_instance_rides_the_probe(self):
+        wt = Path(self.env.folder("wt-b"))
+        (wt / ".test-instance.json").write_text(json.dumps({"pid": 4343, "port": 8391}), encoding="utf-8")
+        body = {"id": "branch:b", "kind": "branch",
+                "work": [{"id": "t1", "title": "Contacts sync (timer)", "kind": "sync",
+                          "started": 1700000000.0, "done": 857, "total": 916, "step": "Pat Example"},
+                         {"title": "Mail archiving", "started": "bad"}, "junk"]}
+        with mock.patch.object(fleet, "listening_ports", lambda: {8391: 4343}), \
+             mock.patch.object(fleet, "probe_instance", lambda port, timeout=0: body):
+            snap = self.live()
+        inst = next(i for i in snap["instances"] if i["port"] == 8391)
+        self.assertEqual([w["title"] for w in inst["work"]], ["Contacts sync (timer)", "Mail archiving"])
+        w = inst["work"][0]
+        self.assertEqual((w["done"], w["total"], w["step"], w["startedAt"]), (857, 916, "Pat Example", 1700000000000))
+        self.assertIsNone(inst["work"][1]["startedAt"])
+
+    def test_this_process_work_is_read_fresh_every_tick(self):
+        from server import runtimework
+        with mock.patch.object(fleet, "listening_ports", lambda: {8377: os.getpid()}), \
+             mock.patch.object(fleet.instance, "api_url", lambda: "http://localhost:8377"), \
+             mock.patch.object(fleet.instance, "metadata", lambda: {"id": "primary", "kind": "primary"}):
+            with runtimework.activity("Media indexing", kind="index"):
+                runtimework.progress(done=3, total=10, step="batch 3")
+                snap = self.live()
+                me = next(i for i in snap["instances"] if i["port"] == 8377)
+                self.assertEqual([(w["title"], w["done"], w["total"], w["step"]) for w in me["work"]],
+                                 [("Media indexing", 3, 10, "batch 3")])
+            snap = self.live()
+            me = next(i for i in snap["instances"] if i["port"] == 8377)
+            self.assertEqual(me["work"], [], "gone the tick after the activity ends")
+
     def test_a_branch_instance_is_shown_beside_its_worktree(self):
         wt = Path(self.env.folder("wt"))
         (wt / ".test-instance.json").write_text(json.dumps({"pid": 4242, "port": 8390}), encoding="utf-8")

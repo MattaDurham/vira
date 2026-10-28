@@ -43,7 +43,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import admission, changelog, instance, joblog, settings
+from . import admission, changelog, instance, joblog, settings, runtimework
 from . import fleetclaude as fc
 from . import fleetcodex as fx
 from . import fleetgit as fg
@@ -218,6 +218,24 @@ def listening_ports():
             if m:
                 ports.setdefault(int(m.group(1)), pid)
     return ports
+
+
+def work_rows(rows):
+    """What runs inside an instance (runtimework.snapshot, or the same list
+    read over /api/instance): [{id, title, kind, startedAt, done, total,
+    step}] with the clock in ms like every other Fleet timestamp."""
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict) or not r.get("title"):
+            continue
+        try:
+            started = int(float(r.get("started") or 0) * 1000) or None
+        except (TypeError, ValueError):
+            started = None
+        out.append(dict(id=r.get("id"), title=str(r["title"])[:120], kind=r.get("kind") or "background",
+                        startedAt=started, done=r.get("done"), total=r.get("total"),
+                        step=(r.get("step") or "")[:120]))
+    return out
 
 
 def probe_instance(port, timeout=0.6):
@@ -855,6 +873,11 @@ class Fleet:
                 self.roots_seen[r["repo"]] = max(self.roots_seen.get(r["repo"], 0), r["lastAt"])
         self.last_rows = rows
         instances, listener_pids = self._instances(procs)
+        # This process's own work is free to read and changes every tick
+        # (a counter moving), so it never waits for the probe cadence.
+        for i in instances:
+            if i.get("self"):
+                i["work"] = work_rows(runtimework.snapshot())
         families = self._graph(rows)
         shown = {r["id"] for r in rows if r["live"]} | self._shown_closed
         sessions = [r for r in rows if r["live"]]
@@ -1106,7 +1129,8 @@ class Fleet:
                             url=f"http://localhost:{port}", self=port == me, pid=pid,
                             startedAt=(now_ms() - p["secs"] * 1000) if p else None,
                             cpu=p["cpu"] if p else None, memMB=round(p["rss"] / 1024) if p else None,
-                            worktree=folder, branch=wt["branch"] if wt else None))
+                            worktree=folder, branch=wt["branch"] if wt else None,
+                            work=work_rows(body.get("work"))))
         self.inst = (out, pids, time.time())
         return out, pids
 

@@ -286,6 +286,26 @@ assert.equal(ses.querySelector(".fl-doing-tag").textContent, "Testing");
 F.back();
 F.onFrame("fleet", snap);
 
+// Work inside a Vira process (runtimework rows on an instance) shows on
+// the bottom strip with its counter, the live instance included, and the
+// instance's sheet lists it.
+const withWork = JSON.parse(JSON.stringify(snap));
+withWork.instances = [{ port: 8377, kind: "primary", self: true, id: "primary", url: "http://localhost:8377",
+  startedAt: NOW - H, work: [{ id: "t1", title: "Contacts sync (sync tab)", kind: "sync", startedAt: NOW - 60e3,
+    done: 857, total: 916, step: "Pat Example" }] }];
+F.onFrame("fleet", withWork);
+const bottomStrip = root.querySelector(".fl-bottom");
+assert.match(bottomStrip.textContent, /Inside Vira/);
+const pill = bottomStrip.querySelector(".fl-work");
+assert.equal(pill.querySelector("b").textContent, "Contacts sync (sync tab)");
+assert.match(pill.querySelector("span").textContent, /^857 of 916 \/ Pat Example/);
+pill.click();
+assert.equal(F.S.view, "inst:8377");
+assert.match(root.querySelector(".fl-sheet").textContent, /Running inside it[\s\S]*Contacts sync \(sync tab\)/);
+F.back();
+F.onFrame("fleet", snap);
+assert.ok(!/Inside Vira/.test(root.querySelector(".fl-bottom").textContent), "no work, no label");
+
 // Branch labels: a branch with no commits is not "merged", and its
 // uncommitted files are counted.
 assert.equal(F.branchLabel({ state: "fresh", dirty: 15 }), "no commits yet / 15 uncommitted files");

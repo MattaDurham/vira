@@ -5634,8 +5634,10 @@ def api_update_apply():
 
 @app.get("/api/instance")
 def api_instance():
-    """Lightweight runtime identity, also used to coordinate account workers."""
-    return instance.metadata()
+    """Lightweight runtime identity, also used to coordinate account workers.
+    `work` is what runs inside this process right now (runtimework), so
+    Fleet can show it beside the sessions."""
+    return dict(instance.metadata(), work=runtimework.snapshot())
 
 
 # ---------- config ----------

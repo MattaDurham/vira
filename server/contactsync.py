@@ -16,8 +16,9 @@ Inbound (phone -> CRM), additive only:
 - An email or phone on a matched card the CRM lacks joins the person's
   handles (triage.add_handles). One that belongs to another CRM person
   marks a card two people share (a duplicate, a family card): it is never
-  moved, never retried, and is listed once under shared cards and in the
-  review list.
+  moved, never retried, and the card is listed once under shared cards
+  and in the review list. Nothing is pushed to a shared card either, or
+  the two people would overwrite each other on alternate passes.
 - An empty card field (company, title, birthday, location) is filled from
   the phone card, and the phone's own note is kept in Vira as a "Phone
   note" custom row. Nothing the CRM already says is overwritten.
@@ -55,7 +56,7 @@ import uuid
 from pathlib import Path
 
 from . import applecontacts as ac
-from . import jsonstore, settings
+from . import jsonstore, runtimework, settings
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,21 @@ BOOT_DELAY_S = 120
 
 _run_lock = threading.Lock()
 _status = {"running": False, "phase": "", "started": None, "finished": None,
-           "error": None, "reason": None}
+           "error": None, "reason": None, "progress": None}
+
+
+def _progress(done=None, total=None, step=None):
+    """The running pass's counter, for the Sync tab (status()) and for
+    Fleet (runtimework): done of total, and the name being worked on."""
+    cur = dict(_status.get("progress") or {})
+    if done is not None:
+        cur["done"] = done
+    if total is not None:
+        cur["total"] = total
+    if step is not None:
+        cur["step"] = str(step)[:120]
+    _status["progress"] = cur
+    runtimework.progress(done=done, total=total, step=step)
 
 
 # ---------- store ----------
@@ -193,7 +208,7 @@ def survey(cards=None, store=None):
     store = store if store is not None else read_store()
     c = crm._load()
     people = list(c["by_id"].values())
-    matched, matched_uids = {}, set()
+    matched, matched_uids, owners = {}, set(), {}
     for p in people:
         emails, phones = _handles(p)
         if not (emails or phones):
@@ -202,6 +217,19 @@ def survey(cards=None, store=None):
         if ms:
             matched[p["id"]] = ms
             matched_uids.update(m["uid"] for m in ms)
+            for m in ms:
+                owners.setdefault(m["uid"], []).append(p["id"])
+    # A card two CRM people both match (a duplicate registry entry, a
+    # family card) would take one person's fields on one pass and the
+    # other's on the next. Nothing is pushed to it until the CRM says who
+    # it is; it is listed once, with both names.
+    shared_uids = {uid for uid, ps in owners.items() if len(ps) > 1}
+    shared_cards = []
+    for uid in sorted(shared_uids):
+        cd = next((x for x in cards if x["uid"] == uid), None)
+        shared_cards.append({"uid": uid, "card": cd["name"] if cd else "",
+                             "people": [{"pid": q, "name": c["by_id"][q]["name"]}
+                                        for q in owners[uid]]})
     newest_known = max((m["created"] for ms in matched.values() for m in ms
                         if m.get("created")), default=None)
     since = store.get("since")
@@ -274,7 +302,8 @@ def survey(cards=None, store=None):
         if fill or phone_note:
             fills.append({"pid": pid, "name": p["name"], "fields": fill,
                           "phone_note": phone_note})
-        for m, plan in ac.plan_person(pid, ms, card=card, detail=detail):
+        own = [m for m in ms if m["uid"] not in shared_uids]
+        for m, plan in ac.plan_person(pid, own, card=card, detail=detail):
             if plan["changed"]:
                 plans.append((pid, p["name"], m, plan))
                 changes.append({"pid": pid, "name": p["name"], "uid": m["uid"],
@@ -292,7 +321,7 @@ def survey(cards=None, store=None):
         "backlog": len(backlog),
         "backlog_sample": [_card_row(cd) for cd in backlog],
         "handle_adds": handle_adds, "handle_conflicts": handle_conflicts,
-        "fills": fills, "changes": changes,
+        "shared_cards": shared_cards, "fills": fills, "changes": changes,
         "missing": missing, "unmatched_skipped": len(unmatched) - len(missing),
         "_new_cards": new_cards, "_plans": plans,
     }
@@ -355,166 +384,183 @@ def apply(inbound=True, push=False, create=False, reason="manual"):
         return {"ok": False, "detail": why}
     now = _now()
     _status.update(running=True, phase="survey", started=now, error=None,
-                   reason=reason)
+                   reason=reason, progress=None)
     try:
         from . import contactcard, data as crm, onboard, triage
-        cards = ac.load_cards()
-        s = survey(cards)
-        done = {"imported": [], "handles": [], "fills": 0, "pushed": [],
-                "created": [], "errors": [], "review": 0}
-        reviews = []
-        if inbound:
-            _status["phase"] = "inbound"
-            contacts = []
-            for cd in s["_new_cards"]:
-                emails = sorted({e["value"].strip().lower()
-                                 for e in cd.get("emails", []) if e["value"].strip()})
-                phones = sorted({ac._norm_phone(p["value"]) for p in cd.get("phones", [])
-                                 if len(ac._norm_phone(p["value"])) == 10})
-                if cd["name"] and (emails or phones):
-                    contacts.append({"name": cd["name"], "company": cd.get("org") or "",
-                                     "title": cd.get("title") or "",
-                                     "emails": emails, "phones10": phones})
-            if contacts:
-                onboard.import_contacts(contacts, "apple-contacts")
-                crm.invalidate()
-                for ct in contacts:
-                    pid = None
-                    for h in ct["emails"] + ct["phones10"]:
-                        pid = crm.resolve_handle(h)
-                        if pid:
-                            break
-                    done["imported"].append({"pid": pid, "name": ct["name"]})
-                    where = f" ({ct['company']})" if ct["company"] else ""
-                    reviews.append(_review(
-                        "new-person", pid, ct["name"],
-                        detail=f"New on the phone: {ct['name']}{where}. "
-                               "Set the relationship and check the card."))
-            newest = max((cd["created"] for cd in s["_new_cards"] if cd.get("created")),
-                         default=None)
-            marks = [x for x in (s["since"], newest) if x is not None]
-            if marks:
-                mark = max(marks)
-                _mutate(lambda st: st.__setitem__("since", mark))
-            for item in s["handle_adds"]:
-                try:
-                    triage.add_handles(item["pid"], [{"kind": item["kind"],
-                                                      "value": item["value"]}])
-                    done["handles"].append(item)
-                except ValueError as e:
-                    reviews.append(_review(
-                        "handle-conflict", item["pid"], item["name"],
-                        detail=f"The phone card carries {item['kind']} "
-                               f"{item['value']}: {e}",
-                        key=f"handle-conflict:{item['pid']}:{item['value']}"))
-                except (KeyError, OSError) as e:
-                    done["errors"].append(f"{item['name']}: {str(e)[:120]}")
-            for item in s["handle_conflicts"]:
-                reviews.append(_review(
-                    "handle-conflict", item["pid"], item["name"],
-                    detail=f"The phone card carries {item['kind']} {item['value']}, "
-                           f"which belongs to {item['other_name']} in the CRM: the "
-                           "two share one phone card. Merge them in the CRM or "
-                           "split the card; nothing was moved.",
-                    key=f"handle-conflict:{item['pid']}:{item['value']}"))
-            for f in s["fills"]:
-                draft = {"fields": dict(f["fields"])}
-                if f["phone_note"]:
-                    card = contactcard.compose(f["pid"])
-                    custom = list(card["custom"]) if card else []
-                    custom.append({"label": PHONE_NOTE_LABEL,
-                                   "value": f["phone_note"][:contactcard.MAX_VALUE]})
-                    draft["custom"] = custom
-                    reviews.append(_review(
-                        "phone-note", f["pid"], f["name"],
-                        detail="The phone card had its own note. It is now the "
-                               f"'{PHONE_NOTE_LABEL}' row on the card here and "
-                               "stays on the phone above the Vira block.",
-                        text=f["phone_note"]))
-                try:
-                    contactcard.save(f["pid"], draft, integrate=False)
-                    done["fills"] += 1
-                except (KeyError, ValueError, OSError) as e:
-                    done["errors"].append(f"{f['name']}: {str(e)[:120]}")
-            if done["imported"] or done["handles"] or done["fills"]:
-                crm.invalidate()
-                s = survey(cards)       # the push plans see the filled CRM
-        apple_changed = False
-        if push:
-            _status["phase"] = "push"
-            if not ac.enabled():
-                done["errors"].append("Apple push is off (Config > Contacts > "
-                                      "Update Apple Contacts).")
-            for pid, name, apple, plan in (s["_plans"] if ac.enabled() else []):
-                try:
-                    r = ac.apply_plan(apple, plan)
-                    apple_changed = True
-                    done["pushed"].append({"pid": pid, "name": name,
-                                           "uid": apple["uid"], "changed": r["changed"]})
-                    for cf in r["conflicts"]:
-                        reviews.append(_review(
-                            "field-conflict", pid, name, uid=apple["uid"],
-                            detail=f"{cf['field']}: Vira says \"{cf['crm']}\", the "
-                                   f"phone said \"{cf['phone']}\". The phone now "
-                                   "shows Vira's value; the old one is kept in the "
-                                   "card's note."))
-                    if r["foreign_note"]:
-                        foreign, _ = ac.split_note(apple.get("note") or "")
-                        reviews.append(_review(
-                            "note-merged", pid, name, uid=apple["uid"],
-                            detail="The phone card had its own note; Vira's block "
-                                   "was added below it. Read the card.",
-                            text=foreign))
-                except Exception as e:
-                    done["errors"].append(f"{name}: {str(e)[:160]}")
-        if create:
-            _status["phase"] = "create"
-            if not ac.enabled():
-                done["errors"].append("Apple push is off (Config > Contacts > "
-                                      "Update Apple Contacts).")
-            for mp in (s["missing"] if ac.enabled() else []):
-                r = ac.create_card(mp["pid"])
-                if r["ok"]:
-                    apple_changed = True
-                    done["created"].append({"pid": mp["pid"], "name": mp["name"],
-                                            "uid": r["uid"]})
-                    reviews.append(_review(
-                        "created-card", mp["pid"], mp["name"], uid=r["uid"],
-                        detail="Created on the phone from the CRM."))
-                else:
-                    done["errors"].append(f"{mp['name']}: {r['detail']}")
-        _status["phase"] = "report"
-        final = survey(ac.load_cards() if apple_changed else cards)
-        done["review"] = len(reviews)
-        public = _public(final)
-
-        def fn(st):
-            st["report"] = public
-            seen = {_review_key(r) for r in st["review"]}
-            for rv in reviews:
-                if rv["key"] not in seen:
-                    seen.add(rv["key"])
-                    st["review"].append(rv)
-            st["review"] = st["review"][-MAX_REVIEW:]
-            st["log"].append({
-                "when": now, "reason": reason, "inbound": inbound,
-                "push": push, "create": create,
-                "imported": len(done["imported"]), "handles": len(done["handles"]),
-                "fills": done["fills"], "pushed": len(done["pushed"]),
-                "created": len(done["created"]), "review": len(reviews),
-                "errors": done["errors"][:20]})
-            st["log"] = st["log"][-MAX_LOG:]
-            for cr in done["created"]:
-                st["created"].append({**cr, "when": now, "undone": False})
-        _mutate(fn)
-        return {"ok": True, "done": done, "report": public}
+        with runtimework.activity(f"Contacts sync ({reason})", kind="sync"):
+            return _apply_inner(inbound, push, create, reason, now,
+                                contactcard, crm, onboard, triage)
     except Exception as e:
         log.exception("contacts sync pass failed")
         _status["error"] = str(e)[:300]
         return {"ok": False, "detail": str(e)[:300]}
     finally:
-        _status.update(running=False, phase="", finished=_now())
+        _status.update(running=False, phase="", finished=_now(), progress=None)
         _run_lock.release()
+
+
+def _apply_inner(inbound, push, create, reason, now, contactcard, crm, onboard, triage):
+    _progress(step="surveying the cards and the CRM")
+    cards = ac.load_cards()
+    s = survey(cards)
+    done = {"imported": [], "handles": [], "fills": 0, "pushed": [],
+            "created": [], "errors": [], "review": 0}
+    reviews = []
+    if inbound:
+        _status["phase"] = "inbound"
+        contacts = []
+        for cd in s["_new_cards"]:
+            emails = sorted({e["value"].strip().lower()
+                             for e in cd.get("emails", []) if e["value"].strip()})
+            phones = sorted({ac._norm_phone(p["value"]) for p in cd.get("phones", [])
+                             if len(ac._norm_phone(p["value"])) == 10})
+            if cd["name"] and (emails or phones):
+                contacts.append({"name": cd["name"], "company": cd.get("org") or "",
+                                 "title": cd.get("title") or "",
+                                 "emails": emails, "phones10": phones})
+        if contacts:
+            onboard.import_contacts(contacts, "apple-contacts")
+            crm.invalidate()
+            for ct in contacts:
+                pid = None
+                for h in ct["emails"] + ct["phones10"]:
+                    pid = crm.resolve_handle(h)
+                    if pid:
+                        break
+                done["imported"].append({"pid": pid, "name": ct["name"]})
+                where = f" ({ct['company']})" if ct["company"] else ""
+                reviews.append(_review(
+                    "new-person", pid, ct["name"],
+                    detail=f"New on the phone: {ct['name']}{where}. "
+                           "Set the relationship and check the card."))
+        newest = max((cd["created"] for cd in s["_new_cards"] if cd.get("created")),
+                     default=None)
+        marks = [x for x in (s["since"], newest) if x is not None]
+        if marks:
+            mark = max(marks)
+            _mutate(lambda st: st.__setitem__("since", mark))
+        for item in s["handle_adds"]:
+            try:
+                triage.add_handles(item["pid"], [{"kind": item["kind"],
+                                                  "value": item["value"]}])
+                done["handles"].append(item)
+            except ValueError as e:
+                reviews.append(_review(
+                    "handle-conflict", item["pid"], item["name"],
+                    detail=f"The phone card carries {item['kind']} "
+                           f"{item['value']}: {e}",
+                    key=f"handle-conflict:{item['pid']}:{item['value']}"))
+            except (KeyError, OSError) as e:
+                done["errors"].append(f"{item['name']}: {str(e)[:120]}")
+        _progress(done=0, total=len(s["fills"]), step="filling cards from the phone")
+        for n_f, f in enumerate(s["fills"], 1):
+            _progress(done=n_f, step=f["name"])
+            draft = {"fields": dict(f["fields"])}
+            if f["phone_note"]:
+                card = contactcard.compose(f["pid"])
+                custom = list(card["custom"]) if card else []
+                custom.append({"label": PHONE_NOTE_LABEL,
+                               "value": f["phone_note"][:contactcard.MAX_VALUE]})
+                draft["custom"] = custom
+                reviews.append(_review(
+                    "phone-note", f["pid"], f["name"],
+                    detail="The phone card had its own note. It is now the "
+                           f"'{PHONE_NOTE_LABEL}' row on the card here and "
+                           "stays on the phone above the Vira block.",
+                    text=f["phone_note"]))
+            try:
+                contactcard.save(f["pid"], draft, integrate=False)
+                done["fills"] += 1
+            except (KeyError, ValueError, OSError) as e:
+                done["errors"].append(f"{f['name']}: {str(e)[:120]}")
+        if done["imported"] or done["handles"] or done["fills"]:
+            crm.invalidate()
+            s = survey(cards)       # the push plans see the filled CRM
+    apple_changed = False
+    if push:
+        _status["phase"] = "push"
+        if not ac.enabled():
+            done["errors"].append("Apple push is off (Config > Contacts > "
+                                  "Update Apple Contacts).")
+        todo = s["_plans"] if ac.enabled() else []
+        _progress(done=0, total=len(todo), step="writing phone cards")
+        for n_p, (pid, name, apple, plan) in enumerate(todo, 1):
+            _progress(done=n_p, step=name)
+            try:
+                r = ac.apply_plan(apple, plan)
+                apple_changed = True
+                done["pushed"].append({"pid": pid, "name": name,
+                                       "uid": apple["uid"], "changed": r["changed"]})
+                for cf in r["conflicts"]:
+                    reviews.append(_review(
+                        "field-conflict", pid, name, uid=apple["uid"],
+                        detail=f"{cf['field']}: Vira says \"{cf['crm']}\", the "
+                               f"phone said \"{cf['phone']}\". The phone now "
+                               "shows Vira's value; the old one is kept in the "
+                               "card's note."))
+                if r["foreign_note"]:
+                    foreign, _ = ac.split_note(apple.get("note") or "")
+                    reviews.append(_review(
+                        "note-merged", pid, name, uid=apple["uid"],
+                        detail="The phone card had its own note; Vira's block "
+                               "was added below it. Read the card.",
+                        text=foreign))
+            except Exception as e:
+                done["errors"].append(f"{name}: {str(e)[:160]}")
+    if create:
+        _status["phase"] = "create"
+        if not ac.enabled():
+            done["errors"].append("Apple push is off (Config > Contacts > "
+                                  "Update Apple Contacts).")
+        todo = s["missing"] if ac.enabled() else []
+        _progress(done=0, total=len(todo), step="creating phone cards")
+        for n_c, mp in enumerate(todo, 1):
+            _progress(done=n_c, step=mp["name"])
+            r = ac.create_card(mp["pid"])
+            if r["ok"]:
+                apple_changed = True
+                done["created"].append({"pid": mp["pid"], "name": mp["name"],
+                                        "uid": r["uid"]})
+                reviews.append(_review(
+                    "created-card", mp["pid"], mp["name"], uid=r["uid"],
+                    detail="Created on the phone from the CRM."))
+            else:
+                done["errors"].append(f"{mp['name']}: {r['detail']}")
+    _status["phase"] = "report"
+    _progress(step="re-surveying")
+    final = survey(ac.load_cards() if apple_changed else cards)
+    for sc in final["shared_cards"]:
+        names = " and ".join(q["name"] for q in sc["people"])
+        reviews.append(_review(
+            "shared-card", sc["people"][0]["pid"], sc["card"] or names,
+            uid=sc["uid"],
+            detail=f"Two CRM people match this phone card: {names}. Nothing "
+                   "is pushed to it until they are merged in the CRM or the "
+                   "card is split.",
+            key=f"shared-card:{sc['uid']}"))
+    done["review"] = len(reviews)
+    public = _public(final)
+
+    def fn(st):
+        st["report"] = public
+        seen = {_review_key(r) for r in st["review"]}
+        for rv in reviews:
+            if rv["key"] not in seen:
+                seen.add(rv["key"])
+                st["review"].append(rv)
+        st["review"] = st["review"][-MAX_REVIEW:]
+        st["log"].append({
+            "when": now, "reason": reason, "inbound": inbound,
+            "push": push, "create": create,
+            "imported": len(done["imported"]), "handles": len(done["handles"]),
+            "fills": done["fills"], "pushed": len(done["pushed"]),
+            "created": len(done["created"]), "review": len(reviews),
+            "errors": done["errors"][:20]})
+        st["log"] = st["log"][-MAX_LOG:]
+        for cr in done["created"]:
+            st["created"].append({**cr, "when": now, "undone": False})
+    _mutate(fn)
+    return {"ok": True, "done": done, "report": public}
 
 
 def run_async(inbound=True, push=False, create=False, reason="manual"):

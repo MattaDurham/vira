@@ -1,4 +1,5 @@
-"""In-process work that a deliberate restart must disclose and drain."""
+"""In-process work that a deliberate restart must disclose and drain, and
+that Fleet shows as what is running inside each Vira instance."""
 import threading
 import time
 import uuid
@@ -9,6 +10,9 @@ lock = threading.RLock()
 _admission = threading.Condition(lock)
 _active = {}
 _frozen = False
+# The activity each thread is inside, innermost last, so progress() can
+# find its own row without the caller threading a token through.
+_current = threading.local()
 
 
 class Restarting(ValueError):
@@ -28,12 +32,38 @@ def activity(title, kind="background", wait=False):
             raise Restarting("Vira is restarting; try again after it reconnects")
         _active[token] = {"id": token, "title": title, "kind": kind,
                           "started": time.time(), "survives": False,
-                          "detail": "Interrupted by an immediate restart."}
+                          "detail": "Interrupted by an immediate restart.",
+                          "done": None, "total": None, "step": ""}
+    stack = getattr(_current, "stack", None)
+    if stack is None:
+        stack = _current.stack = []
+    stack.append(token)
     try:
         yield
     finally:
+        if stack and stack[-1] == token:
+            stack.pop()
         with lock:
             _active.pop(token, None)
+
+
+def progress(done=None, total=None, step=None):
+    """Report how far the current thread's activity is: `done` of `total`
+    items, and `step`, the thing being worked on now. Fleet shows the
+    row with these; a thread outside any activity is ignored."""
+    stack = getattr(_current, "stack", None)
+    if not stack:
+        return
+    with lock:
+        row = _active.get(stack[-1])
+        if row is None:
+            return
+        if done is not None:
+            row["done"] = done
+        if total is not None:
+            row["total"] = total
+        if step is not None:
+            row["step"] = str(step)[:120]
 
 
 def tracked(title):

@@ -353,6 +353,7 @@ details.fl-fold summary { cursor: pointer; font-size: 12px; color: var(--text-di
 .fl-srv b { font-family: var(--mono); font-weight: 500; color: var(--text); }
 .fl-srv span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fl-srv.old b { color: var(--fl-need); }
+.fl-srv.fl-work b { color: var(--fl-do-run); font-family: inherit; }
 .fl-gap { margin-left: auto; min-width: 0; }
 .fl-missing { color: var(--text-faint); }
 

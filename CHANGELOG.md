@@ -8,6 +8,20 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Fleet shows what runs inside each Vira process. Every in-process pass
+  registered with `runtimework` (media and mail archiving, contact and
+  idea indexing, backups, the contacts sync, a flow starting) now rides
+  `/api/instance` and appears on the Fleet strip under "Inside Vira", the
+  live instance included, with a counter where the pass reports one
+  ("857 of 916 / Pat Example") and its elapsed time; the instance's sheet
+  lists the same rows. `runtimework.progress(done, total, step)` is how a
+  pass reports; the contacts sync reports every card it writes, fills or
+  creates, and the Sync tab's running line shows the same counter.
+- Contacts sync: a phone card two CRM people both match is never pushed
+  to (each pass would have written the other person's fields), and the
+  handle comparison ignores the order Contacts stores a list in and a
+  label the CRM has no opinion on, so an unchanged card is not rewritten
+  on every pass (223 of 916 were, on the first live push).
 - People > Sync: the CRM and the phone's address book reconciled both
   ways (`server/contactsync.py`). Until now nothing moved contacts on its
   own: a card added on the phone reached the Mac over iCloud and stopped,
