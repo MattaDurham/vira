@@ -10,6 +10,10 @@ A family member's calendars are not synced into the local store by
 default; enable their shared calendars under the Google account in
 Calendar.app and they appear here automatically. Calendars named in the
 `family_calendars` config list get the family tag.
+
+Appointments that live only in a reminder text or mail (server/appointments.py)
+join Today and Tomorrow too, with their travel buffer, so a day with a
+doctor's visit never reads as "nothing scheduled".
 """
 
 from . import modulemodels
@@ -20,6 +24,7 @@ import time
 from pathlib import Path
 
 from . import admininbox
+from . import appointments
 from . import briefstate
 from . import channels
 from . import data as crm
@@ -151,12 +156,16 @@ def _occurrences(day_from, day_to):
 
 
 def _flag_conflicts(events):
-    timed = [e for e in events if not e["all_day"] and not e["birthday"]]
+    # A travel row is already inside its appointment's busy window, which
+    # covers the buffer on both sides (server/appointments.py).
+    timed = [e for e in events if not e["all_day"] and not e["birthday"]
+             and not e.get("travel")]
     for i, a in enumerate(timed):
         for b in timed[i + 1:]:
             if bool(a.get("remote")) != bool(b.get("remote")):
                 continue  # a remote call doesn't block an in-person commitment
-            if a["start"] < b["end"] and b["start"] < a["end"]:
+            if (a.get("busy_start", a["start"]) < b.get("busy_end", b["end"])
+                    and b.get("busy_start", b["start"]) < a.get("busy_end", a["end"])):
                 a["conflict"] = b["conflict"] = True
     return events
 
@@ -224,12 +233,17 @@ def _merge_m365(events, extra):
     return events
 
 
-def _calendar():
+def _calendar(feed_items=None):
     m365 = _m365_events()
-    today = _flag_conflicts(_merge_m365(
-        _occurrences(*_day_bounds(0)), m365["today"]))
-    tomorrow = _flag_conflicts(_merge_m365(
-        _occurrences(*_day_bounds(1)), m365["tomorrow"]))
+    found = appointments.refresh(feed_items)
+    try:
+        appts = appointments.upcoming(include_closed=True)
+    except Exception as e:  # noqa: BLE001 - the calendar still renders
+        appts, found = [], f"ledger unreadable: {str(e)[:120]}"
+    today = _flag_conflicts(appointments.merge(_merge_m365(
+        _occurrences(*_day_bounds(0)), m365["today"]), *_day_bounds(0), appts))
+    tomorrow = _flag_conflicts(appointments.merge(_merge_m365(
+        _occurrences(*_day_bounds(1)), m365["tomorrow"]), *_day_bounds(1), appts))
     week_start, _ = _day_bounds(0)
     week = _occurrences(week_start, week_start + dt.timedelta(days=7))
     birthdays = [{**e, "date": e["start"][:10]} for e in week if e["birthday"]]
@@ -238,7 +252,8 @@ def _calendar():
             "birthdays": birthdays,
             "available": CAL_DB.exists() and _cal_error is None,
             "error": _cal_error,
-            "m365": m365["status"]}
+            "m365": m365["status"],
+            "appointments": found}
 
 
 def _is_company(person):
@@ -615,7 +630,7 @@ def compose(feed_items=None):
     return {
         "generated_at": now.isoformat(),
         "date_label": settings.strf(now, "%A, %B %-d, %Y"),
-        "calendar": _calendar(),
+        "calendar": _calendar(feed_items),
         "waiting": {
             "imessage": _not_dismissed(_unreplied_imessages()),
             "email": _not_dismissed(_recent_mail(feed_items)),
@@ -658,7 +673,10 @@ NARRATIVE_CLASS = "standard"
 
 NARRATIVE_PROMPT = """You are writing the TL;DR for {owner}'s daily brief.
 
-Below is today's brief data as JSON: calendar (their day and the family's),
+Below is today's brief data as JSON: calendar (their day and the family's;
+rows with "appointment" are appointments, "appointment_found" ones known only
+from a reminder text or mail and not yet on a calendar, "travel" rows are
+the time to get there, "leave_by_hm" when to set off),
 iMessages waiting on a reply from them, recent inbound work/personal email,
 admin chores (things businesses and automated systems asked them to do,
 with due dates; these are errands, never people waiting on a reply),

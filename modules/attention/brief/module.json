@@ -26,7 +26,8 @@
     "people/networking",
     "applications/catalog",
     "reader/queue",
-    "models/backends"
+    "models/backends",
+    "attention/assistant"
   ],
   "feeds": [
     "attention/now"

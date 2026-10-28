@@ -102,13 +102,13 @@ branch; the suite and `check` say when it is whole.
 ### Rhythm
 
 - [Attention](attention/README.md) - What Vira is doing right now, what is waiting on the owner, the Daily Brief, and the standing assistant.  
-  Now, Brief, Review, Assistant, Childcare (40 files)
+  Now, Brief, Review, Assistant, Childcare (42 files)
 
 ### Money
 
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-786 of 786 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+788 of 788 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->

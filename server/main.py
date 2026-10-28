@@ -2243,6 +2243,24 @@ def api_brief_dismiss(req: BriefDismissReq):
     return {"ok": True}
 
 
+@app.get("/api/appointments")
+def api_appointments(include_closed: bool = False):
+    """Appointments found in reminder texts and mail (server/appointments.py)."""
+    from . import appointments
+    status = appointments.refresh(watcher.snapshot(200))
+    return {"items": appointments.upcoming(include_closed=include_closed), "status": status}
+
+
+@app.post("/api/appointments/{appt_id}/dismiss")
+def api_appointment_dismiss(appt_id: str):
+    """Not an appointment: drop it from the brief and withdraw its unwritten entry."""
+    from . import appointments
+    try:
+        return appointments.dismiss(appt_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 class EventPrepReq(BaseModel):
     event_key: str
     end: str               # the event's last day, so state prunes after it

@@ -13491,20 +13491,46 @@ function renderBrief(b) {
     run: () => openDayContext(context),
   }];
   const cal = b.calendar || {};
+  // Appointments found in reminder texts and mail (server/appointments.py):
+  // a found row is not on any calendar yet; a travel row is the buffer
+  // before an in-person visit; a calendar event can carry a leave-by time
+  // or say its appointment was cancelled.
+  const apptNote = (e) => [
+    e.leave_by_hm ? "Leave by " + e.leave_by_hm + " (" + e.travel_minutes + "-minute travel buffer)." : "",
+    e.appointment_found ? "Found in a message from " + e.found_in
+      + "; not on a calendar yet." + (e.end_stated ? "" : " The end time is your default appointment length.") : "",
+    e.found_quote ? "“" + e.found_quote + "”" : "",
+  ].filter(Boolean).join("\n\n");
   const evRow = (sec, e) => briefRow(sec, {
     time: e.all_day ? "all day" : e.start_hm,
     title: e.title,
-    tag: e.conflict ? "overlap" : (e.remote ? "remote"
-      : (e.family ? "family" : (e.work ? "work" : null))),
-    tagCls: e.conflict ? "conflict" : (e.remote ? "remote"
-      : (e.family ? "family" : "work")),
-    actions: contextAction({
-      source: "Calendar", title: e.title,
+    sub: e.leave_by_hm ? "leave by " + e.leave_by_hm : null,
+    tag: e.conflict ? "overlap" : (e.appointment_status ? e.appointment_status
+      : (e.travel ? "travel" : (e.appointment_found ? "from a text"
+      : (e.appointment ? "appointment" : (e.remote ? "remote"
+      : (e.family ? "family" : (e.work ? "work" : null))))))),
+    tagCls: e.conflict || e.appointment_status ? "conflict"
+      : (e.travel ? "remote" : (e.appointment ? "owe" : (e.remote ? "remote"
+      : (e.family ? "family" : "work")))),
+    actions: e.travel ? [] : contextAction({
+      source: e.appointment_found ? "Appointment" : "Calendar", title: e.title,
       ref: [e.calendar, e.start].filter(Boolean).join(" · "),
       text: [e.all_day ? "All day" : [e.start_hm, e.end_hm].filter(Boolean).join("–"),
-             e.location, e.organizer, e.body_preview].filter(Boolean).join("\n\n"),
+             e.location, e.organizer, e.body_preview, apptNote(e)].filter(Boolean).join("\n\n"),
       open: e.web_link || "",
-    }),
+    }).concat(e.appointment_found ? [{
+      label: "not an appointment", title: "Remove it from the brief and keep it off the calendar",
+      run: async (btn) => {
+        btn.disabled = true;
+        try {
+          await post("/api/appointments/" + encodeURIComponent(e.appointment_id) + "/dismiss", {});
+          loadBrief();
+        } catch (err) {
+          btn.disabled = false;
+          toast("Could not remove it: " + errText(err));
+        }
+      },
+    }] : []),
   });
 
   // Event prep climbs the brief as its date nears: within two days it sits

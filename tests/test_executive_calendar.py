@@ -44,6 +44,9 @@ class CalendarPlanningLoop(unittest.TestCase):
             mock.patch.object(executive, "commitment_records", side_effect=lambda: copy.deepcopy(self.records)),
             mock.patch.object(executive, "_notify"),
             mock.patch.object(contactintel, "tick"),
+            # The appointment scan reads chat.db and the CRM; its own suite
+            # (tests/test_appointments.py) covers it with synthetic sources.
+            mock.patch("server.appointments.tick", return_value={}),
             mock.patch.object(calendarplan, "list_drafts", side_effect=lambda **kw: copy.deepcopy(self.drafts)),
             mock.patch.object(calendarplan, "destinations", create=True,
                               return_value={"selected": {"id": "synthetic", "name": "Synthetic calendar"}}),
