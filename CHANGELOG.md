@@ -21,7 +21,10 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   to (each pass would have written the other person's fields), and the
   handle comparison ignores the order Contacts stores a list in and a
   label the CRM has no opinion on, so an unchanged card is not rewritten
-  on every pass (223 of 916 were, on the first live push).
+  on every pass (223 of 916 were, on the first live push). The shared-card
+  review line counts the people on the card ("Three CRM people match
+  this phone card: A, B and C") and is refreshed in place when the names
+  change, instead of filing the entry again.
 - People > Sync: the CRM and the phone's address book reconciled both
   ways (`server/contactsync.py`). Until now nothing moved contacts on its
   own: a card added on the phone reached the Mac over iCloud and stopped,

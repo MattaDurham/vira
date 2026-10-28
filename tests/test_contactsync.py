@@ -7,6 +7,7 @@ module reads is pinned to the temp directory. Fixtures are synthetic
 
 import json
 import tempfile
+import re
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -219,6 +220,33 @@ class InboundPassTest(SyncCase):
         cs.apply(inbound=True)
         self.assertEqual(len([r for r in cs.read_store()["review"] if r["kind"] == "shared-card"]), 1)
         self.assertEqual(cs.read_store()["report"]["shared_cards_total"], 1)
+
+    def test_shared_card_wording_counts_the_people_and_stays_current(self):
+        self.people.append(person("p_y", "Yara Example", phones=["5550101234"]))
+        self.people.append(person("p_z", "Zed Example", phones=["5550101234"]))
+        self._write_registry()
+        crm.invalidate()
+        cs.apply(inbound=True)
+        shared = [r for r in cs.read_store()["review"] if r["kind"] == "shared-card"]
+        self.assertEqual(len(shared), 1)
+        m = re.match(r"Three CRM people match this phone card: (.*)\. Nothing",
+                     shared[0]["detail"])
+        self.assertTrue(m, shared[0]["detail"])
+        head, last = m.group(1).rsplit(" and ", 1)
+        self.assertEqual(sorted(head.split(", ") + [last]),
+                         ["Alex Example", "Yara Example", "Zed Example"])
+        # the owner reads it, then renames Zed in the CRM: the same entry
+        # is kept, stays read, and tells the current names
+        cs.mark_reviewed(everything=True)
+        next(p for p in self.people if p["id"] == "p_z")["name"] = "Zed Q. Example"
+        self._write_registry()
+        crm.invalidate()
+        cs.apply(inbound=True)
+        shared2 = [r for r in cs.read_store()["review"] if r["kind"] == "shared-card"]
+        self.assertEqual([r["id"] for r in shared2], [shared[0]["id"]])
+        self.assertTrue(shared2[0]["reviewed"])
+        self.assertIn("Zed Q. Example", shared2[0]["detail"])
+        self.assertNotIn("Zed Example", shared2[0]["detail"])
 
     def test_push_skips_the_shared_card(self):
         self.people.append(person("p_z", "Zed Example", phones=["5550101234"]))

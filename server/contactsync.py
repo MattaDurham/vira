@@ -349,6 +349,22 @@ def _public(s):
 
 # ---------- the pass (writes) ----------
 
+_WORDS = {2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven",
+          8: "Eight", 9: "Nine"}
+
+
+def _count(n):
+    return _WORDS.get(n, str(n))
+
+
+def _join(names):
+    """'A and B'; 'A, B and C'."""
+    names = list(names)
+    if len(names) <= 2:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def _review(kind, pid, name, *, uid=None, detail="", text="", key=None):
     """One entry for the owner to read. `key` is what makes it the same
     case on a later pass (the default folds in the detail text)."""
@@ -530,24 +546,31 @@ def _apply_inner(inbound, push, create, reason, now, contactcard, crm, onboard, 
     _progress(step="re-surveying")
     final = survey(ac.load_cards() if apple_changed else cards)
     for sc in final["shared_cards"]:
-        names = " and ".join(q["name"] for q in sc["people"])
+        names = [q["name"] for q in sc["people"]]
         reviews.append(_review(
-            "shared-card", sc["people"][0]["pid"], sc["card"] or names,
+            "shared-card", sc["people"][0]["pid"], sc["card"] or _join(names),
             uid=sc["uid"],
-            detail=f"Two CRM people match this phone card: {names}. Nothing "
-                   "is pushed to it until they are merged in the CRM or the "
-                   "card is split.",
+            detail=f"{_count(len(names))} CRM people match this phone card: "
+                   f"{_join(names)}. Nothing is pushed to it until they are "
+                   "merged in the CRM or the card is split.",
             key=f"shared-card:{sc['uid']}"))
     done["review"] = len(reviews)
     public = _public(final)
 
     def fn(st):
         st["report"] = public
-        seen = {_review_key(r) for r in st["review"]}
+        have = {}
+        for r in st["review"]:
+            have.setdefault(_review_key(r), r)
         for rv in reviews:
-            if rv["key"] not in seen:
-                seen.add(rv["key"])
+            old = have.get(rv["key"])
+            if old is None:
+                have[rv["key"]] = rv
                 st["review"].append(rv)
+            elif (old.get("detail"), old.get("name")) != (rv["detail"], rv["name"]):
+                # the same case told differently (a renamed person, one
+                # more person on the card): keep the entry, refresh its words
+                old["detail"], old["name"] = rv["detail"], rv["name"]
         st["review"] = st["review"][-MAX_REVIEW:]
         st["log"].append({
             "when": now, "reason": reason, "inbound": inbound,
