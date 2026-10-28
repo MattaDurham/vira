@@ -26,7 +26,9 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   phone's own note stays above the block, a differing value is kept in it
   as "Previously on phone", and each such case, each refused handle, each
   new person and each created card lands in a review list on the tab
-  until it is marked read. Card creation for CRM people with no Apple
+  until it is marked read. A phone card shared by two CRM people (a
+  duplicate, a family card) is listed once under "Shared cards" and never
+  retried: the handle stays with its owner and nothing is moved. Card creation for CRM people with no Apple
   card is its own step, logged and undoable (`python -m server.contactsync
   undo-created`). The card-save push gained the same fields.
 - The module tree. `modules/<module>/<submodule>/` is the map of the

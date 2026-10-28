@@ -194,19 +194,43 @@ class InboundPassTest(SyncCase):
         kinds = [r["kind"] for r in cs.read_store()["review"]]
         self.assertIn("phone-note", kinds)
 
-    def test_phone_handle_owned_by_someone_else_is_refused_and_listed(self):
+    def test_shared_card_is_listed_once_and_never_retried(self):
         self.people.append(person("p_z", "Zed Example", phones=["5550101234"]))
         self._write_registry()
         crm.invalidate()
+        s = cs.survey()
+        # Zed shares Alex's card: each side's missing handle is a shared-card
+        # case, not pending work, and names the other person.
+        self.assertEqual([(h["pid"], h["other_pid"]) for h in s["handle_conflicts"]],
+                         [("p_a", "p_z"), ("p_z", "p_a")])
+        self.assertFalse([h for h in s["handle_adds"] if h["pid"] in ("p_a", "p_z")])
         cs.apply(inbound=True)
-        alex = self.by_name("Alex Example")
-        self.assertNotIn("5550101234", alex["handles"]["phones10"])
-        # Zed shares Alex's card, so each is refused the other's handle:
-        # two entries to read, nothing moved.
+        self.assertNotIn("5550101234", self.by_name("Alex Example")["handles"]["phones10"])
+        self.assertNotIn("alex@example.com", self.by_name("Zed Example")["handles"]["emails"])
         conflicts = [r for r in cs.read_store()["review"] if r["kind"] == "handle-conflict"]
         self.assertEqual(sorted(r["pid"] for r in conflicts), ["p_a", "p_z"])
-        zed = self.by_name("Zed Example")
-        self.assertNotIn("alex@example.com", zed["handles"]["emails"])
+        self.assertIn("Zed Example", conflicts[0]["detail"])
+        # a second pass files nothing new for the same shared card
+        cs.apply(inbound=True)
+        again = [r for r in cs.read_store()["review"] if r["kind"] == "handle-conflict"]
+        self.assertEqual(len(again), 2)
+        self.assertEqual(cs.read_store()["report"]["handle_conflicts_total"], 2)
+
+    def test_legacy_conflict_rows_are_not_duplicated(self):
+        self.people.append(person("p_z", "Zed Example", phones=["5550101234"]))
+        self._write_registry()
+        crm.invalidate()
+        # an entry written before review keys existed, for the same case
+        legacy = {"id": "rv_old", "kind": "handle-conflict", "pid": "p_a",
+                  "name": "Alex Example", "uid": None, "when": "2026-10-28T12:32:44",
+                  "detail": "The phone card carries phone 5550101234: handle "
+                            "5550101234 already belongs to another CRM person",
+                  "text": "", "reviewed": False}
+        cs._mutate(lambda st: st["review"].append(legacy))
+        cs.apply(inbound=True)
+        mine = [r for r in cs.read_store()["review"]
+                if r["kind"] == "handle-conflict" and r["pid"] == "p_a"]
+        self.assertEqual([r["id"] for r in mine], ["rv_old"])
 
 
 class PushPassTest(SyncCase):
