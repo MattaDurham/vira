@@ -52,6 +52,20 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan[0][0], "+1 (555) 014-2222")
         self.assertEqual(plan[0][1], "home")
 
+    def test_same_ignores_order_and_an_empty_planned_label(self):
+        existing = [{"value": "b@example.com", "label": "work"},
+                    {"value": "a@example.com", "label": "home"}]
+        self.assertTrue(ac._same_handles([("a@example.com", "home"), ("b@example.com", "work")],
+                                         existing, "email"))
+        self.assertTrue(ac._same_handles([("a@example.com", ""), ("b@example.com", "work")],
+                                         existing, "email"), "no opinion on a label matches any")
+        self.assertFalse(ac._same_handles([("a@example.com", "work"), ("b@example.com", "work")],
+                                          existing, "email"), "a different label is a change")
+        self.assertFalse(ac._same_handles([("a@example.com", "home")], existing, "email"),
+                         "a missing value is a change")
+        self.assertFalse(ac._same_handles([("a@example.com", "home"), ("b@example.com", "work"),
+                                           ("c@example.com", "")], existing, "email"))
+
     def test_dedupe_and_same_check(self):
         rows = [row("email", "a@example.com", rank="primary"),
                 row("email", "A@Example.com")]
@@ -59,8 +73,13 @@ class PlanTest(unittest.TestCase):
         plan = ac.plan_handles(rows, existing, "email")
         self.assertEqual(len(plan), 1)
         self.assertTrue(ac._same_handles(plan, existing, "email"))
-        self.assertFalse(ac._same_handles(
+        # the planned label is empty (no use, no label at plan time), which
+        # is no opinion: a card that meanwhile says "work" is not a change
+        self.assertTrue(ac._same_handles(
             plan, [{"value": "a@example.com", "label": "work"}], "email"))
+        self.assertFalse(ac._same_handles(
+            [("a@example.com", "home")],
+            [{"value": "a@example.com", "label": "work"}], "email"))
 
 
 class ScriptTest(unittest.TestCase):

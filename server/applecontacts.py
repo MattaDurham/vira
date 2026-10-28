@@ -331,10 +331,24 @@ def plan_handles(rows, existing, kind):
 
 
 def _same_handles(planned, existing, kind):
+    """Nothing to write when every planned value is on the card with the
+    planned label. ORDER is not compared: Contacts stores a rewritten list
+    in its own order, so comparing order made every pass rewrite the same
+    cards (seen live 2026-10-28, 223 of 916). A planned empty label means
+    "no opinion" and matches whatever label the card gives the entry."""
     norm = _norm_email if kind == "email" else _norm_phone
-    cur = [(norm(h["value"]), (h["label"] or "").lower()) for h in existing]
-    new = [(norm(v), (l or "").lower()) for v, l in planned]
-    return cur == new
+    cur = {}
+    for h in existing:
+        cur.setdefault(norm(h["value"]), (h["label"] or "").lower())
+    if len(cur) != len({norm(v) for v, _ in planned}):
+        return False
+    for v, l in planned:
+        k = norm(v)
+        if k not in cur:
+            return False
+        if l and l.lower() != cur[k]:
+            return False
+    return True
 
 
 def split_note(text):

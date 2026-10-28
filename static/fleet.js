@@ -1411,8 +1411,18 @@
     if (!i) { sheet.replaceChildren(navRow(), head(null, "Instance stopped"), el("p", "fl-empty", "Nothing answers on that port now.")); return; }
     const l = el("div", "fl-list");
     l.append(instanceRow(i));
+    const work = el("div", "fl-list");
+    (i.work || []).forEach((w) => {
+      const it = el("div", "fl-item");
+      const a = el("div", "a");
+      a.append(el("b", null, w.title));
+      const b = el("div", "b", workText(w));
+      it.append(a, b, el("div", "c", w.kind || ""));
+      work.append(it);
+    });
     sheet.replaceChildren(navRow(), head(null, `Vira on :${i.port}`, (() => { const w = el("div", "fl-links"); w.append(ext("fl-open", "Open it", i.url)); return w; })()),
-      l, el("p", "fl-empty", i.kind === "primary" ? "The live Vira." :
+      l, block("Running inside it", (i.work || []).length ? work : el("p", "fl-empty", "Nothing beyond the request handlers right now.")),
+      el("p", "fl-empty", i.kind === "primary" ? "The live Vira." :
         "A branch instance. Stop it with scripts/branch.sh stop <slug> once the branch is decided."));
   }
 
@@ -1568,8 +1578,31 @@
   }
 
   // ---------- bottom strip ----------
+  // A row of in-process work (runtimework): "857 of 916 / Hilary..." or just
+  // the elapsed time when the pass has no counter.
+  function workText(w) {
+    const bits = [];
+    if (w.total) bits.push(`${w.done || 0} of ${w.total}`);
+    else if (w.done) bits.push(String(w.done));
+    if (w.step) bits.push(w.step);
+    if (w.startedAt) bits.push(up(now() - w.startedAt));
+    return bits.join(" / ");
+  }
+  function workPill(i, w) {
+    const c = btn("fl-srv fl-work", null, () => go(`inst:${i.port}`), `${w.title} inside Vira on :${i.port}`);
+    c.append(el("b", null, w.title), el("span", null, workText(w)));
+    return c;
+  }
   function renderBottom(box, d) {
     const parts = [];
+    // Work running inside a Vira process is otherwise invisible: no session,
+    // no shell. Every instance's runtimework rows show here, the live one
+    // included, and a pill opens that instance.
+    const working = (d.instances || []).filter((i) => (i.work || []).length);
+    if (working.length) {
+      parts.push(el("span", "fl-lbl", "Inside Vira"));
+      working.forEach((i) => (i.work || []).forEach((w) => parts.push(workPill(i, w))));
+    }
     const inst = (d.instances || []).filter((i) => !i.self || i.kind !== "primary");
     if (inst.length) {
       parts.push(el("span", "fl-lbl", "Vira instances"));

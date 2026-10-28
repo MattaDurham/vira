@@ -17482,8 +17482,10 @@ function renderContactSync(box, st) {
   // -- status line
   const status = el("div", "csync-status");
   const last = (st.log || [])[0];
+  const prog = run.progress || {};
+  const counter = prog.total ? ` ${prog.done || 0} of ${prog.total}` : "";
   status.appendChild(el("span", "hint", run.running
-    ? `Running: ${run.phase || "starting"}…`
+    ? `Running: ${run.phase || "starting"}${counter}${prog.step ? ` · ${prog.step}` : ""}`
     : last ? `Last pass ${String(last.when).replace("T", " ").slice(0, 16)} (${last.reason})`
            : "No pass has run yet."));
   status.appendChild(el("span", "hint", st.enabled
@@ -17574,14 +17576,17 @@ function renderContactSync(box, st) {
     row.appendChild(el("div", "csync-what", r.what));
     return row;
   }, "The CRM already has everything the phone cards carry.");
-  // -- shared cards: two CRM people on one phone card; nothing moves
-  csyncSection(box, "Shared cards", rep.handle_conflicts_total || 0, rep.handle_conflicts || [], (h) => {
+  // -- shared cards: two CRM people on one phone card; nothing moves either way
+  csyncSection(box, "Shared cards", rep.shared_cards_total || 0, rep.shared_cards || [], (sc) => {
     const row = el("div", "csync-row");
-    row.appendChild(csyncName(h.name, h.pid));
+    row.appendChild(csyncName(sc.card || "(card)"));
     const what = el("div", "csync-what");
-    what.appendChild(document.createTextNode(`${h.kind} ${h.value} also belongs to `));
-    what.appendChild(csyncName(h.other_name, h.other_pid));
-    what.appendChild(document.createTextNode(" in the CRM; merge them or split the card"));
+    what.appendChild(document.createTextNode("matches "));
+    (sc.people || []).forEach((q, n) => {
+      if (n) what.appendChild(document.createTextNode(n === sc.people.length - 1 ? " and " : ", "));
+      what.appendChild(csyncName(q.name, q.pid));
+    });
+    what.appendChild(document.createTextNode(" in the CRM; nothing is pushed until they are merged or the card is split"));
     row.appendChild(what);
     return row;
   }, "No phone card is shared by two CRM people.");

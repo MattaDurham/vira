@@ -38,7 +38,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `server/jsonstore.py` | Shared discipline for the small JSON state stores under data/. |
 | `server/loopwatch.py` | Event-loop stall detector — the thing that was missing when the server went dark for 90 seconds and left nothing behind to read. |
 | `server/restart.py` | A cancellable, server-owned restart queue. |
-| `server/runtimework.py` | In-process work that a deliberate restart must disclose and drain. |
+| `server/runtimework.py` | In-process work that a deliberate restart must disclose and drain, and that Fleet shows as what is running inside each Vira instance. |
 | `server/update.py` | In-app update flow: know when the remote is ahead, pull, restart. |
 | `server/workers.py` | Background work, one row per worker: its switch, its last run, its error. |
 
