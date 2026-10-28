@@ -264,8 +264,23 @@ SCHEMA = [
       "only. Does nothing while the assistant is off."),
     S("apple_contacts_push", "contacts", "bool", True,
       "Update Apple Contacts when a card is saved",
-      "macOS only. Company, birthday, email and phone order and labels sync "
-      "to the phone."),
+      "macOS only. Company, title, birthday, location, email and phone order "
+      "and labels, and the Vira notes block sync to the phone."),
+    S("contacts_sync", "contacts", "bool", True,
+      "Keep the CRM and Apple Contacts reconciled",
+      "macOS only. A background pass brings new phone contacts and new "
+      "handles into the CRM, fills empty card fields from the phone, and "
+      "keeps the Sync tab's report current. Nothing is deleted on either "
+      "side; a card that had content on both sides is kept whole and "
+      "flagged for you to read."),
+    S("contacts_sync_push_auto", "contacts", "bool", False,
+      "Push CRM changes to the phone automatically",
+      "On: every pass also writes CRM changes to the matched Apple cards. "
+      "Off: changes wait in People > Sync until you press Push."),
+    S("contacts_sync_interval", "contacts", "int", 30,
+      "Minutes between contact sync passes",
+      "How often the background pass runs.", advanced=True,
+      range=(5, 1440)),
 
     # -------------------------------------------------------------- brain
     S("vault_root", "brain", "path", "", "Primary vault folder",

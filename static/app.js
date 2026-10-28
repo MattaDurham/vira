@@ -15541,7 +15541,8 @@ function cardContacts(card, step, st) {
     "You do not need to choose a new folder to import contacts.", cardContactStorage);
   connectionSection(card, "Who may change contacts",
     "Writers that update People cards on their own.",
-    (body) => { window.ViraSettings?.form(body, { keys: ["assistant_contact_updates", "apple_contacts_push"] }); });
+    (body) => { window.ViraSettings?.form(body, { keys: ["assistant_contact_updates", "apple_contacts_push",
+      "contacts_sync", "contacts_sync_push_auto", "contacts_sync_interval"] }); });
 }
 
 function connectionSummary(container, summary) {
@@ -17399,7 +17400,8 @@ function setPeopleTab(tab, opts = {}) {
   $("#people-tabs")?.querySelectorAll(".seg-btn")
     .forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   const panes = { contacts: "#people-contacts-pane",
-                  networking: "#people-networking-pane" };
+                  networking: "#people-networking-pane",
+                  sync: "#people-sync-pane" };
   Object.entries(panes).forEach(([t, sel]) => {
     const p = $(sel);
     if (p) p.style.display = t === tab ? "" : "none";
@@ -17412,7 +17414,202 @@ function setPeopleTab(tab, opts = {}) {
 // wired to their element ids, which moved with the markup.
 function peopleTabLoad(tab) {
   if (tab === "networking") loadRadar().catch(() => {});
+  if (tab === "sync") loadContactSync().catch((e) => toast(errText(e)));
 }
+
+// ---- People > Sync: the CRM and the phone reconciled both ways ---------
+// Everything shown is /api/contacts/sync; the buttons start a pass and the
+// tab polls while it runs. Nothing here is stored client-side.
+let csyncPoll = null;
+
+async function loadContactSync() {
+  const box = $("#csync-body");
+  if (!box) return;
+  const st = await api("/api/contacts/sync");
+  renderContactSync(box, st);
+  if (st.status && st.status.running && !csyncPoll) {
+    csyncPoll = startPoll(async (h) => {
+      if (!box.isConnected || peopleTab !== "sync") { h.stop(); csyncPoll = null; return; }
+      const cur = await api("/api/contacts/sync");
+      renderContactSync(box, cur);
+      if (!(cur.status && cur.status.running)) { h.stop(); csyncPoll = null; }
+    }, 2000);
+  }
+}
+
+async function csyncRun(btn, body) {
+  if (!btn || btn.disabled) return;
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "working…";
+  try {
+    const r = await post("/api/contacts/sync/run", body);
+    if (r && r.busy) toast("A sync pass is already running");
+  } catch (e) {
+    toast(errText(e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+  await loadContactSync();
+}
+
+function csyncSection(box, title, count, rows, renderRow, emptyText) {
+  const d = el("details", "csync-sec");
+  const sm = el("summary", "", title);
+  sm.appendChild(el("span", "badge", String(count)));
+  d.appendChild(sm);
+  if (!rows.length) d.appendChild(el("div", "csync-empty", emptyText));
+  rows.forEach((r) => d.appendChild(renderRow(r)));
+  if (count > rows.length)
+    d.appendChild(el("div", "csync-empty", `${count - rows.length} more not shown`));
+  box.appendChild(d);
+  return d;
+}
+
+function csyncName(text, pid) {
+  const n = el("span", "csync-name" + (pid ? " click" : ""), text || "(unnamed)");
+  if (pid) n.addEventListener("click", () => openPerson(pid));
+  return n;
+}
+
+function renderContactSync(box, st) {
+  box.innerHTML = "";
+  const rep = st.report || {};
+  const run = st.status || {};
+  if (!st.available) {
+    box.appendChild(el("p", "hint warn", st.why || "Contacts sync is not available here."));
+    return;
+  }
+  // -- status line
+  const status = el("div", "csync-status");
+  const last = (st.log || [])[0];
+  status.appendChild(el("span", "hint", run.running
+    ? `Running: ${run.phase || "starting"}…`
+    : last ? `Last pass ${String(last.when).replace("T", " ").slice(0, 16)} (${last.reason})`
+           : "No pass has run yet."));
+  status.appendChild(el("span", "hint", st.enabled
+    ? `Auto: phone changes come in every ${st.interval} min; push to phone is ${st.push_auto ? "automatic" : "manual"}.`
+    : "Auto sync is off (Config > Contacts)."));
+  if (!st.push_enabled)
+    status.appendChild(el("span", "hint warn", "Apple push is off, so nothing is written to the phone."));
+  if (rep.generated)
+    status.appendChild(el("span", "hint", `${rep.matched} of ${rep.people} CRM people have a phone card; ${rep.cards} cards on the Mac.`));
+  box.appendChild(status);
+  // -- actions
+  const acts = el("div", "csync-actions");
+  const inboundN = (rep.new_cards_total || 0) + (rep.handle_adds_total || 0) + (rep.fills_total || 0);
+  const bIn = el("button", "btn" + (inboundN ? " primary" : ""), `Bring in phone changes (${inboundN})`);
+  bIn.disabled = !!run.running;
+  bIn.onclick = () => csyncRun(bIn, { inbound: true, push: false, create: false });
+  acts.appendChild(bIn);
+  const bPush = el("button", "btn" + (rep.changes_total ? " primary" : ""), `Push to phone (${rep.changes_total || 0})`);
+  bPush.disabled = !!run.running || !st.push_enabled;
+  bPush.onclick = () => csyncRun(bPush, { inbound: false, push: true, create: false });
+  acts.appendChild(bPush);
+  const bCreate = el("button", "btn", `Create missing cards (${rep.missing_total || 0})`);
+  bCreate.disabled = !!run.running || !st.push_enabled || !rep.missing_total;
+  bCreate.onclick = () => csyncRun(bCreate, { inbound: false, push: false, create: true });
+  acts.appendChild(bCreate);
+  if (rep.backlog) {
+    const bOld = el("button", "btn", `Import ${rep.backlog} older cards`);
+    bOld.disabled = !!run.running;
+    bOld.onclick = async () => {
+      if (bOld.disabled) return;
+      bOld.disabled = true;
+      try {
+        const r = await api("/api/onboard/apple", { method: "POST" });
+        toast(`${r.added} added, ${r.already_known} already known`);
+      } catch (e) { toast(errText(e)); }
+      bOld.disabled = false;
+      csyncRun(bOld, { inbound: false, push: false, create: false });
+    };
+    acts.appendChild(bOld);
+  }
+  box.appendChild(acts);
+  if (run.error) box.appendChild(el("p", "hint warn", `Last pass failed: ${run.error}`));
+  // -- to read
+  const review = st.review || [];
+  const rv = csyncSection(box, "To read", st.review_total || 0, review, (r) => {
+    const row = el("div", "csync-row");
+    row.appendChild(csyncName(r.name, r.pid));
+    const what = el("div", "csync-what");
+    what.appendChild(el("div", "", `${r.kind.replace(/-/g, " ")}: ${r.detail || ""}`));
+    if (r.text) what.appendChild(el("div", "csync-note", r.text));
+    row.appendChild(what);
+    const ok = el("button", "fchip sm", "Read");
+    ok.onclick = async () => {
+      ok.disabled = true;
+      try { await post("/api/contacts/sync/review", { ids: [r.id] }); row.remove(); }
+      catch (e) { toast(errText(e)); ok.disabled = false; }
+    };
+    row.appendChild(ok);
+    return row;
+  }, "Nothing waiting on you.");
+  if (review.length) {
+    const all = el("button", "fchip sm", "Mark all read");
+    all.style.margin = "6px 0";
+    all.onclick = async () => {
+      all.disabled = true;
+      try { await post("/api/contacts/sync/review", { all: true }); await loadContactSync(); }
+      catch (e) { toast(errText(e)); all.disabled = false; }
+    };
+    rv.appendChild(all);
+  }
+  if (st.review_total) rv.open = true;
+  // -- new on the phone
+  csyncSection(box, "New on the phone", rep.new_cards_total || 0, rep.new_cards || [], (c) => {
+    const row = el("div", "csync-row");
+    row.appendChild(csyncName(c.name));
+    row.appendChild(el("div", "csync-what",
+      [c.org, c.created ? `added ${c.created.replace("T", " ")}` : "",
+       c.importable ? "" : "no email or phone, so it cannot be imported"].filter(Boolean).join(" · ")));
+    return row;
+  }, rep.generated ? "Nothing new since the last pass." : "Run a pass to find out.");
+  // -- coming into Vira
+  const inboundRows = [...(rep.handle_adds || []).map((h) => ({ pid: h.pid, name: h.name, what: `${h.kind} ${h.value} from the phone card` })),
+                       ...(rep.fills || []).map((f) => ({ pid: f.pid, name: f.name,
+                         what: [f.fields.length ? `fills ${f.fields.join(", ")}` : "", f.phone_note ? "keeps the phone note" : ""].filter(Boolean).join("; ") }))];
+  csyncSection(box, "Coming into Vira", (rep.handle_adds_total || 0) + (rep.fills_total || 0), inboundRows, (r) => {
+    const row = el("div", "csync-row");
+    row.appendChild(csyncName(r.name, r.pid));
+    row.appendChild(el("div", "csync-what", r.what));
+    return row;
+  }, "The CRM already has everything the phone cards carry.");
+  // -- will change on the phone
+  csyncSection(box, "Will change on the phone", rep.changes_total || 0, rep.changes || [], (c) => {
+    const row = el("div", "csync-row");
+    row.appendChild(csyncName(c.name, c.pid));
+    const what = el("div", "csync-what");
+    what.appendChild(el("span", "", c.changed.join(", ")));
+    (c.conflicts || []).forEach((cf) =>
+      what.appendChild(el("div", "warn", `${cf.field}: phone says "${cf.phone}", Vira says "${cf.crm}" (both kept)`)));
+    if (c.foreign_note) what.appendChild(el("div", "warn", "the phone note is kept above the Vira block"));
+    row.appendChild(what);
+    return row;
+  }, "Every phone card already reads like the CRM.");
+  // -- not on the phone
+  csyncSection(box, "Not on the phone yet", rep.missing_total || 0, rep.missing || [], (m) => {
+    const row = el("div", "csync-row");
+    row.appendChild(csyncName(m.name, m.pid));
+    row.appendChild(el("div", "csync-what", m.tier ? `tier ${m.tier}` : ""));
+    return row;
+  }, "Every CRM person who should have a card has one.");
+  if (rep.unmatched_skipped)
+    box.appendChild(el("p", "hint", `${rep.unmatched_skipped} CRM people have no card and are marked skipped or excluded, so no card is made for them.`));
+  // -- passes
+  if ((st.log || []).length) {
+    const lg = el("details", "csync-sec");
+    lg.appendChild(el("summary", "", "Recent passes"));
+    st.log.forEach((l) => lg.appendChild(el("div", "csync-log",
+      `${String(l.when).replace("T", " ").slice(0, 16)} ${l.reason}: ${l.imported} imported, ${l.handles} handles, ${l.fills} filled, ${l.pushed} pushed, ${l.created} created, ${l.review} to read` +
+      (l.errors && l.errors.length ? ` · ${l.errors.length} errors: ${l.errors[0]}` : ""))));
+    box.appendChild(lg);
+  }
+}
+
+$("#csync-refresh")?.addEventListener("click", () =>
+  csyncRun($("#csync-refresh"), { inbound: false, push: false, create: false }));
 
 function setWorkTab(tab, opts = {}) {
   tab = WORK_TAB_ALIAS[tab] || tab;

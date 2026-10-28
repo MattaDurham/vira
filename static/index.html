@@ -231,6 +231,7 @@
     <div class="seg ideas-tabs" id="people-tabs">
       <button data-tab="contacts" class="seg-btn on">Contacts</button>
       <button data-tab="networking" class="seg-btn">Networking</button>
+      <button data-tab="sync" class="seg-btn">Sync</button>
     </div>
     <div id="people-contacts-pane">
       <div class="section-head">
@@ -241,6 +242,13 @@
              placeholder="Search name, email, phone" autocomplete="off">
       <div id="people-sort" class="fchips"></div>
       <div id="people-list" class="list"></div>
+    </div>
+    <div id="people-sync-pane" style="display:none">
+      <div class="section-head"><h2>Sync</h2>
+        <button class="fchip sm" id="csync-refresh" style="margin-left:auto">Refresh</button>
+      </div>
+      <p class="hint" id="csync-lede">The CRM and the phone's address book, reconciled both ways.</p>
+      <div id="csync-body"></div>
     </div>
     <div id="people-networking-pane" style="display:none">
       <div class="section-head"><h2>Networking</h2>

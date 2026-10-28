@@ -4,12 +4,24 @@ Vira > [Modules](../../README.md) > [People](../README.md) > Sync
 
 Apple Contacts write-back, contact photos, and evidence-grounded maintenance.
 
-The spokes that keep the CRM and the Mac in step. Contact-card saves
-flow through to the matching Apple Contacts cards (AppleScript, with a vCard
-backup first; Apple's databases are never written directly). Photos are
-pulled from the AddressBook stores into Vira's cache keyed by person. Contact
-intelligence queues maintenance work from evidence, independently of the
-feed, and the executive worker reconciles it.
+The spokes that keep the CRM and the phone in step. `contactsync.py` is
+the standing pass between them (People > Sync): inbound, a card added on
+the phone after the watermark becomes a CRM person, a new email or phone
+on a matched card joins the person's handles, and an empty card field is
+filled from the phone; outbound, every matched Apple card is planned
+against the CRM (company, title, birthday, location, handle order and
+labels, URLs, and the note's Vira block carrying the whole profile) and
+written on Push, or on every pass when auto-push is on. The rule is keep
+both and flag it: nothing is deleted on either side, the phone's own note
+stays above the Vira block, a differing value is carried in the block as
+"Previously on phone", and every such case lands in the review list until
+the owner marks it read. `applecontacts.py` is the Apple spoke itself:
+AppleScript against Contacts.app with a vCard backup first, never a write
+to Apple's databases; card creation is its own explicit step, logged so it
+can be undone. Photos are pulled from the AddressBook stores into Vira's
+cache keyed by person. Contact intelligence queues maintenance work from
+evidence, independently of the feed, and the executive worker reconciles
+it.
 
 ## What lives here
 
@@ -21,14 +33,15 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [People / CRM](../crm/README.md)
 
-### Files (5)
+### Files (7)
 
 **Server**
 
 | File | What it is |
 |---|---|
-| `server/applecontacts.py` | Apple Contacts write-back — the Apple spoke of the CRM sync engine. |
+| `server/applecontacts.py` | Apple Contacts write-back - the Apple spoke of the CRM sync engine. |
 | `server/contactintel.py` | Evidence-grounded contact maintenance, queued independently of the feed. |
+| `server/contactsync.py` | Contacts sync: the CRM and the phone's address book reconciled, both ways. |
 | `server/photos.py` | Contact photos: extract thumbnails from the local AddressBook stores and map them to CRM person ids by shared email/phone. |
 
 **Tests**
@@ -37,19 +50,24 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 |---|---|
 | `tests/test_applecontacts.py` | Apple Contacts write-back: the plan (pure), the script, the gates, the sqlite matcher, and the push orchestration with osascript mocked. |
 | `tests/test_contactintel.py` | Synthetic, tool-free assistant passes over isolated CRM and corpus stores. |
+| `tests/test_contactsync.py` | Contacts sync: the survey, the watermark, the inbound writes, the push, card creation and the review list, over a temp CRM and synthetic Apple cards (load_ca... |
 
-### Routes (1)
+### Routes (4)
 
-Prefixes: `/api/photo`
+Prefixes: `/api/photo`, `/api/contacts/sync`
 
+- `GET /api/contacts/sync`
+- `POST /api/contacts/sync/run`
+- `POST /api/contacts/sync/review`
 - `GET /api/photo/{pid}`
 
-### Stores (2)
+### Stores (3)
 
 Instance state under git-ignored `data/`; never hand-edit (see `AGENTS.local.md`, section 5).
 
 - `data/photos/`
 - `data/contact-intel.json`
+- `data/contacts-sync.json`
 
 ### System map
 
