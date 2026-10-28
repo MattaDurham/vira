@@ -107,6 +107,44 @@ class ScriptTest(unittest.TestCase):
         self.assertIsNone(ac._birthday_parts("next tuesday"))
         self.assertIsNone(ac._birthday_parts(""))
 
+    def test_native_slot_lines(self):
+        s = ac.build_script("UID:ABPerson",
+                            related=[("Relationship", 'Old "sailing" friend')],
+                            related_set=[("Relationship", "client")],
+                            dates=[("When we met", (2025, 9, 25))],
+                            social=[("LinkedIn", "pat-example",
+                                     "https://www.linkedin.com/in/pat-example")])
+        self.assertIn('make new related name at end of related names of P with '
+                      'properties {label:"Relationship", value:"Old \\"sailing\\" friend"}', s)
+        self.assertIn('if label of rn is "Relationship" then set value of rn to "client"', s)
+        self.assertIn('make new custom date at end of custom dates of P with '
+                      'properties {label:"When we met", value:cd0}', s)
+        self.assertIn('make new social profile at end of social profiles of P with '
+                      'properties {service name:"LinkedIn", user name:"pat-example", '
+                      'url:"https://www.linkedin.com/in/pat-example"}', s)
+        # a date is assembled from components, the day pinned to 1 before
+        # the month moves, so the 31st cannot roll a short month over
+        lines = s.splitlines()
+        i = lines.index("set cd0 to current date")
+        self.assertEqual(lines[i + 1:i + 5],
+                         ["set day of cd0 to 1", "set year of cd0 to 2025",
+                          "set month of cd0 to September", "set day of cd0 to 25"])
+        self.assertNotIn("delete every", s)
+
+    def test_social_from_url(self):
+        f = ac.social_from_url
+        self.assertEqual(f("https://www.linkedin.com/in/pat-example/"),
+                         ("LinkedIn", "pat-example"))
+        self.assertEqual(f("https://x.com/patexample"), ("Twitter", "patexample"))
+        self.assertEqual(f("https://www.youtube.com/@patexample"),
+                         ("YouTube", "patexample"))
+        self.assertEqual(f("https://bsky.app/profile/pat.example.com"),
+                         ("Bluesky", "pat.example.com"))
+        self.assertIsNone(f("https://www.linkedin.com/company/example"))
+        self.assertIsNone(f("https://x.com/intent/tweet?text=hi"))
+        self.assertIsNone(f("https://example.com/pat"))
+        self.assertIsNone(f("not a url"))
+
 
 class GateTest(unittest.TestCase):
     def test_sandbox_refuse(self):
@@ -127,9 +165,20 @@ class GateTest(unittest.TestCase):
                     self.assertFalse(ac.enabled())
 
 
-def _fixture_store(dirpath):
+def _fixture_store(dirpath, slots=False):
     db = Path(dirpath) / "AddressBook-v22.abcddb"
     c = sqlite3.connect(db)
+    if slots:
+        c.execute("CREATE TABLE ZABCDRELATEDNAME (Z_PK INTEGER PRIMARY KEY, "
+                  "ZOWNER INTEGER, ZLABEL TEXT, ZNAME TEXT)")
+        c.execute("CREATE TABLE ZABCDCONTACTDATE (Z_PK INTEGER PRIMARY KEY, "
+                  "ZOWNER INTEGER, ZLABEL TEXT, ZDATE REAL)")
+        c.execute("CREATE TABLE ZABCDSOCIALPROFILE (Z_PK INTEGER PRIMARY KEY, "
+                  "ZOWNER INTEGER, ZSERVICENAME TEXT, ZUSERNAME TEXT, ZURLSTRING TEXT)")
+        c.execute("INSERT INTO ZABCDRELATEDNAME VALUES (1, 1, 'Relationship', 'college friend')")
+        c.execute("INSERT INTO ZABCDCONTACTDATE VALUES (1, 1, 'When we met', 780494400)")
+        c.execute("INSERT INTO ZABCDSOCIALPROFILE VALUES "
+                  "(1, 1, 'LinkedIn', 'pat', 'https://www.linkedin.com/in/pat')")
     c.execute("CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, "
               "ZUNIQUEID TEXT, ZORGANIZATION TEXT)")
     c.execute("CREATE TABLE ZABCDEMAILADDRESS (Z_PK INTEGER PRIMARY KEY, "
@@ -243,15 +292,67 @@ class NoteTest(unittest.TestCase):
         self.assertNotIn("address", plan["changed"])
         self.assertNotIn("urls", plan["changed"])
 
+    def test_plan_fills_the_native_slots(self):
+        card = {"fields": [{"key": "relationship", "value": "College friend"},
+                           {"key": "met", "value": "9/25/2025"}],
+                "custom": [{"label": "LinkedIn",
+                            "value": "https://www.linkedin.com/in/pat-example"},
+                           {"label": "Blog", "value": "https://example.com/pat"}],
+                "handles": []}
+        apple = {"uid": "A:ABPerson", "org": "", "title": "", "emails": [],
+                 "phones": [], "urls": [], "addresses": [], "note": ""}
+        plan = ac.card_plan(card, {"person": {}}, apple)
+        self.assertEqual(plan["changed"],
+                         ["relationship", "met", "urls", "social", "note"])
+        self.assertEqual(plan["kw"]["related"], [("Relationship", "College friend")])
+        self.assertEqual(plan["kw"]["dates"], [("When we met", (2025, 9, 25))])
+        self.assertEqual(plan["kw"]["social"],
+                         [("LinkedIn", "pat-example",
+                           "https://www.linkedin.com/in/pat-example")])
+        # the profile link is a social profile, not also a URL row
+        self.assertEqual(plan["kw"]["urls"], [("Blog", "https://example.com/pat")])
+        self.assertEqual(plan["conflicts"], [])
+        self.assertIn("When we met: 9/25/2025", plan["kw"]["note"])
+        # a card that already has them (labels arrive lower-cased from the
+        # store): the date and the profile are left alone; the relationship
+        # is the one scalar, replaced and flagged with the phone's value
+        apple.update({"related": [{"label": "relationship", "value": "friend"}],
+                      "dates": [{"label": "when we met", "date": (2024, 1, 2)}],
+                      "social": [{"service": "LinkedIn", "user": "old", "url": ""}]})
+        plan = ac.card_plan(card, {"person": {}}, apple)
+        self.assertNotIn("met", plan["changed"])
+        self.assertNotIn("social", plan["changed"])
+        self.assertNotIn("related", plan["kw"])
+        self.assertEqual(plan["kw"]["related_set"], [("Relationship", "College friend")])
+        self.assertEqual(plan["conflicts"], [{"field": "relationship",
+                                              "crm": "College friend", "phone": "friend"}])
+        self.assertIn('Previously on phone: relationship "friend"', plan["kw"]["note"])
+        # the same value in another case is current: nothing to write
+        apple["related"] = [{"label": "Relationship", "value": "college friend"}]
+        plan = ac.card_plan(card, {"person": {}}, apple)
+        self.assertNotIn("relationship", plan["changed"])
+        # a date with no year stays in the note only
+        card["fields"][1]["value"] = "September 2025"
+        apple["dates"] = []
+        plan = ac.card_plan(card, {"person": {}}, apple)
+        self.assertNotIn("met", plan["changed"])
+        self.assertIn("When we met: September 2025", plan["kw"]["note"])
+
     def test_create_script_adds_without_deleting(self):
         s = ac.build_create_script("Pat Q. Example, M.D.", company="NewCo",
                                    emails=[("pat@example.com", "home")],
                                    phones=[("5550101234", "mobile")],
+                                   related=[("Relationship", "friend")],
+                                   dates=[("When we met", (2025, 9, 25))],
+                                   social=[("GitHub", "pat", "https://github.com/pat")],
                                    note="=== Vira ===\nName: Pat\n=== end Vira ===")
         self.assertIn('first name:"Pat Q.", last name:"Example"', s)
         self.assertNotIn("delete every", s)
         self.assertIn("return id of P", s)
         self.assertIn('make new email at end of emails of P', s)
+        self.assertIn('make new related name at end of related names of P', s)
+        self.assertIn('make new custom date at end of custom dates of P', s)
+        self.assertIn('service name:"GitHub"', s)
         self.assertEqual(ac.split_name("Cher"), ("Cher", ""))
 
 
@@ -266,9 +367,21 @@ class LoadCardsTest(unittest.TestCase):
         self.assertEqual(a["emails"][0]["label"], "home")
         self.assertEqual(a["note"], "")
         self.assertIsNone(a["created"])
+        self.assertEqual((a["related"], a["dates"], a["social"]), ([], [], []))
         idx = ac.index_cards(cards)
         self.assertEqual([c["uid"] for c in ac.match_cards(cards, idx, [], ["5550149999"])],
                          ["AAA:ABPerson"])
+
+    def test_native_slots_are_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            cards = ac.load_cards([_fixture_store(d, slots=True)])
+        a = next(c for c in cards if c["uid"] == "AAA:ABPerson")
+        self.assertEqual(a["related"], [{"label": "relationship", "value": "college friend"}])
+        self.assertEqual(a["dates"], [{"label": "when we met", "date": (2025, 9, 25)}])
+        self.assertEqual(a["social"], [{"service": "LinkedIn", "user": "pat",
+                                        "url": "https://www.linkedin.com/in/pat"}])
+        b = next(c for c in cards if c["uid"] == "BBB:ABPerson")
+        self.assertEqual((b["related"], b["dates"], b["social"]), ([], [], []))
 
 
 class PushTest(unittest.TestCase):

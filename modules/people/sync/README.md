@@ -10,8 +10,10 @@ the phone after the watermark becomes a CRM person, a new email or phone
 on a matched card joins the person's handles, and an empty card field is
 filled from the phone; outbound, every matched Apple card is planned
 against the CRM (company, title, birthday, location, handle order and
-labels, URLs, and the note's Vira block carrying the whole profile) and
-written on Push, or on every pass when auto-push is on. The rule is keep
+labels, URLs, the relationship as a related name, the "When we met" date
+as a custom date, profile links as social profiles, and the note's Vira
+block carrying the whole profile) and written on Push, or on every pass
+when auto-push is on. The rule is keep
 both and flag it: nothing is deleted on either side, the phone's own note
 stays above the Vira block, a differing value is carried in the block as
 "Previously on phone", and every such case lands in the review list until

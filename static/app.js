@@ -1309,7 +1309,7 @@ function makeContactCard(pid, card, ctx) {
     bodyWrap.appendChild(hwrap);
 
     const dwrap = el("div", "ccard-details");
-    ["location", "birthday", "note"].forEach((k) => {
+    ["location", "birthday", "met", "note"].forEach((k) => {
       const f = fieldOf(k);
       dwrap.appendChild(detailRow(f.label, f.value, f.placeholder,
                                   () => fieldOf(k).value,

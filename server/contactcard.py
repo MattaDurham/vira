@@ -1,8 +1,8 @@
 """The contact card: the owner-authored top pane of every CRM person.
 
 Everything above the dossier — name, pronouns, relationship, title, company,
-location, birthday, and the ranked list of emails and phones — is DERIVED by
-default and OVERRIDABLE by the owner. This module owns the override half.
+location, birthday, when we met, and the ranked list of emails and phones —
+is DERIVED by default and OVERRIDABLE by the owner. This module owns the override half.
 
 Why an overlay store and not CRM fields
 ---------------------------------------
@@ -85,6 +85,10 @@ FIELDS = (
      "placeholder": "City, state"},
     {"key": "birthday", "label": "Birthday", "derive": None,
      "placeholder": "June 3"},
+    # A full date reaches the phone as the "When we met" custom date
+    # (applecontacts); anything else stays on the card and in the note.
+    {"key": "met", "label": "When we met", "derive": None,
+     "placeholder": "9/25/2025"},
     {"key": "note", "label": "Note", "derive": None,
      "placeholder": "A line you want on the card"},
 )

@@ -265,7 +265,8 @@ SCHEMA = [
     S("apple_contacts_push", "contacts", "bool", True,
       "Update Apple Contacts when a card is saved",
       "macOS only. Company, title, birthday, location, email and phone order "
-      "and labels, and the Vira notes block sync to the phone."),
+      "and labels, the relationship, the when-we-met date, profile links and "
+      "the Vira notes block sync to the phone."),
     S("contacts_sync", "contacts", "bool", True,
       "Keep the CRM and Apple Contacts reconciled",
       "macOS only. A background pass brings new phone contacts and new "
