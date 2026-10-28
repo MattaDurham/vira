@@ -14,8 +14,10 @@ Inbound (phone -> CRM), additive only:
   CRM was built; everything older is the backlog, counted and importable
   from the Sync tab in one explicit step (the Config import).
 - An email or phone on a matched card the CRM lacks joins the person's
-  handles (triage.add_handles). One that belongs to another CRM person is
-  refused there and listed for review instead of moved.
+  handles (triage.add_handles). One that belongs to another CRM person
+  marks a card two people share (a duplicate, a family card): it is never
+  moved, never retried, and is listed once under shared cards and in the
+  review list.
 - An empty card field (company, title, birthday, location) is filled from
   the phone card, and the phone's own note is kept in Vira as a "Phone
   note" custom row. Nothing the CRM already says is overwritten.
@@ -45,6 +47,7 @@ CLI: python -m server.contactsync survey | pass [--push] [--create]
 import argparse
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -210,7 +213,7 @@ def survey(cards=None, store=None):
     new_uids = {cd["uid"] for cd in new_cards}
     backlog = [cd for cd in orphans if cd["uid"] not in new_uids]
 
-    handle_adds, fills, changes, plans = [], [], [], []
+    handle_adds, handle_conflicts, fills, changes, plans = [], [], [], [], []
     for pid, ms in matched.items():
         p = c["by_id"][pid]
         detail = crm.get_person(pid)
@@ -219,19 +222,32 @@ def survey(cards=None, store=None):
             continue
         crm_e = {ac._norm_email(r["value"]) for r in card["handles"] if r["kind"] == "email"}
         crm_p = {ac._norm_phone(r["value"]) for r in card["handles"] if r["kind"] == "phone"}
+
+        def place(kind, value, pid=pid, name=p["name"]):
+            # A handle another CRM person already owns marks a card two
+            # people share (a duplicate, a family card). It is never moved;
+            # it is listed once as a shared card, not retried as pending work.
+            owner = crm.resolve_handle(value)
+            if owner and owner != pid:
+                other = c["by_id"].get(owner) or {}
+                handle_conflicts.append({"pid": pid, "name": name, "kind": kind,
+                                         "value": value, "other_pid": owner,
+                                         "other_name": other.get("name") or owner})
+            else:
+                handle_adds.append({"pid": pid, "name": name, "kind": kind,
+                                    "value": value})
+
         for m in ms:
             for e in m.get("emails", []):
                 k = ac._norm_email(e["value"])
                 if k and "@" in k and k not in crm_e:
                     crm_e.add(k)
-                    handle_adds.append({"pid": pid, "name": p["name"],
-                                        "kind": "email", "value": e["value"].strip()})
+                    place("email", e["value"].strip())
             for ph in m.get("phones", []):
                 k = ac._norm_phone(ph["value"])
                 if len(k) == 10 and k not in crm_p:
                     crm_p.add(k)
-                    handle_adds.append({"pid": pid, "name": p["name"],
-                                        "kind": "phone", "value": k})
+                    place("phone", k)
         fields = {f["key"]: f["value"] for f in card["fields"]}
         fill = {}
         for m in ms:
@@ -275,7 +291,8 @@ def survey(cards=None, store=None):
         "new_cards": [_card_row(cd) for cd in new_cards],
         "backlog": len(backlog),
         "backlog_sample": [_card_row(cd) for cd in backlog],
-        "handle_adds": handle_adds, "fills": fills, "changes": changes,
+        "handle_adds": handle_adds, "handle_conflicts": handle_conflicts,
+        "fills": fills, "changes": changes,
         "missing": missing, "unmatched_skipped": len(unmatched) - len(missing),
         "_new_cards": new_cards, "_plans": plans,
     }
@@ -303,10 +320,28 @@ def _public(s):
 
 # ---------- the pass (writes) ----------
 
-def _review(kind, pid, name, *, uid=None, detail="", text=""):
+def _review(kind, pid, name, *, uid=None, detail="", text="", key=None):
+    """One entry for the owner to read. `key` is what makes it the same
+    case on a later pass (the default folds in the detail text)."""
     return {"id": "rv_" + uuid.uuid4().hex[:10], "kind": kind, "pid": pid,
             "name": name, "uid": uid, "when": _now(), "detail": detail,
-            "text": (text or "")[:NOTE_EXCERPT], "reviewed": False}
+            "text": (text or "")[:NOTE_EXCERPT], "reviewed": False,
+            "key": key or f"{kind}:{pid}:{uid}:{detail}"}
+
+
+_LEGACY_CONFLICT = re.compile(r"carries (email|phone) (\S+?)[:,]")
+
+
+def _review_key(r):
+    """The dedup key of a stored entry; entries written before keys
+    existed get one derived from their text."""
+    if r.get("key"):
+        return r["key"]
+    if r.get("kind") == "handle-conflict":
+        m = _LEGACY_CONFLICT.search(r.get("detail") or "")
+        if m:
+            return f"handle-conflict:{r.get('pid')}:{m.group(2)}"
+    return f"{r.get('kind')}:{r.get('pid')}:{r.get('uid')}:{r.get('detail')}"
 
 
 def apply(inbound=True, push=False, create=False, reason="manual"):
@@ -370,9 +405,18 @@ def apply(inbound=True, push=False, create=False, reason="manual"):
                     reviews.append(_review(
                         "handle-conflict", item["pid"], item["name"],
                         detail=f"The phone card carries {item['kind']} "
-                               f"{item['value']}: {e}"))
+                               f"{item['value']}: {e}",
+                        key=f"handle-conflict:{item['pid']}:{item['value']}"))
                 except (KeyError, OSError) as e:
                     done["errors"].append(f"{item['name']}: {str(e)[:120]}")
+            for item in s["handle_conflicts"]:
+                reviews.append(_review(
+                    "handle-conflict", item["pid"], item["name"],
+                    detail=f"The phone card carries {item['kind']} {item['value']}, "
+                           f"which belongs to {item['other_name']} in the CRM: the "
+                           "two share one phone card. Merge them in the CRM or "
+                           "split the card; nothing was moved.",
+                    key=f"handle-conflict:{item['pid']}:{item['value']}"))
             for f in s["fills"]:
                 draft = {"fields": dict(f["fields"])}
                 if f["phone_note"]:
@@ -446,12 +490,10 @@ def apply(inbound=True, push=False, create=False, reason="manual"):
 
         def fn(st):
             st["report"] = public
-            seen = {(r.get("kind"), r.get("pid"), r.get("uid"), r.get("detail"))
-                    for r in st["review"]}
+            seen = {_review_key(r) for r in st["review"]}
             for rv in reviews:
-                key = (rv["kind"], rv["pid"], rv["uid"], rv["detail"])
-                if key not in seen:
-                    seen.add(key)
+                if rv["key"] not in seen:
+                    seen.add(rv["key"])
                     st["review"].append(rv)
             st["review"] = st["review"][-MAX_REVIEW:]
             st["log"].append({
@@ -507,7 +549,11 @@ def push_person(pid):
                        "added below it. Read the card."))
     if reviews:
         def fn(st):
-            st["review"].extend(reviews)
+            seen = {_review_key(x) for x in st["review"]}
+            for rv in reviews:
+                if rv["key"] not in seen:
+                    seen.add(rv["key"])
+                    st["review"].append(rv)
             st["review"] = st["review"][-MAX_REVIEW:]
         _mutate(fn)
     return r

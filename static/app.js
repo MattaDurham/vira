@@ -17576,6 +17576,17 @@ function renderContactSync(box, st) {
     row.appendChild(el("div", "csync-what", r.what));
     return row;
   }, "The CRM already has everything the phone cards carry.");
+  // -- shared cards: two CRM people on one phone card; nothing moves
+  csyncSection(box, "Shared cards", rep.handle_conflicts_total || 0, rep.handle_conflicts || [], (h) => {
+    const row = el("div", "csync-row");
+    row.appendChild(csyncName(h.name, h.pid));
+    const what = el("div", "csync-what");
+    what.appendChild(document.createTextNode(`${h.kind} ${h.value} also belongs to `));
+    what.appendChild(csyncName(h.other_name, h.other_pid));
+    what.appendChild(document.createTextNode(" in the CRM; merge them or split the card"));
+    row.appendChild(what);
+    return row;
+  }, "No phone card is shared by two CRM people.");
   // -- will change on the phone
   csyncSection(box, "Will change on the phone", rep.changes_total || 0, rep.changes || [], (c) => {
     const row = el("div", "csync-row");
