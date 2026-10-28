@@ -99,8 +99,12 @@ class AquariumBenchmarkTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the turning bend harness")
     def test_turn_stroke_loads_and_releases_through_the_actual_body(self):
         root = Path(__file__).resolve().parents[1]
+        # The harness takes about 30 s on an M-series Mac. At 60 s the same
+        # tree passed CI on its branch and then timed out twice on main's run
+        # (2026-10-28, a loaded macOS runner), so the ceiling guards a hang,
+        # not a slow day: six times the local run, like the gentle study's.
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_turn_bend.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=180)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin detail harness")
