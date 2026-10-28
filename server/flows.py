@@ -1027,7 +1027,7 @@ def kit_preview(ref, kind="", cwd=None, local=False):
     if path.is_dir():
         readme = next((p for p in (path / "README.md", path / "readme.md") if p.is_file()), None)
         text = readme.read_text(encoding="utf-8", errors="replace") if readme else ""
-        files = sorted(str(p.relative_to(path)) for p in path.rglob("*")
+        files = sorted(p.relative_to(path).as_posix() for p in path.rglob("*")
                        if p.is_file() and not any(part.startswith(".") for part in p.relative_to(path).parts))
         return {**out, "format": "folder", "listing": plugin_listing(path) if kind == "plugin" else None,
                 "files": files[:200], "more_files": max(0, len(files) - 200),
