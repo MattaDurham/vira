@@ -17,7 +17,7 @@ from server import contactcard, contactsync as cs, data as crm, runtimework
 
 
 def card(uid, name, *, org="", title="", emails=(), phones=(), note="",
-         created=None, birthday=None, addresses=()):
+         created=None, birthday=None, addresses=(), dates=()):
     first, last = ac.split_name(name)
     return {"uid": uid, "store": "s", "pk": hash(uid) & 0xffff, "first": first,
             "last": last, "name": name, "org": org, "title": title,
@@ -25,7 +25,8 @@ def card(uid, name, *, org="", title="", emails=(), phones=(), note="",
             "created": created, "modified": created,
             "emails": [{"value": e, "label": "home"} for e in emails],
             "phones": [{"value": p, "label": "mobile"} for p in phones],
-            "urls": [], "addresses": list(addresses)}
+            "urls": [], "addresses": list(addresses),
+            "related": [], "dates": list(dates), "social": []}
 
 
 def person(pid, name, *, emails=(), phones=(), tier="A-import"):
@@ -66,7 +67,8 @@ class SyncCase(unittest.TestCase):
                  emails=["alex@example.com"], phones=["+1 (555) 010-1234"],
                  note="met at the pier", created=1000.0,
                  addresses=[{"label": "home", "street": "", "city": "Boston",
-                             "state": "MA", "zip": "", "country": ""}]),
+                             "state": "MA", "zip": "", "country": ""}],
+                 dates=[{"label": "when we met", "date": (2025, 9, 25)}]),
             card("D:ABPerson", "Dana Example", org="OtherCo",
                  emails=["dana@example.com"], note="phone only text",
                  created=900.0),
@@ -133,7 +135,8 @@ class SurveyTest(SyncCase):
         fills = {f["pid"]: f for f in s["fills"]}
         # Alex has no CRM company/title/location: filled from the phone.
         self.assertEqual(fills["p_a"]["fields"],
-                         {"company": "AppleCo", "title": "Maker", "location": "Boston, MA"})
+                         {"company": "AppleCo", "title": "Maker", "location": "Boston, MA",
+                          "met": "9/25/2025"})
         self.assertEqual(fills["p_a"]["phone_note"], "met at the pier")
         # Dana's CRM company stands; only the phone note comes in.
         self.assertEqual(fills["p_d"]["fields"], {})
@@ -156,7 +159,7 @@ class SurveyTest(SyncCase):
         pub = cs._public(cs.survey())
         self.assertNotIn("_plans", pub)
         self.assertEqual(pub["new_cards_total"], 2)
-        self.assertEqual(pub["fills"][0]["fields"], ["company", "location", "title"])
+        self.assertEqual(pub["fills"][0]["fields"], ["company", "location", "met", "title"])
 
 
 class InboundPassTest(SyncCase):
@@ -188,6 +191,7 @@ class InboundPassTest(SyncCase):
         fields = {f["key"]: f for f in c["fields"]}
         self.assertEqual(fields["company"]["value"], "AppleCo")
         self.assertEqual(fields["location"]["value"], "Boston, MA")
+        self.assertEqual(fields["met"]["value"], "9/25/2025")
         self.assertEqual([x["value"] for x in c["custom"] if x["label"] == cs.PHONE_NOTE_LABEL],
                          ["met at the pier"])
         d = contactcard.compose("p_d")

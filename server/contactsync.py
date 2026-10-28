@@ -19,9 +19,10 @@ Inbound (phone -> CRM), additive only:
   moved, never retried, and the card is listed once under shared cards
   and in the review list. Nothing is pushed to a shared card either, or
   the two people would overwrite each other on alternate passes.
-- An empty card field (company, title, birthday, location) is filled from
-  the phone card, and the phone's own note is kept in Vira as a "Phone
-  note" custom row. Nothing the CRM already says is overwritten.
+- An empty card field (company, title, birthday, when we met, location)
+  is filled from the phone card, and the phone's own note is kept in Vira
+  as a "Phone note" custom row. Nothing the CRM already says is
+  overwritten.
 
 Outbound (CRM -> phone): applecontacts.card_plan for every matched card,
 applied in one batch when the owner presses Push, or on every pass when
@@ -188,6 +189,16 @@ def _apple_location(apple):
     return ""
 
 
+def _apple_met(apple):
+    """The card's "When we met" custom date as the card field's M/D/YYYY,
+    or "" when the phone has none."""
+    for d in apple.get("dates", []):
+        if (d.get("label") or "").lower() == ac.MET_LABEL.lower() and d.get("date"):
+            y, mo, dd = d["date"]
+            return f"{mo}/{dd}/{y}"
+    return ""
+
+
 def _card_row(cd):
     return {"uid": cd["uid"], "name": cd["name"], "org": cd.get("org") or "",
             "created": _iso(cd.get("created")),
@@ -286,6 +297,10 @@ def survey(cards=None, store=None):
             if not fields.get("birthday") and m.get("birthday") and "birthday" not in fill:
                 y, mo, d = m["birthday"]
                 fill["birthday"] = f"{mo}/{d}/{y}"
+            if not fields.get("met") and "met" not in fill:
+                met = _apple_met(m)
+                if met:
+                    fill["met"] = met
             if not fields.get("location") and "location" not in fill:
                 loc = _apple_location(m)
                 if loc:

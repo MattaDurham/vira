@@ -86,7 +86,7 @@
   "assistant_contact_updates": true,
   "_assistant_contact_updates": "Adds durable facts and refreshes the relationship summary on People cards as conversations happen. Off keeps the assistant to commitments only. Does nothing while the assistant is off.",
   "apple_contacts_push": true,
-  "_apple_contacts_push": "macOS only. Company, title, birthday, location, email and phone order and labels, and the Vira notes block sync to the phone.",
+  "_apple_contacts_push": "macOS only. Company, title, birthday, location, email and phone order and labels, the relationship, the when-we-met date, profile links and the Vira notes block sync to the phone.",
   "contacts_sync": true,
   "_contacts_sync": "macOS only. A background pass brings new phone contacts and new handles into the CRM, fills empty card fields from the phone, and keeps the Sync tab's report current. Nothing is deleted on either side; a card that had content on both sides is kept whole and flagged for you to read.",
   "contacts_sync_push_auto": false,

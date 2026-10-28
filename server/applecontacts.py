@@ -16,7 +16,13 @@ make-new-email, set-organization, save).
 What it pushes (widened 2026-10-28 on the owner's "all the content"
 rule): company, job title, birthday, the email/phone lists - ORDER and
 LABELS - a postal address when the card has none and the CRM knows a
-location, URLs from the card's custom rows, and the NOTE. The note
+location, URLs from the card's custom rows, the NOTE, and three native
+slots: the relationship as a RELATED NAME labeled "Relationship" (a
+scalar: a differing phone value is replaced and carried in the block),
+the "When we met" date as a CUSTOM DATE, and a profile link on a known
+service (LinkedIn, X, Facebook, Instagram, GitHub, YouTube, TikTok,
+Threads, Bluesky) as a SOCIAL PROFILE rather than a URL row; the last
+two are added only when the card has none. The note
 carries a Vira block between `=== Vira ===` markers holding every card
 field and every profile section (relationship, how we met, summary,
 facts, topics, hooks, open loops, style, cadence, last exchange). Text
@@ -68,6 +74,7 @@ import re
 import sqlite3
 import subprocess
 import time
+import urllib.parse
 from glob import glob
 from pathlib import Path
 
@@ -91,6 +98,35 @@ PREVIOUS_PREFIX = "Previously on phone: "
 # below the argument limit osascript -e tolerates. A longer dossier ends
 # with a pointer back to Vira instead of being cut mid-sentence.
 NOTE_CAP = 6000
+
+# The native slots beside the note (2026-10-28). The related-name row
+# wears a fixed label and carries the CRM's relationship text as its
+# value ("Relationship: college friend"): the owner's word describes
+# THEIR side of the relationship, so putting it in the label with the
+# owner's name as the value would read backwards for a client or a
+# mentor. The date label is the one the owner already used by hand.
+RELATIONSHIP_LABEL = "Relationship"
+MET_LABEL = "When we met"
+# host -> (Apple service name, the path segment the user name follows:
+# "" for the first segment, "@" for an @handle, a word for a prefix). A
+# link that does not fit (a company page, a share link) stays a URL row.
+SOCIAL_SERVICES = {
+    "linkedin.com": ("LinkedIn", "in"),
+    "twitter.com": ("Twitter", ""),
+    "x.com": ("Twitter", ""),
+    "facebook.com": ("Facebook", ""),
+    "instagram.com": ("Instagram", ""),
+    "github.com": ("GitHub", ""),
+    "youtube.com": ("YouTube", "@"),
+    "tiktok.com": ("TikTok", "@"),
+    "threads.net": ("Threads", "@"),
+    "bsky.app": ("Bluesky", "profile"),
+}
+_SOCIAL_RESERVED = {"intent", "share", "sharer", "home", "i", "login", "search",
+                    "hashtag", "explore", "settings", "company", "pub", "feed",
+                    "profile.php", "groups", "pages", "events", "watch",
+                    "channel", "c", "user", "about", "help", "privacy", "terms"}
+_USER_RX = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 
 
 def enabled():
@@ -185,8 +221,10 @@ def load_cards(stores=None):
     [{uid, store, pk, first, last, name, org, title, nickname, note,
     birthday (y, m, d) or None, created, modified (epoch seconds or None),
     emails/phones/urls [{value, label}], addresses [{label, street, city,
-    state, zip, country}]}]. Never raises on a store it cannot open, and
-    tolerates stores that lack the optional columns and tables."""
+    state, zip, country}], related [{label, value}], dates [{label, date
+    (y, m, d)}], social [{service, user, url}]}]. Never raises on a store
+    it cannot open, and tolerates stores that lack the optional columns
+    and tables."""
     cards = []
     for db in (stores if stores is not None else _stores()):
         con = None
@@ -224,6 +262,29 @@ def load_cards(stores=None):
                         "state": (r[4] or "").strip(),
                         "zip": (r[5] or "").strip(),
                         "country": (r[6] or "").strip()})
+            related_by, dates_by, social_by = {}, {}, {}
+            if "ZABCDRELATEDNAME" in tables:
+                for r in con.execute("SELECT ZOWNER, ZLABEL, ZNAME FROM "
+                                     "ZABCDRELATEDNAME ORDER BY Z_PK"):
+                    if r[2] and str(r[2]).strip():
+                        related_by.setdefault(r[0], []).append(
+                            {"label": _unwrap_label(r[1]),
+                             "value": str(r[2]).strip()})
+            if "ZABCDCONTACTDATE" in tables:
+                for r in con.execute("SELECT ZOWNER, ZLABEL, ZDATE FROM "
+                                     "ZABCDCONTACTDATE ORDER BY Z_PK"):
+                    ymd = _mac_ymd(r[2])
+                    if ymd:
+                        dates_by.setdefault(r[0], []).append(
+                            {"label": _unwrap_label(r[1]), "date": ymd})
+            if "ZABCDSOCIALPROFILE" in tables:
+                for r in con.execute("SELECT ZOWNER, ZSERVICENAME, ZUSERNAME, "
+                                     "ZURLSTRING FROM ZABCDSOCIALPROFILE "
+                                     "ORDER BY Z_PK"):
+                    social_by.setdefault(r[0], []).append(
+                        {"service": (r[1] or "").strip(),
+                         "user": (r[2] or "").strip(),
+                         "url": (r[3] or "").strip()})
         except sqlite3.Error:
             continue
         finally:
@@ -250,6 +311,9 @@ def load_cards(stores=None):
                 "phones": phones_by.get(p["Z_PK"], []),
                 "urls": urls_by.get(p["Z_PK"], []),
                 "addresses": addr_by.get(p["Z_PK"], []),
+                "related": related_by.get(p["Z_PK"], []),
+                "dates": dates_by.get(p["Z_PK"], []),
+                "social": social_by.get(p["Z_PK"], []),
             })
     return cards
 
@@ -409,7 +473,7 @@ def note_block(card, detail, *, foreign=False, previous=()):
         out.append(f"Relationship: {rel}")
     for key, label in (("title", "Title"), ("company", "Company"),
                        ("location", "Location"), ("birthday", "Birthday"),
-                       ("note", "Card note")):
+                       ("met", MET_LABEL), ("note", "Card note")):
         if fields.get(key):
             out.append(f"{label}: {fields[key]}")
     for c in (card or {}).get("custom", []):
@@ -519,6 +583,65 @@ def _norm_url(u):
     return (u or "").strip().lower().rstrip("/")
 
 
+def social_from_url(url):
+    """(service name, user name) for a profile link on a known social
+    service, or None: the link stays a plain URL row."""
+    v = (url or "").strip()
+    if not _URL_RX.match(v):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(v)
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    for pre in ("www.", "m.", "mobile."):
+        if host.startswith(pre):
+            host = host[len(pre):]
+    hit = SOCIAL_SERVICES.get(host)
+    if not hit:
+        return None
+    service, prefix = hit
+    segs = [s for s in parts.path.split("/") if s]
+    if prefix == "@":
+        if not segs or not segs[0].startswith("@"):
+            return None
+        user = segs[0][1:]
+    elif prefix:
+        if len(segs) < 2 or segs[0].lower() != prefix:
+            return None
+        user = segs[1]
+    else:
+        if not segs:
+            return None
+        user = segs[0].lstrip("@")
+    if not user or user.lower() in _SOCIAL_RESERVED or not _USER_RX.match(user):
+        return None
+    return service, user
+
+
+def _custom_links(card, apple=None):
+    """(url rows [(label, url)], social profiles [(service, user, url)])
+    the card's custom rows add to an Apple card: a profile link on a
+    known service becomes a social profile, any other http(s) value a URL
+    row, and what the Apple card already has is skipped."""
+    apple = apple or {}
+    have_urls = {_norm_url(u["value"]) for u in apple.get("urls", [])}
+    have_social = {(s.get("service") or "").lower() for s in apple.get("social", [])}
+    urls, social = [], []
+    for c in card.get("custom", []):
+        v = (c.get("value") or "").strip()
+        soc = social_from_url(v)
+        if soc:
+            if soc[0].lower() not in have_social:
+                have_social.add(soc[0].lower())
+                social.append((soc[0], soc[1], v))
+            continue
+        if _URL_RX.match(v) and _norm_url(v) not in have_urls:
+            have_urls.add(_norm_url(v))
+            urls.append((c.get("label") or "url", v))
+    return urls, social
+
+
 def card_plan(card, detail, apple):
     """What one matched Apple card needs to read like the CRM: {kw (the
     build_script kwargs), changed [field names], conflicts [{field, crm,
@@ -541,6 +664,18 @@ def card_plan(card, detail, apple):
         if apple.get("title"):
             conflicts.append({"field": "title", "crm": title,
                               "phone": apple["title"]})
+    rel = (fields.get("relationship") or "").strip()
+    if rel:
+        cur = [r for r in apple.get("related", [])
+               if (r.get("label") or "").lower() == RELATIONSHIP_LABEL.lower()]
+        if not cur:
+            kw["related"] = [(RELATIONSHIP_LABEL, rel)]
+            changed.append("relationship")
+        elif not any((r.get("value") or "").lower() == rel.lower() for r in cur):
+            kw["related_set"] = [(RELATIONSHIP_LABEL, rel)]
+            changed.append("relationship")
+            conflicts.append({"field": "relationship", "crm": rel,
+                              "phone": cur[0]["value"]})
     bday = _birthday_parts(fields.get("birthday"))
     if bday and bday != apple.get("birthday"):
         kw["birthday"] = bday
@@ -549,6 +684,11 @@ def card_plan(card, detail, apple):
             y, mo, d = apple["birthday"]
             conflicts.append({"field": "birthday", "crm": fields.get("birthday"),
                               "phone": f"{mo}/{d}/{y}"})
+    met = _date_parts(fields.get("met"))
+    if met and not any((d.get("label") or "").lower() == MET_LABEL.lower()
+                       for d in apple.get("dates", [])):
+        kw["dates"] = [(MET_LABEL, met)]
+        changed.append("met")
     eplan = plan_handles([r for r in rows if r["kind"] == "email"],
                          apple.get("emails", []), "email")
     if not _same_handles(eplan, apple.get("emails", []), "email"):
@@ -563,16 +703,13 @@ def card_plan(card, detail, apple):
     if addr and not apple.get("addresses"):
         kw["address"] = addr
         changed.append("address")
-    have_urls = {_norm_url(u["value"]) for u in apple.get("urls", [])}
-    add_urls = []
-    for c in card.get("custom", []):
-        v = (c.get("value") or "").strip()
-        if _URL_RX.match(v) and _norm_url(v) not in have_urls:
-            have_urls.add(_norm_url(v))
-            add_urls.append((c.get("label") or "url", v))
+    add_urls, add_social = _custom_links(card, apple)
     if add_urls:
         kw["urls"] = add_urls
         changed.append("urls")
+    if add_social:
+        kw["social"] = add_social
+        changed.append("social")
     foreign, cur_block = split_note(apple.get("note") or "")
     previous = _previous_lines(cur_block) + [
         f'{PREVIOUS_PREFIX}{c["field"]} "{c["phone"]}"' for c in conflicts]
@@ -600,9 +737,10 @@ def _lit(text):
     return " & linefeed & ".join(f'"{_esc(ln)}"' for ln in lines) or '""'
 
 
-def _birthday_parts(value):
-    """The card's birthday string -> (year, month, day) or None. Accepts
-    M/D/YYYY (the card's placeholder format) and YYYY-MM-DD."""
+def _date_parts(value):
+    """A card date string -> (year, month, day) or None. Accepts M/D/YYYY
+    (the card's placeholder format) and YYYY-MM-DD; a date with no year
+    stays in the note, since Apple's slots want a full one."""
     v = (value or "").strip()
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", v)
     if m:
@@ -613,26 +751,38 @@ def _birthday_parts(value):
     return None
 
 
+_birthday_parts = _date_parts      # the name the first callers used
+
 _MONTHS = ["January", "February", "March", "April", "May", "June", "July",
            "August", "September", "October", "November", "December"]
 
 
+def _date_lines(var, ymd):
+    """Assemble a date-only value in `var` from its components (a string
+    literal parses by the system locale). The day is pinned to 1 before
+    the month moves, so a run on the 31st cannot roll a short month over
+    into the next one and land the date a few days late."""
+    y, mo, d = ymd
+    return [f"set {var} to current date",
+            f"set day of {var} to 1",
+            f"set year of {var} to {y}",
+            f"set month of {var} to {_MONTHS[mo - 1]}",
+            f"set day of {var} to {d}",
+            f"set time of {var} to 0"]
+
+
 def _field_lines(target, *, company=None, title=None, birthday=None,
                  emails=None, phones=None, note=None, address=None,
-                 urls=None, rewrite_lists=True):
+                 urls=None, related=None, related_set=None, dates=None,
+                 social=None, rewrite_lists=True):
     lines = []
     if company is not None:
         lines.append(f'set organization of {target} to "{_esc(company)}"')
     if title is not None:
         lines.append(f'set job title of {target} to "{_esc(title)}"')
     if birthday is not None:
-        y, mo, d = birthday
-        lines += ["set bd to current date",
-                  f"set year of bd to {y}",
-                  f"set month of bd to {_MONTHS[mo - 1]}",
-                  f"set day of bd to {d}",
-                  "set time of bd to 0",
-                  f"set birth date of {target} to bd"]
+        lines += _date_lines("bd", birthday)
+        lines.append(f"set birth date of {target} to bd")
     for prop, plan in (("email", emails), ("phone", phones)):
         if plan is None:
             continue
@@ -652,6 +802,24 @@ def _field_lines(target, *, company=None, title=None, birthday=None,
     for label, value in (urls or []):
         lines.append(f"make new url at end of urls of {target} with "
                      f'properties {{label:"{_esc(label)}", value:"{_esc(value)}"}}')
+    for label, value in (related or []):
+        lines.append(f"make new related name at end of related names of {target} "
+                     f'with properties {{label:"{_esc(label)}", value:"{_esc(value)}"}}')
+    for label, value in (related_set or []):
+        # AppleScript compares strings without case by default, so this
+        # finds the row however the label was typed on the phone.
+        lines += [f"repeat with rn in related names of {target}",
+                  f'if label of rn is "{_esc(label)}" then set value of rn to "{_esc(value)}"',
+                  "end repeat"]
+    for i, (label, ymd) in enumerate(dates or []):
+        var = f"cd{i}"
+        lines += _date_lines(var, ymd)
+        lines.append(f"make new custom date at end of custom dates of {target} "
+                     f'with properties {{label:"{_esc(label)}", value:{var}}}')
+    for service, user, url in (social or []):
+        lines.append(f"make new social profile at end of social profiles of {target} "
+                     f'with properties {{service name:"{_esc(service)}", '
+                     f'user name:"{_esc(user)}", url:"{_esc(url)}"}}')
     if note is not None:
         lines.append(f"set note of {target} to {_lit(note)}")
     return lines
@@ -659,13 +827,16 @@ def _field_lines(target, *, company=None, title=None, birthday=None,
 
 def build_script(uid, *, company=None, title=None, birthday=None,
                  emails=None, phones=None, note=None, address=None,
-                 urls=None):
+                 urls=None, related=None, related_set=None, dates=None,
+                 social=None):
     """The per-card AppleScript. Only the pieces that changed are
     included; None means leave that aspect of the card alone."""
     lines = [f'set P to person id "{_esc(uid)}"']
     lines += _field_lines("P", company=company, title=title,
                           birthday=birthday, emails=emails, phones=phones,
-                          note=note, address=address, urls=urls)
+                          note=note, address=address, urls=urls,
+                          related=related, related_set=related_set,
+                          dates=dates, social=social)
     body = "\n".join(lines)
     return f'tell application "Contacts"\n{body}\nsave\nend tell\nreturn "ok"'
 
@@ -684,7 +855,7 @@ def split_name(name):
 
 def build_create_script(name, *, company=None, title=None, birthday=None,
                         emails=None, phones=None, note=None, address=None,
-                        urls=None):
+                        urls=None, related=None, dates=None, social=None):
     """A new card with everything the CRM knows; returns the new card's
     id so the creation can be logged (and undone)."""
     first, last = split_name(name)
@@ -695,6 +866,7 @@ def build_create_script(name, *, company=None, title=None, birthday=None,
     lines += _field_lines("P", company=company, title=title,
                           birthday=birthday, emails=emails, phones=phones,
                           note=note, address=address, urls=urls,
+                          related=related, dates=dates, social=social,
                           rewrite_lists=False)
     body = "\n".join(lines)
     return f'tell application "Contacts"\n{body}\nsave\nreturn id of P\nend tell'
@@ -824,17 +996,22 @@ def create_card(pid, card=None, detail=None):
         if not name.strip() or not (emails or phones):
             return {"ok": False, "detail": "needs a name and a handle",
                     "uid": None}
+        urls, social = _custom_links(card)
+        rel = (fields.get("relationship") or "").strip()
+        met = _date_parts(fields.get("met"))
         kw = {
             "company": fields.get("company") or None,
             "title": fields.get("title") or None,
-            "birthday": _birthday_parts(fields.get("birthday")),
+            "birthday": _date_parts(fields.get("birthday")),
             "emails": plan_handles([r for r in rows if r["kind"] == "email"],
                                    [], "email") or None,
             "phones": plan_handles([r for r in rows if r["kind"] == "phone"],
                                    [], "phone") or None,
             "address": _address_parts(fields.get("location")),
-            "urls": [(c.get("label") or "url", c["value"]) for c in card.get("custom", [])
-                     if _URL_RX.match((c.get("value") or "").strip())] or None,
+            "urls": urls or None,
+            "related": [(RELATIONSHIP_LABEL, rel)] if rel else None,
+            "dates": [(MET_LABEL, met)] if met else None,
+            "social": social or None,
             "note": merge_note("", note_block(card, detail)),
         }
         uid = _osascript(build_create_script(name, **kw))
