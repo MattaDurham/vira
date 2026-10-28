@@ -50,12 +50,15 @@ DEFAULT_MODULES = [
              "arrivals. Needs Full Disk Access granted to Vira's python.",
      "links": [], "keywords": ["chat.db", "imessage", "full disk"],
      "updated": TODAY},
-    {"id": "addressbook", "name": "AddressBook (photos)", "layer": "source",
+    {"id": "addressbook", "name": "AddressBook (Contacts)", "layer": "source",
      "group": "communicate", "kind": "macOS database",
-     "what": "Apple's contacts database, used for one thing: contact "
-             "photos, extracted into Vira's photo cache keyed by person.",
-     "links": [], "keywords": ["addressbook", "contact photo"],
-     "updated": TODAY},
+     "what": "Apple's contacts database: the phone's cards as iCloud syncs "
+             "them to the Mac. Read for contact photos and by the two-way "
+             "contacts sync (People > Sync); written only through "
+             "Contacts.app by AppleScript, never directly.",
+     "links": [], "keywords": ["addressbook", "contact photo", "contacts sync",
+                               "apple contacts"],
+     "updated": "2026-10-28"},
     {"id": "crm-data", "name": "CRM stores", "layer": "source",
      "group": "communicate", "kind": "JSON files (~/workspace/crm)",
      "what": "The memory: ~1,000 people in people.json, evidence-rich "

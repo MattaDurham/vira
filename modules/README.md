@@ -61,7 +61,7 @@ branch; the suite and `check` say when it is whole.
 - [Incoming](incoming/README.md) - Every channel a message can arrive on, merged into one live feed.  
   Feed, iMessage, Mail, WhatsApp, Companion, Triage (86 files)
 - [People](people/README.md) - The CRM: who the owner knows, what the evidence says, and who to talk to next.  
-  CRM, Sync, Networking (21 files)
+  CRM, Sync, Networking (23 files)
 
 ### Know
 
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-786 of 786 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+788 of 788 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->

@@ -29,7 +29,7 @@ from . import (
                admininbox, briefstate, changelog,
                circuits,
                companion,
-               contactcard,
+               contactcard, contactsync,
                correspondence, reminderstickies, workresults,
                crmindex,
                data as crm, dataconnections,
@@ -216,6 +216,7 @@ async def _startup():
     mail_watcher.start()
     whatsapp_watcher.start()   # dormant until a WhatsApp pairing exists
     photos.start_background_build()
+    contactsync.start()        # People > Sync: CRM and phone reconciled on a timer
     indexer.start()
     text_indexer.start()
     idea_indexer.start()       # keeps the backlog's tags/vectors current
@@ -308,8 +309,42 @@ def api_card_save(pid: str, req: CardReq):
     # from there the phone). Best-effort — a failed push never fails the
     # save; the result rides the response so the card can say what happened.
     if applecontacts.enabled():
-        out["apple_push"] = applecontacts.push_person(pid)
+        out["apple_push"] = contactsync.push_person(pid)
     return out
+
+
+class ContactSyncRunReq(BaseModel):
+    inbound: bool = True
+    push: bool = False
+    create: bool = False
+
+
+class ContactSyncReviewReq(BaseModel):
+    ids: list = []
+    all: bool = False
+
+
+# People > Sync: the CRM and the phone's address book reconciled both ways
+# (server/contactsync.py). A run starts a pass on its own thread and the
+# GET reports progress; the Sync tab polls it while a pass is running.
+@app.get("/api/contacts/sync")
+def api_contacts_sync():
+    return contactsync.status()
+
+
+@app.post("/api/contacts/sync/run")
+def api_contacts_sync_run(req: ContactSyncRunReq):
+    ok, why = contactsync.available()
+    if not ok:
+        raise HTTPException(400, why)
+    return contactsync.run_async(inbound=req.inbound, push=req.push,
+                                 create=req.create, reason="sync tab")
+
+
+@app.post("/api/contacts/sync/review")
+def api_contacts_sync_review(req: ContactSyncReviewReq):
+    ids = [str(i) for i in (req.ids or []) if isinstance(i, str)]
+    return contactsync.mark_reviewed(ids, everything=bool(req.all))
 
 
 @app.get("/api/person/{pid}/thread")

@@ -145,6 +145,113 @@ class FindCardsTest(unittest.TestCase):
                 self.assertEqual(ac.find_cards(["nope@example.com"], []), [])
 
 
+class NoteTest(unittest.TestCase):
+    def test_split_and_merge_keep_the_phone_text(self):
+        block = "Name: Pat"
+        merged = ac.merge_note("met at the pier", block)
+        self.assertTrue(merged.startswith("met at the pier\n\n=== Vira ==="))
+        foreign, inner = ac.split_note(merged)
+        self.assertEqual(foreign, "met at the pier")
+        self.assertEqual(inner, block)
+        self.assertEqual(ac.split_note("just phone text"), ("just phone text", None))
+        # a block with no end marker still yields its text
+        self.assertEqual(ac.split_note("x\n=== Vira ===\nName: Pat")[1], "Name: Pat")
+
+    def test_block_is_deterministic_and_complete(self):
+        card = {"fields": [{"key": "display_name", "value": "Pat Example"},
+                           {"key": "pronouns", "value": "they/them"},
+                           {"key": "company", "value": "NewCo"},
+                           {"key": "location", "value": "Boston, MA"}],
+                "custom": [{"label": "Nickname", "value": "Patty"}], "handles": []}
+        detail = {"person": {}, "profile": {
+            "relationship_class": "friend", "how_we_met": "At a regatta.",
+            "relationship_summary": "Old sailing friend.",
+            "personal_facts": [{"fact": "Owns a catboat", "as_of": "2024-05-01"}],
+            "topics": [{"topic": "sailing", "status": "active"}],
+            "hooks": [{"angle": "Ask about the regatta", "detail": "June race"}],
+            "open_loops": [{"what": "Dinner", "owed_by": "me", "since": "2024-03-01"}],
+            "comms_style": "Warm.",
+            "cadence": {"typical_gap_days": 36.5},
+            "last_exchange": {"date": "2024-06-01T10:00", "channel": "imessage",
+                              "summary": "Race results."}}}
+        a = ac.note_block(card, detail)
+        self.assertEqual(a, ac.note_block(card, detail))      # no timestamps
+        for needle in ("Name: Pat Example (they/them)", "Relationship: friend",
+                       "Company: NewCo", "Location: Boston, MA", "Nickname: Patty",
+                       "How we met: At a regatta.", "Summary: Old sailing friend.",
+                       "- Owns a catboat (as of 2024-05-01)", "Topics: sailing (active)",
+                       "- Ask about the regatta: June race",
+                       "- Dinner (owed by me, since 2024-03-01)", "Style: Warm.",
+                       "Cadence: typically every 36 days; last exchange 2024-06-01 "
+                       "via imessage: Race results."):
+            self.assertIn(needle, a)
+        # the phone's text is announced, and previous values carry forward
+        b = ac.note_block(card, detail, foreign=True,
+                          previous=['Previously on phone: company "OldCo"', 'company "OldCo"'])
+        self.assertTrue(b.startswith("Phone note kept above."))
+        self.assertEqual(b.count('Previously on phone: company "OldCo"'), 1)
+
+    def test_block_is_capped_with_a_pointer(self):
+        detail = {"person": {}, "profile": {
+            "personal_facts": [{"fact": "x" * 200} for _ in range(60)]}}
+        a = ac.note_block({"fields": [], "custom": [], "handles": []}, detail)
+        self.assertLessEqual(len(a), ac.NOTE_CAP + 20)
+        self.assertTrue(a.endswith("(more in Vira)"))
+
+    def test_plan_covers_title_address_urls_and_note(self):
+        card = {"fields": [{"key": "title", "value": "Partner"},
+                           {"key": "location", "value": "Boston, MA"}],
+                "custom": [{"label": "LinkedIn", "value": "https://example.com/pat"}],
+                "handles": []}
+        apple = {"uid": "A:ABPerson", "org": "", "title": "Associate",
+                 "emails": [], "phones": [], "urls": [], "addresses": [],
+                 "note": "phone text"}
+        plan = ac.card_plan(card, {"person": {}}, apple)
+        self.assertEqual(plan["changed"], ["title", "address", "urls", "note"])
+        self.assertTrue(plan["foreign_note"])
+        s = ac.build_script("A:ABPerson", **plan["kw"])
+        self.assertIn('set job title of P to "Partner"', s)
+        self.assertIn('make new address at end of addresses of P with properties '
+                      '{label:"home", city:"Boston", state:"MA"}', s)
+        self.assertIn('make new url at end of urls of P with properties '
+                      '{label:"LinkedIn", value:"https://example.com/pat"}', s)
+        self.assertIn('set note of P to "phone text" & linefeed & "" & linefeed '
+                      '& "=== Vira ==="', s)
+        # an existing address or url is left alone, never replaced
+        apple["addresses"] = [{"label": "work", "city": "Elsewhere", "state": ""}]
+        apple["urls"] = [{"value": "https://example.com/pat/", "label": ""}]
+        plan = ac.card_plan(card, {"person": {}}, apple)
+        self.assertNotIn("address", plan["changed"])
+        self.assertNotIn("urls", plan["changed"])
+
+    def test_create_script_adds_without_deleting(self):
+        s = ac.build_create_script("Pat Q. Example, M.D.", company="NewCo",
+                                   emails=[("pat@example.com", "home")],
+                                   phones=[("5550101234", "mobile")],
+                                   note="=== Vira ===\nName: Pat\n=== end Vira ===")
+        self.assertIn('first name:"Pat Q.", last name:"Example"', s)
+        self.assertNotIn("delete every", s)
+        self.assertIn("return id of P", s)
+        self.assertIn('make new email at end of emails of P', s)
+        self.assertEqual(ac.split_name("Cher"), ("Cher", ""))
+
+
+class LoadCardsTest(unittest.TestCase):
+    def test_rich_loader_tolerates_a_minimal_store(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = _fixture_store(d)
+            cards = ac.load_cards([db])
+        self.assertEqual(len(cards), 2)
+        a = next(c for c in cards if c["uid"] == "AAA:ABPerson")
+        self.assertEqual(a["org"], "OldCo")
+        self.assertEqual(a["emails"][0]["label"], "home")
+        self.assertEqual(a["note"], "")
+        self.assertIsNone(a["created"])
+        idx = ac.index_cards(cards)
+        self.assertEqual([c["uid"] for c in ac.match_cards(cards, idx, [], ["5550149999"])],
+                         ["AAA:ABPerson"])
+
+
 class PushTest(unittest.TestCase):
     def _card(self):
         return {"pid": "p_x", "custom": [], "updated": None,
@@ -173,9 +280,15 @@ class PushTest(unittest.TestCase):
             out = ac.push_person("p_x")
         self.assertTrue(out["ok"])
         self.assertEqual(out["cards"][0]["changed"],
-                         ["company", "birthday", "emails"])
+                         ["company", "birthday", "emails", "note"])
         s = scripts[0]
         self.assertIn('set organization of P to "NewCo"', s)
+        # the note carries the Vira block, and the phone's old company
+        self.assertIn('"=== Vira ==="', s)
+        self.assertIn('Previously on phone: company \\"OldCo\\"', s)
+        self.assertEqual(out["cards"][0]["conflicts"],
+                         [{"field": "company", "crm": "NewCo", "phone": "OldCo"}])
+        self.assertFalse(out["cards"][0]["foreign_note"])   # no phone text
         # the Apple-only address survived the rewrite
         self.assertIn("extra@example.com", s)
         # archived sank to the CRM block's end wearing "old", before extras
@@ -202,6 +315,8 @@ class PushTest(unittest.TestCase):
         card = self._card()
         card["fields"] = [{"key": "company", "value": "NewCo"},
                           {"key": "birthday", "value": ""}]
+        # the note already holds this card's block: nothing to rewrite
+        apple["note"] = ac.merge_note("", ac.note_block(card, {"person": {}}))
         ran = []
         with mock.patch.object(ac, "enabled", return_value=True), \
              mock.patch.object(ac, "find_cards", return_value=[apple]), \

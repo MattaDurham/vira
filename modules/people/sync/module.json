@@ -1,20 +1,24 @@
 {
   "id": "people/sync",
   "name": "Sync",
-  "summary": "Apple Contacts write-back, contact photos, and evidence-grounded maintenance.",
+  "summary": "Apple Contacts write-back and the two-way contacts sync, contact photos, and evidence-grounded maintenance.",
   "owns": [
     "server/applecontacts.py",
     "server/contactintel.py",
+    "server/contactsync.py",
     "server/photos.py",
     "tests/test_applecontacts.py",
-    "tests/test_contactintel.py"
+    "tests/test_contactintel.py",
+    "tests/test_contactsync.py"
   ],
   "routes": [
-    "/api/photo"
+    "/api/photo",
+    "/api/contacts/sync"
   ],
   "stores": [
     "data/photos/",
-    "data/contact-intel.json"
+    "data/contact-intel.json",
+    "data/contacts-sync.json"
   ],
   "reads": [
     "people/crm",

@@ -9078,3 +9078,20 @@ mark.doc-term {
 .worker-row .worker-title { font-size: 13px; color: var(--text-bright); }
 .worker-row .worker-meta { font-size: 11px; color: var(--text-faint); line-height: 1.4; }
 .worker-row .worker-error { font-size: 11px; color: var(--red); }
+
+/* ---- People > Sync (contacts reconciled both ways, 2026-10-28) ---- */
+.csync-status { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 10px; }
+.csync-status .hint { margin: 0; }
+.csync-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.csync-sec { margin: 0 0 10px; }
+.csync-sec > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.csync-sec > summary .badge { margin-left: 8px; }
+.csync-row { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line, rgba(127,127,127,.25)); min-width: 0; }
+.csync-row:first-of-type { border-top: 0; }
+.csync-name { font-weight: 600; flex: 0 0 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csync-name.click { cursor: pointer; }
+.csync-what { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; opacity: .85; font-size: 13px; }
+.csync-what .warn { color: var(--warn, #b7791f); }
+.csync-note { white-space: pre-wrap; font-size: 12.5px; opacity: .8; margin: 4px 0 0; max-height: 9em; overflow: auto; }
+.csync-empty { opacity: .7; padding: 6px 0; font-size: 13px; }
+.csync-log { font-size: 12px; opacity: .75; }

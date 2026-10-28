@@ -8,6 +8,27 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- People > Sync: the CRM and the phone's address book reconciled both
+  ways (`server/contactsync.py`). Until now nothing moved contacts on its
+  own: a card added on the phone reached the Mac over iCloud and stopped,
+  the only import was the all-or-nothing button in Config > Contacts, and
+  the Apple write-back fired only when a contact card was saved in Vira.
+  A background pass (every `contacts_sync_interval` minutes while
+  `contacts_sync` is on) brings in cards created after a watermark set at
+  the newest card the CRM already knows, adds new emails and phones from
+  matched cards, and fills empty card fields from the phone; the backlog
+  of older unmatched cards stays an explicit one-click import. Outbound,
+  every matched card is planned against the CRM and written on Push (or
+  every pass with `contacts_sync_push_auto`): company, title, birthday, a
+  postal address when the card has none, URLs, handle order and labels,
+  and the note, which now carries a `=== Vira ===` block with every card
+  field and every profile section. Nothing is deleted on either side; the
+  phone's own note stays above the block, a differing value is kept in it
+  as "Previously on phone", and each such case, each refused handle, each
+  new person and each created card lands in a review list on the tab
+  until it is marked read. Card creation for CRM people with no Apple
+  card is its own step, logged and undoable (`python -m server.contactsync
+  undo-created`). The card-save push gained the same fields.
 - The module tree. `modules/<module>/<submodule>/` is the map of the
   code laid out the way the app is: nineteen modules (Incoming, People,
   Find, Library, Reader, Research, World, Image Atlas, Evidence, Maps,

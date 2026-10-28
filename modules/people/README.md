@@ -20,7 +20,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 ### Submodules
 
 - [CRM](crm/README.md) - The person record, its card, its dossier, its search, and group threads. (11 files)
-- [Sync](sync/README.md) - Apple Contacts write-back, contact photos, and evidence-grounded maintenance. (5 files)
+- [Sync](sync/README.md) - Apple Contacts write-back and the two-way contacts sync, contact photos, and evidence-grounded maintenance. (7 files)
 - [Networking](networking/README.md) - Radar, reconnect, and circles: who deserves attention and who should meet whom. (5 files)
 
 ### Neighbours
@@ -33,6 +33,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `people` (ids from `WINDOWS` in `static/app.js`).
 
-21 tracked files across 3 submodules. `python -m server.moduletree brief people` prints every submodule's page in one go.
+23 tracked files across 3 submodules. `python -m server.moduletree brief people` prints every submodule's page in one go.
 
 <!-- moduletree:end -->
