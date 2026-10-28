@@ -495,8 +495,35 @@
 .forge-envrow .forge-path { flex: 1 1 100%; }
 .forge-envrow label { display: inline-flex; align-items: center; gap: 5px; }
 .forge-envlist { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
-.forge-envlist li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-card); font-size: 13px; }
+.forge-envlist li { display: grid; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-card); font-size: 13px; }
 .forge-envlist li small { color: var(--text-faint); font: 11px var(--mono); }
+.forge-envhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.forge-envactions { display: inline-flex; gap: 4px; }
+.forge-envpeeks { display: grid; gap: 6px; }
+.forge-envpeeks:empty { display: none; }
+/* The file behind a source card, in the column. */
+.forge-preview { display: grid; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-card); font-size: 13px; }
+.forge-preview-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.forge-preview-body { display: grid; gap: 8px; min-width: 0; }
+.forge-preview-text { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.forge-preview pre { max-height: 360px; }
+.forge-outline { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.forge-outline li { display: grid; grid-template-columns: minmax(0, 128px) minmax(0, 1fr); gap: 8px; font-size: 12.5px; line-height: 1.4; }
+.forge-outline li b { color: var(--text-faint); font: 600 11.5px/1.5 var(--mono); overflow-wrap: anywhere; }
+.forge-outline li span { overflow-wrap: anywhere; }
+.forge-md { max-height: 480px; overflow: auto; font-size: 12.5px; line-height: 1.45; color: var(--text); }
+.forge-md h1, .forge-md h2, .forge-md h3, .forge-md h4 { margin: 10px 0 4px; font-size: 13px; font-weight: 600; }
+.forge-md > :first-child { margin-top: 0; }
+.forge-md p, .forge-md ul, .forge-md ol, .forge-md blockquote { margin: 0 0 6px; }
+.forge-md ul, .forge-md ol { padding-left: 18px; }
+.forge-md blockquote { padding-left: 8px; border-left: 2px solid var(--line); color: var(--text-dim); }
+.forge-md hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+.forge-md pre { max-height: 240px; }
+.forge-editor .forge-md code { display: inline; padding: 0 3px; border: 0; background: var(--bg-stage); font: 11.5px var(--mono); }
+.forge-editor .forge-md pre code { padding: 0; background: none; }
+.forge-md .note-meta { margin-bottom: 6px; color: var(--text-faint); font: 11px/1.45 var(--mono); }
+.forge-md .note-link { color: var(--accent); }
+.forge-md img { max-width: 100%; height: auto; }
 .forge-browse { display: flex; align-items: center; gap: 6px; padding: 4px 2px 10px; }
 .forge-browse .forge-card-kind { margin-right: 4px; }
 .forge-editor details { border: 1px solid var(--line); border-radius: var(--radius); }

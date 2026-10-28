@@ -13,10 +13,18 @@ before is appended under the next card's box unless the box places it.
 A card's environment is what is wired into it and nothing else: skills,
 settings files, plugins, agent files and instruction files are source
 cards (the Sources tab, or a saved environment as one card), and the
-session is told about nothing it was not wired to. The right column is
-the only editor. `flows` compiles a board into a circuit; circuits are
-the multi-model pipelines that run as DAGs underneath, and the runner
-applies the environment at launch. Routines are standing loops on a
+session is told about nothing it was not wired to. A source card shows
+the file behind it in the column: an instruction file or a skill as
+rendered markdown, a settings file as an outline of what it holds, a
+plugin as what it contains with a switch per skill, an MCP server as
+how it starts; Open puts the file in Vira's viewer, and an instruction
+or settings card can stand for the owner's own file instead. The
+Sources tab lists what this Mac has: its instruction files (global,
+project, the project's private one), settings files, skills, commands,
+plugins and the CLI's MCP servers. The right column is the only editor.
+`flows` compiles a board into a circuit; circuits are the multi-model
+pipelines that run as DAGs underneath, and the runner applies the
+environment at launch (`flows.kit_preview` is what the column shows). Routines are standing loops on a
 cadence, and a `command` routine runs a program in its own process on a
 schedule (the two TC-IL captures run this way); they are listed in the
 Forge's Loops tab, not as Flows. `actions` enumerates the central
@@ -69,7 +77,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_routinerun.py` | Command routines: the detached runner, its history, and the launchd list. |
 | `tests/test_routinesrc.py` | Under the hood — resolution, explanation, and the guarded write. |
 
-### Routes (33)
+### Routes (36)
 
 Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
 
@@ -80,6 +88,9 @@ Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
 - `POST /api/flows/environments`
 - `DELETE /api/flows/environments/{eid}`
 - `GET /api/flows/kit`
+- `GET /api/flows/kit/preview`
+- `GET /api/flows/kit/file`
+- `POST /api/flows/kit/reveal`
 - `GET /api/flows/kit/source`
 - `GET /api/flows/native/{routine_id}/source`
 - `GET /api/flows/{flow_id}`

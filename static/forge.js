@@ -1490,27 +1490,22 @@
     const box = make("div", "forge-envrows");
     box.appendChild(make("span", "forge-card-kind", "Environment"));
     const row = make("div", "forge-envrow");
-    const custom = env.instructions.find((i) => i !== "project") || "";
+    const peeks = make("div", "forge-envpeeks");
     const paintRow = () => {
       row.replaceChildren();
+      peeks.replaceChildren();
       const on = env.instructions.includes("project");
       row.appendChild(checkbox("the working folder's AGENTS.md or CLAUDE.md", on, (value) => {
         env.instructions = env.instructions.filter((i) => i !== "project");
         if (value) env.instructions.unshift("project");
         touch(node); paintRow();
       }));
+      row.appendChild(peekChip("project", "instructions", peeks));
       const custom = env.instructions.find((i) => i !== "project") || "";
       const replace = make("button", "fchip sm", custom ? "Change file" : "Add a file");
       replace.type = "button";
       replace.addEventListener("click", async () => {
-        const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-        let path = "";
-        try {
-          const res = await send("/api/pick-folder", "POST", { prompt: "Choose an instruction file", local, kind: "file" });
-          if (res.cancelled) return;
-          path = res.path || "";
-          if (res.unavailable) path = await forgeDialog({ title: "Type the file's path", message: res.reason || "", value: custom, confirm: "Use it" });
-        } catch (error) { return toast(`Could not open a window: ${error.message}`); }
+        const path = await pickOnThisMac("Choose an instruction file", "file", custom);
         if (!path) return;
         env.instructions = env.instructions.filter((i) => i === "project").concat([path]);
         touch(node); paintRow();
@@ -1521,11 +1516,12 @@
         drop.type = "button";
         drop.addEventListener("click", () => { env.instructions = env.instructions.filter((i) => i === "project"); touch(node); paintRow(); });
         row.appendChild(drop);
+        row.appendChild(peekChip(custom, "instructions", peeks));
         row.appendChild(make("code", "forge-path", custom));
       }
     };
     paintRow();
-    box.appendChild(row);
+    box.append(row, peeks);
     const wired = wiredIn(node, false).filter((item) => SOURCE.has(item.type) || item.type === "env");
     const byKind = {};
     wired.forEach((item) => {
@@ -1773,35 +1769,213 @@
   function sourceEditor(node) {
     const editor = make("div", "forge-editor");
     editor.appendChild(nameField(node));
-    editor.appendChild(make("code", "forge-path", node.source_ref || "(no path)"));
-    const area = textArea(node.description, (value) => { node.description = value; touch(node); }, 4);
+    const area = textArea(node.description, (value) => { node.description = value; touch(node); }, 3);
     editor.appendChild(field("Tell the card about it (optional)", area));
     editor.appendChild(make("p", "hint", ENV_KINDS.has(node.source)
-      ? `Wire this into a card and it becomes part of that card's environment (${SOURCE_LABEL[node.source] || node.source}).`
-      : "Wire this to a card and the card is told its name, its path and this note. It reads the file itself."));
+      ? `Wired into a card, this is part of that card's environment (${SOURCE_LABEL[node.source] || node.source}).`
+      : "Wired to a card, the card is told its name, its path and this note. It reads the file itself."));
+    if (node.type === "tool" && (node.source === "instructions" || node.source === "settings")) {
+      editor.appendChild(ownFileRow(node));
+    }
+    if (node.type === "tool" && node.source === "plugin" && node.source_ref) {
+      editor.appendChild(pluginSwitches(node));
+    }
     if (node.type === "tool" && node.source_ref) {
-      const actions = make("div", "forge-editor-actions");
-      const read = make("button", "fchip sm", "Read it");
-      read.type = "button";
-      const out = make("pre");
-      out.hidden = true;
-      read.addEventListener("click", async () => {
-        read.disabled = true;
-        try {
-          const source = await request(`/api/flows/kit/source?ref=${encodeURIComponent(node.source_ref)}`);
-          out.textContent = source.text || "(empty)";
-          if (source.truncated) out.textContent += "\n\n[cut at the safety limit]";
-          out.hidden = false;
-          read.hidden = true;
-        } catch (error) {
-          toast(`Could not read it: ${error.message}`);
-          read.disabled = false;
-        }
-      });
-      actions.appendChild(read);
-      editor.append(actions, out);
+      editor.appendChild(previewBlock(node.source_ref, node.source));
+    } else if (node.type === "tool") {
+      editor.appendChild(make("code", "forge-path", "(no path)"));
+    } else if (node.source_ref) {
+      editor.appendChild(make("code", "forge-path", node.source_ref));
     }
     return editor;
+  }
+
+  function atTheKeyboard() {
+    return ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  }
+
+  // The Mac's own open panel, through the server that runs here; over the
+  // tailnet the panel would open on the wrong screen, so a typed path.
+  async function pickOnThisMac(prompt, kind = "file", value = "") {
+    try {
+      const res = await send("/api/pick-folder", "POST", { prompt, local: atTheKeyboard(), kind });
+      if (res.cancelled) return "";
+      if (res.unavailable) {
+        return await forgeDialog({ title: "Type the file's path", message: res.reason || "", value, confirm: "Use it" }) || "";
+      }
+      return res.path || "";
+    } catch (error) {
+      toast(`Could not open a window: ${error.message}`);
+      return "";
+    }
+  }
+
+  // An instruction or settings card can stand for the owner's own file
+  // instead of the stock one; the stock ref is kept so it can come back.
+  function ownFileRow(node) {
+    const row = make("div", "forge-editor-actions");
+    const pick = make("button", "fchip sm", "Use my own file");
+    pick.type = "button";
+    pick.addEventListener("click", async () => {
+      const path = await pickOnThisMac(node.source === "settings" ? "Choose a settings file (.json)" : "Choose an instruction file");
+      if (!path) return;
+      if (node.source === "settings" && !/\.json$/i.test(path)) return toast("A settings file ends in .json");
+      if (!node.stock_ref) node.stock_ref = node.source_ref;
+      node.source_ref = path;
+      touch(node);
+      renderInspector();
+    });
+    row.appendChild(pick);
+    if (node.stock_ref) {
+      const back = make("button", "fchip sm", "Back to the stock file");
+      back.type = "button";
+      back.addEventListener("click", () => {
+        node.source_ref = node.stock_ref;
+        node.stock_ref = "";
+        touch(node);
+        renderInspector();
+      });
+      row.appendChild(back);
+    }
+    return row;
+  }
+
+  // A plugin's skills, each with a switch: the SDK's skill filter honors
+  // that. Its hooks and commands come with the plugin as a set.
+  function pluginSwitches(node) {
+    const box = make("div", "forge-envrows");
+    box.appendChild(make("span", "forge-card-kind", "Its skills"));
+    const rows = make("div", "forge-envrow", "Reading the plugin…");
+    box.appendChild(rows);
+    request(`/api/flows/kit/preview?ref=${encodeURIComponent(node.source_ref)}&kind=plugin`).then((shown) => {
+      rows.replaceChildren();
+      const skills = (shown.listing && shown.listing.skills) || [];
+      if (!skills.length) { rows.textContent = "No skills in it."; return; }
+      const off = new Set(node.skills_off || []);
+      skills.forEach((skill) => {
+        rows.appendChild(checkbox(skill, !off.has(skill), (on) => {
+          if (on) off.delete(skill); else off.add(skill);
+          node.skills_off = [...off];
+          touch(node);
+        }));
+      });
+      const hooks = (shown.listing && shown.listing.hooks) || [];
+      if (hooks.length) rows.appendChild(make("small", "", `Hooks come with it: ${hooks.join(", ")}.`));
+    }).catch((error) => { rows.textContent = `Could not read it: ${error.message}`; });
+    return box;
+  }
+
+  // The file behind a source card, shown in the column: markdown through
+  // the renderer the vault uses, a settings file as an outline, a plugin
+  // folder as what it holds. Open puts the file in Vira's viewer.
+  function previewBlock(ref, kind) {
+    const box = make("div", "forge-preview");
+    const head = make("div", "forge-preview-head");
+    const query = `ref=${encodeURIComponent(ref)}&kind=${encodeURIComponent(kind || "")}`;
+    const open = make("button", "fchip sm", "Open");
+    open.type = "button";
+    open.addEventListener("click", () => {
+      if (typeof openViewer === "function") openViewer(`/api/flows/kit/file?${query}`);
+      else window.open(`/api/flows/kit/file?${query}`, "_blank");
+    });
+    head.appendChild(open);
+    if (atTheKeyboard() && kind !== "mcp") {
+      const finder = make("button", "fchip sm", "Show in Finder");
+      finder.type = "button";
+      finder.addEventListener("click", async () => {
+        try { await send("/api/flows/kit/reveal", "POST", { ref, kind: kind || "" }); }
+        catch (error) { toast(`Could not show it: ${error.message}`); }
+      });
+      head.appendChild(finder);
+    }
+    const body = make("div", "forge-preview-body", "Reading…");
+    box.append(head, body);
+    request(`/api/flows/kit/preview?${query}`).then((shown) => {
+      body.replaceChildren();
+      paintPreview(body, shown);
+      if (!shown.exists || shown.format === "binary") head.hidden = true;
+    }).catch((error) => {
+      body.textContent = `Could not read it: ${error.message}`;
+      head.hidden = true;
+    });
+    return box;
+  }
+
+  function outlineList(rows) {
+    const list = make("ul", "forge-outline");
+    rows.forEach(([key, value]) => {
+      const li = make("li");
+      li.append(make("b", "", key), make("span", "", value));
+      list.appendChild(li);
+    });
+    return list;
+  }
+
+  function paintPreview(body, shown) {
+    body.appendChild(make("code", "forge-path", shown.path || ""));
+    if (!shown.exists) { body.appendChild(make("p", "hint", "Not on this Mac.")); return; }
+    if (shown.format === "mcp") {
+      const server = shown.server || {};
+      body.appendChild(outlineList([["Type", server.type], ["Starts with", server.command], ["URL", server.url],
+        ["Scope", server.scope], ["Env", (server.env || []).join(", ")]].filter(([, value]) => value)));
+      return;
+    }
+    if (shown.format === "binary") { body.appendChild(make("p", "hint", "Not a text file.")); return; }
+    if (shown.format === "folder") {
+      const listing = shown.listing;
+      if (listing) {
+        if (listing.description) body.appendChild(make("p", "forge-preview-text", listing.description));
+        body.appendChild(outlineList([["Skills", listing.skills], ["Commands", listing.commands],
+          ["Agents", listing.agents], ["Hooks", listing.hooks]].map(([key, names]) => [key, names.length ? names.join(", ") : "none"])));
+      }
+      if (shown.text) body.appendChild(markdownBlock(shown.text));
+      const files = shown.files || [];
+      if (files.length) {
+        const details = make("details");
+        details.appendChild(make("summary", "", `${files.length}${shown.more_files ? "+" : ""} files`));
+        const inner = make("div");
+        inner.appendChild(make("pre", "", files.join("\n")));
+        details.appendChild(inner);
+        body.appendChild(details);
+      }
+      return;
+    }
+    if (shown.format === "json") {
+      const rows = (shown.outline || []).map((row) => [row.key, row.summary]);
+      body.appendChild(rows.length ? outlineList(rows) : make("p", "hint", shown.outline_error || "Nothing in it."));
+      const details = make("details");
+      details.appendChild(make("summary", "", "The file itself"));
+      const inner = make("div");
+      inner.appendChild(make("pre", "", shown.text || ""));
+      details.appendChild(inner);
+      body.appendChild(details);
+    } else if (shown.format === "markdown") {
+      body.appendChild(markdownBlock(shown.text));
+    } else {
+      body.appendChild(make("pre", "", shown.text || "(empty)"));
+    }
+    if (shown.truncated) body.appendChild(make("p", "hint", "Cut at the preview limit; Open shows the whole file."));
+  }
+
+  function markdownBlock(text) {
+    const box = make("div", "forge-md");
+    if (typeof mdToHtml === "function") box.innerHTML = mdToHtml(text);
+    else box.appendChild(make("pre", "", text));
+    return box;
+  }
+
+  // Show / Hide for a file named in a row: the preview opens under it.
+  function peekChip(ref, kind, host) {
+    const chip = make("button", "fchip sm", "Show");
+    chip.type = "button";
+    let open = null;
+    chip.addEventListener("click", () => {
+      if (open) { open.remove(); open = null; chip.textContent = "Show"; return; }
+      open = previewBlock(ref, kind);
+      host.appendChild(open);
+      chip.textContent = "Hide";
+    });
+    return chip;
   }
 
   function inputEditor(node) {
@@ -1822,12 +1996,17 @@
       list.replaceChildren();
       (node.items || []).forEach((item, index) => {
         const li = make("li");
+        const head = make("div", "forge-envhead");
         const text = make("span", "", item.name);
         text.appendChild(make("small", "", ` ${SOURCE_LABEL[item.kind] || item.kind}`));
+        const actions = make("span", "forge-envactions");
+        if (item.source_ref) actions.appendChild(peekChip(item.source_ref, item.kind, li));
         const drop = make("button", "fchip sm", "Remove");
         drop.type = "button";
         drop.addEventListener("click", () => { node.items.splice(index, 1); touch(node); paint(); });
-        li.append(text, drop);
+        actions.appendChild(drop);
+        head.append(text, actions);
+        li.appendChild(head);
         list.appendChild(li);
       });
       if (!(node.items || []).length) list.appendChild(make("li", "", "Nothing in it."));

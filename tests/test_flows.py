@@ -13,6 +13,7 @@ holds only that. These tests pin the contract the editor relies on:
 - a wire is from one card to another with an optional note, nothing more;
 - standing loops are not Flows.
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -317,6 +318,10 @@ class FlowTests(unittest.TestCase):
     def test_a_starter_gets_an_input_card_wired_to_its_entry_cards(self):
         flow = flows.get_flow("plan-build-judge")
         self.assertTrue(any(n["type"] == "input" for n in flow["nodes"]))
+        # born one column left of the first stage, on top of nothing
+        card = next(n for n in flow["nodes"] if n["type"] == "input")
+        self.assertEqual((card["x"], card["y"]), (flows.LEFT_COLUMN_X, 130))
+        self.assertTrue(all(n["x"] >= 150 for n in flow["nodes"] if n["type"] == "agent"))
         fed = sorted(e["to"] for e in flow["edges"] if e["from"] == "input")
         self.assertEqual(fed, ["plan"])
         # the parity probes say no to the ask on purpose
@@ -411,6 +416,118 @@ class FlowTests(unittest.TestCase):
         catalog = {item["id"]: item for item in flows.kit_catalog()}
         self.assertEqual(catalog["settings:user"]["source_ref"], "user")
         self.assertEqual(catalog["instructions:project"]["kind"], "instructions")
+
+    def _mac(self):
+        """A pretend Mac: a library with a global CLAUDE.md, a settings file
+        with a secret, one plugin; a working folder with AGENTS.md, its
+        private AGENTS.local.md, and an MCP server in .mcp.json."""
+        root = Path(self.tmp.name)
+        library = flows.LIBRARY
+        library.mkdir(parents=True, exist_ok=True)
+        (library / "CLAUDE.md").write_text("# Global\n\nRun it yourself.", encoding="utf-8")
+        (library / "settings.json").write_text(json.dumps({
+            "permissions": {"allow": ["Bash(ls *)", "Read"], "deny": ["Bash(rm *)"]},
+            "hooks": {"Stop": [{"matcher": "", "hooks": []}]},
+            "env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"},
+            "enabledPlugins": {"adhd@adhd": True},
+            "apiToken": "hunter2", "cleanupPeriodDays": 30}), encoding="utf-8")
+        plugin = library / "plugins" / "cache" / "market" / "adhd" / "0.4.1"
+        (plugin / ".claude-plugin").mkdir(parents=True)
+        (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps(
+            {"name": "adhd", "version": "0.4.1", "description": "Shape the output"}), encoding="utf-8")
+        for skill in ("focus", "recap"):
+            (plugin / "skills" / skill).mkdir(parents=True)
+            (plugin / "skills" / skill / "SKILL.md").write_text(f"# {skill}", encoding="utf-8")
+        (plugin / "hooks").mkdir()
+        (plugin / "hooks" / "hooks.json").write_text(json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": []}]}}), encoding="utf-8")
+        (plugin / "README.md").write_text("# adhd\n\nRead me.", encoding="utf-8")
+        project = root / "project"
+        project.mkdir()
+        (project / "AGENTS.md").write_text("# Start here\n\nRead `AGENTS.local.md`.", encoding="utf-8")
+        (project / "AGENTS.local.md").write_text("# Private\n\nThe owner's file.", encoding="utf-8")
+        (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"notes": {
+            "command": "npx", "args": ["notes-mcp"], "env": {"NOTES_TOKEN": "secret"}}}}), encoding="utf-8")
+        (root / "claude.json").write_text(json.dumps({"mcpServers": {"vault": {
+            "type": "http", "url": "http://localhost:9/mcp"}}}), encoding="utf-8")
+        for patch in (mock.patch.object(flows, "ROOT", project),
+                      mock.patch.object(flows, "CLAUDE_JSON", root / "claude.json")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return library, plugin, project
+
+    def test_the_library_lists_this_macs_instruction_files_plugins_and_mcp_servers(self):
+        library, plugin, project = self._mac()
+        catalog = {item["id"]: item for item in flows.kit_catalog()}
+        self.assertEqual(catalog["instructions:project"]["description"], "AGENTS.md of the working folder")
+        self.assertEqual(catalog["instructions:user"]["source_ref"], str(library / "CLAUDE.md"))
+        self.assertEqual(catalog["instructions:project-local"]["source_ref"], str(project / "AGENTS.local.md"))
+        self.assertEqual(catalog["plugin:adhd"]["description"], "Shape the output")
+        self.assertEqual(catalog["plugin:adhd"]["items"]["skills"], ["focus", "recap"])
+        self.assertEqual(catalog["plugin:adhd"]["items"]["hooks"], ["SessionStart"])
+        self.assertEqual(sorted(k for k in catalog if k.startswith("mcp:")), ["mcp:notes", "mcp:vault"])
+        self.assertEqual(catalog["mcp:notes"]["description"], "npx notes-mcp")
+        # the secret in the server's env block never leaves the config file
+        self.assertNotIn("secret", json.dumps(catalog))
+
+    def test_a_preview_is_the_file_an_outline_or_a_listing(self):
+        library, plugin, project = self._mac()
+        shown = flows.kit_preview("project", "instructions")
+        self.assertEqual((shown["format"], shown["path"]), ("markdown", str(project / "AGENTS.md")))
+        self.assertIn("Start here", shown["text"])
+        shown = flows.kit_preview("user", "settings")
+        self.assertEqual(shown["format"], "json")
+        outline = {row["key"]: row["summary"] for row in shown["outline"]}
+        self.assertEqual(outline["permissions"], "2 allow, 1 deny rules")
+        self.assertEqual(outline["hooks"], "Stop 1")
+        self.assertEqual(outline["env"], "1 variable: CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")
+        self.assertEqual(outline["enabledPlugins"], "1 entry: adhd@adhd")
+        self.assertEqual(outline["apiToken"], "set")
+        self.assertEqual(outline["cleanupPeriodDays"], "30")
+        shown = flows.kit_preview(str(plugin), "plugin")
+        self.assertEqual(shown["format"], "folder")
+        self.assertEqual(shown["listing"]["skills"], ["focus", "recap"])
+        self.assertEqual(shown["listing"]["name"], "adhd")
+        self.assertIn("Read me", shown["text"])
+        self.assertIn("skills/focus/SKILL.md", shown["files"])
+        shown = flows.kit_preview("notes", "mcp")
+        self.assertEqual(shown["server"], {"name": "notes", "scope": "project", "type": "stdio",
+                                           "command": "npx notes-mcp", "url": "",
+                                           "env": ["NOTES_TOKEN"]})
+        self.assertFalse(flows.kit_preview("gone", "mcp")["exists"])
+        self.assertFalse(flows.kit_preview("local", "settings")["exists"])
+
+    def test_a_preview_over_the_network_stays_in_the_library_and_the_working_folder(self):
+        library, plugin, project = self._mac()
+        outside = Path(self.tmp.name) / "elsewhere.md"
+        outside.write_text("private", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            flows.kit_preview(str(outside), "instructions")
+        self.assertEqual(flows.kit_preview(str(outside), "instructions", local=True)["text"], "private")
+        self.assertTrue(flows.kit_preview(str(project / "AGENTS.local.md"), "instructions")["exists"])
+        self.assertTrue(flows.kit_preview(str(library / "CLAUDE.md"), "instructions")["exists"])
+
+    def test_a_plugin_card_brings_its_skills_unless_switched_off(self):
+        library, plugin, project = self._mac()
+        payload = {"name": "Plug", "nodes": [
+            {"id": "adhd", "type": "tool", "name": "adhd", "source": "plugin",
+             "source_ref": str(plugin), "skills_off": ["recap"]},
+            {"id": "mine", "type": "tool", "name": "Your Claude settings", "source": "settings",
+             "source_ref": "/vault/mine.json", "stock_ref": "user"},
+            {"id": "bogus", "type": "tool", "name": "Bogus", "source": "settings",
+             "source_ref": "nope"},
+            _agent("a", "A")],
+            "edges": [{"from": "adhd", "to": "a"}, {"from": "mine", "to": "a"},
+                      {"from": "bogus", "to": "a"}]}
+        saved = flows.save_flow(payload, save_as=True)
+        env = self._stages(saved["id"])["a"]["forge"]["environment"]
+        self.assertEqual(env["plugins"], [str(plugin)])
+        self.assertEqual(env["skills"], ["adhd:focus"])
+        self.assertEqual(env["settings"], ["/vault/mine.json"])
+        card = next(n for n in saved["nodes"] if n["id"] == "adhd")
+        self.assertEqual(card["skills_off"], ["recap"])
+        mine = next(n for n in saved["nodes"] if n["id"] == "mine")
+        self.assertEqual(mine["stock_ref"], "user")
 
     def test_kit_source_unfolds_text_but_cannot_escape_library(self):
         root = flows.LIBRARY

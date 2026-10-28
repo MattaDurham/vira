@@ -334,10 +334,14 @@ def _environment_options(env):
       as a subagent definition.
     - a custom instruction file (a path in `instructions`) is appended to
       the system prompt after Vira's preamble, capped at INSTRUCTIONS_CAP.
+    - a settings file the owner picked (a path in `settings`) goes in as
+      the SDK's `settings` file, its highest settings layer; one per card.
+    - mcp_servers: each wired MCP server by name, looked up in the CLI's
+      own config at launch (flows.mcp_servers), so a Flow never stores one.
 
-    Commands, hooks and MCP servers have no per-session switch in the SDK;
-    a wired one reaches the session as the CONNECTED CAPABILITIES line the
-    compiler writes, and that is all. Said here so nobody expects more."""
+    Commands and hooks have no per-session switch in the SDK; a wired one
+    reaches the session as the CONNECTED CAPABILITIES line the compiler
+    writes, and that is all. Said here so nobody expects more."""
     if not isinstance(env, dict):
         return {}
     out = {"skills": [str(n) for n in env.get("skills") or [] if str(n).strip()]}
@@ -347,9 +351,20 @@ def _environment_options(env):
         sources.append("project")
     for name in env.get("settings") or []:
         name = str(name).strip()
-        if name in ("user", "project", "local") and name not in sources:
-            sources.append(name)
+        if name in ("user", "project", "local"):
+            if name not in sources:
+                sources.append(name)
+        elif name.lower().endswith(".json") and "settings" not in out:
+            out["settings"] = str(Path(name).expanduser())
     out["setting_sources"] = sources
+    wanted = [str(n).strip() for n in env.get("mcp") or [] if str(n).strip()]
+    if wanted:
+        from . import flows
+        known = flows.mcp_servers()
+        servers = {name: {k: v for k, v in known[name].items() if k != "scope"}
+                   for name in wanted if name in known}
+        if servers:
+            out["mcp_servers"] = servers
     out["plugins"] = [{"type": "local", "path": str(p)} for p in env.get("plugins") or []
                       if str(p).strip()]
     agents = {}
@@ -2002,7 +2017,7 @@ class Runner:
             environment = _environment_options(spec.get("environment"))
             options = ClaudeAgentOptions(
                 cwd=spec["cwd"],
-                **{k: v for k, v in environment.items() if k != "append"},
+                **{k: v for k, v in environment.items() if k not in ("append", "mcp_servers")},
                 # See session.SESSION_DEFAULTS for why this is set at all:
                 # the SDK bounds ONE NDJSON line at 1 MiB by default, and a
                 # message carrying a large file's content exceeds it and
@@ -2035,7 +2050,10 @@ class Runner:
                                    vault_context=spec.get("vault_context"),
                                    subagents=True)
                                + environment.get("append", "")},
-                mcp_servers={"vira": vira_srv} if vira_srv else {},
+                # Vira's own server, plus the MCP servers the card wired in
+                # (looked up by name in the CLI's config at launch).
+                mcp_servers={**environment.get("mcp_servers", {}),
+                             **({"vira": vira_srv} if vira_srv else {})},
                 allowed_tools=list(viratools.TOOL_NAMES) if vira_srv else [],
                 # ALWAYS "default" + ALWAYS our gate. Handing the SDK its own
                 # bypassPermissions used to skip can_use_tool altogether,

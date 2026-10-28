@@ -57,6 +57,10 @@ SOURCE_NODE_TYPES = {"tool", "context"}
 # sources wired in as one card.
 DISPLAY_NODE_TYPES = EXECUTABLE_NODE_TYPES | SOURCE_NODE_TYPES | {"trigger", "input", "env"}
 INPUT_ID = "input"
+# Where the Input card and a starter's source cards sit until moved: one
+# column left of the first stage column (_layout starts at x=150, a card
+# is 264 wide), so nothing is born on top of anything.
+LEFT_COLUMN_X = -200
 # Which source kinds become part of a card's environment, and under which
 # key (runner._environment_options reads these). Every other kind (a
 # script, a file, a Find reference) reaches the card as a text line only.
@@ -66,6 +70,15 @@ ENV_KEYS = {"skill": "skills", "plugin": "plugins", "agent": "agents",
 # What a source card of each kind contributes: its name, or its path.
 ENV_BY_REF = {"plugin", "agent", "settings", "instructions"}
 SETTING_SOURCES = ("user", "project", "local")
+# Where the CLI keeps the MCP servers of this Mac (user scope, and the
+# per-project scope keyed by folder) and the project's own list.
+CLAUDE_JSON = Path.home() / ".claude.json"
+PROJECT_MCP = ".mcp.json"
+# The instruction file of a working folder, first one found.
+INSTRUCTION_NAMES = ("AGENTS.md", "CLAUDE.md")
+PREVIEW_CAP = 120_000
+# A settings key whose value a preview never shows, only that it is set.
+SECRET_KEY = re.compile(r"token|secret|key|password|passwd|credential", re.I)
 # The judge's grade and retry knobs the card may set; anything else on a
 # judge dict is dropped at compile time.
 JUDGE_KEYS = ("of", "min_grade", "max_retries", "retry_stage")
@@ -249,7 +262,7 @@ def _attach_input(stages, nodes, edges, saved_nodes, edge_meta):
     nodes.append({
         "id": INPUT_ID, "type": "input", "name": str(placed.get("name") or "Input")[:200],
         "prompt": str(placed.get("prompt") or "")[:MAX_TEXT],
-        "x": int(placed.get("x", 25)), "y": int(placed.get("y", 130)),
+        "x": int(placed.get("x", LEFT_COLUMN_X)), "y": int(placed.get("y", 130)),
     })
     for stage in stages:
         mode = circuits.norm_stage_mode(stage.get("mode"))
@@ -299,7 +312,7 @@ def _attach_environment(stages, nodes, edges):
             for value in env.get(key) or []:
                 card = _env_card(kind, value)
                 if card["id"] not in cards:
-                    cards[card["id"]] = {**card, "x": 25, "y": 320 + 150 * len(cards)}
+                    cards[card["id"]] = {**card, "x": LEFT_COLUMN_X, "y": 320 + 150 * len(cards)}
                 edges.append(_edge(card["id"], stage["id"]))
     nodes.extend(cards.values())
 
@@ -540,13 +553,21 @@ def _env_add_card(env, card):
         return
     value = (card.get("source_ref") if kind in ENV_BY_REF else card.get("name")) or card.get("name")
     _env_add(env, kind, str(value or ""))
+    if kind == "plugin" and value:
+        # The SDK's skill filter hides a plugin's skills unless they are
+        # listed as plugin:skill; the card's switches say which ones are.
+        off = {str(name) for name in (card.get("skills_off") or [])}
+        listing = plugin_listing(str(value), card.get("name"))
+        for skill in listing["skills"]:
+            if skill not in off:
+                _env_add(env, "skill", f"{listing['name']}:{skill}")
 
 
 def _env_add(env, kind, value):
     value = value.strip()[:1000]
     if not value:
         return
-    if kind == "settings" and value not in SETTING_SOURCES:
+    if kind == "settings" and value not in SETTING_SOURCES and not value.lower().endswith(".json"):
         return
     key = ENV_KEYS[kind]
     if value not in env[key] and len(env[key]) < MAX_ENV_ITEMS:
@@ -627,6 +648,11 @@ def save_flow(payload, save_as=False):
                 "source": str(node.get("source") or "forge")[:80],
                 "source_ref": str(node.get("source_ref") or "")[:1000],
             })
+            if node.get("source") == "plugin" and node.get("skills_off"):
+                clean["skills_off"] = [str(name)[:100] for name in node["skills_off"]
+                                       if str(name).strip()][:MAX_ENV_ITEMS]
+            if node.get("stock_ref"):
+                clean["stock_ref"] = str(node["stock_ref"])[:1000]
         clean_nodes.append(clean)
     clean_edges = []
     for e in payload.get("edges") or []:
@@ -829,6 +855,197 @@ def native_source(routine_id):
     return routinesrc.hood(row)
 
 
+def _project_root(cwd=None):
+    """The working folder a Flow runs in: the given one, else this checkout."""
+    if cwd:
+        path = Path(str(cwd)).expanduser()
+        if path.is_dir():
+            return path
+    return ROOT
+
+
+def project_instruction_file(cwd=None):
+    """The instruction file the 'project' row stands for: the working
+    folder's AGENTS.md, else its CLAUDE.md (which may not exist yet)."""
+    root = _project_root(cwd)
+    for name in INSTRUCTION_NAMES:
+        if (root / name).is_file():
+            return root / name
+    return root / INSTRUCTION_NAMES[-1]
+
+
+def settings_file(source, cwd=None):
+    if source == "user":
+        return LIBRARY / "settings.json"
+    folder = _project_root(cwd) / ".claude"
+    return folder / ("settings.json" if source == "project" else "settings.local.json")
+
+
+def _read_json(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def plugin_listing(folder, name=None):
+    """What a plugin folder holds, by name: its skills, commands, hooks and
+    agents, and the description from its manifest."""
+    folder = Path(str(folder)).expanduser()
+    meta = {}
+    for candidate in (folder / ".claude-plugin" / "plugin.json", folder / "plugin.json"):
+        if candidate.is_file():
+            meta = _read_json(candidate) or {}
+            break
+
+    def stems(sub, pattern, parent=False):
+        base = folder / sub
+        return sorted(p.parent.name if parent else p.stem
+                      for p in base.glob(pattern)) if base.is_dir() else []
+
+    hooks = []
+    hooks_data = _read_json(folder / "hooks" / "hooks.json") or {}
+    events = hooks_data.get("hooks") if isinstance(hooks_data.get("hooks"), dict) else hooks_data
+    if isinstance(events, dict):
+        hooks = sorted(str(k) for k in events if isinstance(events[k], list))
+    return {
+        "name": str(meta.get("name") or name or folder.name),
+        "description": str(meta.get("description") or ""),
+        "version": str(meta.get("version") or ""),
+        "skills": stems("skills", "*/SKILL.md", parent=True),
+        "commands": stems("commands", "*.md"),
+        "agents": stems("agents", "*.md"),
+        "hooks": hooks,
+    }
+
+
+def mcp_servers(cwd=None):
+    """Every MCP server the CLI knows on this Mac, by name: the user scope
+    and this folder's scope in ~/.claude.json, and the folder's .mcp.json.
+    The config stays here; a card records a name, and the runner looks the
+    name up again at launch, so nothing from an env block enters a Flow."""
+    out = {}
+    root = _project_root(cwd)
+    user = _read_json(CLAUDE_JSON) or {}
+    scopes = [("user", user.get("mcpServers")),
+              ("folder", ((user.get("projects") or {}).get(str(root)) or {}).get("mcpServers")),
+              ("project", (_read_json(root / PROJECT_MCP) or {}).get("mcpServers"))]
+    for scope, servers in scopes:
+        for name, config in (servers or {}).items() if isinstance(servers, dict) else []:
+            if isinstance(config, dict) and name not in out:
+                out[str(name)] = {"scope": scope, **config}
+    return out
+
+
+def mcp_public(name, server):
+    """An MCP server as a preview shows it: how it starts, never its env."""
+    args = [str(a) for a in server.get("args") or []]
+    command = " ".join([str(server.get("command") or "")] + args).strip()
+    return {"name": name, "scope": server.get("scope", ""),
+            "type": str(server.get("type") or ("stdio" if command else "http")),
+            "command": command, "url": str(server.get("url") or ""),
+            "env": sorted(str(k) for k in (server.get("env") or {}))}
+
+
+def _json_outline(data):
+    """One line per top-level key of a settings file: what it holds, in
+    words, with no secret values."""
+    rows = []
+    for key, value in data.items():
+        key = str(key)
+        if key == "permissions" and isinstance(value, dict):
+            parts = [f"{len(value[k])} {k}" for k in ("allow", "deny", "ask")
+                     if isinstance(value.get(k), list)]
+            summary = ", ".join(parts) + " rules" if parts else "nothing set"
+        elif key == "hooks" and isinstance(value, dict):
+            summary = ", ".join(f"{event} {len(matchers)}" for event, matchers in value.items()
+                                if isinstance(matchers, list)) or "none"
+        elif key == "env" and isinstance(value, dict):
+            summary = f"{len(value)} variable{'s' if len(value) != 1 else ''}: " + ", ".join(map(str, value))
+        elif isinstance(value, dict):
+            names = ", ".join(str(k) for k in list(value)[:8])
+            summary = f"{len(value)} entr{'y' if len(value) == 1 else 'ies'}: {names}" if value else "empty"
+        elif isinstance(value, list):
+            shown = ", ".join(str(v) for v in value[:6] if isinstance(v, (str, int, float)))
+            summary = f"{len(value)} item{'s' if len(value) != 1 else ''}" + (f": {shown}" if shown else "")
+        elif SECRET_KEY.search(key):
+            summary = "set"
+        else:
+            summary = json.dumps(value)
+        rows.append({"key": key, "summary": summary[:300]})
+    return rows
+
+
+def resolve_ref(ref, kind="", cwd=None):
+    """The file or folder a source card's ref stands for."""
+    ref = str(ref or "").strip()
+    kind = str(kind or "").strip().lower()
+    if kind == "instructions" and ref == "project":
+        return project_instruction_file(cwd)
+    if kind == "settings" and ref in SETTING_SOURCES:
+        return settings_file(ref, cwd)
+    if not ref:
+        raise ValueError("no source")
+    return Path(ref).expanduser()
+
+
+def _readable(path, cwd=None, local=False):
+    """Over the tailnet a preview stays inside the Claude library and the
+    working folder's own instruction and settings files. At the keyboard
+    (loopback) any file the owner picked in the Mac's panel may be shown."""
+    if local:
+        return True
+    resolved = path.resolve()
+    library = LIBRARY.expanduser().resolve()
+    if resolved == library or library in resolved.parents:
+        return True
+    root = _project_root(cwd).resolve()
+    allowed = {root / name for name in INSTRUCTION_NAMES} | {
+        root / "AGENTS.local.md", root / PROJECT_MCP,
+        root / ".claude" / "settings.json", root / ".claude" / "settings.local.json"}
+    return resolved in allowed or resolved == CLAUDE_JSON.resolve()
+
+
+def kit_preview(ref, kind="", cwd=None, local=False):
+    """What a source card stands for, ready to show: the file's text with
+    its format, a settings file's outline, a plugin folder's listing, or an
+    MCP server's start line. Missing is an answer, not an error."""
+    kind = str(kind or "").strip().lower()
+    if kind == "mcp":
+        server = mcp_servers(cwd).get(str(ref or "").strip())
+        if not server:
+            return {"kind": kind, "format": "missing", "path": str(ref or ""), "exists": False}
+        return {"kind": kind, "format": "mcp", "exists": True, "path": str(ref),
+                "server": mcp_public(str(ref), server)}
+    path = resolve_ref(ref, kind, cwd)
+    if not _readable(path, cwd, local):
+        raise ValueError("That file is outside what Vira shows over the network")
+    out = {"kind": kind, "path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return {**out, "format": "missing"}
+    if path.is_dir():
+        readme = next((p for p in (path / "README.md", path / "readme.md") if p.is_file()), None)
+        text = readme.read_text(encoding="utf-8", errors="replace") if readme else ""
+        files = sorted(str(p.relative_to(path)) for p in path.rglob("*")
+                       if p.is_file() and not any(part.startswith(".") for part in p.relative_to(path).parts))
+        return {**out, "format": "folder", "listing": plugin_listing(path) if kind == "plugin" else None,
+                "files": files[:200], "more_files": max(0, len(files) - 200),
+                "text": text[:PREVIEW_CAP], "truncated": len(text) > PREVIEW_CAP}
+    if path.suffix.lower() not in SOURCE_SUFFIXES:
+        return {**out, "format": "binary", "size": path.stat().st_size}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    suffix = path.suffix.lower()
+    fmt = "markdown" if suffix == ".md" else "json" if suffix == ".json" else "text"
+    out.update(format=fmt, text=text[:PREVIEW_CAP], truncated=len(text) > PREVIEW_CAP)
+    if fmt == "json":
+        data = _read_json(path)
+        out["outline"] = _json_outline(data) if data is not None else []
+        if data is None:
+            out["outline_error"] = "not valid JSON"
+    return out
+
+
 def kit_catalog():
     items = []
     for item in actions.scan_library():
@@ -851,8 +1068,25 @@ def kit_catalog():
     items.append({"id": "instructions:project", "name": "Project instructions",
                   "kind": "instructions", "type": "tool", "invoke": "",
                   "source_ref": "project",
-                  "description": "The AGENTS.md or CLAUDE.md of the working folder",
+                  "description": f"{project_instruction_file().name} of the working folder",
                   "arg_fields": []})
+    # The other instruction files this Mac has: the global one, and the
+    # working folder's private one. Both reach a card as text.
+    for item_id, path, name, note in (
+            ("instructions:user", LIBRARY / "CLAUDE.md", "Your global instructions",
+             "~/.claude/CLAUDE.md: what every session is told"),
+            ("instructions:project-local", ROOT / "AGENTS.local.md",
+             "The project's local instructions", "AGENTS.local.md in the working folder, git-ignored")):
+        if path.is_file():
+            items.append({"id": item_id, "name": name, "kind": "instructions", "type": "tool",
+                          "invoke": "", "source_ref": str(path), "description": note,
+                          "arg_fields": []})
+    for name, server in mcp_servers().items():
+        public = mcp_public(name, server)
+        items.append({"id": f"mcp:{name}", "name": name, "kind": "mcp", "type": "tool",
+                      "invoke": "", "source_ref": name,
+                      "description": (public["command"] or public["url"] or public["type"])[:200],
+                      "arg_fields": []})
     roots = [
         ("script", LIBRARY / "scripts", {".py", ".sh", ".js", ".zsh"}),
         ("agent", LIBRARY / "agents", {".md"}),
@@ -904,9 +1138,11 @@ def kit_catalog():
                 if item_id in seen:
                     continue
                 seen.add(item_id)
+                listing = plugin_listing(versions[-1], plugin.name)
                 items.append({"id": item_id, "name": plugin.name, "kind": "plugin",
                               "type": "tool", "invoke": str(versions[-1]),
                               "source_ref": str(versions[-1]),
-                              "description": f"Installed plugin ({marketplace.name}, {versions[-1].name})",
-                              "arg_fields": []})
+                              "description": (listing["description"]
+                                              or f"Installed plugin ({marketplace.name}, {versions[-1].name})")[:300],
+                              "items": listing, "arg_fields": []})
     return items

@@ -4445,6 +4445,74 @@ def api_flows_kit():
     return {"items": flows.kit_catalog()}
 
 
+def _at_the_keyboard(request: Request) -> bool:
+    """True for a request from this Mac itself (loopback), the one place a
+    file the owner picked in the Mac's panel may be shown or revealed."""
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+@app.get("/api/flows/kit/preview")
+def api_flows_kit_preview(request: Request, ref: str = "", kind: str = "", cwd: str = ""):
+    try:
+        return flows.kit_preview(ref, kind, cwd=cwd or None, local=_at_the_keyboard(request))
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+
+
+@app.get("/api/flows/kit/file")
+def api_flows_kit_file(request: Request, ref: str = "", kind: str = "", cwd: str = ""):
+    """The file behind a source card, as text, for Vira's viewer."""
+    try:
+        shown = flows.kit_preview(ref, kind, cwd=cwd or None, local=_at_the_keyboard(request))
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    if not shown.get("exists"):
+        raise HTTPException(404, f"not on this Mac: {shown.get('path')}")
+    if shown.get("format") == "mcp":
+        text = json.dumps(shown["server"], indent=2)
+    elif shown.get("format") == "folder":
+        listing = shown.get("listing") or {}
+        lines = [f"{shown['path']}", ""]
+        for key in ("skills", "commands", "agents", "hooks"):
+            if listing.get(key):
+                lines.append(f"{key}: {', '.join(listing[key])}")
+        lines += ["", "files:"] + [f"  {f}" for f in shown.get("files") or []]
+        text = "\n".join(lines) + ("\n\n" + shown["text"] if shown.get("text") else "")
+    elif shown.get("format") == "binary":
+        raise HTTPException(415, "not a text file")
+    else:
+        text = shown.get("text") or ""
+    return Response(text, media_type="text/plain; charset=utf-8",
+                    headers={"X-Content-Type-Options": "nosniff"})
+
+
+class KitRevealReq(BaseModel):
+    ref: str = ""
+    kind: str = ""
+    cwd: str = ""
+
+
+@app.post("/api/flows/kit/reveal")
+def api_flows_kit_reveal(request: Request, req: KitRevealReq):
+    """Show the file behind a source card in Finder. Only from this Mac."""
+    import subprocess
+    if not _at_the_keyboard(request):
+        raise HTTPException(403, "Finder opens only from this Mac")
+    try:
+        target = flows.resolve_ref(req.ref, req.kind, req.cwd or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not target.exists():
+        raise HTTPException(404, "not on this Mac")
+    args = ["open", str(target)] if target.is_dir() else ["open", "-R", str(target)]
+    try:
+        subprocess.run(args, check=True, timeout=10)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        raise HTTPException(500, f"could not open: {e}")
+    return {"ok": True, "path": str(target)}
+
+
 @app.get("/api/flows/kit/source")
 def api_flows_kit_source(ref: str):
     try:

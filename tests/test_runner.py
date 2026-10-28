@@ -171,6 +171,24 @@ class EnvironmentWiring(RunnerCase):
         self.assertIn(f"INSTRUCTIONS FROM {rules}\nAlways write tests.",
                       seen["system_prompt"]["append"])
 
+    def test_an_own_settings_file_and_wired_mcp_servers_reach_the_sdk(self):
+        mine = Path(self.tmp.name) / "mine.json"
+        mine.write_text("{}", encoding="utf-8")
+        from server import flows
+        known = {"notes": {"scope": "project", "command": "npx", "args": ["notes-mcp"],
+                           "env": {"NOTES_TOKEN": "secret"}}}
+        with mock.patch.object(flows, "mcp_servers", return_value=known):
+            seen = self._options_for(environment={
+                "settings": [str(mine), "user"], "mcp": ["notes", "gone"], "instructions": []})
+        self.assertEqual(seen["settings"], str(mine))
+        self.assertEqual(seen["setting_sources"], ["user"])
+        # the config comes from the CLI's own file at launch, scope stripped
+        self.assertEqual(seen["mcp_servers"], {"notes": {"command": "npx", "args": ["notes-mcp"],
+                                                         "env": {"NOTES_TOKEN": "secret"}}})
+        seen = self._options_for(environment={"instructions": []})
+        self.assertEqual(seen["mcp_servers"], {})   # Vira's own server joins at launch
+        self.assertNotIn("settings", seen)
+
 
 class GateTests(RunnerCase):
     def test_auto_allow_read_only_tool(self):
