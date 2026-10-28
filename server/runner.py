@@ -43,6 +43,7 @@ from .session import (EDIT_TOOLS, OUTPUT_CAP, READ_ONLY_EXCLUDE,
 SDK_IMPORT_ERROR = None
 try:
     from claude_agent_sdk import (
+        AgentDefinition,
         AssistantMessage,
         ClaudeAgentOptions,
         ClaudeSDKClient,
@@ -64,6 +65,7 @@ try:
 except Exception as e:  # noqa: BLE001 — tolerated for CLI-exec jobs
     SDK_IMPORT_ERROR = e
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = HookMatcher = None
+    AgentDefinition = None
     ResultMessage = None
     SystemMessage = TextBlock = ThinkingBlock = ToolUseBlock = ToolResultBlock = UserMessage = None
     TaskNotificationMessage = TaskProgressMessage = TaskStartedMessage = TaskUpdatedMessage = None
@@ -305,6 +307,115 @@ _SETTLED = object()      # background work ended with no report turn
 class _EngineDone(Exception):
     """Control-flow only: the CLI-exec engine ran to completion inside
     run_session's try block, and the shared epilogue should proceed."""
+
+
+# A custom instruction file a Forge card attaches is appended to the system
+# prompt whole. 60,000 characters is roughly four AGENTS.md files; past that
+# the file is a document the session should read, not a standing rule, and
+# the cut says so in the prompt rather than silently.
+INSTRUCTIONS_CAP = 60_000
+
+
+def _environment_options(env):
+    """ClaudeAgentOptions fields for a Forge card's environment.
+
+    None (every ordinary dispatch) adds nothing: the CLI's own defaults
+    apply, which is every skill in the library, the owner's settings and
+    the project's CLAUDE.md, as before. A dict is additive from nothing
+    (owner's rule, 2026-10-28): the session is told about what the card
+    wired in, and nothing else.
+
+    - skills: the SDK's own context filter; [] hides every skill.
+    - setting_sources: "project" when the project's instruction file is
+      on, plus each settings file wired in (user / project / local). []
+      loads no settings and no CLAUDE.md.
+    - plugins: each wired plugin folder, as a local plugin.
+    - agents: each wired agent file (frontmatter description, body prompt)
+      as a subagent definition.
+    - a custom instruction file (a path in `instructions`) is appended to
+      the system prompt after Vira's preamble, capped at INSTRUCTIONS_CAP.
+    - a settings file the owner picked (a path in `settings`) goes in as
+      the SDK's `settings` file, its highest settings layer; one per card.
+    - mcp_servers: each wired MCP server by name, looked up in the CLI's
+      own config at launch (flows.mcp_servers), so a Flow never stores one.
+
+    Commands and hooks have no per-session switch in the SDK; a wired one
+    reaches the session as the CONNECTED CAPABILITIES line the compiler
+    writes, and that is all. Said here so nobody expects more."""
+    if not isinstance(env, dict):
+        return {}
+    out = {"skills": [str(n) for n in env.get("skills") or [] if str(n).strip()]}
+    sources = []
+    instructions = [str(i) for i in env.get("instructions") or [] if str(i).strip()]
+    if "project" in instructions:
+        sources.append("project")
+    for name in env.get("settings") or []:
+        name = str(name).strip()
+        if name in ("user", "project", "local"):
+            if name not in sources:
+                sources.append(name)
+        elif name.lower().endswith(".json") and "settings" not in out:
+            out["settings"] = str(Path(name).expanduser())
+    out["setting_sources"] = sources
+    wanted = [str(n).strip() for n in env.get("mcp") or [] if str(n).strip()]
+    if wanted:
+        from . import flows
+        known = flows.mcp_servers()
+        servers = {name: {k: v for k, v in known[name].items() if k != "scope"}
+                   for name in wanted if name in known}
+        if servers:
+            out["mcp_servers"] = servers
+    out["plugins"] = [{"type": "local", "path": str(p)} for p in env.get("plugins") or []
+                      if str(p).strip()]
+    agents = {}
+    for path in env.get("agents") or []:
+        definition = _agent_definition(str(path))
+        if definition:
+            agents[definition[0]] = definition[1]
+    if agents:
+        out["agents"] = agents
+    append = ""
+    for path in instructions:
+        if path == "project":
+            continue
+        try:
+            text = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            append += f"\n\nINSTRUCTION FILE {path}: could not be read ({e})"
+            continue
+        cut = len(text) > INSTRUCTIONS_CAP
+        append += (f"\n\nINSTRUCTIONS FROM {path}\n" + text[:INSTRUCTIONS_CAP]
+                   + ("\n[cut at the instruction-file limit; read the file for the rest]" if cut else ""))
+    if append:
+        out["append"] = append
+    return out
+
+
+def _agent_definition(path):
+    """(name, AgentDefinition) from a ~/.claude/agents style markdown file:
+    YAML-ish frontmatter with name and description, the body as the prompt.
+    None when the file cannot be read or names nothing."""
+    try:
+        text = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    name = Path(path).stem
+    description = ""
+    body = text
+    if text.startswith("---"):
+        head, _, body = text[3:].partition("\n---")
+        for line in head.splitlines():
+            key, _, value = line.partition(":")
+            if key.strip() == "name" and value.strip():
+                name = value.strip().strip("\"'")
+            elif key.strip() == "description":
+                description = value.strip().strip("\"'")
+    body = body.strip()
+    if not body:
+        return None
+    if AgentDefinition is None:
+        return None
+    return name, AgentDefinition(description=description or name, prompt=body[:INSTRUCTIONS_CAP])
 
 
 class Runner:
@@ -1903,8 +2014,10 @@ class Runner:
                 vault_context=spec.get("vault_context"),
                 read_only=bool(spec.get("read_only")),
                 runtime=self.state["runtime"], receipt=self)
+            environment = _environment_options(spec.get("environment"))
             options = ClaudeAgentOptions(
                 cwd=spec["cwd"],
+                **{k: v for k, v in environment.items() if k not in ("append", "mcp_servers")},
                 # See session.SESSION_DEFAULTS for why this is set at all:
                 # the SDK bounds ONE NDJSON line at 1 MiB by default, and a
                 # message carrying a large file's content exceeds it and
@@ -1935,8 +2048,12 @@ class Runner:
                                    live_root=spec.get("live_root") or "",
                                    vault_destination=spec.get("vault_destination"),
                                    vault_context=spec.get("vault_context"),
-                                   subagents=True)},
-                mcp_servers={"vira": vira_srv} if vira_srv else {},
+                                   subagents=True)
+                               + environment.get("append", "")},
+                # Vira's own server, plus the MCP servers the card wired in
+                # (looked up by name in the CLI's config at launch).
+                mcp_servers={**environment.get("mcp_servers", {}),
+                             **({"vira": vira_srv} if vira_srv else {})},
                 allowed_tools=list(viratools.TOOL_NAMES) if vira_srv else [],
                 # ALWAYS "default" + ALWAYS our gate. Handing the SDK its own
                 # bypassPermissions used to skip can_use_tool altogether,

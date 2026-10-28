@@ -34,6 +34,9 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 DEST = Path.home() / ".vira-backups"
 FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.json",
          "routines.json", "circuit-runs.json", "brief-journal.json",
+         # the Forge's editor sidecar (card placement, source cards, the
+         # Input card's ask) and its saved environments
+         "flow-graphs.json", "forge-environments.json",
          # atlas-groups.json is created lazily on the FIRST group edit
          # (atlas._groups_write); until then it does not exist on disk and
          # the missing-file skip below is the correct behavior, not a dead

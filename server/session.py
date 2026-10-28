@@ -669,8 +669,12 @@ class Sessions:
                read_only=False, meta=None, provider=None,
                resume_session=None, resumed_from=None,
                subject=None, about=None, kind_label=None, pr=None,
-               vault_destination=None, vault_context=None, effort=None, runtime=None):
-        """Start a run; returns the job id. `subject` / `about` /
+               vault_destination=None, vault_context=None, effort=None, runtime=None,
+               environment=None):
+        """Start a run; returns the job id. `environment` is a Forge card's
+        bespoke environment (what the session is told about and nothing
+        else: skills, settings, plugins, instruction files); None means the
+        CLI's own defaults, which every other dispatch gets. `subject` / `about` /
         `kind_label` / `pr` are the three-part name's inputs (joblog): what
         the work is about, its long-form explanation, what this run IS,
         and a PR already known - stated by the dispatch site that knows
@@ -836,6 +840,7 @@ class Sessions:
                 "vault_destination": vault_destination,
                 "vault_context": vault_context,
                 "idea_id": idea_id, "session_id": "",
+                "environment": environment if isinstance(environment, dict) else None,
                 "mode": mode, "awaiting": None, "live": live,
                 "read_only": bool(read_only), "meta": meta or {},
                 # the guard's two halves: where writes ARE allowed, and the

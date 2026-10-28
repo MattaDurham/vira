@@ -8,23 +8,40 @@ catalog, and the lossless adapters between those two proven stores.
 The graph sidecar is deliberately not a second circuit store. Prompts, models,
 permissions, dependencies, run state, and cadence continue to live in their
 existing canonical stores. The sidecar owns only visual/editor information
-that those stores cannot represent: node placement, port-level wire metadata,
-attached context references, and revision numbers.
+that those stores cannot represent: card placement, the source cards (a
+skill, a script, a file) wired into a stage, wire notes, and revision
+numbers.
+
+A card is one of eleven kinds. Six run: agent, judge, logic (a gate),
+approval (ask me), output, native (a Vira routine). Five do not: input
+(the ask, one per board), trigger (a schedule), tool and context
+(sources: a thing with a name and a path that a card is told about when
+it is wired in) and env (a saved set of sources as one card). A wire means
+the finished text of the card before goes into the card after, delivered
+by circuits._delivered unless the box places it; it may carry a note. A
+card's environment is what is wired into it and nothing else (the skills,
+settings, plugins, agent files and instruction files; see ENV_KEYS), with
+the project's instruction file on by default. There are no port names,
+payload kinds, connectors, or nested systems: the compiler never read
+them, so the editor no longer draws them (2026-10-27, 10-28).
 """
 from __future__ import annotations
 
 import json
 import re
-import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, circuits, jsonstore, routines
+from . import actions, agentbackend, circuits, jsonstore, models, routines
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "flow-graphs.json"
+# Saved environments: a named set of sources (skills, settings, plugins,
+# instruction files) the owner wires into a card as one Environment card.
+ENVS = ROOT / "data" / "forge-environments.json"
 LIBRARY = Path.home() / ".claude"
+MAX_ENV_ITEMS = 40
 
 MAX_NODES = 80
 MAX_EDGES = 240
@@ -35,10 +52,36 @@ SOURCE_SUFFIXES = {".md", ".txt", ".py", ".sh", ".zsh", ".js", ".ts",
                    ".json", ".yaml", ".yml", ".toml", ".html", ".css"}
 AGENT_NODE_TYPES = {"agent", "judge"}
 EXECUTABLE_NODE_TYPES = AGENT_NODE_TYPES | {"logic", "approval", "output", "native"}
-EDITABLE_NODE_TYPES = EXECUTABLE_NODE_TYPES
-DISPLAY_NODE_TYPES = EDITABLE_NODE_TYPES | {
-    "trigger", "context", "tool", "native", "system", "connector"
-}
+SOURCE_NODE_TYPES = {"tool", "context"}
+# input: the ask, one card per board (what Run sends). env: a saved set of
+# sources wired in as one card.
+DISPLAY_NODE_TYPES = EXECUTABLE_NODE_TYPES | SOURCE_NODE_TYPES | {"trigger", "input", "env"}
+INPUT_ID = "input"
+# Where the Input card and a starter's source cards sit until moved: one
+# column left of the first stage column (_layout starts at x=150, a card
+# is 264 wide), so nothing is born on top of anything.
+LEFT_COLUMN_X = -200
+# Which source kinds become part of a card's environment, and under which
+# key (runner._environment_options reads these). Every other kind (a
+# script, a file, a Find reference) reaches the card as a text line only.
+ENV_KEYS = {"skill": "skills", "plugin": "plugins", "agent": "agents",
+            "command": "commands", "mcp": "mcp", "hook": "hooks",
+            "settings": "settings", "instructions": "instructions"}
+# What a source card of each kind contributes: its name, or its path.
+ENV_BY_REF = {"plugin", "agent", "settings", "instructions"}
+SETTING_SOURCES = ("user", "project", "local")
+# Where the CLI keeps the MCP servers of this Mac (user scope, and the
+# per-project scope keyed by folder) and the project's own list.
+CLAUDE_JSON = Path.home() / ".claude.json"
+PROJECT_MCP = ".mcp.json"
+# The instruction file of a working folder, first one found.
+INSTRUCTION_NAMES = ("AGENTS.md", "CLAUDE.md")
+PREVIEW_CAP = 120_000
+# A settings key whose value a preview never shows, only that it is set.
+SECRET_KEY = re.compile(r"token|secret|key|password|passwd|credential", re.I)
+# The judge's grade and retry knobs the card may set; anything else on a
+# judge dict is dropped at compile time.
+JUDGE_KEYS = ("of", "min_grade", "max_retries", "retry_stage")
 
 
 def _now():
@@ -54,11 +97,6 @@ def _store():
     if not isinstance(value, dict) or not isinstance(value.get("graphs"), dict):
         return _blank()
     return value
-
-
-def _slug(value, prefix="stage"):
-    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
-    return (text or prefix)[:48]
 
 
 def _layout(stages):
@@ -92,35 +130,33 @@ def _layout(stages):
 def _node(stage, placed):
     mode = circuits.norm_stage_mode(stage.get("mode"))
     node_type = mode if mode in {"judge", "logic", "approval", "output", "native"} else "agent"
-    descriptions = {
-        "agent": "One durable Vira agent stage.",
-        "judge": "Grades an upstream result and controls retry behavior.",
-        "logic": "A deterministic gate that routes work without launching a model.",
-        "approval": "Pauses the Flow until an explicit human decision is recorded.",
-        "output": "Shapes the finished result for its named destination.",
-        "native": "Launches an existing Vira system inside this Flow.",
-    }
     data = {
         "id": stage["id"],
         "type": node_type,
         "name": stage.get("name") or stage["id"],
-        "description": descriptions[node_type],
         "x": int(placed.get("x", 0)),
         "y": int(placed.get("y", 0)),
-        "expanded": bool(placed.get("expanded")),
-        "width": int(placed.get("width") or 244),
-        "height": int(placed.get("height") or 148),
         "model": stage.get("model") or "",
         "provider": stage.get("provider") or "",
         "mode": mode,
         "read_only": bool(stage.get("read_only")) or node_type == "judge",
-        "prompt": stage.get("prompt") or "",
-        "extra": stage.get("extra") or "",
-        "judge": dict(stage.get("judge") or {}),
+        # A judge's box is what the owner asked it to weigh (stage.extra);
+        # every other card's box is its prompt.
+        "prompt": (stage.get("extra") if node_type == "judge"
+                   else stage.get("prompt")) or "",
+        "judge": {k: stage["judge"][k] for k in JUDGE_KEYS
+                  if k in (stage.get("judge") or {})},
         "logic": dict(stage.get("logic") or {}),
         "approval": dict(stage.get("approval") or {}),
         "output": dict(stage.get("output") or {}),
+        "native": dict(stage.get("native") or {}),
         "forge": dict(stage.get("forge") or {}),
+        # The card's own environment row: the project's instruction file
+        # (on by default), or a custom file, or none. Skills, settings and
+        # plugins are cards wired in, never a field here.
+        "environment": {"instructions": list(
+            ((stage.get("forge") or {}).get("environment") or {}).get("instructions")
+            or (["project"] if "environment" not in (stage.get("forge") or {}) else []))},
         "source": "circuit-stage",
     }
     if node_type == "agent":
@@ -129,8 +165,6 @@ def _node(stage, placed):
         data["timeout_s"] = int(stage.get("timeout_s") or 0)
         data["on_timeout"] = stage.get("on_timeout") or "error"
         data["continues"] = stage.get("continues") or ""
-    if placed.get("spatial_layer") in {0, 1, 2, 3}:
-        data["spatial_layer"] = int(placed["spatial_layer"])
     return data
 
 
@@ -140,17 +174,12 @@ def _edge(source, target, meta=None):
         "id": meta.get("id") or f"edge:{source}:{target}",
         "from": source,
         "to": target,
-        "from_port": meta.get("from_port") or "result",
-        "to_port": meta.get("to_port") or "input",
-        "label": str(meta.get("label") or "")[:200],
         "instructions": str(meta.get("instructions") or "")[:2000],
-        "direction": "both" if meta.get("direction") == "both" else "forward",
     }
 
 
 def _graph_for_circuit(circuit, rows, saved):
-    stages = [stage for stage in circuit.get("stages") or []
-              if not (stage.get("forge") or {}).get("system")]
+    stages = list(circuit.get("stages") or [])
     defaults = _layout(stages)
     saved_nodes = {n.get("id"): n for n in saved.get("nodes") or []
                    if isinstance(n, dict) and n.get("id")}
@@ -159,9 +188,14 @@ def _graph_for_circuit(circuit, rows, saved):
              for stage in stages]
     stage_ids = {stage["id"] for stage in stages}
     for stored in saved_nodes.values():
+        # Source cards and manual schedules live only in the sidecar. A
+        # schedule WITH a cadence is a routine (saved under routine:<id>
+        # below), so a stored copy of one is placement, never a card.
         if (stored.get("id") in stage_ids
                 or str(stored.get("id") or "").startswith("routine:")
-                or stored.get("type") not in DISPLAY_NODE_TYPES):
+                or stored.get("type") not in DISPLAY_NODE_TYPES
+                or stored.get("type") in EXECUTABLE_NODE_TYPES
+                or stored.get("type") == "input"):   # built by _attach_input
             continue
         nodes.append(dict(stored))
     edge_meta = {(e.get("from"), e.get("to")): e
@@ -170,24 +204,29 @@ def _graph_for_circuit(circuit, rows, saved):
     for stage in stages:
         for need in stage.get("needs") or []:
             edges.append(_edge(need, stage["id"], edge_meta.get((need, stage["id"]))))
+    node_ids = {node["id"] for node in nodes}
     for saved_edge in saved.get("edges") or []:
         if not isinstance(saved_edge, dict):
             continue
         pair = (saved_edge.get("from"), saved_edge.get("to"))
-        if pair in {(edge["from"], edge["to"]) for edge in edges}:
-            continue
-        if pair[0] in saved_nodes and pair[1] in saved_nodes:
+        if pair in {(edge["from"], edge["to"]) for edge in edges} or pair[0] == INPUT_ID:
+            continue       # the Input card's wires come from forge.input
+        if pair[0] in node_ids and pair[1] in node_ids:
             edges.append(_edge(pair[0], pair[1], saved_edge))
+    _attach_input(stages, nodes, edges, saved_nodes, edge_meta)
+    if not saved_nodes:
+        _attach_environment(stages, nodes, edges)
     triggers = [dict(r) for r in rows if r.get("kind") == "circuit"
                 and r.get("circuit_id") == circuit["id"]]
     entry_ids = [stage["id"] for stage in stages if not stage.get("needs")]
     for index, trigger in enumerate(triggers):
         trigger_id = f"routine:{trigger['id']}"
+        placed = saved_nodes.get(trigger_id) or {}
         nodes.append({
             "id": trigger_id, "type": "trigger",
             "name": trigger.get("name") or "Schedule",
-            "description": _cadence(trigger),
-            "x": 25, "y": 120 + index * 170, "width": 220, "height": 126,
+            "x": int(placed.get("x", 25)),
+            "y": int(placed.get("y", 120 + index * 170)),
             "source": "routine", "routine_id": trigger["id"],
             "daily_at": trigger.get("daily_at") or "",
             "every_hours": trigger.get("every_hours"),
@@ -214,58 +253,84 @@ def _graph_for_circuit(circuit, rows, saved):
     }
 
 
-def _graph_for_routine(row):
-    rid = row["id"]
-    trigger = {
-        "id": f"{rid}:trigger", "type": "trigger", "name": "Schedule",
-        "description": _cadence(row), "x": 130, "y": 170,
-        "width": 210, "height": 126, "source": "routine",
-        "routine_id": rid, "daily_at": row.get("daily_at") or "",
-        "every_hours": row.get("every_hours"),
-        "enabled": bool(row.get("enabled")), "notify": bool(row.get("notify")),
-    }
-    # A command routine's "source" is the line it runs, shown where a
-    # prompt would be.
-    prompt = (" ".join(shlex.quote(a) for a in row.get("command") or [])
-              if row.get("kind") == "command" else row.get("prompt") or "")
-    native = {
-        "id": f"{rid}:native", "type": "native", "name": row.get("name") or rid,
-        "description": row.get("description") or "Native Vira operation.",
-        "x": 470, "y": 170, "width": 280, "height": 148,
-        "prompt": prompt, "model": row.get("model") or "",
-        "mode": row.get("mode") or "", "source": "routine-native",
-        "routine_id": rid, "source_ref": rid, "locked": True,
-        "engine": "command" if row.get("kind") == "command" else "",
-    }
-    return {
-        "id": f"routine:{rid}", "source_id": rid,
-        "name": row.get("name") or rid, "description": row.get("description") or "",
-        "kind": "native", "builtin": not rid.startswith("rt_"), "revision": 1,
-        "created": row.get("created"), "updated": row.get("last_run"),
-        "nodes": [trigger, native],
-        "edges": [_edge(trigger["id"], native["id"])],
-        "contexts": [], "triggers": [dict(row)], "executable": True,
-    }
+def _attach_input(stages, nodes, edges, saved_nodes, edge_meta):
+    """The Input card: one per board, holding the ask. Its text and place
+    live in the sidecar; it is wired into every stage the Forge recorded
+    it on (forge.input) and, for a definition the Forge never saved, into
+    every entry stage that runs a model."""
+    placed = saved_nodes.get(INPUT_ID) or {}
+    nodes.append({
+        "id": INPUT_ID, "type": "input", "name": str(placed.get("name") or "Input")[:200],
+        "prompt": str(placed.get("prompt") or "")[:MAX_TEXT],
+        "x": int(placed.get("x", LEFT_COLUMN_X)), "y": int(placed.get("y", 130)),
+    })
+    for stage in stages:
+        mode = circuits.norm_stage_mode(stage.get("mode"))
+        if mode in circuits.LOCAL_MODES or mode == "judge":
+            continue
+        forge = stage.get("forge") or {}
+        wired = (bool(forge["input"]) if "input" in forge
+                 else not stage.get("needs"))
+        if wired:
+            edges.append(_edge(INPUT_ID, stage["id"], edge_meta.get((INPUT_ID, stage["id"]))))
 
 
-def _cadence(row):
-    if row.get("daily_at"):
-        return f"Daily at {row['daily_at']}"
-    hours = row.get("every_hours")
-    if not isinstance(hours, (int, float)):
-        return "Manual"
-    return "Every hour" if hours == 1 else f"Every {hours:g} hours"
+def _env_card(kind, value):
+    """The source card a stage's recorded environment entry stands for."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")[:40] or kind
+    card = {"type": "tool", "source": kind, "description": ""}
+    if kind == "skill":
+        path = LIBRARY / "skills" / str(value) / "SKILL.md"
+        card.update(id=f"skill-{slug}", name=str(value),
+                    source_ref=str(path) if path.exists() else "")
+    elif kind == "command":
+        path = LIBRARY / "commands" / f"{value}.md"
+        card.update(id=f"command-{slug}", name=str(value),
+                    source_ref=str(path) if path.exists() else "")
+    elif kind == "settings":
+        card.update(id=f"settings-{slug}", name=SETTINGS_NAMES.get(str(value), str(value)),
+                    source_ref=str(value))
+    elif kind in ("mcp", "hook"):
+        card.update(id=f"{kind}-{slug}", name=str(value), source_ref=str(LIBRARY / f"{kind}-servers" / str(value)) if kind == "mcp" else str(LIBRARY / "hooks" / str(value)))
+    else:
+        name = Path(str(value)).name or str(value)
+        card.update(id=f"{kind}-{re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:40]}",
+                    name=name, source_ref=str(value))
+    return card
+
+
+def _attach_environment(stages, nodes, edges):
+    """A starter's stated environment as the cards it would be, wired in:
+    the board shows what each card is told about. Only for a definition
+    with no sidecar yet; once saved, the cards are the record."""
+    cards = {}
+    for stage in stages:
+        env = (stage.get("forge") or {}).get("environment") or {}
+        for kind, key in ENV_KEYS.items():
+            if kind == "instructions":
+                continue
+            for value in env.get(key) or []:
+                card = _env_card(kind, value)
+                if card["id"] not in cards:
+                    cards[card["id"]] = {**card, "x": LEFT_COLUMN_X, "y": 320 + 150 * len(cards)}
+                edges.append(_edge(card["id"], stage["id"]))
+    nodes.extend(cards.values())
+
+
+SETTINGS_NAMES = {"user": "Your Claude settings", "project": "The project's settings",
+                  "local": "The project's local settings"}
 
 
 def list_flows():
+    """Every circuit as a Flow. Standing loops (routines) are NOT Flows:
+    they have their own list in the Forge, over /api/routines, where Run
+    now, Pause and Under the hood live. Until 2026-10-27 each one was
+    dressed as a locked two-card Flow, which is how eleven loops came to
+    outnumber the Flows in a list called My Flows."""
     sidecar = _store()["graphs"]
     rows = routines.list_routines()
-    result = [_graph_for_circuit(c, rows, sidecar.get(c["id"]) or {})
-              for c in circuits.list_circuits()]
-    attached = {r["id"] for r in rows if r.get("kind") == "circuit"
-                and r.get("circuit_id")}
-    result.extend(_graph_for_routine(r) for r in rows if r["id"] not in attached)
-    return result
+    return [_graph_for_circuit(c, rows, sidecar.get(c["id"]) or {})
+            for c in circuits.list_circuits()]
 
 
 def get_flow(flow_id):
@@ -290,70 +355,11 @@ def _clean_contexts(values):
     return out
 
 
-def _expand_systems(nodes, edges):
-    """Compile anchored Flow instances inline while preserving their box."""
-    nodes = [dict(node) for node in nodes]
-    edges = [dict(edge) for edge in edges]
-    for _depth in range(3):
-        systems = [node for node in nodes if node.get("type") == "system"]
-        if not systems:
-            return nodes, edges
-        changed = False
-        for system in systems:
-            embedded = system.get("embedded") or {}
-            children = [dict(node) for node in embedded.get("nodes") or []]
-            child_edges = [dict(edge) for edge in embedded.get("edges") or []]
-            if not children:
-                continue
-            changed = True
-            sid = str(system.get("id") or "system")
-            id_map = {str(child.get("id")): f"{sid}__{child.get('id')}"
-                      for child in children if child.get("id")}
-            for child in children:
-                original = str(child.get("id") or "")
-                child["id"] = id_map.get(original, f"{sid}__part")
-                child["system_instance"] = sid
-                child["system_source"] = str(system.get("source_ref") or "")[:100]
-            compiled_edges = []
-            for edge in child_edges:
-                source = id_map.get(str(edge.get("from")))
-                target = id_map.get(str(edge.get("to")))
-                if source and target:
-                    compiled_edges.append({**edge, "from": source, "to": target})
-            executable = {child["id"] for child in children
-                          if child.get("type") in EXECUTABLE_NODE_TYPES}
-            internal_exec = [edge for edge in compiled_edges
-                             if edge.get("from") in executable
-                             and edge.get("to") in executable]
-            has_in = {edge["to"] for edge in internal_exec}
-            has_out = {edge["from"] for edge in internal_exec}
-            entries = [node_id for node_id in executable if node_id not in has_in]
-            exits = [node_id for node_id in executable if node_id not in has_out]
-            next_edges = [edge for edge in edges
-                          if edge.get("from") != sid and edge.get("to") != sid]
-            for edge in edges:
-                if edge.get("to") == sid:
-                    next_edges.extend({**edge,
-                                       "id": f"{edge.get('id', 'edge')}:{entry}",
-                                       "to": entry, "to_port": "input"}
-                                      for entry in entries)
-                if edge.get("from") == sid:
-                    next_edges.extend({**edge,
-                                       "id": f"{edge.get('id', 'edge')}:{exit_id}",
-                                       "from": exit_id, "from_port": "result"}
-                                      for exit_id in exits)
-            nodes = [node for node in nodes if node is not system] + children
-            edges = next_edges + compiled_edges
-        if not changed:
-            break
-    if any(node.get("type") == "system" for node in nodes):
-        raise ValueError("nested Flow instances may be at most three levels deep")
-    return nodes, edges
-
-
 def _compile(payload):
-    nodes, edges = _expand_systems(payload.get("nodes") or [],
-                                   payload.get("edges") or [])
+    nodes = [dict(node) for node in payload.get("nodes") or []
+             if isinstance(node, dict)]
+    edges = [dict(edge) for edge in payload.get("edges") or []
+             if isinstance(edge, dict)]
     if not nodes or len(nodes) > MAX_NODES:
         raise ValueError("a Flow needs 1-80 parts")
     if len(edges) > MAX_EDGES:
@@ -361,6 +367,7 @@ def _compile(payload):
     exec_nodes = [n for n in nodes if n.get("type") in EXECUTABLE_NODE_TYPES]
     if not exec_nodes:
         raise ValueError("a Flow needs at least one executable part")
+    input_ids = {str(n.get("id") or "") for n in nodes if n.get("type") == "input"}
     ids = [str(n.get("id") or "").strip() for n in exec_nodes]
     if not all(ids) or len(ids) != len(set(ids)):
         raise ValueError("executable part ids must be unique and non-empty")
@@ -369,42 +376,17 @@ def _compile(payload):
     contexts = {str(item.get("id") or ""): item
                 for item in _clean_contexts(payload.get("contexts"))}
     needs = {sid: [] for sid in ids}
+    incoming = {sid: [] for sid in ids}
+    outgoing = {sid: [] for sid in ids}
     for edge in edges:
         source, target = edge.get("from"), edge.get("to")
         if source in known and target in known and source not in needs[target]:
             needs[target].append(source)
-    stages = []
-    incoming = {sid: [] for sid in ids}
-    outgoing = {sid: [] for sid in ids}
-    graph_incoming = {str(node.get("id") or ""): [] for node in nodes
-                      if node.get("id")}
-    for edge in edges:
-        target = edge.get("to")
         if target in incoming:
             incoming[target].append(edge)
-        if target in graph_incoming:
-            graph_incoming[target].append(edge)
-        source = edge.get("from")
         if source in outgoing:
             outgoing[source].append(edge)
-
-    def routed_sources(connector_id, seen=None):
-        """Return tool/context parts feeding a chain of visual connectors."""
-        seen = set(seen or ())
-        if connector_id in seen:
-            return []
-        seen.add(connector_id)
-        found = []
-        for edge in graph_incoming.get(connector_id, []):
-            source = by_id.get(str(edge.get("from") or "")) or {}
-            if source.get("type") in {"tool", "context"}:
-                found.append(source)
-            elif source.get("type") == "connector":
-                found.extend(routed_sources(str(source.get("id") or ""), seen))
-        unique = {}
-        for source in found:
-            unique[str(source.get("id") or id(source))] = source
-        return list(unique.values())
+    stages = []
     for node in exec_nodes:
         sid = str(node["id"])
         node_type = node.get("type")
@@ -433,9 +415,29 @@ def _compile(payload):
             if node.get("continues"):
                 stage["continues"] = str(node.get("continues")).strip()[:80]
         if mode == "judge":
-            judge = dict(node.get("judge") or {})
-            judge.setdefault("of", needs[sid])
+            raw = dict(node.get("judge") or {})
+            judge = {k: raw[k] for k in JUDGE_KEYS if k in raw}
+            judge["of"] = [str(v) for v in judge.get("of") or needs[sid]]
+            judge["min_grade"] = str(judge.get("min_grade") or "")[:1]
+            try:
+                judge["max_retries"] = max(0, min(int(judge.get("max_retries") or 0),
+                                                  circuits.MAX_RETRIES))
+            except (TypeError, ValueError):
+                raise ValueError(f"part {sid}: retries must be a whole number")
+            # The card picks which upstream card a failing grade re-runs; an
+            # empty pick means grade only. circuits.validate_stages refuses
+            # a target that is not a stage.
+            retry = str(judge.get("retry_stage") or "").strip()[:80]
+            if retry:
+                judge["retry_stage"] = retry
+            else:
+                judge.pop("retry_stage", None)
             stage["judge"] = judge
+            # The judge's box: what to weigh in particular. The grading
+            # prompt itself is built by server/judge.py at launch.
+            extra = str(node.get("prompt") or node.get("extra") or "").strip()
+            if extra:
+                stage["extra"] = extra[:circuits.EXTRA_CAP]
         elif mode == "logic":
             logic = dict(node.get("logic") or {})
             logic["operation"] = str(logic.get("operation") or "always")[:40]
@@ -448,18 +450,19 @@ def _compile(payload):
         elif mode == "approval":
             approval = dict(node.get("approval") or {})
             approval["instructions"] = str(
-                approval.get("instructions") or node.get("prompt")
-                or node.get("description") or "Approval required")[:4000]
+                node.get("prompt") or approval.get("instructions")
+                or "Approval required")[:4000]
             stage["approval"] = approval
         elif mode == "output":
             output = dict(node.get("output") or {})
             output["destination"] = str(
                 output.get("destination") or "record")[:80]
             output["instructions"] = str(
-                output.get("instructions") or node.get("prompt") or "")[:4000]
+                node.get("prompt") or output.get("instructions") or "")[:4000]
             stage["output"] = output
         elif mode == "native":
-            routine_id = str(node.get("routine_id") or node.get("source_ref") or "")[:100]
+            routine_id = str((node.get("native") or {}).get("routine_id")
+                             or node.get("routine_id") or node.get("source_ref") or "")[:100]
             if not routine_id:
                 raise ValueError(f"part {sid}: native system has no routine source")
             stage["native"] = {"routine_id": routine_id}
@@ -468,25 +471,27 @@ def _compile(payload):
             if not prompt:
                 raise ValueError(f"part {sid}: instruction prompt is empty")
             stage["prompt"] = prompt
+            # read / ask / edit / full on the card: read is this flag, the
+            # other three are the mode. Until 2026-10-27 no control set it,
+            # so every card the editor added ran read-only for good.
             stage["read_only"] = bool(node.get("read_only"))
             if node.get("extra"):
-                stage["extra"] = str(node.get("extra"))[:4000]
+                stage["extra"] = str(node.get("extra"))[:circuits.EXTRA_CAP]
         attachments = {"contexts": [], "tools": [], "wire_instructions": []}
-        if node.get("system_instance"):
-            attachments["system"] = {
-                "instance": str(node.get("system_instance"))[:100],
-                "source": str(node.get("system_source") or "")[:100],
-            }
+        if mode not in {"logic", "approval", "output", "native"}:
+            # The card's environment: what its session is told about, and
+            # nothing else (owner's rule, 2026-10-28). Built from the cards
+            # wired in plus the card's own instruction-file row.
+            attachments["environment"] = _environment(node, incoming[sid], by_id)
+            if input_ids:
+                attachments["input"] = any(str(edge.get("from") or "") in input_ids
+                                           for edge in incoming[sid])
         for edge in incoming[sid]:
             source = by_id.get(str(edge.get("from") or "")) or {}
             source_type = source.get("type")
             instructions = str(edge.get("instructions") or "").strip()[:2000]
             if instructions:
                 attachments["wire_instructions"].append(instructions)
-            if edge.get("direction") == "both":
-                attachments["wire_instructions"].append(
-                    "This is a shared-reference connection: use the input and "
-                    "return any proposed updates clearly in this stage's output.")
             if source_type == "context":
                 saved_context = contexts.get(str(source.get("id") or ""), {})
                 attachments["contexts"].append({
@@ -502,29 +507,8 @@ def _compile(payload):
                     "name": str(source.get("name") or "Capability")[:200],
                     "source": str(source.get("source") or "")[:80],
                     "source_ref": str(source.get("source_ref") or "")[:1000],
-                    "instructions": str(source.get("prompt")
-                                        or source.get("description") or "")[:2000],
+                    "instructions": str(source.get("description") or "")[:2000],
                 })
-            elif source_type == "connector":
-                for routed in routed_sources(str(source.get("id") or "")):
-                    if routed.get("type") == "context":
-                        saved_context = contexts.get(str(routed.get("id") or ""), {})
-                        attachments["contexts"].append({
-                            "name": str(routed.get("name") or saved_context.get("name")
-                                        or "Context")[:200],
-                            "ref": str(routed.get("source_ref") or saved_context.get("ref")
-                                       or "")[:1000],
-                            "note": str(routed.get("description") or saved_context.get("note")
-                                        or "")[:2000],
-                        })
-                    elif routed.get("type") == "tool":
-                        attachments["tools"].append({
-                            "name": str(routed.get("name") or "Capability")[:200],
-                            "source": str(routed.get("source") or "")[:80],
-                            "source_ref": str(routed.get("source_ref") or "")[:1000],
-                            "instructions": str(routed.get("prompt")
-                                                or routed.get("description") or "")[:2000],
-                        })
         attached_outputs = []
         for edge in outgoing[sid]:
             target = by_id.get(str(edge.get("to") or "")) or {}
@@ -534,16 +518,60 @@ def _compile(payload):
             attached_outputs.append({
                 "name": str(target.get("name") or "Output")[:200],
                 "destination": str(config.get("destination") or "record")[:80],
-                "instructions": str(config.get("instructions")
-                                    or target.get("prompt") or "")[:2000],
+                "instructions": str(target.get("prompt")
+                                    or config.get("instructions") or "")[:2000],
             })
         if attached_outputs:
             attachments["outputs"] = attached_outputs
-        if any(attachments.values()):
+        if any(value not in (None, [], {}) for value in attachments.values()):
             stage["forge"] = attachments
         stages.append(stage)
     circuits.validate_stages(stages)
     return stages
+
+
+def _environment(node, incoming, by_id):
+    env = {key: [] for key in ENV_KEYS.values()}
+    own = node.get("environment") if isinstance(node.get("environment"), dict) else {}
+    instructions = own.get("instructions") if "instructions" in own else ["project"]
+    for item in instructions or []:
+        _env_add(env, "instructions", str(item))
+    for edge in incoming:
+        source = by_id.get(str(edge.get("from") or "")) or {}
+        if source.get("type") in SOURCE_NODE_TYPES:
+            _env_add_card(env, source)
+        elif source.get("type") == "env":
+            for item in source.get("items") or []:
+                if isinstance(item, dict):
+                    _env_add_card(env, item)
+    return env
+
+
+def _env_add_card(env, card):
+    kind = str(card.get("source") or card.get("kind") or "").strip().lower()
+    if kind not in ENV_KEYS:
+        return
+    value = (card.get("source_ref") if kind in ENV_BY_REF else card.get("name")) or card.get("name")
+    _env_add(env, kind, str(value or ""))
+    if kind == "plugin" and value:
+        # The SDK's skill filter hides a plugin's skills unless they are
+        # listed as plugin:skill; the card's switches say which ones are.
+        off = {str(name) for name in (card.get("skills_off") or [])}
+        listing = plugin_listing(str(value), card.get("name"))
+        for skill in listing["skills"]:
+            if skill not in off:
+                _env_add(env, "skill", f"{listing['name']}:{skill}")
+
+
+def _env_add(env, kind, value):
+    value = value.strip()[:1000]
+    if not value:
+        return
+    if kind == "settings" and value not in SETTING_SOURCES and not value.lower().endswith(".json"):
+        return
+    key = ENV_KEYS[kind]
+    if value not in env[key] and len(env[key]) < MAX_ENV_ITEMS:
+        env[key].append(value)
 
 
 def save_flow(payload, save_as=False):
@@ -559,56 +587,80 @@ def save_flow(payload, save_as=False):
         "description": str(payload.get("description") or "").strip()[:2000],
         "stages": stages,
     })
+    # Schedule cards with a cadence become routines of kind circuit. Their
+    # placement is stored under routine:<id>, which is the id the graph
+    # gives them back, so the card lands where it was left.
+    placement = {}
+    input_text = next((str(n.get("prompt") or "").strip() for n in payload.get("nodes") or []
+                       if isinstance(n, dict) and n.get("type") == "input"), "")
+    for node in payload.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("type") != "trigger":
+            continue
+        daily_at = str(node.get("daily_at") or "").strip()
+        every_hours = node.get("every_hours")
+        if not daily_at and not every_hours:
+            continue
+        routine_data = {
+            "name": str(node.get("name") or f"{rec['name']} schedule")[:200],
+            "kind": "circuit", "circuit_id": rec["id"],
+            # a scheduled run's ask is the Input card's text
+            "prompt": input_text[:MAX_TEXT],
+            "description": str(node.get("description") or "")[:2000],
+            "daily_at": daily_at or None,
+            "every_hours": every_hours if not daily_at else None,
+            "enabled": bool(node.get("enabled", True)),
+            "notify": bool(node.get("notify")),
+        }
+        routine_id = None if save_as else str(node.get("routine_id") or "") or None
+        row = routines.save_routine(routine_data, rid=routine_id)
+        placement[str(node.get("id") or "")] = f"routine:{row['id']}"
     clean_nodes = []
     for node in payload.get("nodes") or []:
-        if node.get("type") not in DISPLAY_NODE_TYPES:
+        if not isinstance(node, dict) or node.get("type") not in DISPLAY_NODE_TYPES:
             continue
+        node_id = placement.get(str(node.get("id") or "")) or str(node.get("id") or "")[:100]
+        if node.get("type") == "input":
+            node_id = INPUT_ID
         clean = {
-            "id": str(node.get("id") or "")[:100],
+            "id": node_id,
             "type": str(node.get("type") or "")[:40],
             "x": int(node.get("x") or 0), "y": int(node.get("y") or 0),
-            "width": max(160, min(int(node.get("width") or 244), 1200)),
-            "height": max(90, min(int(node.get("height") or 148), 1000)),
-            "expanded": bool(node.get("expanded")),
         }
-        if node.get("spatial_layer") in {0, 1, 2, 3}:
-            clean["spatial_layer"] = int(node["spatial_layer"])
-        if node.get("type") not in AGENT_NODE_TYPES:
+        if node.get("type") in AGENT_NODE_TYPES:
+            own = node.get("environment") if isinstance(node.get("environment"), dict) else {}
+            if "instructions" in own:
+                clean["environment"] = {"instructions": [
+                    str(i)[:1000] for i in (own.get("instructions") or [])][:8]}
+        if node.get("type") == "input":
+            clean.update({"name": str(node.get("name") or "Input")[:200],
+                          "prompt": str(node.get("prompt") or "")[:MAX_TEXT]})
+        if node.get("type") == "env":
+            clean.update({"name": str(node.get("name") or "Environment")[:200],
+                          "items": _clean_env_items(node.get("items"))})
+        if node.get("type") in SOURCE_NODE_TYPES or (
+                node.get("type") == "trigger" and not node_id.startswith("routine:")):
+            # A source card is a name, a path and a note; a manual schedule
+            # card is a name. Never the text behind the path: the agent reads
+            # the file itself when told where it is.
             clean.update({
                 "name": str(node.get("name") or node.get("type") or "Part")[:200],
                 "description": str(node.get("description") or "")[:2000],
                 "source": str(node.get("source") or "forge")[:80],
                 "source_ref": str(node.get("source_ref") or "")[:1000],
-                "prompt": str(node.get("prompt") or "")[:MAX_SOURCE],
-                "model": str(node.get("model") or "")[:80],
-                "mode": str(node.get("mode") or "")[:80],
-                "locked": bool(node.get("locked")),
-                "routine_id": str(node.get("routine_id") or "")[:100],
-                "daily_at": str(node.get("daily_at") or "")[:5],
-                "every_hours": node.get("every_hours"),
-                "enabled": bool(node.get("enabled")),
-                "notify": bool(node.get("notify")),
-                "logic": dict(node.get("logic") or {}),
-                "approval": dict(node.get("approval") or {}),
-                "output": dict(node.get("output") or {}),
-                "source_revision": int(node.get("source_revision") or 1),
-                "embedded": dict(node.get("embedded") or {}),
-                "source_files": list(node.get("source_files") or [])[:100],
-                "source_truncated": bool(node.get("source_truncated")),
             })
-            if node.get("type") == "connector":
-                clean.update({
-                    "connector_mode": str(
-                        node.get("connector_mode") or "through")[:20],
-                    "input_ports": [str(value)[:40] for value in
-                                    list(node.get("input_ports") or [])[:8]],
-                    "output_ports": [str(value)[:40] for value in
-                                     list(node.get("output_ports") or [])[:8]],
-                    "data_kind": str(node.get("data_kind") or "data")[:40],
-                })
+            if node.get("source") == "plugin" and node.get("skills_off"):
+                clean["skills_off"] = [str(name)[:100] for name in node["skills_off"]
+                                       if str(name).strip()][:MAX_ENV_ITEMS]
+            if node.get("stock_ref"):
+                clean["stock_ref"] = str(node["stock_ref"])[:1000]
         clean_nodes.append(clean)
-    clean_edges = [_edge(str(e.get("from") or ""), str(e.get("to") or ""), e)
-                   for e in payload.get("edges") or []]
+    clean_edges = []
+    for e in payload.get("edges") or []:
+        if not isinstance(e, dict):
+            continue
+        source = placement.get(str(e.get("from") or "")) or str(e.get("from") or "")
+        target = placement.get(str(e.get("to") or "")) or str(e.get("to") or "")
+        clean_edges.append(_edge(source, target, e))
     previous = _store()["graphs"].get(rec["id"]) or {}
     graph = {
         "revision": int(previous.get("revision") or 0) + 1,
@@ -621,45 +673,99 @@ def save_flow(payload, save_as=False):
     def mutate(state):
         state.setdefault("graphs", {})[rec["id"]] = graph
     jsonstore.mutate(STORE, mutate, _blank(), indent=1, ensure_ascii=False)
-    for node in payload.get("nodes") or []:
-        if node.get("type") != "trigger":
-            continue
-        daily_at = str(node.get("daily_at") or "").strip()
-        every_hours = node.get("every_hours")
-        if not daily_at and not every_hours:
-            continue
-        routine_data = {
-            "name": str(node.get("name") or f"{rec['name']} schedule")[:200],
-            "kind": "circuit", "circuit_id": rec["id"],
-            "description": str(node.get("description") or "")[:2000],
-            "daily_at": daily_at or None,
-            "every_hours": every_hours if not daily_at else None,
-            "enabled": bool(node.get("enabled", True)),
-            "notify": bool(node.get("notify")),
-        }
-        routine_id = None if save_as else str(node.get("routine_id") or "") or None
-        routines.save_routine(routine_data, rid=routine_id)
     return get_flow(rec["id"])
 
 
-def run_flow(flow_id, input_text, cwd=None, notify=False, output="",
+def _clean_env_items(items):
+    out = []
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or raw.get("source") or "")[:40]
+        if not kind:
+            continue
+        out.append({"kind": kind, "name": str(raw.get("name") or kind)[:200],
+                    "source_ref": str(raw.get("source_ref") or "")[:1000]})
+        if len(out) >= MAX_ENV_ITEMS:
+            break
+    return out
+
+
+def input_text(flow_id):
+    """The saved Input card's text, the ask a run uses when none is given."""
+    graph = _store()["graphs"].get(flow_id) or {}
+    node = next((n for n in graph.get("nodes") or []
+                 if isinstance(n, dict) and n.get("type") == "input"), None)
+    return str((node or {}).get("prompt") or "").strip()
+
+
+def run_flow(flow_id, input_text_given, cwd=None, notify=False, output="",
              idea_id=None, provider=None, vault_destination=None, vault_context=None):
-    if flow_id.startswith("routine:"):
-        row = routines.get_routine(flow_id.split(":", 1)[1])
-        if not row:
-            raise KeyError(flow_id)
-        row = {**row}
-        if vault_destination is not None:
-            row["vault_destination"] = vault_destination
-        if vault_context is not None:
-            row["vault_context"] = vault_context
-        return routines.dispatch(row)
-    return circuits.start_run(flow_id, input_text, cwd=cwd, notify=notify,
+    """Start a run. The ask is the Input card's text; the API may hand one
+    in (the Queue's idea) and it wins. `provider` is kept for the API: a
+    card that names no engine runs on the configured default. `output` is
+    kept for the API's sake; the destination of a run is what its Output
+    cards say."""
+    ask = str(input_text_given or "").strip() or input_text(flow_id)
+    return circuits.start_run(flow_id, ask, cwd=cwd, notify=notify,
                               source="forge", idea_id=idea_id,
                               flow_options={"output": output},
                               provider=provider,
                               vault_destination=vault_destination,
                               vault_context=vault_context)
+
+
+def defaults():
+    """What a card that names nothing runs on: the configured go-to
+    provider, by name, so the picker never says "Vira default" for a thing
+    that has a name (owner's rule, 2026-10-28)."""
+    try:
+        pid = agentbackend.default_session_provider()
+    except Exception:  # noqa: BLE001 - a disabled go-to still has a label
+        pid = str(models.PROVIDERS and "" or "")
+    label = (models.PROVIDERS.get(pid) or {}).get("label") or pid or "the configured default"
+    return {"provider": pid, "provider_label": label}
+
+
+def _blank_envs():
+    return {"environments": []}
+
+
+def list_environments():
+    value = jsonstore.read(ENVS, _blank_envs())
+    rows = value.get("environments") if isinstance(value, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict) and row.get("id")]
+
+
+def save_environment(data):
+    """Create or update a saved environment: a name and up to 40 sources."""
+    name = str((data or {}).get("name") or "").strip()[:200]
+    if not name:
+        raise ValueError("an environment needs a name")
+    items = _clean_env_items((data or {}).get("items"))
+    if not items:
+        raise ValueError("an environment needs at least one source")
+    eid = str((data or {}).get("id") or "").strip()[:60] or "env_" + uuid.uuid4().hex[:8]
+    row = {"id": eid, "name": name, "items": items, "updated": _now()}
+
+    def mutate(state):
+        rows = [r for r in state.setdefault("environments", []) if r.get("id") != eid]
+        rows.append(row)
+        state["environments"] = rows
+    jsonstore.mutate(ENVS, mutate, _blank_envs(), indent=1, ensure_ascii=False)
+    return row
+
+
+def delete_environment(eid):
+    found = {"ok": False}
+
+    def mutate(state):
+        rows = state.setdefault("environments", [])
+        found["ok"] = any(r.get("id") == eid for r in rows)
+        state["environments"] = [r for r in rows if r.get("id") != eid]
+    jsonstore.mutate(ENVS, mutate, _blank_envs(), indent=1, ensure_ascii=False)
+    if not found["ok"]:
+        raise KeyError(eid)
 
 
 DEFAULT_IDEA_TEMPLATE = "plan-build-judge"
@@ -749,6 +855,197 @@ def native_source(routine_id):
     return routinesrc.hood(row)
 
 
+def _project_root(cwd=None):
+    """The working folder a Flow runs in: the given one, else this checkout."""
+    if cwd:
+        path = Path(str(cwd)).expanduser()
+        if path.is_dir():
+            return path
+    return ROOT
+
+
+def project_instruction_file(cwd=None):
+    """The instruction file the 'project' row stands for: the working
+    folder's AGENTS.md, else its CLAUDE.md (which may not exist yet)."""
+    root = _project_root(cwd)
+    for name in INSTRUCTION_NAMES:
+        if (root / name).is_file():
+            return root / name
+    return root / INSTRUCTION_NAMES[-1]
+
+
+def settings_file(source, cwd=None):
+    if source == "user":
+        return LIBRARY / "settings.json"
+    folder = _project_root(cwd) / ".claude"
+    return folder / ("settings.json" if source == "project" else "settings.local.json")
+
+
+def _read_json(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def plugin_listing(folder, name=None):
+    """What a plugin folder holds, by name: its skills, commands, hooks and
+    agents, and the description from its manifest."""
+    folder = Path(str(folder)).expanduser()
+    meta = {}
+    for candidate in (folder / ".claude-plugin" / "plugin.json", folder / "plugin.json"):
+        if candidate.is_file():
+            meta = _read_json(candidate) or {}
+            break
+
+    def stems(sub, pattern, parent=False):
+        base = folder / sub
+        return sorted(p.parent.name if parent else p.stem
+                      for p in base.glob(pattern)) if base.is_dir() else []
+
+    hooks = []
+    hooks_data = _read_json(folder / "hooks" / "hooks.json") or {}
+    events = hooks_data.get("hooks") if isinstance(hooks_data.get("hooks"), dict) else hooks_data
+    if isinstance(events, dict):
+        hooks = sorted(str(k) for k in events if isinstance(events[k], list))
+    return {
+        "name": str(meta.get("name") or name or folder.name),
+        "description": str(meta.get("description") or ""),
+        "version": str(meta.get("version") or ""),
+        "skills": stems("skills", "*/SKILL.md", parent=True),
+        "commands": stems("commands", "*.md"),
+        "agents": stems("agents", "*.md"),
+        "hooks": hooks,
+    }
+
+
+def mcp_servers(cwd=None):
+    """Every MCP server the CLI knows on this Mac, by name: the user scope
+    and this folder's scope in ~/.claude.json, and the folder's .mcp.json.
+    The config stays here; a card records a name, and the runner looks the
+    name up again at launch, so nothing from an env block enters a Flow."""
+    out = {}
+    root = _project_root(cwd)
+    user = _read_json(CLAUDE_JSON) or {}
+    scopes = [("user", user.get("mcpServers")),
+              ("folder", ((user.get("projects") or {}).get(str(root)) or {}).get("mcpServers")),
+              ("project", (_read_json(root / PROJECT_MCP) or {}).get("mcpServers"))]
+    for scope, servers in scopes:
+        for name, config in (servers or {}).items() if isinstance(servers, dict) else []:
+            if isinstance(config, dict) and name not in out:
+                out[str(name)] = {"scope": scope, **config}
+    return out
+
+
+def mcp_public(name, server):
+    """An MCP server as a preview shows it: how it starts, never its env."""
+    args = [str(a) for a in server.get("args") or []]
+    command = " ".join([str(server.get("command") or "")] + args).strip()
+    return {"name": name, "scope": server.get("scope", ""),
+            "type": str(server.get("type") or ("stdio" if command else "http")),
+            "command": command, "url": str(server.get("url") or ""),
+            "env": sorted(str(k) for k in (server.get("env") or {}))}
+
+
+def _json_outline(data):
+    """One line per top-level key of a settings file: what it holds, in
+    words, with no secret values."""
+    rows = []
+    for key, value in data.items():
+        key = str(key)
+        if key == "permissions" and isinstance(value, dict):
+            parts = [f"{len(value[k])} {k}" for k in ("allow", "deny", "ask")
+                     if isinstance(value.get(k), list)]
+            summary = ", ".join(parts) + " rules" if parts else "nothing set"
+        elif key == "hooks" and isinstance(value, dict):
+            summary = ", ".join(f"{event} {len(matchers)}" for event, matchers in value.items()
+                                if isinstance(matchers, list)) or "none"
+        elif key == "env" and isinstance(value, dict):
+            summary = f"{len(value)} variable{'s' if len(value) != 1 else ''}: " + ", ".join(map(str, value))
+        elif isinstance(value, dict):
+            names = ", ".join(str(k) for k in list(value)[:8])
+            summary = f"{len(value)} entr{'y' if len(value) == 1 else 'ies'}: {names}" if value else "empty"
+        elif isinstance(value, list):
+            shown = ", ".join(str(v) for v in value[:6] if isinstance(v, (str, int, float)))
+            summary = f"{len(value)} item{'s' if len(value) != 1 else ''}" + (f": {shown}" if shown else "")
+        elif SECRET_KEY.search(key):
+            summary = "set"
+        else:
+            summary = json.dumps(value)
+        rows.append({"key": key, "summary": summary[:300]})
+    return rows
+
+
+def resolve_ref(ref, kind="", cwd=None):
+    """The file or folder a source card's ref stands for."""
+    ref = str(ref or "").strip()
+    kind = str(kind or "").strip().lower()
+    if kind == "instructions" and ref == "project":
+        return project_instruction_file(cwd)
+    if kind == "settings" and ref in SETTING_SOURCES:
+        return settings_file(ref, cwd)
+    if not ref:
+        raise ValueError("no source")
+    return Path(ref).expanduser()
+
+
+def _readable(path, cwd=None, local=False):
+    """Over the tailnet a preview stays inside the Claude library and the
+    working folder's own instruction and settings files. At the keyboard
+    (loopback) any file the owner picked in the Mac's panel may be shown."""
+    if local:
+        return True
+    resolved = path.resolve()
+    library = LIBRARY.expanduser().resolve()
+    if resolved == library or library in resolved.parents:
+        return True
+    root = _project_root(cwd).resolve()
+    allowed = {root / name for name in INSTRUCTION_NAMES} | {
+        root / "AGENTS.local.md", root / PROJECT_MCP,
+        root / ".claude" / "settings.json", root / ".claude" / "settings.local.json"}
+    return resolved in allowed or resolved == CLAUDE_JSON.resolve()
+
+
+def kit_preview(ref, kind="", cwd=None, local=False):
+    """What a source card stands for, ready to show: the file's text with
+    its format, a settings file's outline, a plugin folder's listing, or an
+    MCP server's start line. Missing is an answer, not an error."""
+    kind = str(kind or "").strip().lower()
+    if kind == "mcp":
+        server = mcp_servers(cwd).get(str(ref or "").strip())
+        if not server:
+            return {"kind": kind, "format": "missing", "path": str(ref or ""), "exists": False}
+        return {"kind": kind, "format": "mcp", "exists": True, "path": str(ref),
+                "server": mcp_public(str(ref), server)}
+    path = resolve_ref(ref, kind, cwd)
+    if not _readable(path, cwd, local):
+        raise ValueError("That file is outside what Vira shows over the network")
+    out = {"kind": kind, "path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return {**out, "format": "missing"}
+    if path.is_dir():
+        readme = next((p for p in (path / "README.md", path / "readme.md") if p.is_file()), None)
+        text = readme.read_text(encoding="utf-8", errors="replace") if readme else ""
+        files = sorted(p.relative_to(path).as_posix() for p in path.rglob("*")
+                       if p.is_file() and not any(part.startswith(".") for part in p.relative_to(path).parts))
+        return {**out, "format": "folder", "listing": plugin_listing(path) if kind == "plugin" else None,
+                "files": files[:200], "more_files": max(0, len(files) - 200),
+                "text": text[:PREVIEW_CAP], "truncated": len(text) > PREVIEW_CAP}
+    if path.suffix.lower() not in SOURCE_SUFFIXES:
+        return {**out, "format": "binary", "size": path.stat().st_size}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    suffix = path.suffix.lower()
+    fmt = "markdown" if suffix == ".md" else "json" if suffix == ".json" else "text"
+    out.update(format=fmt, text=text[:PREVIEW_CAP], truncated=len(text) > PREVIEW_CAP)
+    if fmt == "json":
+        data = _read_json(path)
+        out["outline"] = _json_outline(data) if data is not None else []
+        if data is None:
+            out["outline_error"] = "not valid JSON"
+    return out
+
+
 def kit_catalog():
     items = []
     for item in actions.scan_library():
@@ -758,6 +1055,38 @@ def kit_catalog():
             source_ref = LIBRARY / "commands" / f"{item['name']}.md"
         items.append({**item, "id": f"{item['kind']}:{item['name']}",
                       "type": "tool", "source_ref": str(source_ref)})
+    # The two things a session used to receive without being asked: its
+    # settings files and the project's instruction file. As cards, so a
+    # bare card can have them back on purpose.
+    for source, name, note in (
+            ("user", SETTINGS_NAMES["user"], "~/.claude/settings.json: permissions, hooks, env"),
+            ("project", SETTINGS_NAMES["project"], ".claude/settings.json in the working folder"),
+            ("local", SETTINGS_NAMES["local"], ".claude/settings.local.json in the working folder")):
+        items.append({"id": f"settings:{source}", "name": name, "kind": "settings",
+                      "type": "tool", "invoke": "", "source_ref": source,
+                      "description": note, "arg_fields": []})
+    items.append({"id": "instructions:project", "name": "Project instructions",
+                  "kind": "instructions", "type": "tool", "invoke": "",
+                  "source_ref": "project",
+                  "description": f"{project_instruction_file().name} of the working folder",
+                  "arg_fields": []})
+    # The other instruction files this Mac has: the global one, and the
+    # working folder's private one. Both reach a card as text.
+    for item_id, path, name, note in (
+            ("instructions:user", LIBRARY / "CLAUDE.md", "Your global instructions",
+             "~/.claude/CLAUDE.md: what every session is told"),
+            ("instructions:project-local", ROOT / "AGENTS.local.md",
+             "The project's local instructions", "AGENTS.local.md in the working folder, git-ignored")):
+        if path.is_file():
+            items.append({"id": item_id, "name": name, "kind": "instructions", "type": "tool",
+                          "invoke": "", "source_ref": str(path), "description": note,
+                          "arg_fields": []})
+    for name, server in mcp_servers().items():
+        public = mcp_public(name, server)
+        items.append({"id": f"mcp:{name}", "name": name, "kind": "mcp", "type": "tool",
+                      "invoke": "", "source_ref": name,
+                      "description": (public["command"] or public["url"] or public["type"])[:200],
+                      "arg_fields": []})
     roots = [
         ("script", LIBRARY / "scripts", {".py", ".sh", ".js", ".zsh"}),
         ("agent", LIBRARY / "agents", {".md"}),
@@ -786,38 +1115,34 @@ def kit_catalog():
             seen.add(item_id)
             items.append({
                 "id": item_id, "name": name, "kind": kind,
-                "type": "agent" if kind == "agent" else "tool",
+                "type": "tool",
                 "invoke": str(path), "source_ref": str(path),
                 "description": f"{kind.replace('_', ' ').title()} capability",
                 "arg_fields": [],
             })
-    primitives = [
-        ("trigger", "trigger", "Trigger", "Manual, scheduled, or event start", {}),
-        ("context", "context", "Context", "A reference set from Find or Reader", {}),
-        ("agent", "agent", "Agent", "Model, permission, prompt, and capabilities", {}),
-        ("logic", "logic", "Logic", "Branch, merge, judge, or retry", {}),
-        ("approval", "approval", "Approval", "Pause for an explicit human decision", {}),
-        ("output", "output", "Output", "Artifact, record, notification, or destination", {}),
-        ("connector", "connector", "Connector", "Configurable input/output adapter", {
-            "connector_mode": "through", "input_ports": ["in"],
-            "output_ports": ["out"], "data_kind": "data",
-        }),
-        ("input-port", "connector", "Input port", "A source chip that introduces data to a Flow", {
-            "connector_mode": "input", "input_ports": [],
-            "output_ports": ["out"], "data_kind": "data",
-        }),
-        ("output-port", "connector", "Output port", "A destination chip at the edge of a Flow", {
-            "connector_mode": "output", "input_ports": ["in"],
-            "output_ports": [], "data_kind": "data",
-        }),
-        ("tool-bus", "connector", "Tool bus", "Expandable capability bus for tools, skills, scripts, and MCP", {
-            "connector_mode": "through", "input_ports": ["tool"],
-            "output_ports": ["capability"], "data_kind": "capability",
-        }),
-    ]
-    for item_id, kind, name, description, defaults in primitives:
-        items.insert(0, {"id": f"primitive:{item_id}", "name": name,
-                         "kind": "primitive", "type": kind,
-                         "invoke": "", "description": description,
-                         "arg_fields": [], **defaults})
+    # Installed plugins: ~/.claude/plugins/cache/<marketplace>/<plugin>/
+    # <version>/; the newest version folder is the plugin's root.
+    cache = LIBRARY / "plugins" / "cache"
+    if cache.is_dir():
+        for marketplace in sorted(cache.iterdir(), key=lambda p: p.name.lower()):
+            if not marketplace.is_dir() or marketplace.name.startswith("."):
+                continue
+            for plugin in sorted(marketplace.iterdir(), key=lambda p: p.name.lower()):
+                if not plugin.is_dir() or plugin.name.startswith("."):
+                    continue
+                versions = sorted((v for v in plugin.iterdir() if v.is_dir()),
+                                  key=lambda v: v.name)
+                if not versions:
+                    continue
+                item_id = f"plugin:{plugin.name}"
+                if item_id in seen:
+                    continue
+                seen.add(item_id)
+                listing = plugin_listing(versions[-1], plugin.name)
+                items.append({"id": item_id, "name": plugin.name, "kind": "plugin",
+                              "type": "tool", "invoke": str(versions[-1]),
+                              "source_ref": str(versions[-1]),
+                              "description": (listing["description"]
+                                              or f"Installed plugin ({marketplace.name}, {versions[-1].name})")[:300],
+                              "items": listing, "arg_fields": []})
     return items

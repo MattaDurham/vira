@@ -333,16 +333,24 @@
     </div>
 
     <div id="work-dispatch-pane" class="forge" style="display:none">
+      <!-- THE FORGE (2026-10-27 rewrite). A Flow is a board of cards wired
+           in one direction. Nine card kinds: six that run (agent, judge,
+           gate, ask me, output, native), a schedule, and two sources (a
+           skill, script or file; a Find reference). The right column is the
+           only editor; the board shows each card small. The audit that led
+           here is the owner's: the old board dressed every card as a form,
+           every wire as a typed port, and every script as a part, and
+           nothing was ever saved with it. -->
       <header class="forge-head">
         <div class="forge-identity">
-          <span class="forge-kicker">The Forge / Flows</span>
+          <span class="forge-kicker">The Forge</span>
           <div class="forge-titleline">
             <button class="forge-back" id="forge-library-toggle" type="button"
-                    aria-label="Show Flow library">Library</button>
+                    aria-label="Show the library">Library</button>
             <h2 id="forge-flow-name">Choose a Flow</h2>
             <span class="forge-revision" id="forge-flow-revision"></span>
           </div>
-          <p id="forge-flow-description">Operational systems, reusable starters, and every part that makes them run.</p>
+          <p id="forge-flow-description">Who runs each step, what it must do, and what it may touch. Wire the cards; the finished text of one is the input of the next.</p>
         </div>
         <div class="forge-actions">
           <div class="forge-tools" id="forge-tools" role="group" aria-label="Edit tools">
@@ -353,68 +361,53 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 10.5h-11a4.5 4.5 0 0 0 0 9h2.5"/><path d="M16.5 6.5l4 4-4 4"/></svg>
             </button>
             <span class="forge-tool-split" aria-hidden="true"></span>
-            <button class="forge-tool" id="forge-copy" type="button" aria-label="Copy component" title="Copy">
+            <button class="forge-tool" id="forge-copy" type="button" aria-label="Copy card" title="Copy">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 8.5h10v11h-10z"/><path d="M6.5 15.5h-2v-11h10v2"/></svg>
             </button>
-            <button class="forge-tool" id="forge-paste" type="button" aria-label="Paste component" title="Paste">
+            <button class="forge-tool" id="forge-paste" type="button" aria-label="Paste card" title="Paste">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5h-3v14h13v-14h-3"/><path d="M9.5 3.5h5v3h-5z"/></svg>
             </button>
-            <button class="forge-tool" id="forge-duplicate" type="button" aria-label="Duplicate component" title="Duplicate">
+            <button class="forge-tool" id="forge-duplicate" type="button" aria-label="Duplicate card" title="Duplicate">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 4.5h9v9h-9z"/><path d="M10.5 10.5h9v9h-9z"/></svg>
             </button>
-            <button class="forge-tool" id="forge-delete" type="button" aria-label="Delete component" title="Delete">
+            <button class="forge-tool" id="forge-delete" type="button" aria-label="Delete card" title="Delete">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15"/><path d="M9.5 7V4.5h5V7"/><path d="M6.5 7l1 12.5h9L17.5 7"/></svg>
             </button>
           </div>
           <button class="fchip sm" id="forge-new" type="button">New</button>
           <button class="fchip sm" id="forge-save-as" type="button">Save as</button>
           <button class="fchip sm" id="forge-save" type="button">Save</button>
-          <button class="btn primary" id="forge-test" type="button">Test Flow</button>
+          <button class="btn primary" id="forge-run" type="button" title="Run this Flow on its Input card's ask">Run</button>
         </div>
       </header>
 
       <div class="forge-shell" id="forge-shell">
         <aside class="forge-library" id="forge-library">
-          <header class="forge-panel-head" id="forge-library-head">
-            <div><span>Library</span><strong>Flows, Kit, Context, This Mac</strong></div>
-            <div class="forge-panel-actions">
-              <button type="button" id="forge-library-float" title="Pop the library out into Vira or dock it in The Forge">Pop out</button>
-            </div>
-          </header>
           <div class="seg mini forge-library-tabs" id="forge-library-tabs">
-            <button class="seg-btn on" data-forge-library="flows">My Flows</button>
-            <button class="seg-btn" data-forge-library="starters">Starters</button>
-            <button class="seg-btn" data-forge-library="kit">Kit</button>
-            <button class="seg-btn" data-forge-library="context">Context</button>
-            <button class="seg-btn" data-forge-library="mac" title="Every launchd job on this Mac, read-only">This Mac</button>
+            <button class="seg-btn on" data-forge-library="flows">Flows</button>
+            <button class="seg-btn" data-forge-library="sources" title="Skills, commands, scripts and files to wire into a card">Sources</button>
+            <button class="seg-btn" data-forge-library="loops" title="What Vira runs on a schedule">Loops</button>
           </div>
           <div class="forge-library-tools">
             <input class="search" id="forge-library-search" type="search"
-                   placeholder="Search this library" autocomplete="off">
-            <select class="idea-sort" id="forge-library-filter" aria-label="Filter library"></select>
+                   placeholder="Search" autocomplete="off">
           </div>
           <div class="forge-library-body" id="forge-library-body"></div>
         </aside>
 
         <main class="forge-workspace">
           <div class="forge-boardbar">
-            <div class="seg mini" id="forge-view-toggle">
-              <button class="seg-btn on" data-forge-view="board">Breadboard</button>
-              <button class="seg-btn" data-forge-view="spatial">3D Board</button>
-              <button class="seg-btn" data-forge-view="outline">Outline</button>
-            </div>
+            <button class="btn primary sm" id="forge-add" type="button" aria-haspopup="true" title="Input, Agent, Judge, Gate, Ask me, Output, Schedule, or a source">+ Add</button>
             <span class="forge-status" id="forge-status">Live definitions</span>
-            <div class="forge-zoom" aria-label="Breadboard zoom">
-              <button type="button" id="forge-zoom-out" aria-label="Zoom out">−</button>
+            <div class="forge-zoom" aria-label="Board zoom">
+              <button type="button" id="forge-zoom-out" aria-label="Zoom out">&minus;</button>
               <span id="forge-zoom-value">100%</span>
               <button type="button" id="forge-zoom-in" aria-label="Zoom in">+</button>
               <button type="button" id="forge-arrange">Arrange</button>
             </div>
             <!-- The run trace strip: which run the board is wearing, its
-                 live progress, and the way out. A wrapping second row of
-                 the FLOATING boardbar — the bar sits absolutely over the
-                 viewport, so an in-flow sibling would render underneath it,
-                 unreachable. Hidden unless a trace is armed. -->
+                 live progress, and the way out. Hidden unless a trace is
+                 armed. -->
             <div class="forge-tracebar" id="forge-trace" hidden></div>
           </div>
           <div class="forge-viewport" id="forge-viewport">
@@ -423,44 +416,22 @@
               <div id="forge-nodes"></div>
             </div>
             <div class="forge-empty" id="forge-empty">
-              <strong>Select a Flow or start with a blank board.</strong>
-              <span>Every agent, prompt, model, permission, tool, trigger, and output remains inspectable.</span>
+              <strong>Pick a Flow on the left, or start a new one.</strong>
+              <span>Add an Input card for the ask, a card for each step, wire them in order. A card is told only what is wired into it.</span>
             </div>
           </div>
-          <div class="forge-spatial" id="forge-spatial" hidden>
-            <canvas id="forge-spatial-canvas" aria-label="Interactive three-dimensional view of the current Flow"></canvas>
-            <div class="forge-spatial-tools" aria-label="3D camera controls">
-              <button type="button" class="is-active" id="forge-spatial-orbit">Orbit</button>
-              <button type="button" id="forge-spatial-pan">Pan</button>
-              <button type="button" class="is-active" id="forge-spatial-natural" aria-pressed="true"
-                      title="Reverse drag-pan and scroll-zoom direction">Natural motion</button>
-              <button type="button" id="forge-spatial-reset">Reset view</button>
-            </div>
-            <div class="forge-spatial-layers" id="forge-spatial-layers" aria-label="Flow layers"></div>
-            <div class="forge-spatial-telemetry" id="forge-spatial-telemetry" aria-live="polite"></div>
-            <p class="forge-spatial-help">Drag empty space to orbit or pan. Drag a component across plates to change its level. Double-click a plate for its 2D context.</p>
-          </div>
-          <div class="forge-outline" id="forge-outline" hidden></div>
         </main>
 
         <aside class="forge-inspector" id="forge-inspector">
           <header class="forge-panel-head">
-            <div><span>Selection</span><strong id="forge-inspector-title">Nothing selected</strong></div>
+            <div><span id="forge-inspector-kind">Selection</span><strong id="forge-inspector-title">Nothing selected</strong></div>
             <button type="button" id="forge-inspector-close" aria-label="Close selection">Close</button>
           </header>
           <div class="forge-inspector-body" id="forge-inspector-body">
-            <p class="hint">Select a part or connection. Its complete configuration opens here without leaving the board.</p>
+            <p class="hint">Click a card, a wire, or a loop. It opens here.</p>
           </div>
         </aside>
       </div>
-
-      <footer class="forge-launchbar">
-        <label><span>Content</span><input id="forge-run-input" type="text" placeholder="What should this Flow work on?"></label>
-        <label><span>Context</span><select id="forge-run-context"><option value="">Attached context</option></select></label>
-        <label><span>Output</span><select id="forge-run-output"><option value="record">Record</option><option value="decision_brief">Decision brief</option><option value="artifact">Artifact</option><option value="notification">Notification</option><option value="plan">Plan dossier</option></select></label>
-        <label><span>Provider</span><select id="forge-run-provider"><option value="">Vira default</option><option value="anthropic">Claude</option><option value="openai">Codex</option><option value="google">Gemini</option><option value="xai">Grok</option></select></label>
-        <button class="btn primary" id="forge-run" type="button">Run Flow</button>
-      </footer>
 
       <!-- Compatibility anchors for retired Dispatch controls. They keep old
            command paths inert while every visible path routes through Forge. -->
@@ -1372,7 +1343,6 @@
   </section>
 </div>
 
-<script src="/forge-spatial.js"></script>
 <script src="/forge.js"></script>
 <script src="/assistant.js"></script>
 <script src="/work-results.js"></script>

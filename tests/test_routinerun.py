@@ -313,12 +313,16 @@ class HoodTests(Base):
         h = routinesrc.hood(row)
         self.assertNotIn("file:program", [p["id"] for p in h["parts"]])
 
-    def test_the_flow_node_carries_the_command_line(self):
-        flow = flows._graph_for_routine(self.routine())
-        native = flow["nodes"][1]
-        self.assertEqual(native["engine"], "command")
-        self.assertIn("demo.py", native["prompt"])
-        self.assertEqual(flow["nodes"][0]["description"], "Every hour")
+    def test_a_loop_is_listed_under_the_hood_and_never_as_a_flow(self):
+        # Standing loops have their own list in the Forge (over
+        # /api/routines and /hood); the Flow list is circuits only.
+        row = routines.save_routine({k: v for k, v in self.routine().items()
+                                     if k not in ("id", "instance_id")})
+        h = routinesrc.hood(row)
+        self.assertEqual(h["engine"], "command")
+        self.assertIn("demo.py", {f["label"]: f["value"] for f in h["facts"]}["Command"])
+        with mock.patch.object(flows.circuits, "list_circuits", return_value=[]):
+            self.assertEqual(flows.list_flows(), [])
 
 
 class LaunchdTests(unittest.TestCase):

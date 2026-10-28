@@ -2,17 +2,36 @@
 
 Vira > [Modules](../../README.md) > [Work](../README.md) > Automations
 
-The Forge: flows, circuits, routines, command routines, and the action library.
+The Forge: Flows (cards wired on a board), circuits, standing loops (routines and command routines), and the source library.
 
-The Dispatch tab. A Flow is the stable object the owner edits in The
-Forge; circuits are multi-model agent pipelines as executable DAGs
-underneath it; routines are standing agent loops on a cadence, and a
-`command` routine runs a program in its own process on a schedule (the two
-TC-IL captures run this way). `actions` enumerates the central library's
-skills and commands as buttons; `launchdjobs` lists every launchd job on this
-Mac, read-only, in the This Mac tab. `routinesrc` is "under the hood": what
-a standing loop actually is, and editing it. Scripts and anything else an
-automation needs live beside it here.
+The Automations tab. A Flow is a board of cards wired in one direction:
+an Input card holds the ask; each step is a card that says who runs it
+(a model), what it may touch (read / ask / edit / full) and what it must
+do (one instruction box); judges, gates, ask-me pauses, outputs and a
+schedule are cards too. A wire delivers: the finished text of the card
+before is appended under the next card's box unless the box places it.
+A card's environment is what is wired into it and nothing else: skills,
+settings files, plugins, agent files and instruction files are source
+cards (the Sources tab, or a saved environment as one card), and the
+session is told about nothing it was not wired to. A source card shows
+the file behind it in the column: an instruction file or a skill as
+rendered markdown, a settings file as an outline of what it holds, a
+plugin as what it contains with a switch per skill, an MCP server as
+how it starts; Open puts the file in Vira's viewer, and an instruction
+or settings card can stand for the owner's own file instead. The
+Sources tab lists what this Mac has: its instruction files (global,
+project, the project's private one), settings files, skills, commands,
+plugins and the CLI's MCP servers. The right column is the only editor.
+`flows` compiles a board into a circuit; circuits are the multi-model
+pipelines that run as DAGs underneath, and the runner applies the
+environment at launch (`flows.kit_preview` is what the column shows). Routines are standing loops on a
+cadence, and a `command` routine runs a program in its own process on a
+schedule (the two TC-IL captures run this way); they are listed in the
+Forge's Loops tab, not as Flows. `actions` enumerates the central
+library's skills and commands, which the Sources tab offers as cards;
+`launchdjobs` lists every launchd job on this Mac, read-only, folded under
+the Loops tab. `routinesrc` is "under the hood": what a standing loop
+actually is, and editing it.
 
 ## What lives here
 
@@ -24,7 +43,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Work / Sessions](../sessions/README.md), [Reader / Rooms](../../reader/rooms/README.md), [Research / Topics](../../research/topics/README.md), [Maps / System](../../maps/system/README.md), [Attention / Now](../../attention/now/README.md)
 
-### Files (19)
+### Files (17)
 
 **Server**
 
@@ -42,9 +61,8 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 | File | What it is |
 |---|---|
-| `static/forge-spatial.js` | Three-dimensional projection of a live Forge Flow. |
 | `static/forge.css` | The Forge is structurally unique but visually owned by Vira. |
-| `static/forge.js` | The Forge: Vira's integrated Flow editor. |
+| `static/forge.js` | The Forge: Vira's Flow editor. |
 
 **Tests**
 
@@ -53,21 +71,26 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_agentic.py` | Agentic-OS engine tests: vault chunking/search/ask grounding, judge verdict parsing + grade gates, circuit DAG validation + execution + grader-gated retry, r... |
 | `tests/test_flow_trace_contract.py` | The flow-trace source contracts. |
 | `tests/test_flows.py` | The Forge product adapter and its executable graph parts. |
-| `tests/test_forge_spatial.py` | Static contracts for the Forge spatial projection. |
 | `tests/test_forge_tools.py` | Contract: the Forge's edit toolbar, and the join that makes undo record. |
 | `tests/test_judge_circuits_budget.py` | The two modules that size an AGENT SESSION's prompt: judge and circuits. |
 | `tests/test_parity_flows.py` | The Forge's parity machinery: provider pins, stage timeouts, continued conversations, the record-reading logic gates, and the three parity starters. |
 | `tests/test_routinerun.py` | Command routines: the detached runner, its history, and the launchd list. |
 | `tests/test_routinesrc.py` | Under the hood — resolution, explanation, and the guarded write. |
 
-### Routes (30)
+### Routes (36)
 
 Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
 
 - `GET /api/actions`
 - `POST /api/actions/run`
 - `GET /api/flows`
+- `GET /api/flows/environments`
+- `POST /api/flows/environments`
+- `DELETE /api/flows/environments/{eid}`
 - `GET /api/flows/kit`
+- `GET /api/flows/kit/preview`
+- `GET /api/flows/kit/file`
+- `POST /api/flows/kit/reveal`
 - `GET /api/flows/kit/source`
 - `GET /api/flows/native/{routine_id}/source`
 - `GET /api/flows/{flow_id}`

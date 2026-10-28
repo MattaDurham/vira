@@ -137,6 +137,20 @@ _rlock = threading.Lock()
 
 # ---------- builtin templates ----------
 
+def _forge(skills=(), input=None):
+    """A starter stage's Forge data: its environment (what the session is
+    told about, and nothing else: the project's instruction file by default,
+    plus any skills named here) and, for a probe that must never receive
+    the run's ask, input=False."""
+    data = {"environment": {"skills": list(skills), "instructions": ["project"]}}
+    if input is not None:
+        data["input"] = bool(input)
+    return data
+
+
+# The starters are plain cards (2026-10-28): the ask reaches an entry card
+# on its own, and a wire delivers the card before. {{input}} appears only
+# where a later card wants the ask placed; {{stage.x.output}} nowhere.
 TEMPLATES = [
     {
         "id": "plan",
@@ -148,14 +162,14 @@ TEMPLATES = [
         "builtin": True,
         "stages": [
             {"id": "plan", "name": "Plan", "model": "", "mode": "manual",
-             "read_only": True, "needs": [],
-             "prompt": "Write the plan for the following. Study the working "
+             "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Write the plan for the ask below. Study the working "
                        "directory and anything else you need first, so the "
                        "plan is grounded in what is actually there rather "
-                       "than in assumptions.\n\n{{input}}\n\nName exact "
-                       "files, the change in each, the order of work, how to "
-                       "verify it, and what NOT to touch. Say what you are "
-                       "unsure of rather than papering over it."},
+                       "than in assumptions. Name exact files, the change in "
+                       "each, the order of work, how to verify it, and what "
+                       "NOT to touch. Say what you are unsure of rather than "
+                       "papering over it."},
             {"id": "dossier", "name": "Plan dossier", "mode": "output",
              "needs": ["plan"], "output": {"destination": "plan"}},
         ],
@@ -170,28 +184,28 @@ TEMPLATES = [
         "builtin": True,
         "stages": [
             {"id": "plan", "name": "Plan (Fable)", "model": "fable",
-             "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "You are the PLANNING stage of a pipeline. Another "
-                       "agent will implement your plan without talking to "
-                       "you, so it must stand alone.\n\nWrite a concrete, "
-                       "step-by-step implementation plan for:\n\n{{input}}"
-                       "\n\nExplore the code read-only as needed. The plan "
-                       "must name exact files, the changes in each, the "
-                       "order of work, how to verify, and what NOT to touch."
-                       " Do not modify anything. Output only the plan."},
+             "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "You are the planning step. Another agent will "
+                       "implement your plan without talking to you, so it "
+                       "must stand alone. Write a concrete, step-by-step "
+                       "implementation plan for the ask below. Explore the "
+                       "code read-only as needed. The plan must name exact "
+                       "files, the changes in each, the order of work, how "
+                       "to verify, and what NOT to touch. Do not modify "
+                       "anything. Output only the plan."},
             {"id": "build", "name": "Build (Sonnet)", "model": "sonnet",
-             "mode": "bypassPermissions", "needs": ["plan"],
-             "prompt": "You are the BUILD stage of a pipeline. Implement "
-                       "the plan below completely. Run tests where they "
-                       "exist. Do NOT commit or push — changes stay in the "
-                       "working tree. Original ask: {{input}}\n\n"
-                       "THE PLAN:\n{{stage.plan.output}}\n\nFinish with a "
-                       "clear report of what you changed and how you "
-                       "verified it."},
+             "mode": "bypassPermissions", "needs": ["plan"], "forge": _forge(),
+             "prompt": "You are the build step. Implement the plan from the "
+                       "card before this completely. Run tests where they "
+                       "exist. Do NOT commit or push: changes stay in the "
+                       "working tree. The original ask is here for "
+                       "reference; the plan is what you implement.\n\n"
+                       "{{input}}\n\nFinish with a clear report of what "
+                       "you changed and how you verified it."},
             {"id": "dossier", "name": "Plan dossier", "mode": "output",
              "needs": ["plan"], "output": {"destination": "plan"}},
             {"id": "judge", "name": "Judge (fresh eyes)", "model": "",
-             "mode": "judge", "needs": ["build"],
+             "mode": "judge", "needs": ["build"], "forge": _forge(),
              "judge": {"of": ["build"], "retry_stage": "build",
                        "min_grade": "B", "max_retries": 1}},
         ],
@@ -211,75 +225,74 @@ TEMPLATES = [
         "stages": [
             {"id": "watch", "name": "Watch (Sonnet)", "model": "sonnet",
              "mode": "bypassPermissions", "needs": [],
-             "prompt": "You are the WATCH stage of a pipeline. The input "
-                       "below holds a video URL (and possibly extra notes "
-                       "from the owner). Watch the video for real and "
-                       "write the definitive breakdown of what it "
-                       "proposes — downstream stages never see the video, "
-                       "only your text, so it must stand alone.\n\n"
-                       "{{input}}\n\n"
-                       "How to watch: run the watch toolkit —\n"
+             "forge": _forge(skills=["watch"]),
+             "prompt": "You are the watch step. The ask below holds a video "
+                       "URL (and possibly extra notes from the owner). "
+                       "Watch the video for real and write the definitive "
+                       "breakdown of what it proposes; later steps never "
+                       "see the video, only your text, so it must stand "
+                       "alone.\n\n"
+                       "How to watch: run the watch toolkit,\n"
                        "python3 ~/.claude/skills/watch/scripts/watch.py "
                        "\"<url>\"\n"
                        "It downloads the video, extracts timestamped "
                        "frames, and pulls the transcript (captions first, "
                        "Whisper fallback). Read every frame path it "
-                       "prints — they render as images — alongside the "
-                       "transcript. For videos over ~10 minutes do a "
+                       "prints, they render as images, alongside the "
+                       "transcript. For videos over about 10 minutes do a "
                        "sparse full pass first, then re-run focused "
                        "(--start/--end, --resolution 1024) on the "
                        "sections that show code, commands, architecture "
                        "diagrams, or UI that must be read exactly. If the "
-                       "toolkit is missing, fall back to yt-dlp + ffmpeg "
+                       "toolkit is missing, fall back to yt-dlp and ffmpeg "
                        "directly.\n\n"
                        "Then write the breakdown:\n"
-                       "1. THE PITCH — what is proposed or demonstrated, "
+                       "1. THE PITCH: what is proposed or demonstrated, "
                        "in two sentences.\n"
-                       "2. HOW IT WORKS — the architecture as presented: "
+                       "2. HOW IT WORKS: the architecture as presented, "
                        "components, data flow, every tool, service, "
                        "model, or library named, with timestamps.\n"
-                       "3. THE BUILD RECIPE — every concrete step, "
+                       "3. THE BUILD RECIPE: every concrete step, "
                        "command, code snippet, config, or prompt shown "
                        "on screen or spoken, in order, transcribed "
                        "exactly.\n"
-                       "4. GAPS — what the video hand-waves, skips, or "
+                       "4. GAPS: what the video hand-waves, skips, or "
                        "gets wrong; the decisions an implementer must "
                        "make.\n"
-                       "5. VERDICT — worth building as shown, and what "
+                       "5. VERDICT: worth building as shown, and what "
                        "to change.\n\n"
                        "Keep the breakdown under 20,000 characters. "
                        "Delete the working directory when done. Output "
                        "only the breakdown."},
             {"id": "plan", "name": "Plan (Fable)", "model": "fable",
              "mode": "manual", "read_only": True, "needs": ["watch"],
-             "prompt": "You are the PLANNING stage of a pipeline. An "
-                       "agent watched a video and wrote the breakdown "
-                       "below. Turn it into a concrete, standalone "
-                       "implementation plan for the working directory "
-                       "you are in — another agent will implement it "
-                       "without seeing the video or talking to you.\n\n"
-                       "THE ASK:\n{{input}}\n\n"
-                       "THE VIDEO BREAKDOWN:\n{{stage.watch.output}}\n\n"
-                       "Explore the working directory read-only. Decide "
-                       "what to adopt as shown and what to adapt to this "
-                       "machine and codebase — name each deviation and "
-                       "why. The plan must name exact files, the changes "
-                       "in each, dependencies to install, the order of "
-                       "work, how to verify, and what NOT to touch. Do "
-                       "not modify anything. Output only the plan."},
+             "forge": _forge(),
+             "prompt": "You are the planning step. An agent watched a "
+                       "video and wrote the breakdown you will find below. "
+                       "Turn it into a concrete, standalone implementation "
+                       "plan for the working directory you are in; another "
+                       "agent will implement it without seeing the video or "
+                       "talking to you. Explore the working directory "
+                       "read-only. Decide what to adopt as shown and what "
+                       "to adapt to this machine and codebase, and name "
+                       "each deviation and why. The plan must name exact "
+                       "files, the changes in each, dependencies to "
+                       "install, the order of work, how to verify, and what "
+                       "NOT to touch. Do not modify anything. Output only "
+                       "the plan.\n\nTHE ASK:\n{{input}}"},
             {"id": "build", "name": "Build (Sonnet)", "model": "sonnet",
-             "mode": "bypassPermissions", "needs": ["plan"],
-             "prompt": "You are the BUILD stage of a pipeline. Implement "
-                       "the plan below completely. Run tests where they "
-                       "exist. Do NOT commit or push — changes stay in "
-                       "the working tree. Original ask: {{input}}\n\n"
-                       "THE PLAN:\n{{stage.plan.output}}\n\nFinish with "
-                       "a clear report of what you changed and how you "
-                       "verified it."},
+             "mode": "bypassPermissions", "needs": ["plan"], "forge": _forge(),
+             "prompt": "You are the build step. Implement the plan from the "
+                       "card before this completely. Run tests where they "
+                       "exist. Do NOT commit or push: changes stay in the "
+                       "working tree. The original ask is here for "
+                       "reference; the plan is what you implement.\n\n"
+                       "{{input}}\n\nFinish with a clear report of what "
+                       "you changed and how you verified it."},
             {"id": "dossier", "name": "Plan dossier", "mode": "output",
              "needs": ["plan"], "output": {"destination": "plan"}},
             {"id": "judge", "name": "Judge (fresh eyes)", "model": "",
-             "mode": "judge", "needs": ["build"],
+             "mode": "judge", "needs": ["build"], "forge": _forge(),
              "judge": {"of": ["build"], "retry_stage": "build",
                        "min_grade": "B", "max_retries": 1}},
         ],
@@ -294,30 +307,27 @@ TEMPLATES = [
         "builtin": True,
         "stages": [
             {"id": "sonnet", "name": "Sonnet's take", "model": "sonnet",
-             "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this question thoroughly and directly, on "
-                       "your own judgment:\n\n{{input}}"},
+             "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the question below thoroughly and directly, "
+                       "on your own judgment."},
             {"id": "opus", "name": "Opus's take", "model": "opus",
-             "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this question thoroughly and directly, on "
-                       "your own judgment:\n\n{{input}}"},
+             "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the question below thoroughly and directly, "
+                       "on your own judgment."},
             {"id": "haiku", "name": "Haiku's take", "model": "haiku",
-             "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this question thoroughly and directly, on "
-                       "your own judgment:\n\n{{input}}"},
+             "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the question below thoroughly and directly, "
+                       "on your own judgment."},
             {"id": "synth", "name": "Synthesis (Fable)", "model": "fable",
              "mode": "manual", "read_only": True,
-             "needs": ["sonnet", "opus", "haiku"],
+             "needs": ["sonnet", "opus", "haiku"], "forge": _forge(),
              "prompt": "Three independent advisors answered the same "
-                       "question without seeing each other's work. "
-                       "Synthesize a final answer: where they agree "
-                       "(high confidence), where they disagree (name the "
-                       "disagreement and adjudicate it), and anything "
-                       "exactly one of them caught.\n\nTHE QUESTION:\n"
-                       "{{input}}\n\nADVISOR 1 (Sonnet):\n"
-                       "{{stage.sonnet.output}}\n\nADVISOR 2 (Opus):\n"
-                       "{{stage.opus.output}}\n\nADVISOR 3 (Haiku):\n"
-                       "{{stage.haiku.output}}"},
+                       "question without seeing each other's work; their "
+                       "answers follow below. Synthesize a final answer: "
+                       "where they agree (high confidence), where they "
+                       "disagree (name the disagreement and adjudicate it), "
+                       "and anything exactly one of them caught.\n\n"
+                       "THE QUESTION:\n{{input}}"},
         ],
     },
     {
@@ -330,24 +340,22 @@ TEMPLATES = [
         "stages": [
             {"id": "research", "name": "Research (Sonnet)",
              "model": "sonnet", "mode": "manual", "read_only": True,
-             "needs": [],
-             "prompt": "You are the RESEARCH stage. Investigate this "
-                       "question using the mcp__vira__* native tools — "
-                       "vault_search / vault_note (the owner's knowledge "
-                       "vault), crm_lookup, mail_search, calendar, "
-                       "daily_brief — plus web search when useful:\n\n"
-                       "{{input}}\n\nReturn organized findings with "
-                       "sources named, contradictions surfaced, and open "
-                       "questions listed. Findings only — no "
-                       "recommendations yet."},
+             "needs": [], "forge": _forge(),
+             "prompt": "You are the research step. Investigate the "
+                       "question below using the mcp__vira__* native tools "
+                       "(vault_search / vault_note, the owner's knowledge "
+                       "vault; crm_lookup; mail_search; calendar; "
+                       "daily_brief) plus web search when useful. Return "
+                       "organized findings with sources named, "
+                       "contradictions surfaced, and open questions "
+                       "listed. Findings only, no recommendations yet."},
             {"id": "brief", "name": "Brief (Fable)", "model": "fable",
              "mode": "manual", "read_only": True,
-             "needs": ["research"],
-             "prompt": "Turn these research findings into a decision "
+             "needs": ["research"], "forge": _forge(),
+             "prompt": "Turn the research findings below into a decision "
                        "brief for the owner: the answer up front, the "
                        "evidence, the tradeoffs, and a recommendation. "
-                       "Tight and frank.\n\nTHE QUESTION:\n{{input}}\n\n"
-                       "FINDINGS:\n{{stage.research.output}}"},
+                       "Tight and frank.\n\nTHE QUESTION:\n{{input}}"},
         ],
     },
     {
@@ -363,28 +371,28 @@ TEMPLATES = [
         "builtin": True,
         "stages": [
             {"id": "anthropic", "name": "Claude's answer", "provider": "anthropic",
-             "model": "", "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first).\n\n{{input}}"},
+             "model": "", "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the ask below thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first)."},
             {"id": "openai", "name": "Codex's answer", "provider": "openai",
-             "model": "", "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first).\n\n{{input}}"},
+             "model": "", "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the ask below thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first)."},
             {"id": "google", "name": "Gemini's answer", "provider": "google",
-             "model": "", "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first).\n\n{{input}}"},
+             "model": "", "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the ask below thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first)."},
             {"id": "xai", "name": "Grok's answer", "provider": "xai",
-             "model": "", "mode": "manual", "read_only": True, "needs": [],
-             "prompt": "Answer this thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first).\n\n{{input}}"},
+             "model": "", "mode": "manual", "read_only": True, "needs": [], "forge": _forge(),
+             "prompt": "Answer the ask below thoroughly and directly, on your own judgment. Where the question needs Vira's own data, use the vira tools (find first)."},
             {"id": "judge_anthropic", "name": "Judge: Claude", "model": "",
-             "mode": "judge", "read_only": True, "needs": ["anthropic"],
+             "mode": "judge", "read_only": True, "needs": ["anthropic"], "forge": _forge(),
              "judge": {"of": ["anthropic"], "min_grade": ""}},
             {"id": "judge_openai", "name": "Judge: Codex", "model": "",
-             "mode": "judge", "read_only": True, "needs": ["openai"],
+             "mode": "judge", "read_only": True, "needs": ["openai"], "forge": _forge(),
              "judge": {"of": ["openai"], "min_grade": ""}},
             {"id": "judge_google", "name": "Judge: Gemini", "model": "",
-             "mode": "judge", "read_only": True, "needs": ["google"],
+             "mode": "judge", "read_only": True, "needs": ["google"], "forge": _forge(),
              "judge": {"of": ["google"], "min_grade": ""}},
             {"id": "judge_xai", "name": "Judge: Grok", "model": "",
-             "mode": "judge", "read_only": True, "needs": ["xai"],
+             "mode": "judge", "read_only": True, "needs": ["xai"], "forge": _forge(),
              "judge": {"of": ["xai"], "min_grade": ""}},
         ],
     },
@@ -392,7 +400,7 @@ TEMPLATES = [
         "id": "parity-harness",
         "name": "Parity harness",
         "description": "Does a provider really get what its capability record "
-                       "says? Pick the provider on the launch bar and run "
+                       "says? Pick the provider on the cards and run "
                        "this against the Vira checkout (a branch-first repo). "
                        "Five probes run unattended - tool reach, a read-only "
                        "plan, the branch-first write guard, a conversation "
@@ -406,6 +414,7 @@ TEMPLATES = [
         "stages": [
             {"id": "reach", "name": "Probe: tool reach", "model": "",
              "mode": "manual", "read_only": True, "needs": [],
+             "forge": _forge(input=False),
              "prompt": "Use the vira find tool exactly once, with the query "
                        "'daily brief', and report the title of the top result "
                        "in one line. Use no other tool and no shell. If the "
@@ -419,6 +428,7 @@ TEMPLATES = [
                        "value": ""}},
             {"id": "plan", "name": "Probe: read-only plan", "model": "",
              "mode": "manual", "read_only": True, "needs": [],
+             "forge": _forge(input=False),
              "prompt": "Write a three-line plan for adding a --version flag "
                        "to a command-line tool. Plan only: read what you "
                        "like, change nothing, run nothing that writes."},
@@ -427,6 +437,7 @@ TEMPLATES = [
              "logic": {"operation": "read_only_honored", "value": ""}},
             {"id": "guard", "name": "Probe: write guard", "model": "",
              "mode": "bypassPermissions", "read_only": False, "needs": [],
+             "forge": _forge(input=False),
              "prompt": "Append one line reading 'parity probe' to the file "
                        "README.md at this exact absolute path: "
                        "{{cwd}}/README.md - use the absolute path as written, "
@@ -438,12 +449,14 @@ TEMPLATES = [
              "logic": {"operation": "guard_held", "value": ""}},
             {"id": "codeword", "name": "Probe: remember", "model": "",
              "mode": "manual", "read_only": True, "needs": [],
+             "forge": _forge(input=False),
              "prompt": "Remember this codeword for later in our conversation "
                        "and reply with exactly the single word noted: "
                        "MARIGOLD-7"},
             {"id": "recall", "name": "Probe: continue the conversation",
              "model": "", "mode": "manual", "read_only": True,
              "needs": ["codeword"], "continues": "codeword",
+             "forge": _forge(input=False),
              "prompt": "Reply with only the codeword I gave you earlier in "
                        "this conversation, nothing else."},
             {"id": "recall_gate", "name": "Gate: codeword recalled",
@@ -452,6 +465,7 @@ TEMPLATES = [
             {"id": "slow", "name": "Probe: stage timeout", "model": "",
              "mode": "manual", "read_only": True, "needs": [],
              "timeout_s": 30, "on_timeout": "continue",
+             "forge": _forge(input=False),
              "prompt": "Count from 1 to 5000, one number per line, and after "
                        "every number write one full sentence about that "
                        "number. Do not summarise, do not skip, do not stop "
@@ -467,7 +481,7 @@ TEMPLATES = [
         "name": "Parity cards",
         "description": "The two probes that need a person: an owner question "
                        "and a permission card. Pick the provider on the "
-                       "launch bar; each probe raises a card in the Attention "
+                       "cards; each probe raises a card in the Attention "
                        "window and the Flow waits for your answer, then a "
                        "gate checks the card was really raised. On a provider "
                        "with no shell or file tools the permission gate "
@@ -477,6 +491,7 @@ TEMPLATES = [
         "stages": [
             {"id": "ask", "name": "Probe: owner question", "model": "",
              "mode": "manual", "read_only": True, "needs": [],
+             "forge": _forge(input=False),
              "prompt": "Before anything else, use the ask_owner tool to ask "
                        "'Which word should I write?' offering exactly two "
                        "options, apple and pear. Then reply with only the "
@@ -486,7 +501,7 @@ TEMPLATES = [
              "logic": {"operation": "card_raised", "value": "ask"}},
             {"id": "permission", "name": "Probe: permission card",
              "model": "", "mode": "manual", "read_only": False,
-             "needs": [],
+             "needs": [], "forge": _forge(input=False),
              "prompt": "Create a file named parity-scratch.txt in the current "
                        "working directory containing the single word hello, "
                        "using a file tool or the shell. If the write is "
@@ -525,9 +540,33 @@ def _load_defs():
             s["circuits"].append(json.loads(json.dumps(t)))
             changed = True
     changed = _seed_plan_outputs(s) or changed
+    changed = _seed_template_text(s) or changed
     if changed:
         _save_defs(s)
     return s
+
+
+# Bumped when a shipped starter's text or environment changes. Seeding is
+# by id, so without this an install that already holds the starters would
+# keep the old prompts for good (2026-10-28: the wire delivers, so the
+# starters lost their {{stage.x.output}} syntax and gained stated
+# environments).
+TEMPLATE_TEXT_VERSION = 2
+
+
+def _seed_template_text(s):
+    """Refresh every builtin the owner has never saved. A builtin with an
+    `updated` stamp was saved from the Forge or the tray and is the owner's
+    now; it keeps its text (the old syntax still works)."""
+    if s.get("templates_text_version") == TEMPLATE_TEXT_VERSION:
+        return False
+    s["templates_text_version"] = TEMPLATE_TEXT_VERSION
+    by_id = {t["id"]: t for t in TEMPLATES}
+    for index, rec in enumerate(s["circuits"]):
+        template = by_id.get(rec.get("id"))
+        if template and rec.get("builtin") and not rec.get("updated"):
+            s["circuits"][index] = json.loads(json.dumps(template))
+    return True
 
 
 def _seed_plan_outputs(s):
@@ -1088,10 +1127,68 @@ def writes_a_plan(st_def, run=None):
                for item in attached_outputs(st_def, run))
 
 
-def _forge_brief(stage, run=None):
+def _delivered(stage, run, template):
+    """What a wire carries, rendered at the stage boundary (2026-10-28).
+
+    A wire means the finished text of the card before goes into the card
+    after. Until now it only ordered the two: the text arrived only when
+    the next card's box spelled out {{stage.x.output}}, and a wired card
+    that forgot the reference ran blind. So, for an agent stage:
+
+    - every `needs` entry that is itself an agent stage, and that the box
+      does not already place with {{stage.<id>.output}}, is appended under
+      the box as a block headed FROM <that card's name>, in wire order;
+    - the run's ask is appended as THE ASK when the Input card is wired
+      into this stage (forge.input), or, for a definition the Forge never
+      saved, when the stage is an entry stage with no needs; a box that
+      places {{input}} itself gets nothing extra, and forge.input False
+      (the parity probes) means the ask never reaches it.
+
+    Gates, approvals and outputs read nothing; a judge builds its own
+    evidence; a continued conversation already holds its prior turn, so a
+    stage with `continues` gets no feed. The cap is the same per-part
+    handoff budget a {{stage.x.output}} substitution gets, shared across
+    everything this stage receives."""
+    if not run:
+        return []
+    mode = norm_stage_mode(stage.get("mode"))
+    if mode in LOCAL_MODES or mode == "judge":
+        return []
+    prompt = template if template is not None else (stage.get("prompt") or "")
+    forge = stage.get("forge") or {}
+    needs = [n for n in stage.get("needs") or [] if n]
+    defs = {d.get("id"): d for d in run.get("stages_def") or []}
+    states = run.get("stages") or {}
+    feeds = []
+    if not str(stage.get("continues") or "").strip():
+        for need in needs:
+            d = defs.get(need) or {}
+            if norm_stage_mode(d.get("mode")) in LOCAL_MODES + ("judge",):
+                continue
+            if need not in states or f"{{{{stage.{need}.output}}}}" in prompt:
+                continue
+            feeds.append(need)
+    wants_ask = (bool(forge["input"]) if "input" in forge else not needs)
+    ask = (run.get("input") or "").strip()
+    deliver_ask = wants_ask and ask and "{{input}}" not in prompt
+    if not feeds and not deliver_ask:
+        return []
+    cap = _handoff_cap(len(feeds) + len(_STAGE_REF_RE.findall(prompt))
+                       + (1 if deliver_ask else 0))
+    blocks = []
+    if deliver_ask:
+        blocks.append("THE ASK\n" + ask[:cap])
+    for need in feeds:
+        name = (defs.get(need) or {}).get("name") or need
+        text = _stage_output(run, need, cap=cap).strip()
+        blocks.append(f"FROM {name}\n{text or '(it wrote nothing)'}")
+    return blocks
+
+
+def _forge_brief(stage, run=None, template=None):
     """Render graph attachments once, at the stage boundary they feed."""
     forge = stage.get("forge") or {}
-    blocks = []
+    blocks = _delivered(stage, run, template)
     contexts = forge.get("contexts") or []
     if contexts:
         lines = ["CONNECTED CONTEXT"]
@@ -1162,7 +1259,7 @@ def render_prompt(template, run, stage=None):
     def sub(m):
         return _stage_output(run, m.group(1), cap=cap)
     out = _STAGE_REF_RE.sub(sub, out)
-    return out + (_forge_brief(stage or {}, run))
+    return out + (_forge_brief(stage or {}, run, template))
 
 
 # ---------- surfaced run result ----------
@@ -1597,10 +1694,17 @@ class Driver(threading.Thread):
         cname = run.get("circuit_name") or run.get("circuit_id") or "flow"
         step = st_def.get("name") or sid
         inp = " ".join((run.get("input") or "").split())
+        # A Forge-compiled stage carries its environment: the skills,
+        # settings, plugins and instruction files wired into the card, and
+        # nothing else (session.launch / runner._environment_options). A
+        # stage with no environment recorded runs on the CLI's defaults, as
+        # every other Vira dispatch does.
+        environment = (st_def.get("forge") or {}).get("environment")
         return session.sessions.launch(
             prompt, cwd=st_def.get("cwd") or run.get("cwd"),
             model=model or None, provider=provider or None,
             mode=mode, read_only=read_only,
+            environment=environment if isinstance(environment, dict) else None,
             publish_plan=writes_a_plan(st_def, run),
             vault_destination=run.get("vault_destination") or None,
             vault_context=run.get("vault_context") or None,
