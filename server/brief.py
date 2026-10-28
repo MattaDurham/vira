@@ -32,6 +32,7 @@ from . import imessage
 from . import journal
 from . import modelbudget
 from . import settings
+from . import sourcehealth
 from . import suggest
 from . import threadread
 from . import triage
@@ -608,6 +609,13 @@ def _event_prep(fixture=False):
         return {"events": [], "hidden": 0, "error": str(e)[:160]}
 
 
+def _source_health():
+    try:
+        return sourcehealth.brief_section()
+    except Exception as e:  # noqa: BLE001 — a health read never breaks the brief
+        return {"broken": [], "error": str(e)[:200]}
+
+
 def compose(feed_items=None):
     now = dt.datetime.now()
     if settings.fixture_mode():
@@ -626,6 +634,7 @@ def compose(feed_items=None):
             "journal": [], "narrative": None,
             "events": _event_prep(fixture=True),
             "admin": {"count": 0, "top": [], "status": {}},
+            "source_health": {"broken": []},
         }
     return {
         "generated_at": now.isoformat(),
@@ -644,6 +653,9 @@ def compose(feed_items=None):
         "journal": _journal_recent(),
         "events": _event_prep(),
         "admin": admininbox.summary(feed_items),
+        # A source that reads zero against its baseline is labelled here, so
+        # an empty section above reads as "unknown", not "nothing there".
+        "source_health": _source_health(),
         "narrative": cached_narrative(),
     }
 

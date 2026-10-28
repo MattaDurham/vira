@@ -10718,6 +10718,15 @@ function attnVerb(r) {
                catch (e) { toast("Recheck failed: " + e.message); }
                refreshAlerts();
              } };
+  if (String(r.id || "").startsWith("health:source:"))
+    return { label: "recheck",
+             title: "Read this source again now; the row clears when it reads normally",
+             run: async (btn) => {
+               btn.disabled = true;
+               try { await post("/api/health/sources/check", {}); }
+               catch (e) { toast("Recheck failed: " + e.message); }
+               refreshAlerts();
+             } };
   if (r.kind === "health")
     return { label: "open",
              title: "Open the exact job-board health strip in Applications",
@@ -13459,6 +13468,36 @@ $("#cov-check")?.addEventListener("click", async () => {
   }
 });
 
+function renderSourceHealth(host, sick) {
+  if (!sick.length) return;
+  const box = el("div", "brief-health");
+  box.appendChild(el("div", "brief-health-head",
+    sick.length === 1 ? "A source looks broken" : sick.length + " sources look broken"));
+  sick.forEach((x) => box.appendChild(el("div", "brief-health-row", x.label_text)));
+  const acts = el("div", "brief-health-acts");
+  const again = el("button", "brief-act", "recheck");
+  again.title = "Read every source again now";
+  again.addEventListener("click", async () => {
+    again.disabled = true;
+    try {
+      await post("/api/health/sources/check", {});
+      renderBrief(await api("/api/brief"));
+    } catch (e) {
+      toast("Recheck failed: " + e.message);
+      again.disabled = false;
+    }
+  });
+  acts.appendChild(again);
+  if (sick.some((x) => x.idea_id)) {
+    const fix = el("button", "brief-act", "fix-it item");
+    fix.title = "The item Vira filed in the ideas backlog";
+    fix.addEventListener("click", () => openApp("review"));
+    acts.appendChild(fix);
+  }
+  box.appendChild(acts);
+  host.appendChild(box);
+}
+
 function renderBrief(b) {
   const body = $("#brief-body");
   body.innerHTML = "";
@@ -13539,9 +13578,18 @@ function renderBrief(b) {
   const prepAt = (u) => prep.filter((e) => e.urgency === u);
   renderEventPrep(body, prepAt("now"));
 
+  // A source reading zero against its baseline (server/sourcehealth.py)
+  // leads the brief, so an empty section below reads as unknown, not free.
+  const sick = (b.source_health && b.source_health.broken) || [];
+  renderSourceHealth(body, sick);
+  const calSick = sick.some((x) => x.kind === "calendar");
+
   const today = briefSection(body, "Today");
   (cal.today || []).forEach((e) => evRow(today, e));
-  if (!(cal.today || []).length) briefEmpty(today, "Clear calendar.");
+  if (!(cal.today || []).length)
+    briefEmpty(today, calSick
+      ? "No events read, but the calendar looks broken: this may not be a clear day."
+      : "Clear calendar.");
   if (cal.m365 && cal.m365 !== "ok")
     briefEmpty(today, "M365 calendar: " + cal.m365);
 

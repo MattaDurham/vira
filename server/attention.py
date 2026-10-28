@@ -324,6 +324,9 @@ def _health_rows():
                 f"{len(errs)} job board{'s' if len(errs) > 1 else ''} "
                 "failing to poll", f"{bid}: {msg}"[:160] + more,
                 verb="open", activity_at=fetched))
+
+    from . import sourcehealth
+    rows += sourcehealth.attention_rows(_row)
     return rows
 
 

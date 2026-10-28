@@ -794,6 +794,8 @@ def _vault_search_text(query, limit):
         return "error: query is required"
     limit = max(1, min(int(limit or 8), 20))
     hits = vault.search(query, limit=limit, for_model=True)
+    from . import sourcehealth
+    sourcehealth.note_vault_search(bool(hits))   # the "vault hits" baseline
     if not hits:
         st = vault.status()
         if not st.get("available"):
@@ -1759,6 +1761,13 @@ async def invoke(name, arguments=None, read_only=False, ask_owner=None,
                             "sources": list(dict.fromkeys(s["source"] for s in sources)),
                             "full_length": proof["full_length"], "span": proof["span"], "truncated": proof["truncated"],
                             "continuation": proof["continuation"]}, ensure_ascii=False)})
+                    # A source reading zero against its baseline labels every
+                    # answer drawn from it, ahead of everything else, so "no
+                    # matches" is read as unknown (server/sourcehealth.py).
+                    from . import sourcehealth
+                    notice = sourcehealth.tool_notice(plain)
+                    if notice and isinstance(result.get("content"), list):
+                        result["content"].insert(0, {"type": "text", "text": notice})
                     record["result"] = result
                     return result
         finally:

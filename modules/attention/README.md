@@ -21,14 +21,14 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 ### Submodules
 
 - [Now](now/README.md) - The aggregator: what Vira is doing right now and what is waiting on the owner right now. (4 files)
-- [Brief](brief/README.md) - The Daily Brief, its dismissed-row state, and the Journal typed into it. (4 files)
+- [Brief](brief/README.md) - The Daily Brief, its dismissed-row state, the Journal typed into it, and the source-health sentinel that labels a source gone quiet. (6 files)
 - [Review](review/README.md) - One queue for every decision waiting on the owner, and how often each standing rule breaks. (4 files)
 - [Assistant](assistant/README.md) - The standing executive: commitments, quiet reminders, desktop pins, calendar suggestions, appointments from reminders, event prep. (28 files)
 - [Childcare](childcare/README.md) - Childcare coverage: notice a pickup nobody is covering, block it, ask once. (2 files)
 
 ### Neighbours
 
-**Reads from:** [Work](../work/README.md), [Incoming](../incoming/README.md), [People](../people/README.md), [Applications](../applications/README.md), [Reader](../reader/README.md), [Models](../models/README.md), [Core](../core/README.md)
+**Reads from:** [Work](../work/README.md), [Incoming](../incoming/README.md), [People](../people/README.md), [Applications](../applications/README.md), [Reader](../reader/README.md), [Models](../models/README.md), [Find](../find/README.md), [Core](../core/README.md)
 
 **Feeds:** [Core](../core/README.md), [Incoming](../incoming/README.md)
 
@@ -36,6 +36,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Windows: `attention`, `journal`, `coverage` (ids from `WINDOWS` in `static/app.js`).
 
-42 tracked files across 5 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
+44 tracked files across 5 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

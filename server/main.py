@@ -25,7 +25,7 @@ from . import (
     actions, admission, agentbackend, agentslocal, aihealth, applecontacts, instance,
                applicationmap, applications,
                atlas, attention, circles,
-               backup, brainchat, brief, virachat,
+               backup, brainchat, brief, virachat, sourcehealth,
                admininbox, briefstate, changelog,
                circuits,
                companion,
@@ -172,6 +172,7 @@ mercury_poller = mercury.Poller()
 receipts_sweeper = receipts.Sweeper()
 vault_indexer = vault.VaultIndexer()
 ai_health_watcher = aihealth.Watcher()
+source_health_watcher = sourcehealth.Watcher()  # "nothing found" vs "nothing there"
 jobboards_poller = jobboards.Poller()
 idea_indexer = ideatags.Indexer(                  # backlog tags + vectors
     settings.get("idea_tag_interval_min") or 10)
@@ -245,6 +246,7 @@ def _start_account_workers():
     mercury_poller.start()
     receipts_sweeper.start()
     ai_health_watcher.start()
+    source_health_watcher.start()
     inbound.start()
     executive.start()
     correspondence.start()
@@ -5709,6 +5711,23 @@ def api_health_recheck():
     res = aihealth.probe(write=True)
     aihealth.maybe_alert(res)
     return res
+
+
+# ---------- source health (the "looks broken since X" sentinel) ----------
+
+@app.get("/api/health/sources")
+def api_health_sources():
+    """Every watched source, its baseline and verdict, read from the store.
+    No probe and no model call: safe to poll."""
+    return sourcehealth.status()
+
+
+@app.post("/api/health/sources/check")
+def api_health_sources_check():
+    """Probe every source now. Files a fix-it item for a fresh breakage.
+    Not under admission.cpu: the M365 probe is a network call, and the rest
+    is a few COUNT queries."""
+    return sourcehealth.check()
 
 
 class ConfigReq(BaseModel):

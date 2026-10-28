@@ -18,7 +18,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Library / Documents](../../library/documents/README.md)
 
-### Files (17)
+### Files (19)
 
 **Server**
 
@@ -56,6 +56,8 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `walkthroughs/event-prep/README.md` | Every open loop tied to an upcoming dated event (a trip, a birthday, a |
 | `walkthroughs/event-prep/brief-desktop.png` |  |
 | `walkthroughs/event-prep/brief-mobile.png` |  |
+| `walkthroughs/source-health/README.md` | "Nothing found" used to read the same as "nothing there": a calendar that |
+| `walkthroughs/source-health/brief-banner.png` |  |
 
 ### Routes (0)
 

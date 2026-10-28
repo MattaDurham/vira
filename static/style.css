@@ -3979,6 +3979,18 @@ body.nd-drag { user-select: none; -webkit-user-select: none; }
 .brief-tag.owe { color: var(--accent); border-color: var(--accent-line); }
 .brief-tag.work { color: var(--green); border-color: var(--green-line); }
 .brief-empty { padding: 4px 10px; color: var(--text-faint); font-size: 12.5px; }
+/* Source-health banner: a source reading zero against its baseline. */
+.brief-health {
+  padding: 10px 14px; margin-bottom: 16px; min-width: 0;
+  border: 1px solid var(--red-line); border-radius: 2px;
+  font-size: 13px; line-height: 1.5; color: var(--text);
+}
+.brief-health-head {
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--red); margin-bottom: 4px;
+}
+.brief-health-row { overflow-wrap: anywhere; }
+.brief-health-acts { display: flex; gap: 8px; margin-top: 6px; }
 /* Admin inbox: the chore is the row, so it takes the width and wraps. */
 #admin-list .brief-title { flex: 1 1 auto; max-width: none; white-space: normal; min-width: 0; }
 #admin-list .brief-sub { flex: 0 1 28%; }

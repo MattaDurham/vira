@@ -426,6 +426,18 @@ SCHEMA = [
       "Minutes between AI health probes",
       "Clamped to a 60 second floor. The probe is cheap and spends no tokens.",
       advanced=True, range=(1, 1440)),
+    S("source_health_enabled", "workers", "bool", True,
+      "Watch for sources that go quiet",
+      "The source-health sentinel (server/sourcehealth.py) learns a baseline "
+      "per source (calendar events per weekday, mail and iMessage arrivals, "
+      "vault notes and search hits). When one falls to zero against it, the "
+      "brief and every tool answer from that source say it looks broken, "
+      "and one fix-it item is filed in the ideas backlog. No model call."),
+    S("source_health_interval_min", "workers", "int", 30,
+      "Minutes between source-health checks",
+      "Each check is a few COUNT queries plus the M365 calendar read the "
+      "brief already makes.",
+      advanced=True, range=(5, 1440)),
     S("media_archive_enabled", "workers", "bool", True,
       "Keep a copy of every iMessage attachment",
       "macOS treats ~/Library/Messages/Attachments as an evictable cache: "
