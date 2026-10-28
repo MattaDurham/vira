@@ -179,7 +179,9 @@ the owner picks Try it first. When the owner picks Merge, Vira asks you
 to do steps 1 to 3 of the landing below, then end your turn. Never run
 `branch.sh merge` or push `main` yourself: Vira does the merge, push and
 teardown once your turn ends, because the merge deletes the worktree you
-are running in.
+are running in, and it writes what it did under your last turn in the
+session's transcript. So end on one line saying the branch is ready, not
+on a list of what you left to Vira.
 
 In a session the owner runs directly, **"merge it" from the owner is the
 authorization for the whole landing**, run end to end without stopping:

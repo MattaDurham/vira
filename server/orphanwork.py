@@ -64,7 +64,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import gitutil, joblog, jsonstore, prindex, sessiondiag, worktree
+from . import (gitutil, jobfiles, joblog, jsonstore, prindex, sessiondiag,
+               worktree)
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "orphan-work.json"
@@ -1275,6 +1276,83 @@ def _set_action(branch, name, status, output):
             "finished": None if status == "running" else _now_iso()}
 
 
+TRANSCRIPT_TAIL = 6000       # chars of branch.sh output a landing leaves under the session
+
+
+def _transcript_note(jid, text):
+    """Append `text` to the session's own transcript (output.log), so the
+    landing reads on from the session's last words instead of ending on
+    them. The runner that owned the file has exited by the time a landing
+    acts (land_session waits for exactly that), so the server appends
+    directly, the way session._tidy_worktree does.
+
+    Owner, 2026-10-28: a merge whose only trace was an in-memory action on
+    an unlanded row - a row that vanished the moment the branch did - read
+    as a session that "silently ended" on the line saying it had NOT
+    merged. Best-effort: a transcript that cannot be written never fails
+    the landing itself."""
+    try:
+        with (jobfiles.job_dir(jid) / "output.log").open(
+                "a", encoding="utf-8") as f:
+            f.write(text if text.endswith("\n") else text + "\n")
+    except OSError:
+        return
+    _poke_session(jid)
+
+
+def _poke_session(jid):
+    """Tell any open terminal the transcript moved (an SSE poke; the client
+    refetches). Imported late - session imports this module lazily for the
+    landing - and guarded, because a poke is freshness, never the record."""
+    try:
+        from . import session as _session
+        _session.sessions._emit("update", jid)
+    except Exception:  # noqa: BLE001 - never take the landing thread down
+        pass
+
+
+def _landing_block(text):
+    """branch.sh's verbatim words, indented under the [vira] line and
+    trimmed to their tail: the end of a merge is where the refusal, the
+    push and the teardown are."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) > TRANSCRIPT_TAIL:
+        text = "(earlier output trimmed)\n" + text[-TRANSCRIPT_TAIL:]
+    return "".join(f"  {line}\n" for line in text.splitlines())
+
+
+def _landing_outcome(name, branch, ok, text):
+    """What a landing leaves under the session's last turn: one [vira]
+    line the owner reads at a glance, honest about the push and the
+    teardown (a merge that landed but did not push is still on this
+    machine only); then, each on its own [vira] line, the notes that need
+    the owner - the restart when server/ changed, a failed push, a held
+    teardown; then branch.sh's own words."""
+    text = text or ""
+    pushed = "push FAILED" not in text
+    torn = "teardown HELD" not in text and "teardown did not run" not in text
+    if name == "land":
+        if not ok:
+            head = f"[vira] landing failed: {branch} was NOT merged"
+        else:
+            head = f"[vira] landed: {branch} merged into main"
+            head += ", pushed" if pushed else ", push FAILED (main is local only)"
+            if pushed and torn:
+                head += ", branch and worktree removed"
+    else:
+        head = (f"[vira] discarded: {branch}, its worktree and its test "
+                "instance are gone" if ok else
+                f"[vira] discard failed: {branch} is still there")
+    lines = [head]
+    for line in text.splitlines():
+        if line.startswith(("server code changed", "push FAILED",
+                            "teardown HELD", "teardown did not run")):
+            lines.append(f"[vira] {line}")
+    return "\n" + "\n".join(lines) + "\n" + _landing_block(text)
+
+
 def _merge_sync(slug):
     """branch.sh merge + the push/restart epilogue, synchronously.
     branch.sh is the sole authority for preflight/refusals — its combined
@@ -1331,6 +1409,10 @@ def land_session(jid, branch, verdict):
             refresh()
         except Exception:  # noqa: BLE001 - a re-sweep must never eat the outcome
             pass
+        # The transcript BEFORE the status flips off "running", for the
+        # same reason as the re-sweep above: a reader that polls the action
+        # for completion must find the session's last lines already there.
+        _transcript_note(jid, _landing_outcome(name, branch, ok, text))
         _set_action(branch, name, "ok" if ok else "failed", (text or "")[-4000:])
 
     threading.Thread(target=run, daemon=True,
@@ -1352,6 +1434,14 @@ def _session_end_then(jid, slug, branch, verdict):
     else:
         return False, (f"session {jid} still running after "
                        f"{LAND_WAIT_S // 3600}h - nothing was done")
+    # The session is over: say so where its last words are, before the
+    # minute branch.sh takes, so the transcript never sits on "closing the
+    # session" with nothing after it.
+    _transcript_note(jid, (
+        f"\n[vira] landing: merging {branch} into main, then the push and "
+        "the teardown..." if verdict == "merge" else
+        f"\n[vira] landing: discarding {branch} - deleting the branch, its "
+        "worktree and any test instance..."))
     if verdict == "discard":
         try:
             out = subprocess.run(

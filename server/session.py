@@ -1378,24 +1378,52 @@ class Sessions:
                             spec.get("branch"))
         if not (wt and root and branch):
             return
-        other = self._running_in(wt, h)
-        if other:
-            removed, detail = False, f"session {other} is still running in it"
+        verdict = self._landing_on_file(h)
+        if verdict:
+            # The owner's Merge it / Discard is on file: orphanwork
+            # .land_session is waiting for this very end to run branch.sh,
+            # which removes the worktree itself and writes what it did
+            # under the session's last words. Tidy keeps out of its way (a
+            # git call here would race the merge) and says so, because
+            # "worktree kept ... keeping them" over a branch merged one
+            # second later read as a session that silently ended (owner,
+            # 2026-10-28).
+            line = (f"\n[vira] worktree handed to the landing - Vira "
+                    f"{'merges' if verdict == 'merge' else 'discards'} "
+                    f"{branch} next, below\n")
         else:
-            try:
-                removed, detail = worktree.tidy(root, wt, branch)
-            except Exception as e:  # noqa: BLE001 — the supervisor never dies
-                removed, detail = False, f"tidy failed: {e}"
+            other = self._running_in(wt, h)
+            if other:
+                removed, detail = False, f"session {other} is still running in it"
+            else:
+                try:
+                    removed, detail = worktree.tidy(root, wt, branch)
+                except Exception as e:  # noqa: BLE001 — the supervisor never dies
+                    removed, detail = False, f"tidy failed: {e}"
+            line = (f"\n[vira] worktree: {detail}\n" if removed else
+                    f"\n[vira] worktree kept at {wt} — {detail}\n")
         try:
             with (h.dir / "output.log").open("a", encoding="utf-8") as f:
-                f.write(f"\n[vira] worktree: {detail}\n" if removed else
-                        f"\n[vira] worktree kept at {wt} — {detail}\n")
+                f.write(line)
         except OSError:
             pass
         try:
             (h.dir / TIDY_PENDING).unlink(missing_ok=True)
         except OSError:
             pass
+
+    @staticmethod
+    def _landing_on_file(h):
+        """The verdict runner.handle_landing stamped on the session's state
+        ("merge" / "discard"), or None. Read fresh rather than off the
+        cached state: the stamp rides the runner's last flush, which the
+        supervisor's cached copy may predate."""
+        try:
+            st = h.read_state() or {}
+        except Exception:  # noqa: BLE001 — the supervisor never dies
+            st = {}
+        v = st.get("landing") or (h.last_state or {}).get("landing")
+        return v if v in ("merge", "discard") else None
 
     def _running_in(self, wt, h):
         """The id of another registered session still running in `wt`, or "".
