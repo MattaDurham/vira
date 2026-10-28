@@ -631,11 +631,14 @@ class TransportContract(unittest.TestCase):
         offered = set(re.findall(r'\["([a-z_]+)", "', block))
         self.assertEqual(offered, set(circuits.LOGIC_OPS))
 
-    def test_the_launch_bar_and_the_run_request_carry_a_provider(self):
-        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    def test_the_card_names_its_engine_and_the_run_request_still_accepts_one(self):
+        # The launch bar's "Run on" picker went (2026-10-28): a card that
+        # names nothing runs on the configured go-to, shown by name on the
+        # card. The run request keeps the field for callers that need it.
         js = (ROOT / "static" / "forge.js").read_text(encoding="utf-8")
-        self.assertIn('id="forge-run-provider"', html)
-        self.assertIn('provider: q("#forge-run-provider")', js)
+        for pid in agentbackend.CAPABILITIES:
+            self.assertIn(f'["provider:{pid}"', js)
+        self.assertNotIn("forge-run-provider", js)
         main = (ROOT / "server" / "main.py").read_text(encoding="utf-8")
         self.assertIn("provider=req.provider", main)
 

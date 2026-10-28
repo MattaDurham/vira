@@ -5,11 +5,18 @@ Vira > [Modules](../../README.md) > [Work](../README.md) > Automations
 The Forge: Flows (cards wired on a board), circuits, standing loops (routines and command routines), and the source library.
 
 The Automations tab. A Flow is a board of cards wired in one direction:
-who runs each step (a model), what it may touch (read / ask / edit /
-full), what it must do (one instruction box), plus judges, gates, ask-me
-pauses, outputs and a schedule. The right column is the only editor.
-`flows` compiles a board into a circuit; circuits are the multi-model
-pipelines that run as DAGs underneath. Routines are standing loops on a
+an Input card holds the ask; each step is a card that says who runs it
+(a model), what it may touch (read / ask / edit / full) and what it must
+do (one instruction box); judges, gates, ask-me pauses, outputs and a
+schedule are cards too. A wire delivers: the finished text of the card
+before is appended under the next card's box unless the box places it.
+A card's environment is what is wired into it and nothing else: skills,
+settings files, plugins, agent files and instruction files are source
+cards (the Sources tab, or a saved environment as one card), and the
+session is told about nothing it was not wired to. The right column is
+the only editor. `flows` compiles a board into a circuit; circuits are
+the multi-model pipelines that run as DAGs underneath, and the runner
+applies the environment at launch. Routines are standing loops on a
 cadence, and a `command` routine runs a program in its own process on a
 schedule (the two TC-IL captures run this way); they are listed in the
 Forge's Loops tab, not as Flows. `actions` enumerates the central
@@ -62,13 +69,16 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_routinerun.py` | Command routines: the detached runner, its history, and the launchd list. |
 | `tests/test_routinesrc.py` | Under the hood — resolution, explanation, and the guarded write. |
 
-### Routes (30)
+### Routes (33)
 
 Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
 
 - `GET /api/actions`
 - `POST /api/actions/run`
 - `GET /api/flows`
+- `GET /api/flows/environments`
+- `POST /api/flows/environments`
+- `DELETE /api/flows/environments/{eid}`
 - `GET /api/flows/kit`
 - `GET /api/flows/kit/source`
 - `GET /api/flows/native/{routine_id}/source`

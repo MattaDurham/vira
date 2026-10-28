@@ -357,5 +357,24 @@ class FolderPickerUiTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+
+
+class NativePanelScript(unittest.TestCase):
+    """The same panel asked for a file (the Forge's Browse this Mac)."""
+
+    def test_the_file_variant_asks_for_a_file_on_each_platform(self):
+        from unittest import mock
+        from server import pickfolder, settings
+        with mock.patch.object(settings, "IS_MAC", True):
+            folder = pickfolder.script("Pick", "folder")[2]
+            file = pickfolder.script("Pick", "file")[2]
+            self.assertIn("choose folder", folder)
+            self.assertIn("choose file", file)
+            self.assertNotIn("choose folder", file)
+        with mock.patch.object(settings, "IS_MAC", False):
+            self.assertIn("FolderBrowserDialog", pickfolder.script("Pick", "folder")[4])
+            self.assertIn("OpenFileDialog", pickfolder.script("Pick", "file")[4])
+
+
 if __name__ == "__main__":
     unittest.main()

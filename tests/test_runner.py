@@ -119,6 +119,59 @@ class ResumeWiring(RunnerCase):
         self.assertNotIn("continuing session", self.output(r))
 
 
+class EnvironmentWiring(RunnerCase):
+    """A Forge card's environment must reach the SDK options: skills as the
+    context filter, settings sources, plugins, and a custom instruction file
+    appended to the system prompt. No environment means no change."""
+
+    def _options_for(self, **over):
+        r = self.make_runner(provider="anthropic", **over)
+        seen = {}
+
+        class Stop(Exception):
+            pass
+
+        def fake_options(**kw):
+            seen.update(kw)
+            raise Stop()
+
+        with mock.patch.object(runner_mod, "ClaudeAgentOptions", fake_options), \
+             mock.patch.object(runner_mod, "SDK_IMPORT_ERROR", None), \
+             mock.patch.object(runner_mod.viratools, "sdk_server", lambda **kw: None), \
+             mock.patch.object(runner_mod.joblog, "record_finish", lambda *a, **k: None):
+            asyncio.run(r.run_session())
+        return seen
+
+    def test_no_environment_leaves_the_cli_defaults_alone(self):
+        seen = self._options_for()
+        for key in ("skills", "setting_sources", "plugins", "agents"):
+            self.assertNotIn(key, seen)
+
+    def test_a_bare_environment_hides_every_skill_and_setting(self):
+        seen = self._options_for(environment={"instructions": []})
+        self.assertEqual(seen["skills"], [])
+        self.assertEqual(seen["setting_sources"], [])
+        self.assertEqual(seen["plugins"], [])
+
+    def test_wired_sources_reach_the_sdk(self):
+        rules = Path(self.tmp.name) / "RULES.md"
+        rules.write_text("Always write tests.", encoding="utf-8")
+        agent = Path(self.tmp.name) / "scout.md"
+        agent.write_text("---\nname: scout\ndescription: Finds things\n---\nLook around.",
+                         encoding="utf-8")
+        seen = self._options_for(environment={
+            "skills": ["watch", "deep-dive"], "settings": ["user", "bogus"],
+            "plugins": ["/lib/plugins/adhd/0.4.1"], "agents": [str(agent)],
+            "instructions": ["project", str(rules)]})
+        self.assertEqual(seen["skills"], ["watch", "deep-dive"])
+        self.assertEqual(seen["setting_sources"], ["project", "user"])
+        self.assertEqual(seen["plugins"], [{"type": "local", "path": "/lib/plugins/adhd/0.4.1"}])
+        self.assertIn("scout", seen["agents"])
+        self.assertEqual(seen["agents"]["scout"].prompt, "Look around.")
+        self.assertIn(f"INSTRUCTIONS FROM {rules}\nAlways write tests.",
+                      seen["system_prompt"]["append"])
+
+
 class GateTests(RunnerCase):
     def test_auto_allow_read_only_tool(self):
         r = self.make_runner()

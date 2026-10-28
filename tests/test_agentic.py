@@ -292,15 +292,20 @@ class CircuitTests(unittest.TestCase):
         self.assertTrue(by_id["plan"]["read_only"])
         self.assertEqual(by_id["build"]["needs"], ["plan"])
         self.assertEqual(by_id["judge"]["judge"]["retry_stage"], "build")
-        # the breakdown threads out->in from watch into the plan prompt
+        # The wire delivers (2026-10-28): the ask reaches the entry card on
+        # its own, and each card's finished text is handed to the card after
+        # it under FROM <name>, with no {{stage.x.output}} in any box.
         stub = self._stub(lambda rec: f"OUT[{rec['prompt'][:24]}]")
         run = circuits.start_run(
             "watch-build", "https://example.com/v watch this")
         self.drive(run["id"])
         prompts = {r["meta"]["stage"]: r["prompt"] for r in stub.launched}
-        self.assertIn("https://example.com/v watch this", prompts["watch"])
-        self.assertIn("OUT[You are the WATCH stage", prompts["plan"])
-        self.assertIn("OUT[You are the PLANNING st", prompts["build"])
+        self.assertIn("THE ASK\nhttps://example.com/v watch this", prompts["watch"])
+        self.assertIn("FROM Watch (Sonnet)\nOUT[You are the watch step.", prompts["plan"])
+        self.assertIn("FROM Plan (Fable)\nOUT[You are the planning st", prompts["build"])
+        # a later card gets the ask only where its box places it
+        self.assertIn("https://example.com/v watch this", prompts["build"])
+        self.assertNotIn("THE ASK", prompts["build"])
 
     def test_judge_gate_retries_then_passes(self):
         judge_calls = {"n": 0}

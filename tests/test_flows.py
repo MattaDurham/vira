@@ -292,6 +292,126 @@ class FlowTests(unittest.TestCase):
                         self.assertEqual(after[sid]["judge"]["min_grade"],
                                          stage["judge"].get("min_grade", ""))
 
+    def test_the_input_card_is_the_ask(self):
+        payload = {"name": "Asked", "nodes": [
+            {"id": "input", "type": "input", "name": "Input",
+             "prompt": "Rebuild the radar", "x": 10, "y": 10},
+            _agent("a", "A"), _agent("b", "B")],
+            "edges": [{"from": "input", "to": "a"}]}
+        saved = flows.save_flow(payload, save_as=True)
+        stages = self._stages(saved["id"])
+        self.assertTrue(stages["a"]["forge"]["input"])
+        self.assertFalse(stages["b"]["forge"]["input"])
+        card = next(n for n in saved["nodes"] if n["type"] == "input")
+        self.assertEqual(card["prompt"], "Rebuild the radar")
+        self.assertEqual([e["to"] for e in saved["edges"] if e["from"] == "input"], ["a"])
+        self.assertEqual(flows.input_text(saved["id"]), "Rebuild the radar")
+        seen = {}
+        with mock.patch.object(circuits, "start_run",
+                               lambda cid, text, **kw: seen.update(cid=cid, text=text) or {"id": "r"}):
+            flows.run_flow(saved["id"], "")
+            self.assertEqual(seen["text"], "Rebuild the radar")
+            flows.run_flow(saved["id"], "something else")
+            self.assertEqual(seen["text"], "something else")
+
+    def test_a_starter_gets_an_input_card_wired_to_its_entry_cards(self):
+        flow = flows.get_flow("plan-build-judge")
+        self.assertTrue(any(n["type"] == "input" for n in flow["nodes"]))
+        fed = sorted(e["to"] for e in flow["edges"] if e["from"] == "input")
+        self.assertEqual(fed, ["plan"])
+        # the parity probes say no to the ask on purpose
+        harness = flows.get_flow("parity-harness")
+        self.assertEqual([e for e in harness["edges"] if e["from"] == "input"], [])
+        # and a Flow saved from a starter keeps that shape
+        saved = flows.save_flow({**flow, "name": "copy"}, save_as=True)
+        stages = self._stages(saved["id"])
+        self.assertTrue(stages["plan"]["forge"]["input"])
+        self.assertFalse(stages["build"]["forge"]["input"])
+
+    def test_the_cards_environment_is_what_is_wired_in(self):
+        payload = {"name": "Env", "nodes": [
+            {"id": "watch", "type": "tool", "name": "watch", "source": "skill",
+             "source_ref": "/lib/skills/watch/SKILL.md"},
+            {"id": "settings", "type": "tool", "name": "Your Claude settings",
+             "source": "settings", "source_ref": "user"},
+            {"id": "plugin", "type": "tool", "name": "adhd", "source": "plugin",
+             "source_ref": "/lib/plugins/adhd/0.4.1"},
+            {"id": "script", "type": "tool", "name": "capture", "source": "script",
+             "source_ref": "/lib/scripts/capture.py"},
+            {"id": "bundle", "type": "env", "name": "Research kit", "items": [
+                {"kind": "skill", "name": "deep-dive", "source_ref": "/lib/skills/deep-dive/SKILL.md"},
+                {"kind": "agent", "name": "scout", "source_ref": "/lib/agents/scout.md"}]},
+            _agent("a", "A"),
+            _agent("bare", "Bare", environment={"instructions": []}),
+            _agent("custom", "Custom", environment={"instructions": ["/vault/RULES.md"]}),
+        ], "edges": [{"from": "watch", "to": "a"}, {"from": "settings", "to": "a"},
+                     {"from": "plugin", "to": "a"}, {"from": "script", "to": "a"},
+                     {"from": "bundle", "to": "a"}]}
+        stages = self._stages(flows.save_flow(payload, save_as=True)["id"])
+        env = stages["a"]["forge"]["environment"]
+        self.assertEqual(env["skills"], ["watch", "deep-dive"])
+        self.assertEqual(env["settings"], ["user"])
+        self.assertEqual(env["plugins"], ["/lib/plugins/adhd/0.4.1"])
+        self.assertEqual(env["agents"], ["/lib/agents/scout.md"])
+        self.assertEqual(env["instructions"], ["project"])
+        # a script is a capability line, not part of the environment
+        self.assertEqual([t["name"] for t in stages["a"]["forge"]["tools"]][:1], ["watch"])
+        self.assertIn("capture", [t["name"] for t in stages["a"]["forge"]["tools"]])
+        bare = stages["bare"]["forge"]["environment"]
+        self.assertEqual(bare, {"skills": [], "plugins": [], "agents": [], "commands": [],
+                                "mcp": [], "hooks": [], "settings": [], "instructions": []})
+        self.assertEqual(stages["custom"]["forge"]["environment"]["instructions"], ["/vault/RULES.md"])
+
+    def test_a_starters_environment_shows_as_cards(self):
+        flow = flows.get_flow("watch-build")
+        skill = next(n for n in flow["nodes"] if n["type"] == "tool" and n.get("source") == "skill")
+        self.assertEqual(skill["name"], "watch")
+        self.assertEqual([e["to"] for e in flow["edges"] if e["from"] == skill["id"]], ["watch"])
+        agent = next(n for n in flow["nodes"] if n["id"] == "plan")
+        self.assertEqual(agent["environment"], {"instructions": ["project"]})
+        # saved as the owner's copy, the cards are the environment
+        saved = flows.save_flow({**flow, "name": "copy"}, save_as=True)
+        env = self._stages(saved["id"])["watch"]["forge"]["environment"]
+        self.assertEqual(env["skills"], ["watch"])
+        self.assertEqual(env["instructions"], ["project"])
+
+    def test_saved_environments_round_trip(self):
+        with mock.patch.object(flows, "ENVS", Path(self.tmp.name) / "envs.json"):
+            with self.assertRaises(ValueError):
+                flows.save_environment({"name": "Empty", "items": []})
+            row = flows.save_environment({"name": "Research kit", "items": [
+                {"kind": "skill", "name": "deep-dive", "source_ref": "/x"}, "junk"]})
+            self.assertEqual([r["id"] for r in flows.list_environments()], [row["id"]])
+            self.assertEqual(flows.list_environments()[0]["items"],
+                             [{"kind": "skill", "name": "deep-dive", "source_ref": "/x"}])
+            flows.delete_environment(row["id"])
+            self.assertEqual(flows.list_environments(), [])
+            with self.assertRaises(KeyError):
+                flows.delete_environment(row["id"])
+
+    def test_defaults_name_the_configured_provider(self):
+        with mock.patch.object(flows.agentbackend, "default_session_provider",
+                               return_value="openai"):
+            out = flows.defaults()
+        self.assertEqual(out["provider"], "openai")
+        self.assertEqual(out["provider_label"], flows.models.PROVIDERS["openai"]["label"])
+
+    def test_a_scheduled_flow_carries_the_input_cards_ask(self):
+        payload = {"name": "Nightly", "nodes": [
+            {"id": "input", "type": "input", "name": "Input", "prompt": "https://example.com/feed"},
+            _agent("a", "A"),
+            {"id": "when", "type": "trigger", "name": "Nightly", "daily_at": "20:00",
+             "enabled": True, "notify": False}],
+            "edges": [{"from": "input", "to": "a"}, {"from": "when", "to": "a"}]}
+        saved = flows.save_flow(payload, save_as=True)
+        row = next(r for r in routines.list_routines() if r.get("circuit_id") == saved["id"])
+        self.assertEqual(row["prompt"], "https://example.com/feed")
+
+    def test_the_library_offers_settings_and_instructions_as_sources(self):
+        catalog = {item["id"]: item for item in flows.kit_catalog()}
+        self.assertEqual(catalog["settings:user"]["source_ref"], "user")
+        self.assertEqual(catalog["instructions:project"]["kind"], "instructions")
+
     def test_kit_source_unfolds_text_but_cannot_escape_library(self):
         root = flows.LIBRARY
         skill = root / "skills" / "sample"
@@ -303,6 +423,92 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(loaded["files"], ["SKILL.md"])
         with self.assertRaises(ValueError):
             flows.kit_source(Path(self.tmp.name).parent / "outside.md")
+
+
+class DeliveryTests(unittest.TestCase):
+    """The wire delivers (circuits._delivered): a card gets the finished
+    text of the cards wired into it, and an entry card gets the ask, unless
+    its box already places them."""
+
+    def _run(self, defs, outputs, ask="the ask"):
+        return {"input": ask, "stages_def": defs,
+                "stages": {sid: {"result_text": text} for sid, text in outputs.items()}}
+
+    def _render(self, stage, run):
+        return circuits.render_prompt(stage.get("prompt") or "", run, stage)
+
+    def test_an_entry_card_gets_the_ask_unless_it_places_it(self):
+        defs = [{"id": "a", "mode": "manual", "name": "A", "prompt": "Plan it."}]
+        run = self._run(defs, {})
+        self.assertIn("THE ASK\nthe ask", self._render(defs[0], run))
+        placed = {"id": "a", "mode": "manual", "name": "A", "prompt": "Plan {{input}} now."}
+        out = self._render(placed, run)
+        self.assertIn("Plan the ask now.", out)
+        self.assertNotIn("THE ASK", out)
+
+    def test_the_card_before_is_delivered_unless_referenced(self):
+        defs = [{"id": "a", "mode": "manual", "name": "Plan (Fable)", "prompt": "x"},
+                {"id": "b", "mode": "manual", "name": "Build", "needs": ["a"], "prompt": "Build it."}]
+        run = self._run(defs, {"a": "THE PLAN TEXT"})
+        out = self._render(defs[1], run)
+        self.assertIn("FROM Plan (Fable)\nTHE PLAN TEXT", out)
+        self.assertNotIn("THE ASK", out)       # a later card gets the ask only by placing it
+        placed = {**defs[1], "prompt": "Build this: {{stage.a.output}}"}
+        out = self._render(placed, run)
+        self.assertIn("Build this: THE PLAN TEXT", out)
+        self.assertNotIn("FROM Plan", out)
+
+    def test_gates_judges_and_continued_conversations_get_nothing(self):
+        defs = [{"id": "a", "mode": "manual", "name": "A", "prompt": "x"},
+                {"id": "g", "mode": "logic", "name": "G", "needs": ["a"]},
+                {"id": "j", "mode": "judge", "name": "J", "needs": ["a"]},
+                {"id": "c", "mode": "manual", "name": "C", "needs": ["a"],
+                 "continues": "a", "prompt": "Go on."},
+                {"id": "after", "mode": "manual", "name": "After", "needs": ["g", "j"],
+                 "prompt": "Next."}]
+        run = self._run(defs, {"a": "OUT A", "g": "pass", "j": "Grade: B"})
+        self.assertNotIn("FROM", self._render(defs[3], run))
+        # a card fed only by a gate and a judge receives neither
+        out = self._render(defs[4], run)
+        self.assertNotIn("FROM", out)
+        self.assertNotIn("THE ASK", out)
+
+    def test_an_explicit_no_keeps_the_ask_away(self):
+        probe = {"id": "p", "mode": "manual", "name": "Probe", "prompt": "Count.",
+                 "forge": {"input": False}}
+        self.assertNotIn("THE ASK", self._render(probe, self._run([probe], {})))
+        wired = {"id": "w", "mode": "manual", "name": "W", "needs": ["p"], "prompt": "Then.",
+                 "forge": {"input": True}}
+        out = self._render(wired, self._run([probe, wired], {"p": "1 2 3"}))
+        self.assertIn("THE ASK\nthe ask", out)
+        self.assertIn("FROM Probe\n1 2 3", out)
+
+
+class ReseedTests(unittest.TestCase):
+    """A changed starter reaches an install that already holds the old
+    text, unless the owner saved that starter as their own."""
+
+    def test_untouched_builtins_refresh_and_edited_ones_stay(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        defs = Path(tmp.name) / "circuits.json"
+        import json
+        stale = {"id": "plan", "name": "Plan it", "builtin": True,
+                 "stages": [{"id": "plan", "name": "Plan", "mode": "manual",
+                             "needs": [], "prompt": "OLD {{input}}"}]}
+        edited = {"id": "council", "name": "Mine", "builtin": True,
+                  "updated": "2026-10-01T00:00:00+00:00",
+                  "stages": [{"id": "x", "name": "X", "mode": "manual",
+                              "needs": [], "prompt": "owner's own"}]}
+        defs.write_text(json.dumps({"circuits": [stale, edited],
+                                    "plan_outputs_seeded": True}), encoding="utf-8")
+        with mock.patch.object(circuits, "DEFS", defs):
+            by_id = {c["id"]: c for c in circuits.list_circuits()}
+            self.assertNotIn("OLD", by_id["plan"]["stages"][0]["prompt"])
+            self.assertEqual(by_id["council"]["name"], "Mine")
+            # and only once: a second load does not touch the edited one
+            self.assertEqual(json.loads(defs.read_text(encoding="utf-8"))["templates_text_version"],
+                             circuits.TEMPLATE_TEXT_VERSION)
 
 
 class IdeaToFlowTests(unittest.TestCase):

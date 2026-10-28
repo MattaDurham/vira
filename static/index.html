@@ -376,7 +376,8 @@
           </div>
           <button class="fchip sm" id="forge-new" type="button">New</button>
           <button class="fchip sm" id="forge-save-as" type="button">Save as</button>
-          <button class="btn primary" id="forge-save" type="button">Save</button>
+          <button class="fchip sm" id="forge-save" type="button">Save</button>
+          <button class="btn primary" id="forge-run" type="button" title="Run this Flow on its Input card's ask">Run</button>
         </div>
       </header>
 
@@ -396,7 +397,7 @@
 
         <main class="forge-workspace">
           <div class="forge-boardbar">
-            <button class="btn primary sm" id="forge-add" type="button" aria-haspopup="true">+ Add</button>
+            <button class="btn primary sm" id="forge-add" type="button" aria-haspopup="true" title="Input, Agent, Judge, Gate, Ask me, Output, Schedule, or a source">+ Add</button>
             <span class="forge-status" id="forge-status">Live definitions</span>
             <div class="forge-zoom" aria-label="Board zoom">
               <button type="button" id="forge-zoom-out" aria-label="Zoom out">&minus;</button>
@@ -416,7 +417,7 @@
             </div>
             <div class="forge-empty" id="forge-empty">
               <strong>Pick a Flow on the left, or start a new one.</strong>
-              <span>Add a card, write what it must do, wire it to the next one.</span>
+              <span>Add an Input card for the ask, a card for each step, wire them in order. A card is told only what is wired into it.</span>
             </div>
           </div>
         </main>
@@ -431,17 +432,6 @@
           </div>
         </aside>
       </div>
-
-      <footer class="forge-launchbar">
-        <input id="forge-run-input" type="text" placeholder="What should this Flow work on?" autocomplete="off">
-        <!-- The run's engine for every agent card that names none of its
-             own (how the parity harness is run against each provider).
-             A card that picks its own model keeps it. -->
-        <select id="forge-run-provider" aria-label="Run on" title="The engine for cards that name none of their own">
-          <option value="">Run on Vira default</option><option value="anthropic">Run on Claude</option><option value="openai">Run on Codex</option><option value="google">Run on Gemini</option><option value="xai">Run on Grok</option>
-        </select>
-        <button class="btn primary" id="forge-run" type="button">Run</button>
-      </footer>
 
       <!-- Compatibility anchors for retired Dispatch controls. They keep old
            command paths inert while every visible path routes through Forge. -->

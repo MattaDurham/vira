@@ -2,14 +2,16 @@
    execution live in Vira; this file owns the board, the library and the
    right-column editor.
 
-   A Flow is a board of cards wired in one direction. Nine kinds of card:
-   six that run (agent, judge, gate, ask me, output, native), a schedule,
-   and two sources (a skill, script or file; a Find reference). A card is
-   who runs it, what it must do and what it may touch; the board shows it
-   small and the right column is the only editor. A wire means the
-   finished text of the card before goes into the card after, and it may
-   carry a note. The server (server/flows.py) reads nothing else, so the
-   editor draws nothing else (2026-10-27). */
+   A Flow is a board of cards wired in one direction. Six kinds run
+   (agent, judge, gate, ask me, output, native); the Input card is the ask;
+   a schedule runs it; sources (a skill, a settings file, a script, a file,
+   a Find reference) and saved environments are wired into a card and are
+   the whole of what its session is told about. A card is who runs it,
+   what it must do and what it may touch; the board shows it small and the
+   right column is the only editor. A wire means the finished text of the
+   card before goes into the card after (the server appends it unless the
+   box places it), and it may carry a note. server/flows.py reads nothing
+   else, so the editor draws nothing else (2026-10-27, rebuilt 10-28). */
 (() => {
   "use strict";
 
@@ -42,6 +44,7 @@
   /* ---------- vocabulary ------------------------------------------------ */
 
   const KIND = {
+    input: { name: "Input", hint: "The ask: what this Flow works on. Run sends it." },
     agent: { name: "Agent", hint: "A session: a model, a permission, an instruction." },
     judge: { name: "Judge", hint: "Grades the card before it and can send it back." },
     logic: { name: "Gate", hint: "Passes or stops on what the card before it did." },
@@ -51,7 +54,19 @@
     native: { name: "Vira routine", hint: "Runs one of Vira's own loops inside this Flow." },
     tool: { name: "Source", hint: "A skill, command, script or file the card is told about." },
     context: { name: "Reference", hint: "A note or file from Find the card is told about." },
+    env: { name: "Environment", hint: "A saved set of sources, wired in as one card." },
   };
+  // What a source card is, by the kind of thing behind it.
+  const SOURCE_LABEL = {
+    skill: "Skill", command: "Command", script: "Script", agent: "Agent file",
+    plugin: "Plugin", mcp: "MCP server", hook: "Hook", settings: "Settings",
+    instructions: "Instructions", harness: "Harness", "scheduled-task": "Scheduled task",
+    file: "File", folder: "Folder", find: "Reference", library: "Source",
+  };
+  // Kinds that become part of a card's environment (server/flows.py
+  // ENV_KEYS); the rest reach the card as a line of text.
+  const ENV_KINDS = new Set(["skill", "plugin", "agent", "command", "mcp", "hook", "settings", "instructions"]);
+  const INPUT_ID = "input";
   const EXEC = new Set(["agent", "judge", "logic", "approval", "output", "native"]);
   const SOURCE = new Set(["tool", "context"]);
   const CARD_W = 264;
@@ -60,7 +75,7 @@
   // whole provider (its own default model). Mirrors server/models.py
   // PROVIDERS and agentbackend.provider_of_model.
   const MODEL_CHOICES = [
-    ["", "Vira default"], ["provider:anthropic", "Claude"], ["fable", "Fable"],
+    ["", "the configured default"], ["provider:anthropic", "Claude"], ["fable", "Fable"],
     ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"],
     ["provider:openai", "Codex"], ["provider:google", "Gemini"], ["provider:xai", "Grok"],
     ["other", "Another model id"],
@@ -124,6 +139,8 @@
     flows: [],
     kit: [],
     loops: [],
+    envs: [],
+    defaults: { provider: "", provider_label: "" },
     mac: null,
     current: null,
     selectedNode: null,
@@ -282,14 +299,15 @@
     return state.current?.nodes.find((node) => node.id === state.selectedNode) || null;
   }
 
+  // The board has no edge (owner, 2026-10-28): a card goes where it is put.
   function freeSpot(node) {
-    let x = clamp((Number(node.x) || 0) + 42, 0, 3900);
-    let y = clamp((Number(node.y) || 0) + 42, 60, 2550);
+    let x = (Number(node.x) || 0) + 42;
+    let y = (Number(node.y) || 0) + 42;
     for (let tries = 0; tries < 24; tries += 1) {
       const taken = state.current.nodes.some((item) => Math.abs(item.x - x) < 14 && Math.abs(item.y - y) < 14);
       if (!taken) break;
-      x = clamp(x + 42, 0, 3900);
-      y = clamp(y + 42, 60, 2550);
+      x += 42;
+      y += 42;
     }
     return { x, y };
   }
@@ -312,6 +330,7 @@
   function pasteNode() {
     const clip = readClip();
     if (!clip || !editable()) return;
+    if (clip.node.type === "input" && inputCard()) return toast("A board has one Input card.");
     const clone = copy(clip.node);
     clone.id = cardId(clone.name, clone.type);
     if (clone.id.startsWith("routine:")) clone.id = cardId("schedule", "trigger");
@@ -389,6 +408,8 @@
         request("/api/flows/kit"),
       ]);
       state.flows = flowData.flows || [];
+      state.defaults = flowData.defaults || state.defaults;
+      state.envs = flowData.environments || [];
       state.kit = kitData.items || [];
       const wanted = options.flowId || state.current?.id || localStorage.getItem("vira-forge-flow") || "plan-build-judge";
       const selected = state.flows.find((flow) => flow.id === wanted) || state.flows[0] || null;
@@ -492,7 +513,7 @@
     const ghost = flow?.kind === "trace";
     q("#forge-save").disabled = !flow || ghost;
     q("#forge-save-as").disabled = !flow || ghost;
-    q("#forge-run").disabled = !flow || ghost || !flow.id;
+    q("#forge-run").disabled = !flow || ghost;
     syncTools();
   }
 
@@ -723,23 +744,64 @@
     return item.description || item.invoke || item.source_ref || "";
   }
 
+  const GROUP_ORDER = ["instructions", "settings", "skill", "command", "agent", "plugin",
+    "mcp", "hook", "script", "scheduled-task", "harness"];
+  const GROUP_LABEL = {
+    instructions: "Instruction files", settings: "Settings files", skill: "Skills",
+    command: "Commands", agent: "Agent files", plugin: "Plugins", mcp: "MCP servers",
+    hook: "Hooks", script: "Scripts", "scheduled-task": "Scheduled tasks", harness: "Harnesses",
+  };
+
+  function browseRow() {
+    const row = make("div", "forge-browse");
+    row.appendChild(make("span", "forge-card-kind", "This Mac"));
+    [["folder", "Folder"], ["file", "File"]].forEach(([kind, label]) => {
+      const button = make("button", "fchip sm", label);
+      button.type = "button";
+      button.title = kind === "folder" ? "Pick a folder in a window" : "Pick a file in a window";
+      button.addEventListener("click", () => browseMac(kind));
+      row.appendChild(button);
+    });
+    return row;
+  }
+
   function renderSourcesTab(body, term) {
-    const items = state.kit.filter((item) => matches(term, item.name, item.kind, item.description));
-    let previous = "";
-    items.forEach((item) => {
-      const group = item.kind || "parts";
-      if (group !== previous) {
-        body.appendChild(make("div", "forge-library-group", group));
-        previous = group;
-      }
-      const card = libraryCard({ title: item.name, line: sourceLine(item), iconKey: ICON[item.kind] ? item.kind : "tool", draggable: true });
-      card.addEventListener("click", () => addSource(item));
-      card.addEventListener("dragstart", (event) => {
-        state.libraryDrag = copy(item);
-        event.dataTransfer.effectAllowed = "copy";
-        event.dataTransfer.setData("text/plain", item.id || item.name || "part");
+    if (editable()) body.appendChild(browseRow());
+    const envs = state.envs.filter((env) => matches(term, env.name, (env.items || []).map((i) => i.name).join(" ")));
+    if (envs.length) {
+      body.appendChild(make("div", "forge-library-group", "Saved environments"));
+      envs.forEach((env) => {
+        const card = libraryCard({ title: env.name, iconKey: "tool", draggable: true,
+          line: (env.items || []).map((i) => i.name).join(", ") });
+        card.addEventListener("click", () => addEnvironment(env));
+        card.addEventListener("dragstart", (event) => {
+          state.libraryDrag = { environment: copy(env) };
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData("text/plain", env.name);
+        });
+        body.appendChild(card);
       });
-      body.appendChild(card);
+    }
+    const items = state.kit.filter((item) => matches(term, item.name, item.kind, item.description));
+    const groups = new Map();
+    items.forEach((item) => {
+      const kind = item.kind || "parts";
+      if (!groups.has(kind)) groups.set(kind, []);
+      groups.get(kind).push(item);
+    });
+    const order = [...GROUP_ORDER.filter((k) => groups.has(k)), ...[...groups.keys()].filter((k) => !GROUP_ORDER.includes(k))];
+    order.forEach((kind) => {
+      body.appendChild(make("div", "forge-library-group", GROUP_LABEL[kind] || kind));
+      groups.get(kind).forEach((item) => {
+        const card = libraryCard({ title: item.name, line: sourceLine(item), iconKey: ICON[item.kind] ? item.kind : "tool", draggable: true });
+        card.addEventListener("click", () => addSource(item));
+        card.addEventListener("dragstart", (event) => {
+          state.libraryDrag = copy(item);
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData("text/plain", item.id || item.name || "part");
+        });
+        body.appendChild(card);
+      });
     });
     if (state.findRows.length) {
       body.appendChild(make("div", "forge-library-group", "From Find"));
@@ -753,11 +815,41 @@
         body.appendChild(card);
       });
     }
-    if (!items.length && !state.findRows.length) {
+    if (!items.length && !state.findRows.length && !envs.length) {
       body.appendChild(make("p", "hint", term
         ? (term.length < 3 ? "Keep typing to search Find too." : "Nothing in the library or in Find matches.")
-        : "Skills, commands, scripts and agents from your Claude library. Type to search Find as well."));
+        : "Everything a card can be told about. A card with nothing wired in is told nothing."));
     }
+  }
+
+  // Browse this Mac: the Mac's own open panel, opened by the server, which
+  // runs here. On a phone over Tailscale the panel would open on the wrong
+  // screen, so the server refuses and the typed-path fallback appears.
+  async function browseMac(kind) {
+    if (!editable()) return;
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+    let path = "";
+    try {
+      const res = await send("/api/pick-folder", "POST", {
+        prompt: kind === "file" ? "Choose a file for this card" : "Choose a folder for this card",
+        local, kind });
+      if (res.cancelled) return;
+      if (res.unavailable) {
+        if (kind === "folder" && window.FolderPicker?.choose) {
+          const picked = await window.FolderPicker.choose({ title: "Choose a folder" });
+          path = typeof picked === "string" ? picked : (picked?.path || "");
+        } else {
+          path = await forgeDialog({ title: "Type the path", message: res.reason || "No window could open here.",
+            value: "", confirm: "Add" });
+        }
+        if (!path) return;
+      } else path = res.path || "";
+    } catch (error) {
+      return toast(`Could not open a window: ${error.message}`);
+    }
+    if (!path) return;
+    const name = path.replace(/\/+$/, "").split("/").pop() || path;
+    addSource({ id: `${kind}:${path}`, kind, name, source_ref: path, description: "" });
   }
 
   async function loadFindRows(term) {
@@ -902,19 +994,26 @@
     return candidate;
   }
 
+  function inputCard() {
+    return (state.current?.nodes || []).find((node) => node.type === "input") || null;
+  }
+
   function newCard(type, point) {
     const base = {
-      id: cardId(KIND[type].name, type), type, name: KIND[type].name,
-      x: clamp(Math.round(point.x), 20, 3900), y: clamp(Math.round(point.y), 70, 2550),
+      id: type === "input" ? INPUT_ID : cardId(KIND[type].name, type), type, name: KIND[type].name,
+      x: Math.round(point.x), y: Math.round(point.y),
     };
+    if (type === "input") base.prompt = "";
     if (type === "agent") Object.assign(base, {
       model: "", provider: "", mode: "manual", read_only: true,
-      prompt: "Work on the input below and report what you found.\n\n{{input}}",
+      prompt: "Work on the ask and report what you found.",
       timeout_s: 0, on_timeout: "error", continues: "",
+      environment: { instructions: ["project"] },
     });
     if (type === "judge") Object.assign(base, {
       model: "", provider: "", mode: "judge", read_only: true, prompt: "",
       judge: { min_grade: "B", max_retries: 1, retry_stage: "" },
+      environment: { instructions: ["project"] },
     });
     if (type === "logic") base.logic = { operation: "contains", value: "" };
     if (type === "approval") base.prompt = "Show me the result so far and ask whether to go on.";
@@ -923,26 +1022,35 @@
     return base;
   }
 
-  function addCard(type) {
+  function addCard(type, text) {
     if (!editable()) return;
+    if (type === "input" && inputCard()) {
+      const existing = inputCard();
+      if (text && !existing.prompt) { existing.prompt = text; touch(existing); }
+      openNode(existing.id);
+      return existing;
+    }
     const selected = currentNode();
     let point;
-    if (selected) point = { x: selected.x + CARD_W + 90, y: selected.y };
+    if (selected && (type === "trigger" || type === "input")) point = { x: selected.x - CARD_W - 90, y: selected.y };
+    else if (selected) point = { x: selected.x + CARD_W + 90, y: selected.y };
     else {
       const rect = q("#forge-viewport").getBoundingClientRect();
       point = boardPoint(rect.left + rect.width / 2 - CARD_W / 2, rect.top + rect.height / 2 - 60);
     }
     const node = newCard(type, freeSpot({ x: point.x - 42, y: point.y - 42 }));
+    if (type === "input" && text) node.prompt = text;
     node.z = ++state.z;
     state.current.nodes.push(node);
     // A new running card placed from a selected running card is wired from
-    // it: that is nearly always what the next card is for.
-    if (selected && EXEC.has(selected.type) && EXEC.has(type) && type !== "trigger") {
+    // it: that is nearly always what the next card is for. A schedule or
+    // the Input is wired INTO the selected card.
+    if (selected && EXEC.has(selected.type) && EXEC.has(type)) {
       state.current.edges.push({ id: id("wire"), from: selected.id, to: node.id, instructions: "" });
       if (hasExecutableCycle()) state.current.edges.pop();
     }
-    if (selected && type === "trigger" && EXEC.has(selected.type)) {
-      node.x = selected.x - CARD_W - 90;
+    if (selected && (type === "trigger" || type === "input") && EXEC.has(selected.type)
+        && !(type === "input" && ["logic", "approval", "output"].includes(selected.type))) {
       state.current.edges.push({ id: id("wire"), from: node.id, to: selected.id, instructions: "" });
     }
     state.selectedNode = node.id;
@@ -960,6 +1068,7 @@
       const rect = q("#forge-viewport").getBoundingClientRect();
       return boardPoint(rect.left + 80, rect.top + rect.height / 2);
     })();
+    const selected = currentNode();
     const node = {
       id: cardId(item.name, isFind ? "context" : "tool"),
       type: isFind ? "context" : "tool",
@@ -967,9 +1076,15 @@
       description: isFind ? String(item.note || "").slice(0, 600) : "",
       source: item.kind || (isFind ? "find" : "library"),
       source_ref: item.source_ref || item.invoke || item.ref || item.path || "",
-      x: clamp(Math.round(p.x), 20, 3900), y: clamp(Math.round(p.y), 70, 2550),
+      x: Math.round(p.x), y: Math.round(p.y),
       z: ++state.z,
     };
+    if (!point && selected && (selected.type === "agent" || selected.type === "judge")) {
+      // added while a card is open: it goes to that card, wired in
+      const spot = freeSpot({ x: selected.x - CARD_W - 90 - 42, y: selected.y + 120 - 42 });
+      node.x = spot.x; node.y = spot.y;
+      state.current.edges.push({ id: id("wire"), from: node.id, to: selected.id, instructions: "" });
+    }
     state.current.nodes.push(node);
     state.selectedNode = node.id;
     state.selectedEdge = null;
@@ -977,6 +1092,30 @@
     renderBoard();
     renderInspector();
     if (matchMedia("(max-width: 1099px)").matches) closeLibrary();
+    return node;
+  }
+
+  function addEnvironment(env, point) {
+    if (!editable()) return;
+    const selected = currentNode();
+    const p = point || (selected ? { x: selected.x - CARD_W - 90, y: selected.y + 120 } : (() => {
+      const rect = q("#forge-viewport").getBoundingClientRect();
+      return boardPoint(rect.left + 80, rect.top + rect.height / 2);
+    })());
+    const node = {
+      id: cardId(env.name, "env"), type: "env", name: env.name || "Environment",
+      items: copy(env.items || []), saved_id: env.id || "",
+      x: Math.round(p.x), y: Math.round(p.y), z: ++state.z,
+    };
+    if (!point && selected && (selected.type === "agent" || selected.type === "judge")) {
+      state.current.edges.push({ id: id("wire"), from: node.id, to: selected.id, instructions: "" });
+    }
+    state.current.nodes.push(node);
+    state.selectedNode = node.id;
+    state.selectedEdge = null;
+    setDirty();
+    renderBoard();
+    renderInspector();
     return node;
   }
 
@@ -994,10 +1133,15 @@
     return "";
   }
 
+  function defaultLabel() {
+    const name = state.defaults?.provider_label || "";
+    return name ? `Default: ${name}` : "the configured default";
+  }
+
   function modelLabel(node) {
     if (node.model) return MODEL_LABEL[node.model] || node.model;
     if (node.provider) return PROVIDER_LABEL[node.provider] || node.provider;
-    return "Vira default";
+    return defaultLabel();
   }
 
   function permOf(node) {
@@ -1043,7 +1187,13 @@
     const tag = (text, cls) => tags.appendChild(make("span", cls || "", text));
     let text = "";
     let path = "";
-    if (node.type === "agent") {
+    if (node.type === "input") {
+      text = node.prompt || "";
+      if (!text) path = "Empty. Click to write what this Flow should work on.";
+    } else if (node.type === "env") {
+      tag(`${(node.items || []).length} source${(node.items || []).length === 1 ? "" : "s"}`);
+      text = (node.items || []).map((i) => i.name).join(", ");
+    } else if (node.type === "agent") {
       tag(modelLabel(node));
       const perm = permOf(node);
       tag(perm, perm === "full" ? "is-full" : "");
@@ -1121,7 +1271,8 @@
 
     const head = make("header", "forge-node-head");
     const title = make("span", "forge-node-copy");
-    title.append(make("span", "forge-node-type", meta.name), make("strong", "forge-node-name", node.name || meta.name));
+    const kindLabel = SOURCE.has(node.type) ? (SOURCE_LABEL[node.source] || meta.name) : meta.name;
+    title.append(make("span", "forge-node-type", kindLabel), make("strong", "forge-node-name", node.name || meta.name));
     head.appendChild(title);
     if (editable()) {
       const menu = make("button", "forge-node-menu", "×");
@@ -1153,7 +1304,7 @@
       if (stage.grade) card.appendChild(make("span", "forge-run-grade", stage.grade));
     }
 
-    if (node.type !== "trigger") card.appendChild(port(node, "in"));
+    if (node.type !== "trigger" && node.type !== "input" && !SOURCE.has(node.type) && node.type !== "env") card.appendChild(port(node, "in"));
     if (node.type !== "output") card.appendChild(port(node, "out"));
     bindNodeDrag(card, head, node);
     card.addEventListener("pointerdown", () => bringNodeFront(node, card));
@@ -1292,10 +1443,12 @@
     if (state.library === "loops") renderLibrary();
   }
 
-  // The reference chips under an instruction box: what the card can name.
+  // The pills under an instruction box: everything the card can place in
+  // its box, each saying how it arrives. A wired card's text, and the
+  // Input card's ask, are appended under the box unless the box places
+  // them; a pill inserts the placement at the cursor.
   function refChips(node, area) {
     const wrap = make("div", "forge-refs");
-    wrap.appendChild(make("span", "", "Insert"));
     const insert = (text) => {
       const start = area.selectionStart ?? area.value.length;
       const end = area.selectionEnd ?? start;
@@ -1304,22 +1457,133 @@
       area.dispatchEvent(new Event("input", { bubbles: true }));
       area.focus();
     };
-    const chip = (label, text, title) => {
-      const button = make("button", "", label);
-      button.type = "button";
-      button.title = title;
-      button.addEventListener("click", () => insert(text));
-      wrap.appendChild(button);
+    const paint = () => {
+      wrap.replaceChildren(make("span", "", "Insert"));
+      const wired = new Set((state.current?.edges || []).filter((e) => e.to === node.id).map((e) => e.from));
+      const chip = (label, token, isWired, what) => {
+        const placed = area.value.includes(token);
+        const button = make("button", placed ? "is-placed" : (isWired ? "" : "is-away"), label);
+        button.type = "button";
+        button.appendChild(make("small", "", placed ? "placed" : (isWired ? "at the end" : "not wired")));
+        button.title = placed ? `${what} is placed where the token sits`
+          : isWired ? `${what} is appended under the box; click to place it`
+            : `${what} is not wired into this card; click to place it anyway`;
+        button.addEventListener("click", () => insert(token));
+        wrap.appendChild(button);
+      };
+      chip("Input", "{{input}}", wired.has(INPUT_ID), "The ask");
+      (state.current?.nodes || []).filter((item) => wired.has(item.id) && EXEC.has(item.type)
+        && !["logic", "approval", "output"].includes(item.type) && item.id !== node.id)
+        .forEach((item) => chip(item.name, `{{stage.${item.id}.output}}`, true, `The finished text of ${item.name}`));
     };
-    chip("{{input}}", "{{input}}", "What the Flow was asked to work on");
-    wiredIn(node).filter((item) => item.type !== "trigger").forEach((item) => {
-      chip(`{{${item.name}}}`, `{{stage.${item.id}.output}}`, `The finished text of ${item.name}`);
-    });
+    paint();
+    area.addEventListener("input", paint);
     return wrap;
+  }
+
+  // The environment rows on an agent or judge card: the instruction file
+  // (the only default-on source), then what is wired in, by kind. Nothing
+  // else reaches the session.
+  function environmentRows(node) {
+    const env = node.environment || (node.environment = { instructions: ["project"] });
+    if (!Array.isArray(env.instructions)) env.instructions = ["project"];
+    const box = make("div", "forge-envrows");
+    box.appendChild(make("span", "forge-card-kind", "Environment"));
+    const row = make("div", "forge-envrow");
+    const custom = env.instructions.find((i) => i !== "project") || "";
+    const paintRow = () => {
+      row.replaceChildren();
+      const on = env.instructions.includes("project");
+      row.appendChild(checkbox("the working folder's AGENTS.md or CLAUDE.md", on, (value) => {
+        env.instructions = env.instructions.filter((i) => i !== "project");
+        if (value) env.instructions.unshift("project");
+        touch(node); paintRow();
+      }));
+      const custom = env.instructions.find((i) => i !== "project") || "";
+      const replace = make("button", "fchip sm", custom ? "Change file" : "Add a file");
+      replace.type = "button";
+      replace.addEventListener("click", async () => {
+        const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+        let path = "";
+        try {
+          const res = await send("/api/pick-folder", "POST", { prompt: "Choose an instruction file", local, kind: "file" });
+          if (res.cancelled) return;
+          path = res.path || "";
+          if (res.unavailable) path = await forgeDialog({ title: "Type the file's path", message: res.reason || "", value: custom, confirm: "Use it" });
+        } catch (error) { return toast(`Could not open a window: ${error.message}`); }
+        if (!path) return;
+        env.instructions = env.instructions.filter((i) => i === "project").concat([path]);
+        touch(node); paintRow();
+      });
+      row.appendChild(replace);
+      if (custom) {
+        const drop = make("button", "fchip sm", "Drop the file");
+        drop.type = "button";
+        drop.addEventListener("click", () => { env.instructions = env.instructions.filter((i) => i === "project"); touch(node); paintRow(); });
+        row.appendChild(drop);
+        row.appendChild(make("code", "forge-path", custom));
+      }
+    };
+    paintRow();
+    box.appendChild(row);
+    const wired = wiredIn(node, false).filter((item) => SOURCE.has(item.type) || item.type === "env");
+    const byKind = {};
+    wired.forEach((item) => {
+      const items = item.type === "env" ? (item.items || []) : [{ kind: item.source, name: item.name }];
+      items.forEach((entry) => {
+        const kind = ENV_KINDS.has(entry.kind) ? (SOURCE_LABEL[entry.kind] || entry.kind) : "Told about";
+        (byKind[kind] = byKind[kind] || []).push(entry.name);
+      });
+    });
+    const line = Object.entries(byKind).map(([kind, names]) => `${kind}: ${names.join(", ")}`).join(". ");
+    box.appendChild(make("p", "hint", line
+      ? `${line}. Nothing else reaches this card.`
+      : "No sources wired in: this card sees no skills, settings or plugins. Add one from Sources, or wire a saved environment."));
+    const save = make("button", "fchip sm", "Save these as an environment");
+    save.type = "button";
+    save.disabled = !wired.length;
+    save.addEventListener("click", () => saveEnvironmentFrom(node, wired));
+    box.appendChild(save);
+    return box;
+  }
+
+  async function saveEnvironmentFrom(node, wired) {
+    const items = [];
+    wired.forEach((item) => {
+      if (item.type === "env") (item.items || []).forEach((entry) => items.push(copy(entry)));
+      else items.push({ kind: item.source || "library", name: item.name, source_ref: item.source_ref || "" });
+    });
+    const name = await forgeDialog({ title: "Save an environment", message: `${items.length} source${items.length === 1 ? "" : "s"} wired into ${node.name}, as one card you can wire anywhere.`, value: `${node.name} kit`, confirm: "Save" });
+    if (!name) return;
+    try {
+      const saved = await send("/api/flows/environments", "POST", { name, items });
+      state.envs = state.envs.filter((env) => env.id !== saved.id).concat([saved]);
+      toast(`Saved "${saved.name}" under Sources`);
+      if (state.library === "sources") renderLibrary();
+    } catch (error) {
+      toast(`Could not save it: ${error.message}`);
+    }
   }
 
   function nameField(node) {
     return field("Name", textInput(node.name, (value) => { node.name = value; touch(node); renderIdentity(); }));
+  }
+
+  // The run's text, pasted onto the board: a link, a question, anything.
+  // It fills an empty Input card, or makes one.
+  function pasteAsInput(text) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed || !editable()) return false;
+    const existing = inputCard();
+    if (existing) {
+      if (existing.prompt && existing.prompt !== trimmed) {
+        existing.prompt = `${existing.prompt}\n${trimmed}`;
+      } else existing.prompt = trimmed;
+      touch(existing);
+      openNode(existing.id);
+    } else addCard("input", trimmed);
+    toast("Pasted into the Input card");
+    return true;
   }
 
   function modelField(node, editor) {
@@ -1329,7 +1593,8 @@
     const otherField = field("Model id", other);
     otherField.style.display = choice === "other" ? "" : "none";
     otherField.style.marginTop = "8px";
-    const select = selectControl(MODEL_CHOICES, choice, (value) => {
+    const choices = MODEL_CHOICES.map(([value, label]) => [value, value === "" ? defaultLabel() : label]);
+    const select = selectControl(choices, choice, (value) => {
       if (value.startsWith("provider:")) { node.model = ""; node.provider = value.slice(9); }
       else if (value === "other") { node.model = node.model && !MODEL_LABEL[node.model] ? node.model : ""; }
       else { node.model = value; node.provider = ""; }
@@ -1355,6 +1620,7 @@
     const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 12);
     editor.appendChild(field("What it must do", area, true));
     editor.appendChild(refChips(node, area));
+    editor.appendChild(environmentRows(node));
     const advanced = make("details");
     advanced.appendChild(make("summary", "", "Advanced: time limit, continue a conversation"));
     const inner = make("div");
@@ -1403,6 +1669,7 @@
     const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 8);
     editor.appendChild(field("What to weigh in particular (optional)", area, true));
     editor.appendChild(make("p", "hint", "The judge reads the finished text of every card wired into it and grades it A to F against what the Flow was asked."));
+    editor.appendChild(environmentRows(node));
     return editor;
   }
 
@@ -1509,7 +1776,9 @@
     editor.appendChild(make("code", "forge-path", node.source_ref || "(no path)"));
     const area = textArea(node.description, (value) => { node.description = value; touch(node); }, 4);
     editor.appendChild(field("Tell the card about it (optional)", area));
-    editor.appendChild(make("p", "hint", "Wire this to a card and the card is told its name, its path and this note. It reads the file itself."));
+    editor.appendChild(make("p", "hint", ENV_KINDS.has(node.source)
+      ? `Wire this into a card and it becomes part of that card's environment (${SOURCE_LABEL[node.source] || node.source}).`
+      : "Wire this to a card and the card is told its name, its path and this note. It reads the file itself."));
     if (node.type === "tool" && node.source_ref) {
       const actions = make("div", "forge-editor-actions");
       const read = make("button", "fchip sm", "Read it");
@@ -1535,6 +1804,55 @@
     return editor;
   }
 
+  function inputEditor(node) {
+    const editor = make("div", "forge-editor");
+    const area = textArea(node.prompt, (value) => { node.prompt = value; touch(node); }, 10);
+    area.placeholder = "A link, a question, an idea: what this Flow works on.";
+    editor.appendChild(field("What should this Flow work on?", area, true));
+    editor.appendChild(make("p", "hint", "Run sends this. Wire it into the first card; that card gets it under its box unless the box places it. Paste a link onto the board to fill it."));
+    setTimeout(() => area.focus(), 0);
+    return editor;
+  }
+
+  function envEditor(node) {
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    const list = make("ul", "forge-envlist");
+    const paint = () => {
+      list.replaceChildren();
+      (node.items || []).forEach((item, index) => {
+        const li = make("li");
+        const text = make("span", "", item.name);
+        text.appendChild(make("small", "", ` ${SOURCE_LABEL[item.kind] || item.kind}`));
+        const drop = make("button", "fchip sm", "Remove");
+        drop.type = "button";
+        drop.addEventListener("click", () => { node.items.splice(index, 1); touch(node); paint(); });
+        li.append(text, drop);
+        list.appendChild(li);
+      });
+      if (!(node.items || []).length) list.appendChild(make("li", "", "Nothing in it."));
+    };
+    paint();
+    editor.appendChild(list);
+    editor.appendChild(make("p", "hint", "Wire this into a card and every source in it is wired in. Changing it here changes this card only; the saved environment under Sources stays as it was."));
+    if (node.saved_id) {
+      const forget = make("button", "fchip sm is-danger", "Forget the saved environment");
+      forget.type = "button";
+      forget.addEventListener("click", async () => {
+        if (!await forgeDialog({ title: "Forget it?", message: "The saved environment leaves Sources. Cards already on boards keep their copies.", confirm: "Forget" })) return;
+        try {
+          await send(`/api/flows/environments/${encodeURIComponent(node.saved_id)}`, "DELETE", {});
+          state.envs = state.envs.filter((env) => env.id !== node.saved_id);
+          node.saved_id = "";
+          toast("Forgotten");
+          renderLibrary(); renderInspector();
+        } catch (error) { toast(`Could not forget it: ${error.message}`); }
+      });
+      editor.appendChild(forget);
+    }
+    return editor;
+  }
+
   function nativeEditor(node) {
     const editor = make("div", "forge-editor");
     editor.appendChild(nameField(node));
@@ -1552,6 +1870,8 @@
       return view;
     }
     const editor = node.type === "agent" ? agentEditor(node)
+      : node.type === "input" ? inputEditor(node)
+        : node.type === "env" ? envEditor(node)
       : node.type === "judge" ? judgeEditor(node)
         : node.type === "logic" ? gateEditor(node)
           : node.type === "approval" ? approvalEditor(node)
@@ -1825,8 +2145,8 @@
       const dx = (event.clientX - active.x) / state.zoom;
       const dy = (event.clientY - active.y) / state.zoom;
       if (Math.hypot(dx, dy) > 3) active.moved = true;
-      node.x = clamp(Math.round(active.nx + dx), 0, 4000);
-      node.y = clamp(Math.round(active.ny + dy), 60, 2650);
+      node.x = Math.round(active.nx + dx);
+      node.y = Math.round(active.ny + dy);
       card.style.left = `${node.x}px`;
       card.style.top = `${node.y}px`;
       renderWires();
@@ -1890,8 +2210,11 @@
     const toNode = state.current.nodes.find((n) => n.id === to);
     if (!fromNode || !toNode) return;
     if (toNode.type === "trigger") return toast("A schedule starts a Flow; nothing feeds it.");
+    if (toNode.type === "input") return toast("The Input is the ask; nothing feeds it.");
     if (fromNode.type === "output") return toast("An output is the end of a line.");
-    if (SOURCE.has(toNode.type)) return toast("A source is told about; wire it the other way, into the card that should know it.");
+    if (SOURCE.has(toNode.type) || toNode.type === "env") return toast("A source is told about; wire it the other way, into the card that should know it.");
+    if ((SOURCE.has(fromNode.type) || fromNode.type === "env" || fromNode.type === "input")
+        && !["agent", "judge", "native"].includes(toNode.type)) return toast("Only a card that runs a session can be told about a source or the ask.");
     if (state.current.edges.some((edge) => edge.from === from && edge.to === to)) return toast("That wire already exists.");
     const edge = { id: id("wire"), from, to, instructions: "" };
     state.current.edges.push(edge);
@@ -2019,8 +2342,9 @@
     clone.id = cardId(`${clone.name} copy`, clone.type);
     clone.name = `${clone.name} copy`;
     delete clone.routine_id;
-    clone.x = clamp((Number(clone.x) || 0) + 42, 0, 3900);
-    clone.y = clamp((Number(clone.y) || 0) + 42, 60, 2550);
+    const spot = freeSpot(clone);
+    clone.x = spot.x;
+    clone.y = spot.y;
     clone.z = ++state.z;
     state.current.nodes.push(clone);
     state.selectedNode = clone.id;
@@ -2066,7 +2390,8 @@
     const title = make("div", "forge-menu-title");
     title.append(make("span", "forge-kicker", "Add a card"), make("strong", "", currentNode() ? `after ${currentNode().name}` : "to the board"));
     menu.appendChild(title);
-    ["agent", "judge", "logic", "approval", "output", "trigger"].forEach((type) => {
+    ["input", "agent", "judge", "logic", "approval", "output", "trigger"].forEach((type) => {
+      if (type === "input" && inputCard()) return;
       menuAction(menu, KIND[type].name, KIND[type].hint, () => addCard(type));
     });
     menuAction(menu, "A skill, script or file", "From the Sources tab: click one, or drag it onto the board.", () => {
@@ -2090,6 +2415,9 @@
       if (EXEC.has(node.type) && node.type !== "output") {
         menuAction(menu, "Add a card after it", "An agent wired from this one.", () => addCard("agent"));
         menuAction(menu, "Add a judge after it", "Grades this card's result.", () => addCard("judge"));
+      }
+      if ((node.type === "agent" || node.type === "judge") && !inputCard()) {
+        menuAction(menu, "Add the Input before it", "The ask, wired into this card.", () => addCard("input"));
       }
       menuAction(menu, "Duplicate", "A copy beside this one.", () => duplicateNode(node));
       menuAction(menu, "Remove", "Delete this card and its wires.", () => removeNode(node.id), true);
@@ -2192,7 +2520,9 @@
     viewport.addEventListener("drop", (event) => {
       event.preventDefault();
       if (!state.libraryDrag) return;
-      addSource(state.libraryDrag, boardPoint(event.clientX, event.clientY));
+      const point = boardPoint(event.clientX, event.clientY);
+      if (state.libraryDrag.environment) addEnvironment(state.libraryDrag.environment, point);
+      else addSource(state.libraryDrag, point);
       state.libraryDrag = null;
     });
   }
@@ -2253,11 +2583,13 @@
       revision: 0, nodes: [], edges: [], contexts: [], triggers: [], executable: true };
     state.trace = null;
     state.idea = null;
-    const agent = newCard("agent", { x: 120, y: 150 });
+    const ask = newCard("input", { x: 60, y: 150 });
+    const agent = newCard("agent", { x: 60 + CARD_W + 90, y: 150 });
     agent.name = "Work";
     agent.id = "work";
-    state.current.nodes.push(agent);
-    state.selectedNode = agent.id;
+    state.current.nodes.push(ask, agent);
+    state.current.edges.push({ id: id("wire"), from: ask.id, to: agent.id, instructions: "" });
+    state.selectedNode = ask.id;
     state.selectedEdge = null;
     state.zoom = 1; state.panX = 25; state.panY = 55;
     setDirty();
@@ -2266,15 +2598,27 @@
   }
 
   async function runFlow() {
-    if (!editable() || !state.current.id) return;
-    if (state.dirty) return toast("Save first, then run.");
-    const input = q("#forge-run-input").value.trim();
-    if (!input) return toast("Say what the Flow should work on.");
+    if (!editable()) return;
+    const card = inputCard();
+    if (!card) {
+      toast("Add an Input card first: it holds what the Flow works on.");
+      addCard("input");
+      return;
+    }
+    const input = String(card.prompt || "").trim();
+    if (!input) { openNode(card.id); return toast("Write what the Flow should work on in the Input card."); }
+    if (!state.current.id) return toast("Save the Flow first, then run it.");
+    // Typing the ask makes the board dirty. Your own Flow saves itself
+    // before it runs; a shipped starter runs on the ask without being
+    // changed (the ask rides the request).
+    if (state.dirty && !state.current.builtin) {
+      await saveFlow();
+      if (state.dirty) return;
+    }
     try {
       const linked = state.idea && state.idea.flow_id === state.current.id ? state.idea.idea_id : null;
       const result = await send(`/api/flows/${encodeURIComponent(state.current.id)}/run`, "POST", {
-        input, notify: false, output: "",
-        provider: q("#forge-run-provider")?.value || null,
+        input, notify: false, output: "", provider: null,
         idea_id: linked,
       });
       const runId = result.id || result.run_id || result.job_id;
@@ -2366,9 +2710,23 @@
     }
   }
 
+  function forgePaste(event) {
+    if (!forgeShowing() || !editable()) return;
+    if (q(".forge-dialog-backdrop", q("#forge-shell"))) return;
+    const typing = event.target?.closest?.("input, textarea, select, [contenteditable='true']");
+    const text = event.clipboardData?.getData("text/plain") || "";
+    // A link pasted into the library search is an ask, not a search.
+    const intoSearch = typing && typing.id === "forge-library-search" && /^https?:\/\/\S+$/i.test(text.trim());
+    if (typing && !intoSearch) return;
+    if (!text.trim()) return;
+    event.preventDefault();
+    pasteAsInput(text);
+  }
+
   function bind() {
     if (!q("#forge-shell") || state.bound) return;
     state.bound = true;
+    document.addEventListener("paste", forgePaste);
     qa("#forge-library-tabs .seg-btn").forEach((button) => button.addEventListener("click", () => switchLibrary(button.dataset.forgeLibrary)));
     q("#forge-library-search").addEventListener("input", (event) => {
       state.query = event.target.value;
@@ -2396,7 +2754,6 @@
     q("#forge-arrange").addEventListener("click", arrange);
     q("#forge-zoom-in").addEventListener("click", () => zoomAt(state.zoom * 1.12));
     q("#forge-zoom-out").addEventListener("click", () => zoomAt(state.zoom * .88));
-    q("#forge-run-input").addEventListener("keydown", (event) => { if (event.key === "Enter") runFlow(); });
     bindViewport();
   }
 
@@ -2409,9 +2766,13 @@
     setDirty(false);              // nothing to discard; skip the guard prompt
     await loadForge({ force: true });
     await selectFlow(payload.flow_id);
-    const box = q("#forge-run-input");
-    if (box) box.value = payload.input || "";
-    toast("Loaded into the Forge. Read the cards, change what you like, Save, then Run.");
+    const card = inputCard() || addCard("input");
+    if (card && payload.input) {
+      card.prompt = payload.input;
+      touch(card);
+      await saveFlow();          // the owner's own copy: the ask is kept with it
+    }
+    toast("Loaded into the Forge. Read the cards, change what you like, then Run.");
   }
 
   window.loadForge = loadForge;

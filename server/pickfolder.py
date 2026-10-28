@@ -72,6 +72,35 @@ if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {{
 '''
 
 
+# The file variants (2026-10-28, the Forge's Browse this Mac): the same
+# panel asked for a file. `choose file` returns an alias; POSIX path of it
+# is the path.
+_MAC_FILE = _MAC.replace("choose folder", "choose file")
+_WIN_FILE = '''
+Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object System.Windows.Forms.OpenFileDialog
+$d.Title = {prompt}
+$d.CheckFileExists = $true
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {{
+  Write-Output $d.FileName
+}} else {{
+  Write-Output "__CANCELLED__"
+}}
+'''
+
+
+def script(prompt, kind="folder"):
+    """The shell command that opens the panel for this platform and kind;
+    a folder unless kind is "file"."""
+    if settings.IS_MAC:
+        body = (_MAC_FILE if kind == "file" else _MAC).format(prompt=_mac_literal(prompt))
+        return ["osascript", "-e", body]
+    body = (_WIN_FILE if kind == "file" else _WIN).format(prompt=f"'{prompt}'")
+    return ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", body]
+
+
 def _mac_literal(s):
     """AppleScript string literal. Only backslash and quote need escaping,
     and the prompt is composed by Vira — but it reaches osascript as a
@@ -95,8 +124,9 @@ def available(local=True):
     return False, "no folder window on this platform — type the path instead"
 
 
-def pick(prompt="Choose a folder", local=True):
-    """Open the panel and block until the owner picks or cancels.
+def pick(prompt="Choose a folder", local=True, kind="folder"):
+    """Open the panel and block until the owner picks or cancels. `kind`
+    is "folder" or "file".
 
     Returns {"path": "/abs/path"} | {"cancelled": True} |
             {"unavailable": True, "reason": "..."}.
@@ -106,15 +136,10 @@ def pick(prompt="Choose a folder", local=True):
     ok, reason = available(local)
     if not ok:
         return {"unavailable": True, "reason": reason}
-    prompt = (prompt or "Choose a folder")[:200]
+    kind = "file" if kind == "file" else "folder"
+    prompt = (prompt or ("Choose a file" if kind == "file" else "Choose a folder"))[:200]
     try:
-        if settings.IS_MAC:
-            script = _MAC.format(prompt=_mac_literal(prompt))
-            cmd = ["osascript", "-e", script]
-        else:
-            script = _WIN.format(prompt=f"'{prompt}'")
-            cmd = ["powershell.exe", "-NoProfile", "-NonInteractive",
-                   "-Command", script]
+        cmd = script(prompt, kind)
         p = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
                            timeout=TIMEOUT_S)
@@ -136,6 +161,6 @@ def pick(prompt="Choose a folder", local=True):
                 "reason": tail[-1][:200] if tail else "folder window failed"}
     # macOS returns a trailing slash on directories; every consumer here
     # stores a bare path, so normalize once rather than at each call site.
-    if len(out) > 1:
+    if kind == "folder" and len(out) > 1:
         out = out.rstrip("/") or "/"
-    return {"path": out}
+    return {"path": out, "kind": kind}

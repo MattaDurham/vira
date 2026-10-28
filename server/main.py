@@ -3987,6 +3987,8 @@ def api_onboard_fda_assist():
 
 class PickFolderReq(BaseModel):
     prompt: str = "Choose a folder"
+    # "folder" or "file" (the Forge's Browse this Mac offers both)
+    kind: str = "folder"
     # Whether the BROWSER is on this machine. The client decides (a hostname
     # that is not localhost is the phone over Tailscale), because the server
     # cannot tell a same-machine request from a tailnet one by address alone
@@ -3998,7 +4000,7 @@ class PickFolderReq(BaseModel):
 def api_pick_folder(req: PickFolderReq):
     # Never raises — an unavailable picker is a normal answer the UI renders
     # beside the text field it falls back to.
-    return pickfolder.pick(req.prompt, local=req.local)
+    return pickfolder.pick(req.prompt, local=req.local, kind=req.kind)
 
 
 class FolderCreateReq(BaseModel):
@@ -4406,7 +4408,36 @@ def api_session_close(sid: str):
 
 @app.get("/api/flows")
 def api_flows():
-    return {"flows": flows.list_flows()}
+    return {"flows": flows.list_flows(), "defaults": flows.defaults(),
+            "environments": flows.list_environments()}
+
+
+class EnvironmentReq(BaseModel):
+    id: str | None = None
+    name: str
+    items: list[dict]
+
+
+@app.get("/api/flows/environments")
+def api_flow_environments():
+    return {"environments": flows.list_environments()}
+
+
+@app.post("/api/flows/environments")
+def api_flow_environment_save(req: EnvironmentReq):
+    try:
+        return flows.save_environment(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/flows/environments/{eid}")
+def api_flow_environment_delete(eid: str):
+    try:
+        flows.delete_environment(eid)
+    except KeyError:
+        raise HTTPException(404, "unknown environment")
+    return {"deleted": eid}
 
 
 @app.get("/api/flows/kit")
