@@ -1,12 +1,14 @@
 {
   "id": "attention/brief",
   "name": "Brief",
-  "summary": "The Daily Brief, its dismissed-row state, and the Journal typed into it.",
+  "summary": "The Daily Brief, its dismissed-row state, the Journal typed into it, and the source-health sentinel that labels a source gone quiet.",
   "owns": [
     "server/brief.py",
     "server/briefstate.py",
     "server/journal.py",
-    "tests/test_brief_edit.py"
+    "tests/test_brief_edit.py",
+    "server/sourcehealth.py",
+    "tests/test_sourcehealth.py"
   ],
   "routes": [
     "/api/brief$",
@@ -14,11 +16,13 @@
     "/api/brief/journal",
     "/api/brief/loop",
     "/api/brief/narrative",
-    "/api/brief/note"
+    "/api/brief/note",
+    "/api/health/sources"
   ],
   "stores": [
     "data/brief-state.json",
-    "data/journal.json"
+    "data/journal.json",
+    "data/source-health.json"
   ],
   "reads": [
     "people/crm",
@@ -27,7 +31,10 @@
     "applications/catalog",
     "reader/queue",
     "models/backends",
-    "attention/assistant"
+    "attention/assistant",
+    "incoming/imessage",
+    "incoming/mail",
+    "find/notes"
   ],
   "feeds": [
     "attention/now"
