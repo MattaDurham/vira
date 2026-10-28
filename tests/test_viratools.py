@@ -146,6 +146,12 @@ class TestPreamble(unittest.TestCase):
 
 
 class TestCalendar(unittest.TestCase):
+    def setUp(self):
+        # The appointment ledger is a real store; the calendar tool reads it.
+        p = mock.patch("server.appointments.upcoming", return_value=[])
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_renders_local_events_and_clamps_days(self):
         cal_db = mock.Mock()
         cal_db.exists.return_value = True

@@ -54,6 +54,9 @@ class ExecutiveTests(unittest.TestCase):
             mock.patch.object(executive.notify, "config", return_value={"enabled": True, "handle": "+15555550123"}),
             mock.patch.object(executive.notify, "assistant_send", return_value={"status": "sent"}),
             mock.patch.object(executive, "_now", return_value=NOW),
+            # The appointment scan reads chat.db and the CRM; its own suite
+            # (tests/test_appointments.py) covers it with synthetic sources.
+            mock.patch("server.appointments.tick", return_value={}),
             mock.patch.dict(os.environ, {}, clear=False),
         ]
         for p in patches:

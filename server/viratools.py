@@ -418,6 +418,10 @@ def _event_line(e):
     marks = "".join([" [work]" if e.get("work") else "",
                      " [family]" if e.get("family") else "",
                      " [birthday]" if e.get("birthday") else "",
+                     " [appointment, not on a calendar yet]" if e.get("appointment_found")
+                     else (" [appointment]" if e.get("appointment") else ""),
+                     f" [leave by {e['leave_by_hm']}]" if e.get("leave_by_hm") else "",
+                     f" [appointment {e['appointment_status']}]" if e.get("appointment_status") else "",
                      " [CONFLICT]" if e.get("conflict") else ""])
     return f"  {when:<18} {e.get('title', '?')}"\
            f"  ({e.get('calendar', '')}){marks}"
@@ -463,6 +467,8 @@ def _calendar_text(days):
                                "work": True})
         except Exception as e:  # noqa: BLE001 — degrade, never fail the tool
             notes.append(f"M365 calendar ({addr}) unavailable: {str(e)[:120]}")
+    from . import appointments
+    events = appointments.merge(events, start, end)
     head = (f"Calendar, next {days} day(s) "
             f"({settings.strf(start, '%a %b %-d')} to "
             f"{settings.strf(end - dt.timedelta(days=1), '%a %b %-d')}):")

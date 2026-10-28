@@ -21,6 +21,13 @@ everything else is personal, on purpose - a wrong "family" entry would
 claim the owner's time. A kids or family entry is filed FOR the owner on
 the owner's own calendars: the people it names ride the description as
 text and nobody is ever invited.
+
+APPOINTMENTS (2026-10-28). A booked appointment parsed from a reminder text
+or mail (server/appointments.py) is staged by plan_appointment, one draft
+per appointment however many reminders repeat it. Its date and clock time
+come from the message itself; only a missing duration is the owner's
+configured default, and the description says so. It is written only while
+the appointment ledger still holds it, unchanged and not cancelled.
 """
 import copy
 import datetime as dt
@@ -695,9 +702,12 @@ def _free_slot(deadline, exclude_id=None):
                 or draft.get("owner_only") is not True or draft.get("attendees")):
             continue
         try:
-            busy.append(_dates(draft))
+            low, high = _dates(draft)
         except ValueError:
-            pass
+            continue
+        # An appointment's travel time is as busy as the visit itself.
+        buffer = dt.timedelta(minutes=draft.get("travel_minutes") or 0)
+        busy.append((low - buffer, high + buffer))
     busy.sort(key=lambda pair: pair[0])
     day = now.astimezone(zone).date()
     duration = dt.timedelta(minutes=minutes)
@@ -826,6 +836,74 @@ def plan_coverage(gap_id, pickup, source, title, description):
     return _view(draft)
 
 
+def plan_appointment(appt):
+    """Stage one calendar entry for a ledger appointment (appointments.view).
+
+    The id is the appointment's, so the 3-day, 1-day and same-day reminders
+    for one visit stage one entry. A suggested draft whose appointment moved
+    is re-staged; a closed or in-flight one is returned as it is.
+    """
+    sources = [s for s in appt.get("sources", []) if s.get("quote")]
+    if not sources:
+        raise ValueError("An appointment needs the message that states its time.")
+    src = sources[-1]
+    full = src.get("text") or src["quote"]
+    travel = appt.get("travel_minutes") or 0
+    lines = ["Found in a message from " + (src.get("sender") or "a reminder service")
+             + (f' ("{src["subject"]}")' if src.get("subject") else "") + "."]
+    if appt.get("location"):
+        lines.append("Where: " + appt["location"] + ".")
+    if travel:
+        leave = _date(appt["start"]) - dt.timedelta(minutes=travel)
+        lines.append(f"Leave by {settings.strf(leave.astimezone(), '%-I:%M %p')} "
+                     f"({travel}-minute travel buffer).")
+    if not appt.get("end_stated"):
+        lines.append("The message states no end time; the length is your default appointment length.")
+    if len(sources) > 1 or len(appt.get("sources", [])) > 1:
+        lines.append(f'{len(appt["sources"])} reminders for this appointment were merged into this one entry.')
+    start = _date(appt["start"]).replace(second=0, microsecond=0)
+    end = _date(appt["end"]).replace(second=0, microsecond=0)
+    draft = _validate({"title": appt["title"], "quote": src["quote"], "time_quote": src["quote"],
+                       "owner_only": True, "description": " ".join(lines), "attendees": [],
+                       "location": appt.get("location") or "",
+                       "start": start.isoformat(), "end": end.isoformat()},
+                      {"id": src["key"], "channel": src.get("channel") or "message",
+                       "when": src.get("when") or "", "text": full, "is_from_me": False})
+    draft_id = "cal_" + hashlib.sha256(json.dumps(["appointment", appt["id"]]).encode("utf-8")).hexdigest()[:24]
+    with locked(STORE):
+        state = _read()
+        prior = state["drafts"].get(draft_id)
+        if prior and (prior.get("status") in CLOSED | {"creating", "uncertain"}
+                      or (prior.get("start"), prior.get("end")) == (draft["start"], draft["end"])):
+            return _view(prior)
+        draft.update(id=draft_id, schedule_kind="appointment", time_chosen_by="source",
+                     appointment_id=appt["id"], travel_minutes=travel,
+                     end_stated=bool(appt.get("end_stated")), status="suggested", reason="",
+                     created_at=prior.get("created_at", _stamp()) if prior else _stamp(),
+                     updated_at=_stamp())
+        state["drafts"][draft_id] = draft
+        jsonstore.write_atomic(STORE, state, indent=2, ensure_ascii=False)
+    return _view(draft)
+
+
+def _appointment_eligibility(draft):
+    """The appointment must still be in the ledger, upcoming and unchanged;
+    its time is the message's own, so it is not re-planned around anything."""
+    from . import appointments
+    try:
+        start, end = _dates(draft)
+    except ValueError as exc:
+        return str(exc)
+    reason = appointments.check_current(draft.get("appointment_id"), draft["start"], draft["end"])
+    if reason:
+        return reason
+    if start <= _now():
+        return "The appointment has started or passed; no entry is needed."
+    if not dt.timedelta(minutes=5) <= end - start <= dt.timedelta(hours=12):
+        return "An appointment entry must run between 5 minutes and 12 hours."
+    return ""
+
+
 def _coverage_eligibility(draft):
     """A pickup block's time comes from the owner's routine or the school's
     own calendar, so it is not re-grounded against a message quote; it only
@@ -875,9 +953,12 @@ def _eligibility(draft, automatic=True):
     # Pickup blocks have their own switch: turning on the coverage watcher
     # with blocks on is the owner's standing request for them.
     coverage = draft.get("schedule_kind") == "coverage"
+    appointment = draft.get("schedule_kind") == "appointment"
     if automatic and coverage and settings.get("coverage_calendar_blocks") is not True:
         return "Automatic pickup blocks are off; this remains a suggestion."
-    if automatic and not coverage and cfg.get("assistant_calendar_auto_create") is not True:
+    if automatic and appointment and settings.get("appointment_calendar_entries") is not True:
+        return "Automatic appointment entries are off; this remains a suggestion."
+    if automatic and not (coverage or appointment) and cfg.get("assistant_calendar_auto_create") is not True:
         return "Automatic calendar creation is off; this remains a suggestion."
     if not settings.IS_MAC:
         return "Personal calendar creation requires Calendar.app on macOS; export the draft instead."
@@ -890,6 +971,8 @@ def _eligibility(draft, automatic=True):
         return "Events involving other people remain suggestions; Vira does not send invitations."
     if draft.get("schedule_kind") == "commitment":
         return _commitment_eligibility(draft)
+    if draft.get("schedule_kind") == "appointment":
+        return _appointment_eligibility(draft)
     if draft.get("source", {}).get("is_from_me") is not True:
         return "Only the owner's own scheduling request can create a personal event."
     solo_quote = draft.get("owner_only_quote", "")
@@ -925,6 +1008,8 @@ def _lane_eligibility(draft):
         return _commitment_eligibility(draft)
     if draft.get("schedule_kind") == "coverage":
         return _coverage_eligibility(draft)
+    if draft.get("schedule_kind") == "appointment":
+        return _appointment_eligibility(draft)
     try:
         start, _ = _dates(draft)
         reason = _grounded(draft)

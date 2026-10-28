@@ -37,6 +37,9 @@ class AssistantFlowTests(AssistantFixture):
             mock.patch.object(executive.notify, "config", return_value={"enabled": True, "handle": "owner@example.test"}),
             mock.patch.object(calendarplan, "create_owner_event", side_effect=AssertionError("No OS calendar writes in this test")),
             mock.patch.object(executive.notify, "assistant_send", return_value={"status": "sent"}),
+            # The appointment scan reads chat.db and the CRM; its own suite
+            # (tests/test_appointments.py) covers it with synthetic sources.
+            mock.patch("server.appointments.tick", return_value={}),
         ]
         for patcher in patches:
             patched = patcher.start()

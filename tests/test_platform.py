@@ -24,6 +24,11 @@ class BriefCalendarFailSoftTests(unittest.TestCase):
     def setUp(self):
         brief._cal_error = None
         self.addCleanup(setattr, brief, "_cal_error", None)
+        # The appointment ledger and its scan are real stores; keep them out.
+        for p in (mock.patch.object(brief.appointments, "refresh", return_value="ok"),
+                  mock.patch.object(brief.appointments, "upcoming", return_value=[])):
+            p.start()
+            self.addCleanup(p.stop)
 
     def test_missing_store_is_empty_not_an_exception(self):
         with mock.patch.object(brief, "CAL_DB",

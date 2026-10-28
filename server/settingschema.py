@@ -212,6 +212,21 @@ SCHEMA = [
     S("assistant_calendar_auto_create", "calendar", "bool", False,
       "Create events automatically when I am the only attendee",
       "Otherwise every proposed event waits for your approval in Attention."),
+    S("appointment_calendar_entries", "calendar", "bool", True,
+      "Put appointments from reminder texts and mail on my calendar",
+      "A doctor's or service's reminder (an SMS short code, a booking site, "
+      "a patient portal) that states a date and time becomes one event on "
+      "the personal calendar, however many reminders repeat it. Nobody is "
+      "invited. Off keeps each as a suggestion in Attention. Needs the "
+      "assistant running; the brief shows them either way."),
+    S("appointment_minutes", "calendar", "int", 60,
+      "Appointment length when the reminder states none (minutes)",
+      range=(5, 480)),
+    S("appointment_travel_minutes", "calendar", "int", 30,
+      "Travel buffer around an in-person appointment (minutes)",
+      "Shown in the brief as a leave-by time and kept free when Vira plans "
+      "work blocks. Video and phone visits get none. 0 turns it off.",
+      range=(0, 240)),
     S("family_calendars", "calendar", "list", [],
       "Family calendar names in the brief",
       "Calendar names as they appear in Calendar.app, tagged as family in the "
