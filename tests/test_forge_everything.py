@@ -51,6 +51,9 @@ class Stores(unittest.TestCase):
             mock.patch.object(launchdjobs, "_disabled", return_value=set()),
             mock.patch.object(claudetasks, "tasks_dir", return_value=root / "scheduled-tasks"),
             mock.patch.object(claudetasks, "archive_dir", return_value=root / "scheduled-tasks-archive"),
+            # launchd is macOS only; the inventory says so elsewhere, and CI
+            # runs these on Windows too, against the temporary folders above
+            mock.patch.object(launchdjobs.settings, "IS_MAC", True),
         ]
         for patch in patches:
             patch.start()

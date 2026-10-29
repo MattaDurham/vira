@@ -226,7 +226,7 @@ def inventory():
     if not settings.IS_MAC:
         return {"status": "not_mac", "checked": checked, "groups": [],
                 "note": "launchd runs only on macOS."}
-    uid = os.getuid()
+    uid = _uid()
     gui, system = _gui_state(), _system_state()
     off = {"gui": _disabled(f"gui/{uid}"), "system": _disabled("system")}
     groups = []
