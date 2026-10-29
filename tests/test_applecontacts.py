@@ -483,3 +483,76 @@ class PushTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _dup_card(uid, name, *, emails=(), phones=(), org="", created=None):
+    first, last = ac.split_name(name)
+    return {"uid": uid, "store": "s", "pk": 1, "first": first, "last": last,
+            "name": name, "org": org, "title": "", "nickname": "", "note": "",
+            "birthday": None, "created": created, "modified": created,
+            "emails": [{"value": e, "label": "home"} for e in emails],
+            "phones": [{"value": p, "label": "mobile"} for p in phones],
+            "urls": [], "addresses": [], "related": [], "dates": [], "social": []}
+
+
+class DuplicatesTest(unittest.TestCase):
+    """find_duplicates and fold_cards (2026-10-28): cards that read as one
+    person, and the fold that keeps one of them."""
+
+    def _cards(self):
+        return [
+            _dup_card("A", "Pat Example", emails=["pat@example.com"], created=100.0),
+            _dup_card("B", "Patricia Example", phones=["+1 555 010 0100"], created=200.0),
+            _dup_card("C", "Sam Other", emails=["sam@example.com"]),
+            _dup_card("D", "Sam Other", phones=["5550100200"]),
+            _dup_card("E", "Lee Third", phones=["5550100300"]),
+            _dup_card("F", "Kim Fourth", phones=["5550100300"]),     # a line, not a twin
+            _dup_card("G", "", emails=["pat@example.com"]),          # unnamed, Pat's email
+            _dup_card("H", "W One", phones=["5550100400"]),
+            _dup_card("I", "X Two", phones=["5550100400"]),
+            _dup_card("J", "Y Three", phones=["5550100400"]),
+            _dup_card("K", "Z Four", phones=["5550100400"]),         # a switchboard
+            _dup_card("L", "J. Example", emails=["j@example.com"]),  # an initial: no match
+        ]
+
+    def test_find_duplicates_groups_names_and_shared_handles(self):
+        groups = ac.find_duplicates(self._cards())
+        self.assertEqual([set(g["uids"]) for g in groups], [{"A", "B", "G"}, {"C", "D"}])
+        pat = groups[0]
+        self.assertEqual(pat["keep"], "A")
+        self.assertIn("Pat / Patricia", pat["why"])
+        self.assertIn("share pat@example.com", pat["why"])
+        self.assertEqual(groups[1]["why"], ["same name"])
+        self.assertEqual([c["uid"] for c in pat["cards"]][0], "A")
+
+    def test_a_line_is_not_a_signal(self):
+        groups = ac.find_duplicates(self._cards(), lines={"pat@example.com"})
+        self.assertEqual([set(g["uids"]) for g in groups], [{"A", "B"}, {"C", "D"}])
+
+    def test_fold_pushes_the_union_then_deletes(self):
+        cards = self._cards()
+        scripts = []
+        with mock.patch.object(ac, "enabled", return_value=True), \
+             mock.patch.object(ac, "backup_vcard", return_value=None), \
+             mock.patch.object(ac, "_osascript", side_effect=lambda s: scripts.append(s) or "ok"):
+            out = ac.fold_cards("A", ["B", "G", "A", "nope"], cards=cards)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["pushed"], ["+1 555 010 0100"])
+        self.assertEqual(out["deleted"], ["B", "G"])
+        self.assertEqual(out["errors"], ["nope: not on the Mac"])
+        self.assertEqual(len(scripts), 3)
+        self.assertIn('set P to person id "A"', scripts[0])
+        self.assertIn('value:"+1 555 010 0100"', scripts[0])
+        self.assertIn("delete every phone of P", scripts[0])
+        self.assertNotIn("email", scripts[0])             # nothing new to add
+        self.assertIn('delete person id "B"', scripts[1])
+        self.assertIn('delete person id "G"', scripts[2])
+
+    def test_fold_refuses_honestly(self):
+        with mock.patch.object(ac, "enabled", return_value=False):
+            self.assertFalse(ac.fold_cards("A", ["B"], cards=self._cards())["ok"])
+        with mock.patch.object(ac, "enabled", return_value=True):
+            out = ac.fold_cards("nope", ["B"], cards=self._cards())
+            self.assertFalse(out["ok"])
+            self.assertIn("not on the Mac", out["detail"])
+            self.assertFalse(ac.fold_cards("A", ["A"], cards=self._cards())["ok"])

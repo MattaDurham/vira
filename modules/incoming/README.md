@@ -28,7 +28,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 - [Mail](mail/README.md) - IMAP and Microsoft 365 inboxes, the local mail archive, and reading or answering an email. (22 files)
 - [WhatsApp](whatsapp/README.md) - Receive-only WhatsApp through a linked-device sidecar process. (8 files)
 - [Companion](companion/README.md) - The Android companion app: pairing, message ingest, and phone pings. (30 files)
-- [Triage](triage/README.md) - Unknown senders, institutional chores, and correspondence that is evidence first. (10 files)
+- [Triage](triage/README.md) - Unknown senders, institutional chores, and correspondence that is evidence first. (11 files)
 
 ### Neighbours
 
@@ -40,6 +40,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Windows: `feed`, `admin` (ids from `WINDOWS` in `static/app.js`).
 
-86 tracked files across 6 submodules. `python -m server.moduletree brief incoming` prints every submodule's page in one go.
+87 tracked files across 6 submodules. `python -m server.moduletree brief incoming` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

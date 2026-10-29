@@ -587,3 +587,28 @@ class MailAttentionTests(unittest.TestCase):
             st = onboard.status()
         self.assertEqual(st["mail"]["accounts"], 1)
         self.assertEqual(st["mail"]["failing"], 0)
+
+
+class ImportHoldTests(ImportMergeTests):
+    def test_a_lookalike_is_held_not_minted(self):
+        from server import contactsync
+        contacts = onboard.read_google_csv(GOOGLE_CSV_NEW)
+        onboard.import_contacts(contacts, "google-csv")
+        twin = {"name": "Casey Q. Example", "company": "", "title": "",
+                "emails": ["casey2@example.com"], "phones10": []}
+        store = self.root / "contacts-sync.json"
+        with mock.patch.object(contactsync, "STORE", store):
+            r = onboard.import_contacts([twin], "google-csv")
+            self.assertEqual((r["added"], len(r["held"])), (0, 1))
+            self.assertEqual(r["held"][0]["existing"], "Casey Example")
+            rows = json.loads(store.read_text(encoding="utf-8"))["review"]
+            self.assertEqual([x["kind"] for x in rows], ["possible-duplicate"])
+            self.assertEqual(rows[0]["card"]["emails"], ["casey2@example.com"])
+            # the same import again files nothing twice; "different" imports it
+            onboard.import_contacts([twin], "google-csv")
+            self.assertEqual(len(json.loads(store.read_text(encoding="utf-8"))["review"]), 1)
+            r2 = onboard.import_contacts([twin], "google-csv", check_names=False)
+        self.assertEqual(r2["added"], 1)
+        names = [p["name"] for p in json.loads(
+            (self.root / "people.json").read_text(encoding="utf-8"))["people"]]
+        self.assertIn("Casey Q. Example", names)

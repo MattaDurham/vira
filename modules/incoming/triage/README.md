@@ -21,7 +21,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [People / CRM](../../people/crm/README.md), [Attention / Assistant](../../attention/assistant/README.md)
 
-### Files (10)
+### Files (11)
 
 **Server**
 
@@ -47,8 +47,9 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_correspondence.py` | Private intake uses synthetic messages, isolated state, and temporary vaults. |
 | `tests/test_resolver.py` | The triage contact resolver: deterministic referrer extraction, referral group intersection, grounded-or-held name verification, and the two routes (/api/tri... |
 | `tests/test_triage_brief_flags.py` | Business-sender detection (triage) and remote-event conflict exclusion (brief). |
+| `tests/test_triage_skip.py` | Triage's registry decisions (2026-10-28): Skip tiers a placeholder out and a later name undoes it; a shared line is written on its owner; a batch of handle a... |
 
-### Routes (15)
+### Routes (16)
 
 Prefixes: `/api/triage`, `/api/brief/admin`, `/api/correspondence`, `/api/crm/add`
 
@@ -65,6 +66,7 @@ Prefixes: `/api/triage`, `/api/brief/admin`, `/api/correspondence`, `/api/crm/ad
 - `GET /api/triage`
 - `GET /api/triage/lookup`
 - `POST /api/triage/dismiss`
+- `POST /api/triage/skip`
 - `POST /api/triage/resolve`
 - `POST /api/crm/add`
 

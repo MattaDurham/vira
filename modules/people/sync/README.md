@@ -35,7 +35,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [People / CRM](../crm/README.md)
 
-### Files (7)
+### Files (11)
 
 **Server**
 
@@ -44,6 +44,8 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `server/applecontacts.py` | Apple Contacts write-back - the Apple spoke of the CRM sync engine. |
 | `server/contactintel.py` | Evidence-grounded contact maintenance, queued independently of the feed. |
 | `server/contactsync.py` | Contacts sync: the CRM and the phone's address book reconciled, both ways. |
+| `server/crmmerge.py` | Duplicates in the CRM, and the merge that folds one record into another. |
+| `server/names.py` | Person-name comparison for the contact cleanup tools. |
 | `server/photos.py` | Contact photos: extract thumbnails from the local AddressBook stores and map them to CRM person ids by shared email/phone. |
 
 **Tests**
@@ -53,23 +55,32 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_applecontacts.py` | Apple Contacts write-back: the plan (pure), the script, the gates, the sqlite matcher, and the push orchestration with osascript mocked. |
 | `tests/test_contactintel.py` | Synthetic, tool-free assistant passes over isolated CRM and corpus stores. |
 | `tests/test_contactsync.py` | Contacts sync: the survey, the watermark, the inbound writes, the push, card creation and the review list, over a temp CRM and synthetic Apple cards (load_ca... |
+| `tests/test_crmmerge.py` | CRM duplicates and the merge (server/crmmerge.py) over a temp CRM root, a temp card overlay, a temp sync store and a temp merge store. |
+| `tests/test_names.py` | server/names.py: the one answer to "could these two names be one person?" that the merge, the fold and the import check share. |
 
-### Routes (4)
+### Routes (10)
 
-Prefixes: `/api/photo`, `/api/contacts/sync`
+Prefixes: `/api/photo`, `/api/contacts/sync`, `/api/people/duplicates`, `/api/people/merge`, `/api/contacts/fold`
 
 - `GET /api/contacts/sync`
 - `POST /api/contacts/sync/run`
 - `POST /api/contacts/sync/review`
+- `POST /api/contacts/sync/lines`
+- `POST /api/contacts/sync/duplicate`
+- `GET /api/people/duplicates`
+- `POST /api/people/merge`
+- `POST /api/people/duplicates/dismiss`
+- `POST /api/contacts/fold`
 - `GET /api/photo/{pid}`
 
-### Stores (3)
+### Stores (4)
 
 Instance state under git-ignored `data/`; never hand-edit (see `AGENTS.local.md`, section 5).
 
 - `data/photos/`
 - `data/contact-intel.json`
 - `data/contacts-sync.json`
+- `data/crm-merge.json`
 
 ### System map
 

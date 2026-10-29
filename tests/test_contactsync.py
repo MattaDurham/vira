@@ -402,3 +402,160 @@ class GateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinesTest(SyncCase):
+    """Shared lines (2026-10-28): an office number two people carry is
+    nobody's match signal, nobody's conflict, files no review entry, and
+    still reaches its first owner inbound."""
+
+    def _office(self):
+        # Zed's CRM record carries the phone on Alex's card: an office line
+        self.people.append(person("p_z", "Zed Office", phones=["5550101234"]))
+        self._write_registry()
+        crm.invalidate()
+
+    def test_shared_lines_row_suggests_a_switchboard(self):
+        self._office()
+        s = cs.survey()
+        self.assertEqual(len(s["shared_cards"]), 1)
+        self.assertEqual([r["key"] for r in s["shared_lines"]], ["phone:5550101234"])
+        r = s["shared_lines"][0]
+        self.assertTrue(r["suggest"])
+        self.assertIn("two surnames share it", r["why"])
+        self.assertEqual([q["pid"] for q in r["people"]], ["p_z"])
+        self.assertEqual([c["uid"] for c in r["cards"]], ["A:ABPerson"])
+        self.assertEqual(r["shared_cards"], ["A:ABPerson"])
+        self.assertEqual(r["mark"], [{"pid": "p_z", "value": "5550101234"}])
+        self.assertEqual([(c["pid"], c["other_pid"]) for c in r["conflicts"]],
+                         [("p_a", "p_z")])
+
+    def test_two_records_for_one_person_are_not_a_line(self):
+        self.people.append(person("p_z", "Alexander Example", phones=["5550101234"]))
+        self._write_registry()
+        crm.invalidate()
+        s = cs.survey()
+        self.assertEqual(len(s["shared_cards"]), 1)
+        self.assertEqual(s["shared_lines"], [])       # a duplicate, for the merge
+
+    def test_marked_line_is_no_match_no_conflict_no_review(self):
+        self._office()
+        out = cs.set_lines([{"pid": "p_z", "value": "+1 (555) 010-1234"}])
+        self.assertEqual(out["marked"], ["5550101234"])
+        self.assertEqual(self.by_name("Zed Office")["handles"]["lines"], ["5550101234"])
+        s = cs.survey()
+        self.assertEqual(s["shared_cards"], [])
+        self.assertEqual(s["handle_conflicts"], [])
+        self.assertEqual(s["shared_lines"], [])
+        self.assertFalse([h for h in s["handle_adds"] if h["value"] == "5550101234"])
+        self.assertEqual(s["lines"], 1)
+        self.assertNotIn("p_z", [m["pid"] for m in s["missing"]])   # a line alone is no card
+        cs.apply(inbound=True)
+        kinds = {r["kind"] for r in cs.read_store()["review"]}
+        self.assertNotIn("shared-card", kinds)
+        self.assertNotIn("handle-conflict", kinds)
+        self.assertEqual(crm.resolve_handle("+1 (555) 010-1234"), "p_z")
+
+    def test_a_line_resolves_to_its_first_owner(self):
+        self._office()
+        self.people.append(person("p_w", "Wen Office", phones=["5550101234"]))
+        self._write_registry()
+        crm.invalidate()
+        self.assertEqual(crm.resolve_handle("5550101234"), "p_w")   # last wins, as before
+        cs.set_lines([{"pid": "p_z", "value": "5550101234"}])
+        self.assertEqual(crm.resolve_handle("5550101234"), "p_z")   # a line: the first owner
+
+    def test_same_office_prunes_the_stored_report(self):
+        self._office()
+        cs.apply(inbound=False)
+        rep = cs.read_store()["report"]
+        # one line row explains the shared card and both conflicts
+        self.assertEqual((rep["shared_lines_total"], rep["shared_cards_total"],
+                          rep["handle_conflicts_total"]), (1, 1, 2))
+        cs.set_lines([{"pid": "p_z", "value": "5550101234"}])
+        rep = cs.read_store()["report"]
+        self.assertEqual((rep["shared_lines_total"], rep["shared_cards_total"],
+                          rep["handle_conflicts_total"], rep["lines"]), (0, 0, 0, 1))
+
+    def test_not_the_same_office_keeps_the_row_apart(self):
+        self._office()
+        cs.apply(inbound=False)
+        cs.set_lines([], keep=["phone:5550101234"])
+        rep = cs.read_store()["report"]
+        self.assertEqual(rep["shared_lines"], [])
+        self.assertEqual(rep["shared_lines_kept"], 1)
+        self.assertEqual(rep["shared_cards_total"], 1)       # the card is still shared
+        s = cs.survey()
+        self.assertEqual(s["shared_lines"], [])
+        self.assertEqual(s["shared_lines_kept"], 1)
+
+    def test_a_handle_the_person_lacks_is_refused(self):
+        with self.assertRaises(ValueError):
+            cs.set_lines([{"pid": "p_a", "value": "5550109999"}])
+        with self.assertRaises(KeyError):
+            cs.set_lines([{"pid": "p_none", "value": "5550109999"}])
+
+
+class BatchAndHoldTest(SyncCase):
+    def test_handle_adds_land_in_one_backup(self):
+        # Alex gains the card phone, Dana a new one: two adds, one write
+        self.cards[1]["phones"] = [{"value": "+1 (555) 010-5678", "label": "mobile"}]
+        cs.apply(inbound=True)
+        self.assertIn("5550101234", self.by_name("Alex Example")["handles"]["phones10"])
+        self.assertIn("5550105678", self.by_name("Dana Example")["handles"]["phones10"])
+        backups = sorted((self.root / "backups").glob("people-*.json"))
+        # one for the import of Casey, one for both handle adds
+        self.assertEqual(len(backups), 2, [b.name for b in backups])
+
+    def test_lookalike_new_card_is_held_as_a_possible_duplicate(self):
+        self.cards.append(card("L:ABPerson", "Dana Q. Example",
+                               emails=["dana2@example.com"], created=2200.0))
+        out = cs.apply(inbound=True)
+        self.assertIsNone(self.by_name("Dana Q. Example"))
+        self.assertNotIn("Dana Q. Example", [x["name"] for x in out["done"]["imported"]])
+        rows = [r for r in cs.read_store()["review"] if r["kind"] == "possible-duplicate"]
+        self.assertEqual([(r["pid"], r["uid"]) for r in rows], [("p_d", "L:ABPerson")])
+        self.assertIn("Dana Q. Example", rows[0]["detail"])
+        # the watermark moved past it: no second entry on the next pass
+        cs.apply(inbound=True)
+        self.assertEqual(len([r for r in cs.read_store()["review"]
+                              if r["kind"] == "possible-duplicate"]), 1)
+        # "same person": the held card's handles join Dana
+        r = cs.resolve_duplicate(rows[0]["id"], "same")
+        self.assertEqual(r["landed"], ["dana2@example.com"])
+        self.assertIn("dana2@example.com", self.by_name("Dana Example")["handles"]["emails"])
+        self.assertTrue(all(x["reviewed"] for x in cs.read_store()["review"]
+                            if x["kind"] == "possible-duplicate"))
+
+    def test_different_person_imports_the_held_card(self):
+        self.cards.append(card("L:ABPerson", "Dana Q. Example",
+                               emails=["dana2@example.com"], created=2200.0))
+        cs.apply(inbound=True)
+        row = next(r for r in cs.read_store()["review"] if r["kind"] == "possible-duplicate")
+        r = cs.resolve_duplicate(row["id"], "different")
+        self.assertEqual(r["added"], 1)
+        self.assertIsNotNone(self.by_name("Dana Q. Example"))
+        with self.assertRaises(ValueError):
+            cs.resolve_duplicate(row["id"], "maybe")
+        with self.assertRaises(KeyError):
+            cs.resolve_duplicate("rv_nope", "same")
+
+    def test_mark_reviewed_by_kind_and_status_counts(self):
+        cs.apply(inbound=True)
+        st = cs.status()
+        self.assertIn("new-person", st["review_kinds"])
+        self.assertIn("note-merged", st["informational_kinds"])
+        n = st["review_kinds"]["phone-note"]
+        self.assertEqual(cs.mark_reviewed(kinds=["phone-note"])["marked"], n)
+        self.assertNotIn("phone-note", cs.status()["review_kinds"])
+        self.assertIn("new-person", cs.status()["review_kinds"])
+
+
+class GateMoreTest(unittest.TestCase):
+    def test_card_worthy_refuses_placeholders_and_lines(self):
+        self.assertFalse(cs.card_worthy(person("p5", "(unidentified)", emails=["x@example.com"])))
+        self.assertFalse(cs.card_worthy(person("p6", "+1" + "5550100000", phones=["5550100000"])))
+        self.assertFalse(cs.card_worthy(person("p7", "5550100000", phones=["5550100000"])))
+        self.assertTrue(cs.card_worthy(person("p8", "Line Person", phones=["5550100001"])))
+        self.assertFalse(cs.card_worthy(person("p8", "Line Person", phones=["5550100001"]),
+                                        lines={"5550100001"}))

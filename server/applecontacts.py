@@ -333,15 +333,178 @@ def index_cards(cards):
     return idx
 
 
-def match_cards(cards, idx, emails, phones10):
+def match_cards(cards, idx, emails, phones10, lines=()):
     """The cards sharing a normalized handle with the person, in store
-    order, each once."""
+    order, each once. A handle in `lines` (an office number, a team
+    mailbox the owner marked as shared) is not a match signal: colleagues
+    who share it are not one person."""
     hits = set()
     for e in emails or []:
-        hits.update(idx["email"].get(_norm_email(e), []))
+        k = _norm_email(e)
+        if k and k not in lines:
+            hits.update(idx["email"].get(k, []))
     for p in phones10 or []:
-        hits.update(idx["phone"].get(_norm_phone(p), []))
+        k = _norm_phone(p)
+        if k and k not in lines:
+            hits.update(idx["phone"].get(k, []))
     return [cards[i] for i in sorted(hits)]
+
+
+# ---------- duplicates on the phone ----------
+
+# A handle on more cards than this is a switchboard (an office line, a
+# company mailbox), never a sign that the cards are one person. The June
+# 2026 dedup used the same cut.
+SWITCHBOARD_CARDS = 3
+
+
+def _card_score(c):
+    """How complete a card is: the one to keep in a group. Handles count
+    most, then the fields a fold would not carry, then age (the older card
+    is the one the owner has lived with)."""
+    created = c.get("created")
+    return (len(c.get("emails", [])) + len(c.get("phones", [])),
+            sum(1 for k in ("org", "title", "note", "birthday") if c.get(k)),
+            len(c.get("addresses", [])) + len(c.get("urls", [])),
+            -created if created else float("-inf"))
+
+
+def find_duplicates(cards, lines=(), max_cards=SWITCHBOARD_CARDS):
+    """Groups of phone cards that read as one person: the same full name,
+    a nickname-equivalent first name with the same surname, or a shared
+    email or phone that is not on more than `max_cards` cards and is not
+    a line. A shared handle between two NAMED cards whose names are not
+    compatible is an office line, not a duplicate, and is left to the
+    Shared lines list. Returns [{uids, keep, cards: [{uid, name, org,
+    emails, phones, created}], why: [str]}], largest groups first."""
+    from . import names
+    parent = {c["uid"]: c["uid"] for c in cards}
+    reasons = {}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def link(a, b, why):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+        reasons.setdefault(frozenset((a, b)), []).append(why)
+
+    by_uid = {c["uid"]: c for c in cards}
+    by_surname = {}
+    for c in cards:
+        first, last = names.split(c.get("name") or "")
+        if first and last:
+            by_surname.setdefault(names.surname_key(last), []).append((first, c["uid"]))
+    for rows in by_surname.values():
+        for i in range(len(rows)):
+            for j in range(i + 1, len(rows)):
+                (fa, ua), (fb, ub) = rows[i], rows[j]
+                ka, kb = names.first_key(fa), names.first_key(fb)
+                if len(ka) < 2 or len(kb) < 2:
+                    continue
+                if ka == kb:
+                    link(ua, ub, "same name")
+                elif kb in names.nick_set(fa):
+                    link(ua, ub, f"{fa} / {fb}")
+    idx = index_cards(cards)
+    for kind in ("email", "phone"):
+        for key, hits in idx[kind].items():
+            uids = list(dict.fromkeys(cards[i]["uid"] for i in hits))
+            if len(uids) < 2 or len(uids) > max_cards or key in lines:
+                continue
+            for i in range(len(uids)):
+                for j in range(i + 1, len(uids)):
+                    na, nb = by_uid[uids[i]].get("name"), by_uid[uids[j]].get("name")
+                    if na and nb and not names.compatible(na, nb) \
+                            and names.split(na)[1] and names.split(nb)[1]:
+                        continue        # two named people on one line
+                    link(uids[i], uids[j], f"share {key}")
+    groups = {}
+    for c in cards:
+        groups.setdefault(find(c["uid"]), []).append(c)
+    out = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members.sort(key=_card_score, reverse=True)
+        uids = [m["uid"] for m in members]
+        why = []
+        for pair, ws in reasons.items():
+            if pair <= set(uids):
+                for w in ws:
+                    if w not in why:
+                        why.append(w)
+        out.append({
+            "uids": uids, "keep": uids[0], "why": why,
+            "cards": [{"uid": m["uid"], "name": m.get("name") or "",
+                       "org": m.get("org") or "",
+                       "emails": [e["value"] for e in m.get("emails", [])],
+                       "phones": [p["value"] for p in m.get("phones", [])],
+                       "created": m.get("created")} for m in members],
+        })
+    out.sort(key=lambda g: (-len(g["uids"]), g["cards"][0]["name"].lower()))
+    return out
+
+
+def fold_cards(keep_uid, drop_uids, cards=None):
+    """Fold duplicate phone cards into one: the union of their emails and
+    phones is written to the keeper (its own first, each other card's in
+    turn, labels kept), then each other card is deleted, every card
+    vCard-backed-up before its first touch. Returns {ok, uid, pushed
+    [handles added], deleted [uids], errors [str]}; never raises."""
+    if not enabled():
+        return {"ok": False, "detail": "apple push not available here",
+                "pushed": [], "deleted": [], "errors": []}
+    out = {"ok": True, "uid": keep_uid, "pushed": [], "deleted": [], "errors": []}
+    try:
+        cards = cards if cards is not None else load_cards()
+        by_uid = {c["uid"]: c for c in cards}
+        keep = by_uid.get(keep_uid)
+        if not keep:
+            return {**out, "ok": False, "detail": "the card to keep is not on the Mac"}
+        drops = []
+        for uid in dict.fromkeys(drop_uids or []):
+            if uid == keep_uid:
+                continue
+            if uid not in by_uid:
+                out["errors"].append(f"{uid}: not on the Mac")
+                continue
+            drops.append(by_uid[uid])
+        if not drops:
+            return {**out, "ok": False, "detail": "nothing to fold"}
+        kw = {}
+        for kind, prop in (("email", "emails"), ("phone", "phones")):
+            norm = _norm_email if kind == "email" else _norm_phone
+            have = {norm(h["value"]) for h in keep.get(prop, [])}
+            plan = [(h["value"], h["label"]) for h in keep.get(prop, [])]
+            for d in drops:
+                for h in d.get(prop, []):
+                    k = norm(h["value"])
+                    if k and k not in have:
+                        have.add(k)
+                        plan.append((h["value"], h["label"]))
+                        out["pushed"].append(h["value"])
+            if len(plan) > len(keep.get(prop, [])):
+                kw[prop] = plan
+        backup_vcard(keep_uid)
+        if kw:
+            _osascript(build_script(keep_uid, **kw))
+        for d in drops:
+            r = delete_card(d["uid"])
+            if r["ok"]:
+                out["deleted"].append(d["uid"])
+            else:
+                out["errors"].append(f"{d.get('name') or d['uid']}: {r['detail']}")
+        out["detail"] = (f"kept {keep.get('name') or keep_uid}: "
+                         f"{len(out['pushed'])} handles added, "
+                         f"{len(out['deleted'])} cards removed")
+        return out
+    except Exception as e:
+        return {**out, "ok": False, "detail": str(e)[:300]}
 
 
 def find_cards(emails, phones10):

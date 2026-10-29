@@ -54,6 +54,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # its gap ledger is what keeps a question from being asked twice.
          "coverage.json",
          "mail-accounts.json", "circuits.json", "evidence.json",
+         # Duplicate decisions (Not the same) and the merge/fold log: owner
+         # judgement that nothing can recompute.
+         "crm-merge.json",
          # The Reader's queue: which documents are worth reading and which are
          # read. The documents themselves live at their sources, but the
          # curation and the read-state are only here.

@@ -1,7 +1,14 @@
 """Unknown-sender triage: surface unresolved iMessage handles (using the CRM
 enrichment verdicts as prefill) and append user-approved people to the CRM
 registry (people.json — still the source of truth, so it gets a timestamped
-backup before every write). Deterministic file reads/writes, no AI."""
+backup before every write). Deterministic file reads/writes, no AI.
+
+Since 2026-10-28 this is also where the registry's small owner decisions
+are written, each backup-first through _read_people_backed_up: a Skip
+(the record is tiered out and its handles dismissed, undone by a later
+name), a shared line (handles.lines: an office number or team mailbox
+that is nobody's match signal), and a batch of handle adds in one write.
+"""
 import json
 import re
 import shutil
@@ -37,13 +44,21 @@ def _dismissed():
 
 
 def dismiss(handle):
+    return dismiss_many([handle])
+
+
+def dismiss_many(handles):
+    """Dismiss several handles in one write of the triage state."""
+    want = [h for h in handles if h]
+
     def fn(s):
         d = set(s.get("dismissed") or [])
-        d.add(handle)
-        return {"dismissed": sorted(d)}
+        d.update(want)
+        s["dismissed"] = sorted(d)
+        return s
 
     jsonstore.mutate(STATE, fn, {}, indent=1)
-    return {"dismissed": True}
+    return {"dismissed": True, "n": len(want)}
 
 
 def _verdicts():
@@ -74,6 +89,37 @@ PLACEHOLDER_NAMES = {"(unidentified)", "unidentified", ""}
 def _is_placeholder(name):
     n = (name or "").strip()
     return n.lower() in PLACEHOLDER_NAMES or n.startswith("+1") or n.isdigit()
+
+
+# The CRM's own tier words for a person Vira leaves alone: a `*skip`
+# master tier, an `excluded` profile tier. Vira reads them and applies one
+# rule everywhere (triage, the phone sync's card_worthy) rather than
+# knowing any list.
+SKIP_TIER = "D-skip"
+EXCLUDED_TIER = "excluded"
+
+
+def skipped(p):
+    """True for a record the CRM or the owner tiered out."""
+    tier = str(p.get("master_tier") or "").lower()
+    return p.get("profile_tier") == EXCLUDED_TIER or tier.endswith("skip")
+
+
+def _record_handles(p):
+    """Every handle string a registry record carries, as the triage list
+    shows them (the raw imessage spellings first)."""
+    h = p.get("handles") or {}
+    out = []
+    for x in (h.get("imessage") or []) + (h.get("emails") or []) \
+            + ["+1" + ph for ph in (h.get("phones10") or [])]:
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
+def _handle_keys(p):
+    """The resolution keys of a record's handles (data.handle_key)."""
+    return {crm.handle_key(x) for x in _record_handles(p)} - {""}
 
 
 # ---------- business/automated-sender detection ----------
@@ -175,7 +221,7 @@ def candidates():
     out = []
     seen = set()
     for p in crm._load()["people"]:
-        if not _is_placeholder(p["name"]):
+        if not _is_placeholder(p["name"]) or skipped(p):
             continue
         handles = p.get("handles", {})
         hs = (handles.get("imessage") or handles.get("emails")
@@ -257,6 +303,22 @@ def candidates():
     return out
 
 
+# How many people.json snapshots the CRM's backups/ keeps. Every registry
+# write takes one, and a sync pass that lands a dozen handles used to take a
+# dozen in a minute; the newest twenty reach back further than anyone has
+# needed to restore, and the dated merge-* folders beside them are kept.
+BACKUPS_KEEP = 20
+
+
+def _prune_backups(backups):
+    try:
+        old = sorted(backups.glob("people-*.json"))
+        for stale in old[:-BACKUPS_KEEP]:
+            stale.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _read_people_backed_up(root=None):
     """Read people.json after taking a timestamped backup. Every write path
     into the registry goes through this — the backup is the guarantee, and a
@@ -267,7 +329,13 @@ def _read_people_backed_up(root=None):
         backups = root / "backups" if root is not None else _backups()
         backups.mkdir(exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        shutil.copy2(people_path, backups / f"people-{stamp}.json")
+        dest = backups / f"people-{stamp}.json"
+        for n in range(1, 100):
+            if not dest.exists():
+                break
+            dest = backups / f"people-{stamp}-{n:02d}.json"
+        shutil.copy2(people_path, dest)
+        _prune_backups(backups)
     except FileNotFoundError:
         # first person ever: mint the registry, so a CRM can grow from
         # zero through triage alone (v9 onboarding)
@@ -298,8 +366,144 @@ def rename_person(person_id, name):
             raise KeyError(person_id)
         person["name"] = name
         person.setdefault("refs", {})["vira_named"] = time.strftime("%Y-%m-%d")
+        _unskip(person)
         _write_people(doc)
         return person
+
+
+def _unskip(person):
+    """A named person is no longer skipped: a Skip (skip_person) is undone
+    the moment the record gets a real name, restoring the tiers it had."""
+    sk = (person.get("refs") or {}).get("skipped")
+    if not isinstance(sk, dict) or _is_placeholder(person.get("name")):
+        return False
+    prev = sk.get("previous") or {}
+    person["master_tier"] = prev.get("master_tier") or "C-review"
+    if prev.get("profile_tier"):
+        person["profile_tier"] = prev["profile_tier"]
+    else:
+        person.pop("profile_tier", None)
+    person["refs"].pop("skipped", None)
+    person["refs"]["unskipped"] = time.strftime("%Y-%m-%d")
+    return True
+
+
+def skip_person(person_id):
+    """Skip a registry record: tiered out (the CRM's own words, D-skip and
+    excluded), its handles dismissed from triage, and never a phone card.
+    The tiers it had are kept under refs.skipped so a later name restores
+    them. Backup-first, one write."""
+    with _lock:
+        crm.invalidate()
+        doc = _read_people_backed_up()
+        person = next((p for p in doc["people"] if p["id"] == person_id), None)
+        if not person:
+            raise KeyError(person_id)
+        refs = person.setdefault("refs", {})
+        if not isinstance(refs.get("skipped"), dict):
+            refs["skipped"] = {"when": time.strftime("%Y-%m-%d"), "by": "triage",
+                               "previous": {"master_tier": person.get("master_tier"),
+                                            "profile_tier": person.get("profile_tier")}}
+        person["master_tier"] = SKIP_TIER
+        person["profile_tier"] = EXCLUDED_TIER
+        _write_people(doc)
+        handles = _record_handles(person)
+    if handles:
+        dismiss_many(handles)
+    return {"skipped": True, "person_id": person_id, "dismissed": len(handles)}
+
+
+def skip_no_verdicts():
+    """Skip every candidate whose enrichment verdict says it is not worth a
+    contact: records are skipped, verdict-only handles dismissed."""
+    out = {"skipped": 0, "dismissed": 0}
+    for c in candidates():
+        if c.get("contact_worthy") != "no":
+            continue
+        if c.get("person_id"):
+            skip_person(c["person_id"])
+            out["skipped"] += 1
+        else:
+            dismiss(c["handle"])
+            out["dismissed"] += 1
+    return out
+
+
+def mark_lines(items, unmark=False):
+    """Mark handles as shared lines (or clear the mark). `items` is a list
+    of {pid, value}; each value must be a handle of that record. One
+    backup, one write. Returns the keys that changed."""
+    with _lock:
+        crm.invalidate()
+        doc = _read_people_backed_up()
+        by_id = {p["id"]: p for p in doc["people"]}
+        changed = []
+        for it in items:
+            person = by_id.get(it.get("pid"))
+            if not person:
+                raise KeyError(it.get("pid"))
+            key = crm.handle_key(it.get("value"))
+            if not key or key not in _handle_keys(person):
+                raise ValueError(f"{it.get('value')} is not a handle of "
+                                 f"{person.get('name') or person['id']}")
+            lines = person.setdefault("handles", {}).setdefault("lines", [])
+            if unmark:
+                if key in lines:
+                    lines.remove(key)
+                    changed.append(key)
+            elif key not in lines:
+                lines.append(key)
+                changed.append(key)
+        if changed:
+            _write_people(doc)
+    return changed
+
+
+def _land_handles(person, handles, known):
+    """Append handles to one record held in a document already read. `known`
+    is {handle key: pid} over the whole document, kept current as handles
+    land, so a batch cannot give one handle to two people. Returns
+    (landed normalized handles, [(value, why it was refused)])."""
+    h = person.setdefault("handles", {})
+    for bucket in ("imessage", "phones10", "emails"):
+        h.setdefault(bucket, [])
+    landed, errors = [], []
+    for item in handles:
+        kind, value = item.get("kind"), (item.get("value") or "").strip()
+        if not value:
+            continue
+        if kind == "email":
+            norm = value.lower()
+            bucket, existing = "emails", {e.lower() for e in h["emails"]}
+        else:
+            norm = crm.norm_digits(value)
+            bucket, existing = "phones10", set(h["phones10"])
+            if len(norm) < 10:
+                errors.append((value, f"{value} is not a full phone number"))
+                continue
+        owner = known.get(norm)
+        if owner and owner != person["id"]:
+            errors.append((value, f"handle {value} already belongs to "
+                                  "another CRM person"))
+            continue
+        if norm in existing:
+            continue
+        h[bucket].append(norm)
+        if norm not in h["imessage"]:
+            h["imessage"].append(norm)
+        known[norm] = person["id"]
+        landed.append(norm)
+    if landed:
+        person.setdefault("refs", {})["vira_handles"] = time.strftime("%Y-%m-%d")
+    return landed, errors
+
+
+def _known_handles(doc):
+    known = {}
+    for p in doc["people"]:
+        for k in _handle_keys(p):
+            known.setdefault(k, p["id"])
+    return known
 
 
 def add_handles(person_id, handles):
@@ -317,37 +521,38 @@ def add_handles(person_id, handles):
         person = next((p for p in doc["people"] if p["id"] == person_id), None)
         if not person:
             raise KeyError(person_id)
-        h = person.setdefault("handles", {})
-        for bucket in ("imessage", "phones10", "emails"):
-            h.setdefault(bucket, [])
-        landed = []
-        for item in handles:
-            kind, value = item.get("kind"), (item.get("value") or "").strip()
-            if not value:
-                continue
-            owner = crm.resolve_handle(value)
-            if owner and owner != person_id:
-                raise ValueError(f"handle {value} already belongs to "
-                                 "another CRM person")
-            if kind == "email":
-                norm = value.lower()
-                bucket, existing = "emails", {e.lower() for e in h["emails"]}
-            else:
-                norm = crm.norm_digits(value)
-                bucket, existing = "phones10", set(h["phones10"])
-                if len(norm) < 10:
-                    raise ValueError(f"{value} is not a full phone number")
-            if norm in existing:
-                continue
-            h[bucket].append(norm)
-            if norm not in h["imessage"]:
-                h["imessage"].append(norm)
-            landed.append(norm)
+        landed, errors = _land_handles(person, handles, _known_handles(doc))
+        if errors:
+            raise ValueError(errors[0][1])    # nothing written: all or none
         if landed:
-            person.setdefault("refs", {})["vira_handles"] = \
-                time.strftime("%Y-%m-%d")
             _write_people(doc)
         return landed
+
+
+def add_handles_batch(groups):
+    """Several people's handle adds in ONE backup and ONE write of
+    people.json: `groups` is [(person_id, [{kind, value}])]. A refused
+    item (an unknown person, a handle owned elsewhere, a short number)
+    costs only itself. Returns {landed: [(pid, norm)], errors: [(pid,
+    value, message)]}."""
+    out = {"landed": [], "errors": []}
+    with _lock:
+        crm.invalidate()
+        doc = _read_people_backed_up()
+        by_id = {p["id"]: p for p in doc["people"]}
+        known = _known_handles(doc)
+        for pid, handles in groups:
+            person = by_id.get(pid)
+            if not person:
+                for it in handles:
+                    out["errors"].append((pid, it.get("value"), "unknown person"))
+                continue
+            landed, errors = _land_handles(person, handles, known)
+            out["landed"] += [(pid, norm) for norm in landed]
+            out["errors"] += [(pid, value, why) for value, why in errors]
+        if out["landed"]:
+            _write_people(doc)
+    return out
 
 
 def add_person(name, handles, class_hint=None, note=None, person_id=None):
@@ -374,6 +579,7 @@ def add_person(name, handles, class_hint=None, note=None, person_id=None):
             person.setdefault("refs", {})["vira_named"] = time.strftime("%Y-%m-%d")
             if note:
                 person["refs"]["note"] = note
+            _unskip(person)
         else:
             for h in clean:
                 if crm.resolve_handle(h):

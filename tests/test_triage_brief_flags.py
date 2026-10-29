@@ -73,11 +73,21 @@ class BusinessSignals(unittest.TestCase):
             {"id": "p_test0000biz1", "name": "(unidentified)",
              "handles": {"imessage": [], "emails": [],
                          "phones10": ["8005550100"]},
-             "master_tier": "D-skip", "activity": {"imsg_n": 2}},
+             "master_tier": "C-review", "activity": {"imsg_n": 2}},
             {"id": "p_test0000per1", "name": "(unidentified)",
              "handles": {"imessage": ["+12125550123"], "emails": [],
                          "phones10": ["2125550123"]},
              "master_tier": "C-review", "activity": {"imsg_n": 9}},
+            # skipped (Skip in Triage, or the CRM's own tier): never listed
+            {"id": "p_test0000skip", "name": "(unidentified)",
+             "handles": {"imessage": ["+12125550199"], "emails": [],
+                         "phones10": ["2125550199"]},
+             "master_tier": "D-skip", "activity": {"imsg_n": 50}},
+            {"id": "p_test0000excl", "name": "(unidentified)",
+             "handles": {"imessage": ["+12125550198"], "emails": [],
+                         "phones10": ["2125550198"]},
+             "master_tier": "C-review", "profile_tier": "excluded",
+             "activity": {"imsg_n": 50}},
         ]}
         with mock.patch.object(triage.crm, "_load",
                                return_value={"people": people["people"]}), \
@@ -88,6 +98,8 @@ class BusinessSignals(unittest.TestCase):
         self.assertEqual([c["business"] for c in out], [False, True])
         self.assertEqual(out[-1]["person_id"], "p_test0000biz1")
         self.assertIn("toll-free number", out[-1]["business_signals"])
+        self.assertNotIn("p_test0000skip", [c["person_id"] for c in out])
+        self.assertNotIn("p_test0000excl", [c["person_id"] for c in out])
 
 
 def _ev(title, start, end, remote=False, all_day=False, birthday=False):
