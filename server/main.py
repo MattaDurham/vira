@@ -82,6 +82,7 @@ from . import (
                routines,
                routinerun,
                routinesrc,
+               crmmerge,
                launchdjobs,
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings, settingschema, restart, runtimework,
@@ -323,7 +324,35 @@ class ContactSyncRunReq(BaseModel):
 
 class ContactSyncReviewReq(BaseModel):
     ids: list = []
+    kinds: list = []
     all: bool = False
+
+
+class ContactSyncLinesReq(BaseModel):
+    """The Shared lines buttons: `marks` [{pid, value}] become lines
+    (Same office); `keep` row keys are kept apart (Not the same office)."""
+    marks: list = []
+    keep: list = []
+
+
+class ContactSyncDuplicateReq(BaseModel):
+    id: str
+    action: str            # same | different
+
+
+class MergeReq(BaseModel):
+    keep: str
+    drop: str
+
+
+class NotSameReq(BaseModel):
+    key: str | None = None
+    uids: list = []
+
+
+class FoldReq(BaseModel):
+    keep_uid: str
+    drop_uids: list = []
 
 
 # People > Sync: the CRM and the phone's address book reconciled both ways
@@ -346,7 +375,62 @@ def api_contacts_sync_run(req: ContactSyncRunReq):
 @app.post("/api/contacts/sync/review")
 def api_contacts_sync_review(req: ContactSyncReviewReq):
     ids = [str(i) for i in (req.ids or []) if isinstance(i, str)]
-    return contactsync.mark_reviewed(ids, everything=bool(req.all))
+    kinds = [str(k) for k in (req.kinds or []) if isinstance(k, str)]
+    return contactsync.mark_reviewed(ids, everything=bool(req.all), kinds=kinds)
+
+
+@app.post("/api/contacts/sync/lines")
+def api_contacts_sync_lines(req: ContactSyncLinesReq):
+    marks = [{"pid": str(m.get("pid") or ""), "value": str(m.get("value") or "")}
+             for m in (req.marks or []) if isinstance(m, dict)]
+    try:
+        return contactsync.set_lines(marks, keep=[str(k) for k in req.keep or []])
+    except KeyError as e:
+        raise HTTPException(404, f"unknown person {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/contacts/sync/duplicate")
+def api_contacts_sync_duplicate(req: ContactSyncDuplicateReq):
+    try:
+        return contactsync.resolve_duplicate(req.id, req.action)
+    except KeyError:
+        raise HTTPException(404, "no such review entry")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# Duplicates: CRM pairs that read as one person and phone cards that do
+# (server/crmmerge.py). The owner decides every one from People > Sync.
+@app.get("/api/people/duplicates")
+def api_people_duplicates(phone: bool = True):
+    return crmmerge.duplicates(with_phone=phone)
+
+
+@app.post("/api/people/merge")
+def api_people_merge(req: MergeReq):
+    try:
+        return crmmerge.merge(req.keep, req.drop)
+    except KeyError as e:
+        raise HTTPException(404, f"unknown person {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/people/duplicates/dismiss")
+def api_people_duplicates_dismiss(req: NotSameReq):
+    if not req.key and not req.uids:
+        raise HTTPException(400, "a pair key or card uids are required")
+    return crmmerge.not_same(req.key, [str(u) for u in req.uids or []])
+
+
+@app.post("/api/contacts/fold")
+def api_contacts_fold(req: FoldReq):
+    r = crmmerge.fold(req.keep_uid, [str(u) for u in req.drop_uids or []])
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("detail") or "fold failed")
+    return r
 
 
 @app.get("/api/person/{pid}/thread")
@@ -3679,6 +3763,25 @@ class DismissReq(BaseModel):
 @app.post("/api/triage/dismiss")
 def api_triage_dismiss(req: DismissReq):
     return triage.dismiss(req.handle)
+
+
+class SkipReq(BaseModel):
+    person_id: str | None = None
+    all_no: bool = False       # every candidate whose verdict says "no"
+
+
+@app.post("/api/triage/skip")
+def api_triage_skip(req: SkipReq):
+    """Skip a placeholder record: tiered out, handles dismissed, no phone
+    card; a later name undoes it (server/triage.py)."""
+    if req.all_no:
+        return triage.skip_no_verdicts()
+    if not req.person_id:
+        raise HTTPException(400, "person_id or all_no required")
+    try:
+        return triage.skip_person(req.person_id)
+    except KeyError:
+        raise HTTPException(404, "unknown person")
 
 
 class ResolveReq(BaseModel):

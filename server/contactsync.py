@@ -57,7 +57,7 @@ import uuid
 from pathlib import Path
 
 from . import applecontacts as ac
-from . import jsonstore, runtimework, settings
+from . import jsonstore, runtimework, settings, triage
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ def _progress(done=None, total=None, step=None):
 
 def _blank():
     return {"since": None, "report": None, "review": [], "log": [],
-            "created": []}
+            "created": [], "kept_lines": []}
 
 
 def read_store():
@@ -167,16 +167,20 @@ def _handles(p):
     return emails, phones
 
 
-def card_worthy(p):
-    """A CRM person the phone should carry: named, reachable, and not one
+def card_worthy(p, lines=()):
+    """A CRM person the phone should carry: really named (a triage
+    placeholder such as "(unidentified)" or a bare number is not a name),
+    reachable through a handle of their own (a shared line does not
+    count: a card made from it alone would never match back), and not one
     the CRM itself marked as skipped or excluded. The tier words are the
     CRM's own (a `*skip` master tier, an `excluded` profile tier); Vira
     reads them and applies this one rule rather than knowing any list."""
-    tier = str(p.get("master_tier") or "").lower()
-    if p.get("profile_tier") == "excluded" or tier.endswith("skip"):
+    if triage.skipped(p) or triage._is_placeholder(p.get("name")):
         return False
     emails, phones = _handles(p)
-    return bool((p.get("name") or "").strip()) and bool(emails or phones)
+    own = [e for e in emails if ac._norm_email(e) not in lines] + \
+          [x for x in phones if ac._norm_phone(x) not in lines]
+    return bool(own)
 
 
 def _apple_location(apple):
@@ -219,12 +223,13 @@ def survey(cards=None, store=None):
     store = store if store is not None else read_store()
     c = crm._load()
     people = list(c["by_id"].values())
+    lines = set(c.get("lines") or ())
     matched, matched_uids, owners = {}, set(), {}
     for p in people:
         emails, phones = _handles(p)
         if not (emails or phones):
             continue
-        ms = ac.match_cards(cards, idx, emails, phones)
+        ms = ac.match_cards(cards, idx, emails, phones, lines=lines)
         if ms:
             matched[p["id"]] = ms
             matched_uids.update(m["uid"] for m in ms)
@@ -262,16 +267,21 @@ def survey(cards=None, store=None):
         crm_e = {ac._norm_email(r["value"]) for r in card["handles"] if r["kind"] == "email"}
         crm_p = {ac._norm_phone(r["value"]) for r in card["handles"] if r["kind"] == "phone"}
 
-        def place(kind, value, pid=pid, name=p["name"]):
+        def place(kind, value, m, pid=pid, name=p["name"]):
             # A handle another CRM person already owns marks a card two
             # people share (a duplicate, a family card). It is never moved;
             # it is listed once as a shared card, not retried as pending work.
+            # A shared LINE (an office number the owner marked) is neither:
+            # it stays where it is and is nobody's conflict.
+            if crm.handle_key(value) in lines:
+                return
             owner = crm.resolve_handle(value)
             if owner and owner != pid:
                 other = c["by_id"].get(owner) or {}
                 handle_conflicts.append({"pid": pid, "name": name, "kind": kind,
                                          "value": value, "other_pid": owner,
-                                         "other_name": other.get("name") or owner})
+                                         "other_name": other.get("name") or owner,
+                                         "uid": m["uid"], "card": m.get("name") or ""})
             else:
                 handle_adds.append({"pid": pid, "name": name, "kind": kind,
                                     "value": value})
@@ -281,12 +291,12 @@ def survey(cards=None, store=None):
                 k = ac._norm_email(e["value"])
                 if k and "@" in k and k not in crm_e:
                     crm_e.add(k)
-                    place("email", e["value"].strip())
+                    place("email", e["value"].strip(), m)
             for ph in m.get("phones", []):
                 k = ac._norm_phone(ph["value"])
                 if len(k) == 10 and k not in crm_p:
                     crm_p.add(k)
-                    place("phone", k)
+                    place("phone", k, m)
         fields = {f["key"]: f["value"] for f in card["fields"]}
         fill = {}
         for m in ms:
@@ -328,7 +338,10 @@ def survey(cards=None, store=None):
     unmatched = [p for p in people if p["id"] not in matched]
     missing = [{"pid": p["id"], "name": p["name"],
                 "tier": p.get("profile_tier") or p.get("master_tier")}
-               for p in unmatched if card_worthy(p)]
+               for p in unmatched if card_worthy(p, lines)]
+    kept = set(store.get("kept_lines") or [])
+    shared_lines, lines_kept = _shared_lines(
+        c, cards, idx, shared_uids, owners, handle_conflicts, lines, kept)
     return {
         "generated": _now(), "cards": len(cards), "people": len(people),
         "matched": len(matched), "since": since, "newest_known": newest_known,
@@ -336,10 +349,106 @@ def survey(cards=None, store=None):
         "backlog": len(backlog),
         "backlog_sample": [_card_row(cd) for cd in backlog],
         "handle_adds": handle_adds, "handle_conflicts": handle_conflicts,
-        "shared_cards": shared_cards, "fills": fills, "changes": changes,
+        "shared_cards": shared_cards, "shared_lines": shared_lines,
+        "shared_lines_kept": lines_kept, "lines": len(lines),
+        "fills": fills, "changes": changes,
         "missing": missing, "unmatched_skipped": len(unmatched) - len(missing),
         "_new_cards": new_cards, "_plans": plans,
     }
+
+
+def _line_key(row):
+    return row["key"].split(":", 1)[1]
+
+
+def _shared_lines(c, cards, idx, shared_uids, owners, handle_conflicts, lines, kept):
+    """The Shared lines list: one row per handle that explains a shared
+    card, a handle conflict or a handle two registry records both carry,
+    with the phone cards and the CRM people on it, and a suggestion when
+    it looks like a switchboard (three or more cards, or two surnames).
+    A handle on a shared card counts only when it belongs to a CRM person
+    whose name is NOT the card's: the card's own person sharing a card
+    with a second record is a duplicate, not a line, and is left to the
+    Duplicates list. Rows the owner kept apart ("Not the same office")
+    are dropped and counted."""
+    from . import contactcard, names
+    carriers = {}
+    for p in c["by_id"].values():
+        for k in triage._handle_keys(p):
+            carriers.setdefault(k, []).append(p["id"])
+    rows = {}
+
+    def row(key):
+        kind = "email" if "@" in key else "phone"
+        k = f"{kind}:{key}"
+        r = rows.get(k)
+        if r is None:
+            hits = idx[kind].get(key, [])
+            r = rows[k] = {
+                "key": k, "kind": kind,
+                "value": key if kind == "email" else contactcard.format_phone(key),
+                "cards": [{"uid": cards[i]["uid"], "name": cards[i].get("name") or ""}
+                          for i in hits],
+                "people": [{"pid": q, "name": (c["by_id"].get(q) or {}).get("name") or q}
+                           for q in carriers.get(key, [])],
+                "shared_cards": [], "conflicts": [], "why": [], "suggest": False,
+                "mark": [{"pid": q, "value": key} for q in carriers.get(key, [])],
+            }
+        return r
+
+    by_uid = {cd["uid"]: cd for cd in cards}
+    for uid in sorted(shared_uids):
+        cd = by_uid.get(uid)
+        if not cd:
+            continue
+        named = {q for q in owners.get(uid, [])
+                 if names.compatible(cd.get("name") or "", (c["by_id"].get(q) or {}).get("name") or "")}
+        handles = [(ac._norm_email(e["value"])) for e in cd.get("emails", [])] + \
+                  [(ac._norm_phone(ph["value"])) for ph in cd.get("phones", [])]
+        for key in handles:
+            if not key or key in lines:
+                continue
+            if not [q for q in carriers.get(key, []) if q not in named]:
+                continue
+            r = row(key)
+            if uid not in r["shared_cards"]:
+                r["shared_cards"].append(uid)
+    for hc in handle_conflicts:
+        key = ac._norm_email(hc["value"]) if hc["kind"] == "email" else ac._norm_phone(hc["value"])
+        if not key or key in lines:
+            continue
+        if names.compatible(hc.get("name") or "", hc.get("other_name") or ""):
+            continue        # two records for one person: a duplicate, not a line
+        if names.compatible(hc.get("card") or "", hc.get("other_name") or ""):
+            continue        # the card's own person's handle: the line is elsewhere
+        r = row(key)
+        r["conflicts"].append({"pid": hc["pid"], "name": hc["name"],
+                               "other_pid": hc["other_pid"], "other_name": hc["other_name"],
+                               "uid": hc.get("uid"), "card": hc.get("card") or ""})
+    for key, pids in carriers.items():
+        if len(pids) > 1 and key not in lines:
+            row(key)
+    out, n_kept = [], 0
+    for r in rows.values():
+        if r["key"] in kept:
+            n_kept += 1
+            continue
+        surnames = set()
+        for q in r["people"]:
+            surnames.add(names.surname_key(names.split(q["name"])[1]))
+        for cd in r["cards"]:
+            surnames.add(names.surname_key(names.split(cd["name"])[1]))
+        surnames.discard("")
+        if len(r["cards"]) >= 3:
+            r["why"].append(f"on {len(r['cards'])} phone cards")
+        if len(surnames) >= 2:
+            r["why"].append("two surnames share it")
+        if len(r["people"]) > 1:
+            r["why"].append(f"on {_count(len(r['people'])).lower()} CRM people")
+        r["suggest"] = len(r["cards"]) >= 3 or len(surnames) >= 2
+        out.append(r)
+    out.sort(key=lambda r: (not r["suggest"], -len(r["cards"]), r["value"]))
+    return out, n_kept
 
 
 def _public(s):
@@ -380,13 +489,24 @@ def _join(names):
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def _review(kind, pid, name, *, uid=None, detail="", text="", key=None):
+def _review(kind, pid, name, *, uid=None, detail="", text="", key=None, card=None):
     """One entry for the owner to read. `key` is what makes it the same
-    case on a later pass (the default folds in the detail text)."""
-    return {"id": "rv_" + uuid.uuid4().hex[:10], "kind": kind, "pid": pid,
-            "name": name, "uid": uid, "when": _now(), "detail": detail,
-            "text": (text or "")[:NOTE_EXCERPT], "reviewed": False,
-            "key": key or f"{kind}:{pid}:{uid}:{detail}"}
+    case on a later pass (the default folds in the detail text). `card`
+    carries the phone card a possible-duplicate entry can still act on."""
+    out = {"id": "rv_" + uuid.uuid4().hex[:10], "kind": kind, "pid": pid,
+           "name": name, "uid": uid, "when": _now(), "detail": detail,
+           "text": (text or "")[:NOTE_EXCERPT], "reviewed": False,
+           "key": key or f"{kind}:{pid}:{uid}:{detail}"}
+    if card is not None:
+        out["card"] = card
+    return out
+
+
+review_entry = _review      # the name other modules file entries under
+
+# Kinds that tell the owner something happened rather than ask for a
+# decision: the Sync tab folds them closed.
+INFORMATIONAL_KINDS = ("note-merged", "phone-note", "created-card", "merged")
 
 
 _LEGACY_CONFLICT = re.compile(r"carries (email|phone) (\S+?)[:,]")
@@ -448,11 +568,15 @@ def _apply_inner(inbound, push, create, reason, now, contactcard, crm, onboard, 
             if cd["name"] and (emails or phones):
                 contacts.append({"name": cd["name"], "company": cd.get("org") or "",
                                  "title": cd.get("title") or "",
-                                 "emails": emails, "phones10": phones})
+                                 "emails": emails, "phones10": phones,
+                                 "uid": cd["uid"]})
         if contacts:
-            onboard.import_contacts(contacts, "apple-contacts")
+            r_imp = onboard.import_contacts(contacts, "apple-contacts")
+            held = {h["name"] for h in r_imp.get("held") or []}
             crm.invalidate()
             for ct in contacts:
+                if ct["name"] in held:
+                    continue        # filed as a possible duplicate instead
                 pid = None
                 for h in ct["emails"] + ct["phones10"]:
                     pid = crm.resolve_handle(h)
@@ -470,19 +594,37 @@ def _apply_inner(inbound, push, create, reason, now, contactcard, crm, onboard, 
         if marks:
             mark = max(marks)
             _mutate(lambda st: st.__setitem__("since", mark))
+        # Every handle the phone adds lands in ONE backup and ONE write of
+        # people.json (a pass once took thirteen in a minute).
+        groups = {}
         for item in s["handle_adds"]:
+            groups.setdefault(item["pid"], []).append(
+                {"kind": item["kind"], "value": item["value"]})
+        if groups:
             try:
-                triage.add_handles(item["pid"], [{"kind": item["kind"],
-                                                  "value": item["value"]}])
-                done["handles"].append(item)
-            except ValueError as e:
+                r_add = triage.add_handles_batch(list(groups.items()))
+            except OSError as e:
+                r_add = {"landed": [], "errors": [
+                    (pid, it["value"], str(e)[:120]) for pid, its in groups.items() for it in its]}
+            landed = set(r_add["landed"])
+            refused = {(pid, value): why for pid, value, why in r_add["errors"]}
+            for item in s["handle_adds"]:
+                norm = ac._norm_email(item["value"]) if item["kind"] == "email" \
+                    else ac._norm_phone(item["value"])
+                if (item["pid"], norm) in landed:
+                    done["handles"].append(item)
+                    continue
+                why = refused.get((item["pid"], item["value"]))
+                if why is None:
+                    continue        # already on the record
+                if "unknown person" in why:
+                    done["errors"].append(f"{item['name']}: {why}")
+                    continue
                 reviews.append(_review(
                     "handle-conflict", item["pid"], item["name"],
                     detail=f"The phone card carries {item['kind']} "
-                           f"{item['value']}: {e}",
+                           f"{item['value']}: {why}",
                     key=f"handle-conflict:{item['pid']}:{item['value']}"))
-            except (KeyError, OSError) as e:
-                done["errors"].append(f"{item['name']}: {str(e)[:120]}")
         _progress(done=0, total=len(s["fills"]), step="filling cards from the phone")
         for n_f, f in enumerate(s["fills"], 1):
             _progress(done=n_f, step=f["name"])
@@ -632,29 +774,118 @@ def push_person(pid):
                 detail="The phone card had its own note; Vira's block was "
                        "added below it. Read the card."))
     if reviews:
-        def fn(st):
-            seen = {_review_key(x) for x in st["review"]}
-            for rv in reviews:
-                if rv["key"] not in seen:
-                    seen.add(rv["key"])
-                    st["review"].append(rv)
-            st["review"] = st["review"][-MAX_REVIEW:]
-        _mutate(fn)
+        file_reviews(reviews)
     return r
 
 
-def mark_reviewed(ids=None, everything=False):
+def file_reviews(reviews):
+    """Append entries to the review list, one per key (an entry already
+    filed for the same case is left as it is). Returns how many landed."""
+    counted = {"n": 0}
+
+    def fn(st):
+        seen = {_review_key(x) for x in st["review"]}
+        for rv in reviews:
+            if rv["key"] not in seen:
+                seen.add(rv["key"])
+                st["review"].append(rv)
+                counted["n"] += 1
+        st["review"] = st["review"][-MAX_REVIEW:]
+    if reviews:
+        _mutate(fn)
+    return counted["n"]
+
+
+def mark_reviewed(ids=None, everything=False, kinds=None):
+    """Mark entries read: by id, every entry of the given kinds, or all."""
     want = set(ids or [])
+    kinds = set(kinds or [])
     counted = {"n": 0}
 
     def fn(st):
         for r in st["review"]:
-            if not r.get("reviewed") and (everything or r.get("id") in want):
+            if r.get("reviewed"):
+                continue
+            if everything or r.get("id") in want or r.get("kind") in kinds:
                 r["reviewed"] = True
                 r["reviewed_at"] = _now()
                 counted["n"] += 1
     _mutate(fn)
     return {"marked": counted["n"]}
+
+
+def set_lines(marks, keep=()):
+    """The Shared lines buttons. "Same office" marks handles as lines
+    (`marks`: [{pid, value}], written through triage, backup-first);
+    "Not the same office" keeps a row apart (`keep`: row keys) so it is
+    not listed again. Both prune the stored report so the tab is right
+    at once; the next pass recomputes it from the cards."""
+    from . import data as crm
+    changed = triage.mark_lines(marks) if marks else []
+    crm.invalidate()
+    now_lines = crm.lines()
+    keep = [k for k in (keep or []) if isinstance(k, str) and k]
+
+    def fn(st):
+        kept = set(st.get("kept_lines") or [])
+        kept.update(keep)
+        st["kept_lines"] = sorted(kept)
+        rep = st.get("report")
+        if isinstance(rep, dict):
+            _prune_report(rep, now_lines, kept)
+    _mutate(fn)
+    return {"marked": changed, "kept": keep}
+
+
+def _prune_report(rep, lines, kept):
+    rows = rep.get("shared_lines") or []
+    gone = [r for r in rows if _line_key(r) in lines or r["key"] in kept]
+    stay = [r for r in rows if r not in gone]
+    rep["shared_lines"] = stay
+    rep["shared_lines_total"] = len(stay)
+    rep["shared_lines_kept"] = int(rep.get("shared_lines_kept") or 0) + \
+        sum(1 for r in gone if r["key"] in kept and _line_key(r) not in lines)
+    rep["lines"] = len(lines)
+    still = {uid for r in stay for uid in r.get("shared_cards", [])}
+    dropped = {uid for r in gone if _line_key(r) in lines
+               for uid in r.get("shared_cards", [])} - still
+    # a conflict on the line itself, or on a card nobody shares any more
+    hc = [h for h in rep.get("handle_conflicts") or []
+          if (ac._norm_email(h["value"]) if h["kind"] == "email"
+              else ac._norm_phone(h["value"])) not in lines
+          and h.get("uid") not in dropped]
+    rep["handle_conflicts"] = hc
+    rep["handle_conflicts_total"] = len(hc)
+    sc = [s for s in rep.get("shared_cards") or [] if s.get("uid") not in dropped]
+    rep["shared_cards"] = sc
+    rep["shared_cards_total"] = len(sc)
+
+
+def resolve_duplicate(review_id, action):
+    """A possible-duplicate entry's two answers. "same": the held phone
+    card's handles join the CRM person it looked like. "different": the
+    card is imported as its own person after all. Either way the entry
+    is marked read."""
+    from . import data as crm, onboard
+    st = read_store()
+    row = next((r for r in st["review"] if r.get("id") == review_id
+                and r.get("kind") == "possible-duplicate"), None)
+    if not row:
+        raise KeyError(review_id)
+    card = row.get("card") or {}
+    if action == "same":
+        handles = [{"kind": "email", "value": e} for e in card.get("emails", [])] + \
+                  [{"kind": "phone", "value": p} for p in card.get("phones10", [])]
+        out = {"landed": triage.add_handles(row["pid"], handles)}
+    elif action == "different":
+        r = onboard.import_contacts([card], card.get("source") or "apple-contacts",
+                                    check_names=False)
+        out = {"added": r["added"]}
+    else:
+        raise ValueError("action must be same or different")
+    crm.invalidate()
+    mark_reviewed([review_id])
+    return {"ok": True, **out}
 
 
 def undo_created(uids=None):
@@ -687,6 +918,9 @@ def status():
     st = read_store()
     ok, why = available()
     pending = [r for r in st["review"] if not r.get("reviewed")]
+    kinds = {}
+    for r in pending:
+        kinds[r.get("kind") or ""] = kinds.get(r.get("kind") or "", 0) + 1
     return {
         "available": ok, "why": why, "enabled": enabled(),
         "push_enabled": ac.enabled(),
@@ -697,6 +931,8 @@ def status():
         "report": st.get("report"),
         "review": pending[-LIST_CAP:][::-1],
         "review_total": len(pending),
+        "review_kinds": kinds,
+        "informational_kinds": list(INFORMATIONAL_KINDS),
         "log": st["log"][-10:][::-1],
         "created": sum(1 for c in st["created"] if not c.get("undone")),
     }

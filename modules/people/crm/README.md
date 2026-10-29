@@ -22,7 +22,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Incoming / Feed](../../incoming/feed/README.md), [Attention / Brief](../../attention/brief/README.md), [World / Atlas](../../world/atlas/README.md), [People / Networking](../networking/README.md)
 
-### Files (11)
+### Files (12)
 
 **Server**
 
@@ -41,11 +41,12 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 |---|---|
 | `tests/test_contactcard.py` | The contact card: the owner-editable top pane of every CRM person. |
 | `tests/test_crmindex.py` | The CRM as a corpus: blob composition, rebuild-on-change, and the hybrid query path with the embedder stubbed. |
+| `tests/test_data_aliases.py` | The CRM data layer's alias map: a person id retired by a merge (refs.merged_from) still finds its survivor everywhere an id is looked up, and a marked shared... |
 | `tests/test_groupchat.py` | Group profiles: leg merging, the related-group diff, member dossiers, the interconnection filter, the cached AI brief, and guid-addressed sending — all over... |
 | `tests/test_profilerefresh.py` | The profile-refresh button's plumbing: the one-pass current mode (model mocked) writes the description back with provenance and a one-deep prev, the explore... |
 | `tests/test_vaultpeople.py` | The vault's person pages as a typeahead index — grounding for a reading room's people pills. |
 
-### Routes (21)
+### Routes (24)
 
 Prefixes: `/api/person`, `/api/people`, `/api/group`, `/api/vault/people`, `/api/vault/person`
 
@@ -53,6 +54,9 @@ Prefixes: `/api/person`, `/api/people`, `/api/group`, `/api/vault/people`, `/api
 - `GET /api/person/{pid}`
 - `GET /api/person/{pid}/card`
 - `POST /api/person/{pid}/card`
+- `GET /api/people/duplicates`
+- `POST /api/people/merge`
+- `POST /api/people/duplicates/dismiss`
 - `GET /api/person/{pid}/thread`
 - `PUT /api/person/{pid}/hooks`
 - `PUT /api/person/{pid}/loops`

@@ -39,6 +39,68 @@ def norm_digits(h):
     return d[-10:] if len(d) >= 10 else d
 
 
+def handle_key(value):
+    """The resolution key of a handle: a lower-cased email, or the last
+    ten digits of a phone. The same key the registry index uses."""
+    v = str(value or "").strip()
+    return v.lower() if "@" in v else norm_digits(v)
+
+
+class _AliasDict(dict):
+    """A dict keyed by person id that also answers to retired ids.
+
+    A record merged into another (refs.merged_from) is gone from the
+    registry, but its id lives on in radar dismissals, review rows, group
+    profiles and the chat archive index. Looking one up here finds the
+    survivor: `d[retired]`, `d.get(retired)` and `retired in d` all
+    resolve through the alias map. Only lookups alias; iteration,
+    values(), items() and len() stay the real records, so a list built
+    from the registry never carries a person twice."""
+
+    def __init__(self, *args, aliases=None, **kw):
+        super().__init__(*args, **kw)
+        self.aliases = aliases or {}
+
+    def __missing__(self, key):
+        target = self.aliases.get(key)
+        if target is not None and dict.__contains__(self, target):
+            return dict.__getitem__(self, target)
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        if dict.__contains__(self, key):
+            return True
+        target = self.aliases.get(key)
+        return target is not None and dict.__contains__(self, target)
+
+
+def _aliases(people):
+    """{retired id: surviving id} from every record's refs.merged_from. A
+    chain (a merged into b, then b into c) resolves to the live record."""
+    live = {p["id"] for p in people}
+    raw = {}
+    for p in people:
+        for m in (p.get("refs") or {}).get("merged_from") or []:
+            rid = m.get("id") if isinstance(m, dict) else m
+            if rid and rid != p["id"] and rid not in live:
+                raw[rid] = p["id"]
+    out = {}
+    for rid, target in raw.items():
+        hops = 0
+        while target not in live and target in raw and hops < 20:
+            target = raw[target]
+            hops += 1
+        if target in live:
+            out[rid] = target
+    return out
+
+
 def _load():
     now = time.time()
     root = _crm()
@@ -57,7 +119,28 @@ def _load():
     except (OSError, json.JSONDecodeError):
         master = {}
 
-    by_id, by_handle = {}, {}
+    aliases = _aliases(people)
+    # A "line" is a handle the owner marked as shared by design: an office
+    # number, a team mailbox (People > Sync, "Same office"). Stored on the
+    # record that owns it (handles.lines) and read as one set: a line is
+    # not a match signal for anyone, raises no conflict, and resolves an
+    # inbound message to its FIRST owner in the registry, whoever else
+    # carries it.
+    lines = set()
+    for p in people:
+        for v in (p.get("handles") or {}).get("lines") or []:
+            k = handle_key(v)
+            if k:
+                lines.add(k)
+
+    by_id, by_handle = _AliasDict(aliases=aliases), {}
+
+    def own(key, pid):
+        if key in lines:
+            by_handle.setdefault(key, pid)
+        else:
+            by_handle[key] = pid
+
     for p in people:
         by_id[p["id"]] = p
         imported = (p.get("refs") or {}).get("contact_import")
@@ -70,12 +153,12 @@ def _load():
         h = p.get("handles", {})
         for e in h.get("emails", []) + h.get("imessage", []):
             if "@" in e:
-                by_handle[e.lower()] = p["id"]
+                own(e.lower(), p["id"])
         for ph in h.get("phones10", []):
-            by_handle[ph] = p["id"]
+            own(ph, p["id"])
         for im in h.get("imessage", []):
             if "@" not in im:
-                by_handle[norm_digits(im)] = p["id"]
+                own(norm_digits(im), p["id"])
 
     # Handles the owner added on a contact card but that never landed in the
     # registry (the write failed, or this is a fixture CRM) still resolve, so
@@ -85,7 +168,8 @@ def _load():
     try:
         from . import contactcard
         for handle, pid in contactcard.added_handles().items():
-            key = handle.lower() if "@" in handle else norm_digits(handle)
+            key = handle_key(handle)
+            pid = aliases.get(pid, pid)
             if key and key not in by_handle and pid in by_id:
                 by_handle[key] = pid
     except Exception:  # noqa: BLE001 — an overlay read must never break the CRM
@@ -107,13 +191,32 @@ def _load():
             for part in entry.get("participants", []):
                 pid = part.get("person_id")
                 if pid:
+                    pid = aliases.get(pid, pid)
                     chats_by_person.setdefault(pid, []).append(entry)
     except (OSError, json.JSONDecodeError):
         pass
 
-    _cache.update(root=str(root.resolve()), people=people, master=master, by_id=by_id, by_handle=by_handle,
-                  profiles=profiles, chats_by_person=chats_by_person, loaded_at=now)
+    _cache.update(root=str(root.resolve()), people=people,
+                  master=_AliasDict(master, aliases=aliases), by_id=by_id,
+                  by_handle=by_handle, aliases=aliases, lines=lines,
+                  profiles=_AliasDict(profiles, aliases=aliases),
+                  chats_by_person=_AliasDict(chats_by_person, aliases=aliases),
+                  loaded_at=now)
     return _cache
+
+
+def canonical_id(pid):
+    """The live id for a person id: itself, or the survivor of the merge
+    that retired it. An id the registry never knew comes back unchanged."""
+    c = _load()
+    if dict.__contains__(c["by_id"], pid):
+        return pid
+    return c["aliases"].get(pid, pid)
+
+
+def lines():
+    """Every handle key the owner marked as a shared line."""
+    return set(_load()["lines"])
 
 
 def resolve_handle(addr):
@@ -177,6 +280,7 @@ def search_people(q=None, limit=60, sort="recent"):
 
 def get_person(pid):
     c = _load()
+    pid = canonical_id(pid)
     p = c["by_id"].get(pid)
     if not p:
         return None
@@ -215,6 +319,7 @@ def save_profile_field(pid, field, value):
     if field not in PROFILE_EDITABLE_FIELDS:
         raise ValueError(f"field {field} is not editable")
     c = _load()
+    pid = canonical_id(pid)
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
@@ -338,6 +443,7 @@ def save_profile_refresh(pid, summary, how_met=None, reason="refresh", expected_
     if not (summary or "").strip():
         raise ValueError("empty summary")
     c = _load()
+    pid = canonical_id(pid)
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
@@ -376,6 +482,7 @@ def update_loop(pid, match_what, action, new_what=None):
     merge (synthesize_profiles.vira_touched_loop) preserves verbatim.
     `edit` rewrites `what` and stamps `edited`. Returns the updated loop."""
     c = _load()
+    pid = canonical_id(pid)
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
@@ -412,6 +519,7 @@ def add_loop(pid, what, owed_by="me"):
     shape vira_touched_loop treats as human-curated, so it survives profile
     refreshes."""
     c = _load()
+    pid = canonical_id(pid)
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
@@ -436,6 +544,7 @@ def add_fact(pid, fact):
     source: "vira" so the CRM refresh merge preserves it (the model's own
     facts carry source: "imessage" etc. and regenerate each refresh)."""
     c = _load()
+    pid = canonical_id(pid)
     p = c["by_id"].get(pid)
     if not p:
         raise KeyError(pid)
@@ -475,6 +584,7 @@ def set_loop_due(pid, assistant_key, due):
         raise ValueError("An exact assistant task key is required")
     if not isinstance(due, str) or not due.strip():
         raise ValueError("A deadline is required")
+    pid = canonical_id(pid)
     person = _load()["by_id"].get(pid)
     if not person:
         raise KeyError(pid)
@@ -515,6 +625,7 @@ def save_contact_intelligence(pid, update, *, expected_summary=None, expected_pr
     from . import jsonstore
     if settings.sandboxed() or settings.fixture_mode():
         raise ValueError("contact intelligence is disabled on a test instance")
+    pid = canonical_id(pid)
     person = _load()["by_id"].get(pid)
     if not person:
         raise KeyError(pid)

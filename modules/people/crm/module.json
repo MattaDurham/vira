@@ -13,7 +13,8 @@
     "tests/test_contactcard.py",
     "tests/test_profilerefresh.py",
     "tests/test_vaultpeople.py",
-    "tests/test_groupchat.py"
+    "tests/test_groupchat.py",
+    "tests/test_data_aliases.py"
   ],
   "routes": [
     "/api/person",

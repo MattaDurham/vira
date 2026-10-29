@@ -12,7 +12,8 @@
     "tests/test_triage_brief_flags.py",
     "tests/test_resolver.py",
     "tests/test_admininbox.py",
-    "tests/test_correspondence.py"
+    "tests/test_correspondence.py",
+    "tests/test_triage_skip.py"
   ],
   "routes": [
     "/api/triage",

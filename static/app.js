@@ -856,6 +856,18 @@ function triageCard(c) {
     try { await post("/api/triage/dismiss", { handle: c.handle }); card.remove(); }
     catch (e) { dis.disabled = false; alert("Dismiss failed: " + e.message); }
   });
+  // Skip: the registry record is tiered out (no phone card, never listed
+  // here again) and its handles dismissed; naming it later undoes it.
+  if (c.person_id) {
+    const skip = el("button", "btn small", "Skip");
+    skip.title = "Tier this record out and dismiss its handles; a name given later undoes it";
+    skip.addEventListener("click", async () => {
+      skip.disabled = true;
+      try { await post("/api/triage/skip", { person_id: c.person_id }); card.remove(); }
+      catch (e) { skip.disabled = false; alert("Skip failed: " + e.message); }
+    });
+    row.appendChild(skip);
+  }
   const add = el("button", "btn small primary",
     c.business ? "Add as company"
       : (c.person_id ? "Name this contact" : "Add to CRM"));
@@ -901,6 +913,22 @@ function revealTriage(key) {
 
 // Businesses sort to the end server-side; head their band with a divider.
 function appendTriageCards(list, candidates) {
+  // One click skips every row the enrichment verdict already called "no".
+  const noes = candidates.filter((c) => c.contact_worthy === "no");
+  if (noes.length) {
+    const bar = el("div", "triage-subhead");
+    const b = el("button", "btn small", `Skip all ${noes.length} with a no verdict`);
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        const r = await post("/api/triage/skip", { all_no: true });
+        toast(`${r.skipped} skipped, ${r.dismissed} dismissed`);
+        if (list.id === "triage-list") await loadTriageWindow(); else await loadTriage();
+      } catch (e) { b.disabled = false; toast(errText(e)); }
+    });
+    bar.appendChild(b);
+    list.appendChild(bar);
+  }
   let bizHead = false;
   candidates.forEach((c) => {
     if (c.business && !bizHead) {
@@ -17499,6 +17527,7 @@ async function loadContactSync() {
   if (!box) return;
   const st = await api("/api/contacts/sync");
   renderContactSync(box, st);
+  if (!(st.status && st.status.running)) loadDuplicates().catch(() => {});
   if (st.status && st.status.running && !csyncPoll) {
     csyncPoll = startPoll(async (h) => {
       if (!box.isConnected || peopleTab !== "sync") { h.stop(); csyncPoll = null; return; }
@@ -17543,6 +17572,143 @@ function csyncName(text, pid) {
   const n = el("span", "csync-name" + (pid ? " click" : ""), text || "(unnamed)");
   if (pid) n.addEventListener("click", () => openPerson(pid));
   return n;
+}
+
+// A chip that posts one body and then reloads the tab; the row it sits
+// on disappears on success so the list reads right before the reload.
+async function csyncAct(btn, path, body, row) {
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const r = await post(path, body);
+    if (row) row.remove();
+    await loadContactSync();
+    return r;
+  } catch (e) {
+    toast(errText(e));
+    btn.disabled = false;
+  }
+}
+
+function csyncReviewRow(r) {
+  const row = el("div", "csync-row");
+  row.appendChild(csyncName(r.name, r.pid));
+  const what = el("div", "csync-what");
+  what.appendChild(el("div", "", r.detail || ""));
+  if (r.text) what.appendChild(el("div", "csync-note", r.text));
+  row.appendChild(what);
+  if (r.kind === "possible-duplicate") {
+    // the held phone card can still join this person, or come in on its own
+    const same = el("button", "fchip sm rec", "Same person");
+    same.onclick = () => csyncAct(same, "/api/contacts/sync/duplicate", { id: r.id, action: "same" }, row);
+    const diff = el("button", "fchip sm", "Different person");
+    diff.onclick = () => csyncAct(diff, "/api/contacts/sync/duplicate", { id: r.id, action: "different" }, row);
+    row.appendChild(same);
+    row.appendChild(diff);
+  }
+  const ok = el("button", "fchip sm", "Read");
+  ok.onclick = async () => {
+    ok.disabled = true;
+    try { await post("/api/contacts/sync/review", { ids: [r.id] }); row.remove(); }
+    catch (e) { toast(errText(e)); ok.disabled = false; }
+  };
+  row.appendChild(ok);
+  return row;
+}
+
+// ---- Duplicates: CRM pairs and phone card groups that read as one person.
+// Fetched apart from the status document (the phone half reads every card)
+// and cached, so a poll re-render while a pass runs does not refetch it.
+let csyncDupes = null;
+
+async function loadDuplicates() {
+  try { csyncDupes = await api("/api/people/duplicates"); }
+  catch (e) { csyncDupes = { error: errText(e) }; }
+  const dd = $("#csync-dupes");
+  if (dd) renderDuplicates(dd, csyncDupes);
+}
+
+function dupeBits(p) {
+  const bits = [];
+  if (p.emails && p.emails.length) bits.push(p.emails.join(", "));
+  if (p.phones && p.phones.length) bits.push(p.phones.join(", "));
+  if (p.messages) bits.push(`${p.messages.toLocaleString()} messages`);
+  if (p.has_profile) bits.push("has a dossier");
+  if (p.skipped) bits.push("skipped");
+  return bits.join(" · ") || "no handles";
+}
+
+function renderDuplicates(dd, d) {
+  dd.innerHTML = "";
+  const sec = el("details", "csync-sec");
+  const sm = el("summary", "", "Duplicates");
+  sec.appendChild(sm);
+  dd.appendChild(sec);
+  if (!d) {
+    sec.appendChild(el("div", "csync-empty", "Looking for duplicates…"));
+    return;
+  }
+  if (d.error) {
+    sec.appendChild(el("div", "csync-empty", "Could not look for duplicates: " + d.error));
+    return;
+  }
+  const pairs = d.pairs || [], groups = d.phone_groups || [];
+  sm.appendChild(el("span", "badge", String(pairs.length + groups.length)));
+  if (!pairs.length && !groups.length)
+    sec.appendChild(el("div", "csync-empty", "No two CRM records and no two phone cards read as one person."));
+  if (pairs.length) sec.appendChild(el("div", "csync-sub", "In the CRM"));
+  pairs.forEach((p) => {
+    const row = el("div", "csync-row");
+    const nm = el("div", "csync-pair");
+    nm.appendChild(csyncName(p.a.name, p.a.pid));
+    nm.appendChild(document.createTextNode(" + "));
+    nm.appendChild(csyncName(p.b.name, p.b.pid));
+    row.appendChild(nm);
+    const what = el("div", "csync-what");
+    what.appendChild(el("div", "", (p.why || []).join("; ")));
+    what.appendChild(el("div", "", `${p.a.name}: ${dupeBits(p.a)}`));
+    what.appendChild(el("div", "", `${p.b.name}: ${dupeBits(p.b)}`));
+    row.appendChild(what);
+    const m1 = el("button", "fchip sm rec", `Merge into ${p.a.name}`);
+    m1.onclick = () => csyncMerge(m1, p.a, p.b, row);
+    const m2 = el("button", "fchip sm", `Merge into ${p.b.name}`);
+    m2.onclick = () => csyncMerge(m2, p.b, p.a, row);
+    const no = el("button", "fchip sm", "Not the same");
+    no.onclick = () => csyncAct(no, "/api/people/duplicates/dismiss", { key: p.key }, row);
+    row.appendChild(m1);
+    row.appendChild(m2);
+    row.appendChild(no);
+    sec.appendChild(row);
+  });
+  if (groups.length) sec.appendChild(el("div", "csync-sub", "On the phone"));
+  groups.forEach((g) => {
+    const row = el("div", "csync-row");
+    const keep = g.cards.find((c) => c.uid === g.keep) || g.cards[0];
+    row.appendChild(csyncName(g.cards.map((c) => c.name || "(unnamed)").join(" + ")));
+    const what = el("div", "csync-what");
+    what.appendChild(el("div", "", (g.why || []).join("; ")));
+    g.cards.forEach((c) => what.appendChild(el("div", "",
+      `${c.name || "(unnamed)"}${c.org ? " (" + c.org + ")" : ""}: ${[...c.emails, ...c.phones].join(", ") || "no handles"}`)));
+    row.appendChild(what);
+    const fold = el("button", "fchip sm rec", `Fold into ${keep.name || "the first card"}`);
+    fold.onclick = () => {
+      const others = g.uids.filter((u) => u !== keep.uid);
+      if (!confirm(`Fold ${others.length} card${others.length === 1 ? "" : "s"} into ${keep.name || "this card"}? Their emails and phones join it, then they are deleted (vCard backup first).`)) return;
+      csyncAct(fold, "/api/contacts/fold", { keep_uid: keep.uid, drop_uids: others }, row);
+    };
+    const no = el("button", "fchip sm", "Not the same");
+    no.onclick = () => csyncAct(no, "/api/people/duplicates/dismiss", { uids: g.uids }, row);
+    row.appendChild(fold);
+    row.appendChild(no);
+    sec.appendChild(row);
+  });
+  if (d.phone_error) sec.appendChild(el("div", "csync-empty", "Phone cards could not be read: " + d.phone_error));
+  if (pairs.length || groups.length) sec.open = true;
+}
+
+function csyncMerge(btn, keep, drop, row) {
+  if (!confirm(`Merge ${drop.name} into ${keep.name}? Handles, card rows and profile notes carry over; the registry is backed up first.`)) return;
+  csyncAct(btn, "/api/people/merge", { keep: keep.pid, drop: drop.pid }, row);
 }
 
 function renderContactSync(box, st) {
@@ -17602,24 +17768,39 @@ function renderContactSync(box, st) {
   }
   box.appendChild(acts);
   if (run.error) box.appendChild(el("p", "hint warn", `Last pass failed: ${run.error}`));
-  // -- to read
+  // -- to read, one group per kind; kinds that only tell the owner
+  // something happened (a note merged, a phone note kept) start folded
   const review = st.review || [];
-  const rv = csyncSection(box, "To read", st.review_total || 0, review, (r) => {
-    const row = el("div", "csync-row");
-    row.appendChild(csyncName(r.name, r.pid));
-    const what = el("div", "csync-what");
-    what.appendChild(el("div", "", `${r.kind.replace(/-/g, " ")}: ${r.detail || ""}`));
-    if (r.text) what.appendChild(el("div", "csync-note", r.text));
-    row.appendChild(what);
-    const ok = el("button", "fchip sm", "Read");
-    ok.onclick = async () => {
-      ok.disabled = true;
-      try { await post("/api/contacts/sync/review", { ids: [r.id] }); row.remove(); }
-      catch (e) { toast(errText(e)); ok.disabled = false; }
+  const kinds = st.review_kinds || {};
+  const info = new Set(st.informational_kinds || []);
+  const rv = el("details", "csync-sec");
+  const rvs = el("summary", "", "To read");
+  rvs.appendChild(el("span", "badge", String(st.review_total || 0)));
+  rv.appendChild(rvs);
+  if (!review.length) rv.appendChild(el("div", "csync-empty", "Nothing waiting on you."));
+  const order = Object.keys(kinds).sort((a, b) =>
+    (info.has(a) - info.has(b)) || (kinds[b] - kinds[a]) || a.localeCompare(b));
+  order.forEach((kind) => {
+    const rows = review.filter((r) => r.kind === kind);
+    const g = el("details", "csync-sec csync-kind");
+    g.open = !info.has(kind);
+    const gs = el("summary", "", kind.replace(/-/g, " "));
+    gs.appendChild(el("span", "badge", String(kinds[kind])));
+    const mk = el("button", "fchip sm", "Mark these read");
+    mk.onclick = async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      mk.disabled = true;
+      try { await post("/api/contacts/sync/review", { kinds: [kind] }); await loadContactSync(); }
+      catch (e) { toast(errText(e)); mk.disabled = false; }
     };
-    row.appendChild(ok);
-    return row;
-  }, "Nothing waiting on you.");
+    gs.appendChild(mk);
+    g.appendChild(gs);
+    rows.forEach((r) => g.appendChild(csyncReviewRow(r)));
+    if (kinds[kind] > rows.length)
+      g.appendChild(el("div", "csync-empty", `${kinds[kind] - rows.length} more not shown`));
+    rv.appendChild(g);
+  });
   if (review.length) {
     const all = el("button", "fchip sm", "Mark all read");
     all.style.margin = "6px 0";
@@ -17631,6 +17812,7 @@ function renderContactSync(box, st) {
     rv.appendChild(all);
   }
   if (st.review_total) rv.open = true;
+  box.appendChild(rv);
   // -- new on the phone
   csyncSection(box, "New on the phone", rep.new_cards_total || 0, rep.new_cards || [], (c) => {
     const row = el("div", "csync-row");
@@ -17650,20 +17832,58 @@ function renderContactSync(box, st) {
     row.appendChild(el("div", "csync-what", r.what));
     return row;
   }, "The CRM already has everything the phone cards carry.");
-  // -- shared cards: two CRM people on one phone card; nothing moves either way
-  csyncSection(box, "Shared cards", rep.shared_cards_total || 0, rep.shared_cards || [], (sc) => {
+  // -- shared lines: one row per office number or mailbox that several
+  // people carry (a shared card, a handle conflict, two CRM records).
+  // "Same office" marks it a line: no longer a match signal or a conflict.
+  const sl = rep.shared_lines || [];
+  const suggested = sl.filter((r) => r.suggest);
+  const lsec = csyncSection(box, "Shared lines", rep.shared_lines_total || 0, sl, (r) => {
     const row = el("div", "csync-row");
-    row.appendChild(csyncName(sc.card || "(card)"));
+    row.appendChild(csyncName(r.value));
     const what = el("div", "csync-what");
-    what.appendChild(document.createTextNode("matches "));
-    (sc.people || []).forEach((q, n) => {
-      if (n) what.appendChild(document.createTextNode(n === sc.people.length - 1 ? " and " : ", "));
-      what.appendChild(csyncName(q.name, q.pid));
+    const cards = r.cards || [];
+    if (cards.length)
+      what.appendChild(el("div", "", `on ${cards.length} phone card${cards.length === 1 ? "" : "s"}: `
+        + cards.slice(0, 6).map((c) => c.name || "(unnamed)").join(", ") + (cards.length > 6 ? ", …" : "")));
+    const pl = el("div", "");
+    pl.appendChild(document.createTextNode("in the CRM: "));
+    (r.people || []).forEach((q, n) => {
+      if (n) pl.appendChild(document.createTextNode(", "));
+      pl.appendChild(csyncName(q.name, q.pid));
     });
-    what.appendChild(document.createTextNode(" in the CRM; nothing is pushed until they are merged or the card is split"));
+    what.appendChild(pl);
+    const cf = r.conflicts || [];
+    if (cf.length)
+      what.appendChild(el("div", "", `${cf.length} handle conflict${cf.length === 1 ? "" : "s"}: `
+        + cf.slice(0, 4).map((c) => `${c.name}'s card carries it`).join("; ") + (cf.length > 4 ? "; …" : "")));
+    if ((r.why || []).length)
+      what.appendChild(el("div", r.suggest ? "warn" : "", (r.suggest ? "looks like a shared line: " : "") + r.why.join(", ")));
     row.appendChild(what);
+    const same = el("button", "fchip sm" + (r.suggest ? " rec" : ""), "Same office");
+    same.title = "Mark it a shared line: not a match signal, not a conflict, and inbound still reaches its first owner";
+    same.onclick = () => csyncAct(same, "/api/contacts/sync/lines", { marks: r.mark }, row);
+    const not = el("button", "fchip sm", "Not the same office");
+    not.onclick = () => csyncAct(not, "/api/contacts/sync/lines", { keep: [r.key] }, row);
+    row.appendChild(same);
+    row.appendChild(not);
     return row;
-  }, "No phone card is shared by two CRM people.");
+  }, rep.generated ? "No office number or mailbox is shared by several people." : "Run a pass to find out.");
+  if (suggested.length > 1) {
+    const all = el("button", "fchip sm rec", `Same office for all ${suggested.length} suggested`);
+    all.style.margin = "6px 0";
+    all.onclick = () => csyncAct(all, "/api/contacts/sync/lines", { marks: suggested.flatMap((r) => r.mark) });
+    lsec.appendChild(all);
+  }
+  const lnote = [];
+  if (rep.lines) lnote.push(`${rep.lines} shared line${rep.lines === 1 ? "" : "s"} marked`);
+  if (rep.shared_lines_kept) lnote.push(`${rep.shared_lines_kept} kept apart`);
+  if (lnote.length) lsec.appendChild(el("div", "csync-empty", lnote.join(" · ")));
+  if (sl.length) lsec.open = true;
+  // -- duplicates (filled by loadDuplicates; the cached answer paints at once)
+  const dd = el("div", "");
+  dd.id = "csync-dupes";
+  box.appendChild(dd);
+  renderDuplicates(dd, csyncDupes);
   // -- will change on the phone
   csyncSection(box, "Will change on the phone", rep.changes_total || 0, rep.changes || [], (c) => {
     const row = el("div", "csync-row");

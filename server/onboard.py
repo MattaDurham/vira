@@ -145,13 +145,32 @@ def read_google_csv(text):
 
 # ---------- the merge into people.json / master.json ----------
 
-def import_contacts(contacts, source):
+def _lookalike(name, by_surname):
+    """The registry record a contact name reads as: same surname, same or
+    nickname-equivalent first name (server/names.py). None when there is
+    no such record, or the name has no surname to compare."""
+    from . import names
+    first, last = names.split(name)
+    if not (first and last):
+        return None
+    for other_first, p in by_surname.get(names.surname_key(last), []):
+        if names.same_first(first, other_first):
+            return p
+    return None
+
+
+def import_contacts(contacts, source, check_names=True):
     """Write contacts into the configured crm_root: new people appended to
     people.json (backup-first through triage), imported company/title facts
     retained in registry refs. Never writes the external master.json.
     People whose handles already resolve to a CRM person are
-    left untouched (counted as known). Returns counts."""
-    from . import dataconnections, triage
+    left untouched (counted as known). A contact whose name reads as a
+    record already there (same surname, same or nickname-equivalent first
+    name) is HELD rather than created, as a "possible-duplicate" entry in
+    the Sync tab's review list that can still add its handles to that
+    person or import it anyway; `check_names=False` is that import.
+    Returns counts, with `held` listing what was held."""
+    from . import dataconnections, names, triage
     with _lock, triage._lock:
         root = crm_target()
         root.mkdir(parents=True, exist_ok=True)
@@ -160,13 +179,18 @@ def import_contacts(contacts, source):
             dataconnections._registry(root)  # corrupt registries fail closed
         doc = triage._read_people_backed_up(root=root)
         known = {}
+        by_surname = {}
         for p in doc["people"]:
             hs = p.get("handles", {})
             for e in hs.get("emails", []):
                 known[e.lower()] = p["id"]
             for ph in hs.get("phones10", []):
                 known[ph] = p["id"]
+            first, last = names.split(p.get("name") or "")
+            if first and last and not triage._is_placeholder(p.get("name")):
+                by_surname.setdefault(names.surname_key(last), []).append((first, p))
         added = existing = skipped = 0
+        held = []
         today = time.strftime("%Y-%m-%d")
         for c in contacts:
             handles = [*c.get("emails", []), *c.get("phones10", [])]
@@ -175,6 +199,11 @@ def import_contacts(contacts, source):
                 continue
             if any(h in known for h in handles):
                 existing += 1
+                continue
+            like = _lookalike(c["name"], by_surname) if check_names else None
+            if like is not None:
+                held.append({"name": c["name"], "pid": like["id"],
+                             "existing": like["name"], "card": dict(c, source=source)})
                 continue
             person = {
                 "id": "p_" + uuid.uuid4().hex[:12],
@@ -195,10 +224,29 @@ def import_contacts(contacts, source):
             doc["people"].append(person)
             for h in handles:
                 known[h] = person["id"]
+            first, last = names.split(c["name"])
+            if first and last:
+                by_surname.setdefault(names.surname_key(last), []).append((first, person))
             added += 1
         triage._write_people(doc, root=root)
+    if held:
+        from . import contactsync
+        contactsync.file_reviews([_held_review(h, contactsync) for h in held])
     return {"added": added, "already_known": existing, "skipped": skipped,
-            "total_people": len(doc["people"]), "source": source}
+            "held": held, "total_people": len(doc["people"]), "source": source}
+
+
+def _held_review(h, contactsync):
+    card = h["card"]
+    where = ", ".join([*card.get("emails", []),
+                       *("+1" + p for p in card.get("phones10", []))][:3])
+    return contactsync.review_entry(
+        "possible-duplicate", h["pid"], h["existing"], uid=card.get("uid"),
+        detail=f"The phone card \"{h['name']}\" ({where}) reads like "
+               f"{h['existing']}, so it was not imported as a new person. "
+               "Same person: its handles join this card. Different: it is "
+               "imported on its own.",
+        key=f"possible-duplicate:{h['pid']}:{h['name']}", card=card)
 
 
 def import_apple():
