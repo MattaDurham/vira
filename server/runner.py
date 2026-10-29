@@ -146,6 +146,17 @@ def _max_buffer_bytes():
     return max(int(mb * 1024 * 1024), _SDK_DEFAULT_BUFFER)
 
 
+def _show_reasoning():
+    """Whether a session's reasoning is shown: the CLI is asked for the
+    model's summarized thinking and render_message writes it as THINK_MARK
+    lines before the step it precedes. Read per launch, like the buffer
+    cap, so a config change reaches the next session without a restart."""
+    try:
+        return bool(_scfg("session_show_reasoning"))
+    except Exception:  # noqa: BLE001 - a bad value must not block a launch
+        return True
+
+
 def _cli_path():
     """The Claude Code binary a session runs: the owner's installed CLI,
     found the way every other Vira call finds it (models.find_binary -
@@ -281,6 +292,12 @@ AGENT_TOOLS = ("Agent", "Task")
 # An agent's transcript line: "  <AGENT_LANE> <label> · <text>". app.js
 # (renderTermLine) parses exactly this shape into a coloured lane.
 AGENT_LANE = "┊"
+# The model's reasoning line: "  <THINK_MARK> <one line of its summarized
+# thinking>", written BEFORE the step it precedes. It is the model's own
+# account of what it is about to do and why - the one thing a reader who
+# follows along to steer could not see before 2026-10-29, when the block
+# arrived empty and was dropped. app.js (renderTermLine) draws it dim.
+THINK_MARK = "\u273b"
 # Lines of one agent message shown in the main feed. An Explore agent's
 # report runs to 100+ lines; four of them inline buried the main agent's
 # own words. The whole report is kept on the agent's card instead.
@@ -473,6 +490,7 @@ class Runner:
         self._deadline_task = None
         self._native_tools = {}
         self._shell_calls = set()        # main-agent shell calls awaiting a result
+        self.show_reasoning = True       # the shipped default; run_session reads the setting
         self._execution_started_mono = None
         self._execution_elapsed = 0.0
         self.out = open(self.dir / "output.log", "a", encoding="utf-8")
@@ -1892,7 +1910,20 @@ class Runner:
                     if not b.name.startswith("mcp__vira__"):
                         self.native_tool(b.id, b.name, b.input)
                 elif isinstance(b, ThinkingBlock):
-                    pass  # keep the log readable, as before
+                    # Summarized thinking, when the launch asked for it
+                    # (thinking= below): the model's account of what it is
+                    # about to do and why, one THINK_MARK line per line of
+                    # it, ahead of the tool line it explains. Opus 4.7+
+                    # sends the block signature-only unless asked for the
+                    # summary, so an empty one costs nothing. Published as
+                    # its own phase so chat can fold it under the answer
+                    # while the answer itself (final_answer) stays clean.
+                    txt = (b.thinking or "").strip()
+                    if txt and self.show_reasoning:
+                        out += "".join(f"  {THINK_MARK} {ln.strip()}\n"
+                                       for ln in txt.splitlines() if ln.strip())
+                        self.publish_message("think-" + uuid.uuid4().hex, txt,
+                                             phase="thinking", completed=True)
             self.append(out)
             return None
         if isinstance(msg, UserMessage) and isinstance(msg.content, list):
@@ -2019,6 +2050,7 @@ class Runner:
                 read_only=bool(spec.get("read_only")),
                 runtime=self.state["runtime"], receipt=self)
             environment = _environment_options(spec.get("environment"))
+            self.show_reasoning = _show_reasoning()
             options = ClaudeAgentOptions(
                 cwd=spec["cwd"],
                 **{k: v for k, v in environment.items() if k not in ("append", "mcp_servers")},
@@ -2028,6 +2060,15 @@ class Runner:
                 # kills the session outright. Left unset, editing this
                 # repo's own static/app.js is unsurvivable.
                 max_buffer_size=_max_buffer_bytes(),
+                # The model's summarized thinking, when the owner shows it
+                # (session_show_reasoning): the SDK passes this as
+                # `--thinking adaptive --thinking-display summarized`, and
+                # the ThinkingBlock render_message sees then carries text.
+                # Measured 2026-10-29 on CLI 2.1.283 / SDK 0.2.115: without
+                # the display option the same block arrives empty. None
+                # leaves the CLI's own default (adaptive, omitted) alone.
+                thinking=({"type": "adaptive", "display": "summarized"}
+                          if self.show_reasoning else None),
                 model=spec.get("model_resolved") or spec.get("model"),
                 effort=spec.get("effort"),
                 env=_sdk_env(),

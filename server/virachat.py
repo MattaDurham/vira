@@ -159,7 +159,7 @@ Every 15-30 seconds of substantial work, give a brief useful progress update
 about evidence found or an unresolved gap. Publish a supported preliminary
 answer when ready and mark it provisional if checks remain. Aim to answer
 ordinary questions within three minutes; explain a remaining gap rather than
-silently extending research. Do not expose private reasoning or raw tool logs.
+silently extending research. Keep raw tool output out of the answer.
 
 You can also perform actions the owner requests, using the configured session
 permissions. Ask with {tool_prefix}ask_owner when a necessary choice belongs
@@ -430,6 +430,12 @@ def send(question, session_id=None, *, mode=None, sources=None):
 
 # ---------- following a turn to its answer ----------
 
+# The runner's message phases a chat turn keeps: the model's words to the
+# owner (commentary), the answer, and its summarized thinking. Anything
+# else (an unknown phase) stays in the session's own transcript.
+SHOWN_PHASES = ("commentary", "final_answer", "thinking")
+
+
 def _current_final(snap, since=0):
     items = (snap.get("execution") or {}).get("message_items") or []
     finals = [item for item in items if item.get("phase") == "final_answer"
@@ -528,7 +534,7 @@ def _observe(sid, key, snap):
         return
     since = float(existing.get("sent_t") or 0)
     messages = [r for r in execution.get("message_items") or []
-                if r.get("phase") in ("commentary", "final_answer")
+                if r.get("phase") in SHOWN_PHASES
                 and r.get("text") and float(r.get("updated_t") or 0) >= since]
     receipts = [r for r in snap.get("receipts") or [] if float(r.get("started_t") or 0) >= since]
     ready = execution.get("answer_ready_t")
@@ -549,12 +555,16 @@ def _observe(sid, key, snap):
         elif t.get("waiting_since_t"):
             t["waited_s"] = t.get("waited_s", 0) + max(0, time.time() - t.pop("waiting_since_t"))
         since = float(t.get("sent_t") or 0)
-        # Thinking/reasoning items and unknown-phase text are never displayed.
+        # Unknown-phase text is never displayed. A "thinking" item is the
+        # model's summarized reasoning (runner.render_message): shown as it
+        # arrives and folded under the answer, but it is not the "first
+        # useful" message - that metric still waits for the model's words.
         messages = [r for r in execution.get("message_items") or []
-                    if r.get("phase") in ("commentary", "final_answer")
+                    if r.get("phase") in SHOWN_PHASES
                     and r.get("text") and float(r.get("updated_t") or 0) >= since]
         if messages:
             t["messages"] = messages
+        if any(r.get("phase") != "thinking" for r in messages):
             metrics = t.setdefault("metrics", {})
             metrics.setdefault("first_useful_t", time.time())
             metrics["time_to_first_useful_s"] = max(0, metrics["first_useful_t"] - since)

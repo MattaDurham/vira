@@ -106,6 +106,13 @@ SESSION_DEFAULTS = {
     # the runner, and that is still worth having. 64 MiB clears every file
     # in this repo by ~60x while staying a real limit.
     "session_max_buffer_mb": 64,
+    # The model's summarized thinking, drawn as a dim line before the step
+    # it precedes (runner.THINK_MARK) and folded under a chat answer. Opus
+    # 4.7+ sends the thinking block signature-only unless asked for the
+    # summary, so before 2026-10-29 a reader following along saw what the
+    # session did and never what it was about to do or why - the one thing
+    # steering needs. On by default; off keeps the feed to actions and text.
+    "session_show_reasoning": True,
     # When an owner-dispatched writer session parks with work on its branch,
     # the HARNESS raises the merge / try it first / keep playing / discard
     # card (never the model - a question that lives only in a transcript is

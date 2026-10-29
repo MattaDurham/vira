@@ -38,11 +38,13 @@ class ChatContract(ChatBase):
             {"phase": "commentary", "text": "Earlier answer", "updated_t": t["sent_t"] - 1},
             {"phase": "reasoning", "text": "Private scratchpad", "updated_t": now},
             {"phase": "unknown", "text": "Unknown phase", "updated_t": now},
+            {"phase": "thinking", "text": "Check the parser first.", "updated_t": now},
             {"phase": "commentary", "text": "Two independent records agree", "updated_t": now},
         ]}}
         virachat._observe(s["id"], t["id"], snapshot)
         observed = virachat.current()["turns"][0]
-        self.assertEqual([m["text"] for m in observed["messages"]], ["Two independent records agree"])
+        self.assertEqual([m["text"] for m in observed["messages"]],
+                         ["Check the parser first.", "Two independent records agree"])
         self.assertGreaterEqual(observed["metrics"]["time_to_first_useful_s"], 0)
         virachat._finish_turn(s["id"], 0, "answer", "", [], [], [], [])
         virachat.visible(s["id"], t["id"])
@@ -51,6 +53,33 @@ class ChatContract(ChatBase):
         first = metrics["answer_visible_t"]
         virachat.visible(s["id"], t["id"])
         self.assertEqual(virachat.current()["turns"][0]["metrics"]["answer_visible_t"], first)
+
+    def test_a_reasoning_line_streams_but_is_not_the_first_useful_message(self):
+        """The model's summarized thinking (runner phase "thinking") reaches
+        the turn as it arrives; the first-useful clock still waits for the
+        model's words to the owner."""
+        s = virachat.send("question")
+        t = s["turns"][0]
+        now = time.time()
+        thought = {"phase": "thinking", "text": "Check the parser first.", "updated_t": now}
+        virachat._observe(s["id"], t["id"], {"execution": {"message_items": [thought]}})
+        observed = virachat.current()["turns"][0]
+        self.assertEqual([m["phase"] for m in observed["messages"]], ["thinking"])
+        self.assertNotIn("first_useful_t", observed.get("metrics") or {})
+        virachat._observe(s["id"], t["id"], {"execution": {"message_items": [
+            thought, {"phase": "commentary", "text": "Two records agree.", "updated_t": now + 1}]}})
+        observed = virachat.current()["turns"][0]
+        self.assertEqual([m["phase"] for m in observed["messages"]], ["thinking", "commentary"])
+        self.assertIn("first_useful_t", observed["metrics"])
+
+    def test_the_brief_no_longer_asks_the_model_to_hide_its_reasoning(self):
+        """The reasoning line shows the model's thinking on purpose; a brief
+        that still said to keep it private would be arguing with the UI."""
+        for native in (True, False):
+            prompt = virachat._launch_prompt("question", native=native)
+            self.assertNotIn("private reasoning", prompt)
+        self.assertIn("Keep raw tool output out of the answer.",
+                      virachat._launch_prompt("question", native=True))
 
     def test_stop_preserves_partial_and_blocks_late_answer(self):
         s = virachat.send("question")

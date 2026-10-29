@@ -579,6 +579,13 @@ SCHEMA = [
       "The SDK bounds one NDJSON line; 1 MiB killed three sessions that ran "
       "Edit on static/app.js. Bounded, not removed, so a runaway CLI cannot "
       "exhaust the runner.", advanced=True, range=(1, 1024)),
+    S("session_show_reasoning", "sessions", "bool", True,
+      "Show the session's reasoning",
+      "Asks the model for its summarized thinking and draws it as a dim line "
+      "before each step in the session window, and folded under a chat "
+      "answer: what it is about to do and why, which is what following "
+      "along to steer needs. Off keeps the transcript to actions and text. "
+      "Claude sessions only; applies from the next launch."),
 
     # -------------------------------------------------------------- atlas
     S("atlas_anchor_org", "atlas", "str", "", "Anchor organization",
