@@ -179,6 +179,15 @@ EDIT_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 # rather than the day someone notices. Read-only means reads.
 READ_ONLY_EXCLUDE = {"Task", "WebSearch"} | viratools.WRITE_TOOLS
 
+# The CLI's task-list tools, in both vocabularies: TaskCreate / TaskUpdate
+# (and their readers) on current CLIs, TodoWrite on older ones. They only
+# keep the session's checklist of its own steps (runner.Runner._plan_call),
+# so the gate allows them in every mode, read-only included.
+PLAN_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
+# A TaskUpdate's status, as its terminal line says it.
+PLAN_STATUS_WORD = {"in_progress": "started", "completed": "done",
+                    "deleted": "dropped", "pending": "back to pending"}
+
 # The two halves of the launch-dict -> job.json derivation (_spawn_runner).
 #
 # RUNNER_OWNED is the ONLY reason a launch input does not reach the runner:
@@ -413,6 +422,16 @@ def _tool_summary(block):
         return f"{name} {inp.get('pattern') or inp.get('query') or ''}".strip()
     if name == "TodoWrite":
         return "planning the steps…"
+    if name == "TaskCreate":
+        what = " ".join(str(inp.get("subject") or "").split())[:100]
+        return f"planning a step: {what}" if what else "planning the steps…"
+    if name == "TaskUpdate":
+        # The input names the step by the CLI's id only; the runner's own
+        # line names it by its words when it knows them (Runner._plan_line).
+        word = PLAN_STATUS_WORD.get(inp.get("status"), "updated")
+        return f"step #{inp.get('taskId') or '?'} {word}"
+    if name in ("TaskList", "TaskGet"):
+        return "checking the steps…"
     if name in ("Task", "Agent"):
         # "Agent" is the tool's name on current CLIs, "Task" on older ones.
         # The description is the agent's name in its lane and on its card

@@ -911,8 +911,10 @@ def _label(row):
 
 
 # The harness's own calls - loading deferred tools, planning - are not
-# something the session looked AT.
-HARNESS_TOOLS = {"ToolSearch", "TodoWrite", "Task", "Read", "Glob", "Grep",
+# something the session looked AT. The task-list tools are session.PLAN_TOOLS;
+# their checklist shows under the status line instead (app.js planChecklist).
+HARNESS_TOOLS = {"ToolSearch", "TodoWrite", "TaskCreate", "TaskUpdate",
+                 "TaskList", "TaskGet", "Task", "Read", "Glob", "Grep",
                  "WebFetch", "WebSearch"}
 
 

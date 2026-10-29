@@ -531,6 +531,17 @@ class WhatItLookedAt(unittest.TestCase):
                 {"turn": 0, "name": "Bash", "input": {"query": "ls"}, "t": 3}]
         self.assertEqual(virachat.looked_at(snap(tools=rows)), [])
 
+    def test_the_task_list_is_not_source_activity(self):
+        """Its checklist shows under the status line (app.js planChecklist);
+        a "TaskCreate" row under Source activity only says it again, worse."""
+        rows = [{"turn": 0, "name": n, "input": {"subject": "Read"}, "t": 2.0}
+                for n in ("TaskCreate", "TaskUpdate", "TaskList", "TaskGet")]
+        rows.append(tool("find", 0, t=3.0, query="boat"))
+        chat = {"job_id": "job_x", "turns": [{"status": "pending", "sent_t": 1.0}]}
+        with mock.patch.object(virachat, "_session_snapshot",
+                               return_value=snap(tools=rows)):
+            self.assertEqual(virachat._with_progress(chat)["progress"], ["find: boat"])
+
     def test_a_turn_with_no_calls_of_its_own_inherits_nothing(self):
         # the second live turn (2026-09-01) showed the first turn's seven
         # cards because attribution keyed on the runner's turn counter

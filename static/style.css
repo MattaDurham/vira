@@ -1612,6 +1612,29 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
   overflow-y: auto; line-height: 1.5; }
 .agent-card.open .agent-report { display: block; }
 
+/* ---------- the session's own checklist (planChecklist): pinned between
+   the agents strip and the compose bar (renderPlanStrip), and under a
+   pending chat turn's status line. One row per step, numbered as the owner
+   names them; the step in progress is marked, done ones ticked. Colours
+   come from the skin's tokens, so dark and light both carry it. ---------- */
+.term-plan { display: none; flex: none; max-height: 30%; overflow-y: auto;
+  border-top: 1px solid var(--term-line); background: var(--term-chrome);
+  padding: 7px 14px 6px; color: var(--term-mut); font-size: 12px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+.term-plan.on { display: block; }
+.plan-head { font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+  margin-bottom: 4px; }
+.plan-step { display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  line-height: 1.55; }
+.plan-mark { flex: none; width: 1em; text-align: center; }
+.plan-num { flex: none; min-width: 1.7em; font-variant-numeric: tabular-nums; }
+.plan-text { flex: 1 1 auto; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.plan-step.st-completed .plan-mark { color: var(--green); }
+.term-plan .plan-num, .term-plan .plan-step.st-completed .plan-text { color: var(--term-dim); }
+.term-plan .plan-step.st-in_progress { color: var(--term-fg); }
+.term-plan .plan-step.st-in_progress .plan-mark { color: var(--claude); }
+
 /* ---------- live sessions: permission cards + compose bar ---------- */
 .perm-stack { padding: 0 18px 16px; margin-top: -44px; display: flex;
   flex-direction: column; gap: 10px;
@@ -4371,6 +4394,12 @@ a.sub-name:hover { color: var(--accent); text-decoration: underline; }
 .chat-reasoning { margin: 0 0 8px; }
 .chat-reasoning > summary { cursor: pointer; margin: 0 0 4px; list-style-position: inside; }
 .chat-reasoning .chat-stream { font-size: 13px; color: var(--text-faint); margin-bottom: 6px; }
+/* the session's checklist while a chat turn is pending (planChecklist) */
+.brain-msg .plan-check { margin: 6px 0 4px; font-size: 13px; color: var(--text-dim); }
+.brain-msg .plan-head, .brain-msg .plan-num,
+.brain-msg .plan-step.st-completed .plan-text { color: var(--text-faint); }
+.brain-msg .plan-step.st-in_progress { color: var(--text); }
+.brain-msg .plan-step.st-in_progress .plan-mark { color: var(--accent); }
 .chat-step { font-family: var(--mono); font-size: 11px; color: var(--text-faint);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-md p { margin: 0 0 .5em; } .chat-md p:last-child { margin-bottom: 0; }
