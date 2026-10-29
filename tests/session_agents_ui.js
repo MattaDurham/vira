@@ -112,4 +112,37 @@ assert.equal(find(box, 'agents-head')[0].textContent, 'Agents · all 2 reported'
 const empty = new Element();
 ctx.renderAgentStrip(empty, { agents: [] });
 assert.ok(!empty.classList.contains('on'));
+
+// the pinned checklist: the session's own steps, numbered as the owner names them
+const planBox = new Element();
+const plan = { execution: { plan_steps: [
+  { text: 'Read the parser', status: 'completed' },
+  { text: 'Fix blank lines', status: 'in_progress' },
+  { text: 'Run the tests', status: 'pending' }] } };
+ctx.renderPlanStrip(planBox, plan);
+assert.ok(planBox.classList.contains('on'));
+assert.equal(find(planBox, 'plan-head')[0].textContent, 'Steps · 1 of 3 done');
+const stepRows = find(planBox, 'plan-step');
+assert.deepEqual(stepRows.map((n) => ['st-completed', 'st-in_progress', 'st-pending']
+  .find((c) => n.classList.contains(c))), ['st-completed', 'st-in_progress', 'st-pending']);
+assert.deepEqual(stepRows.map((n) => find(n, 'plan-num')[0].textContent), ['1.', '2.', '3.']);
+assert.equal(find(stepRows[0], 'plan-mark')[0].textContent, '✓', 'a done step is ticked');
+assert.equal(find(stepRows[1], 'plan-mark')[0].textContent, '▸', 'the step in progress is marked');
+assert.equal(find(stepRows[2], 'plan-mark')[0].textContent, '○');
+assert.equal(find(stepRows[1], 'plan-text')[0].textContent, 'Fix blank lines');
+assert.equal(stepRows[1].title, 'Fix blank lines', 'a step cut to one line keeps its words');
+// the 800ms poll does not rebuild an unchanged list
+const built = planBox.children[0];
+ctx.renderPlanStrip(planBox, JSON.parse(JSON.stringify(plan)));
+assert.equal(planBox.children[0], built);
+ctx.renderPlanStrip(planBox, { execution: { plan_steps: plan.execution.plan_steps
+  .map((s) => ({ ...s, status: 'completed' })) } });
+assert.equal(find(planBox, 'plan-head')[0].textContent, 'Steps · all 3 done');
+// steps past the runner's cap are counted, never silently gone
+ctx.renderPlanStrip(planBox, { execution: { plan_steps: plan.execution.plan_steps, plan_steps_more: 4 } });
+assert.equal(find(planBox, 'plan-head')[0].textContent, 'Steps · 1 of 3 done · 4 more not shown');
+// no list: the strip is hidden and empty
+ctx.renderPlanStrip(planBox, { execution: {} });
+assert.ok(!planBox.classList.contains('on'));
+assert.equal(planBox.children.length, 0);
 console.log('Session agents UI passed');

@@ -80,9 +80,9 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
     2026-07-25 session demonstrably did not follow.
 
     subagents=True is the Claude Agent SDK path (runner.py), the only
-    engine whose sessions can launch Agent-tool subagents; Codex and the
-    function agents are native too, and must not be told about a tool
-    they do not have.
+    engine whose sessions can launch Agent-tool subagents or keep a task
+    list with the CLI's task tools; Codex and the function agents are
+    native too, and must not be told about tools they do not have.
     """
     owner = settings.get("owner_name") or "the owner"
     tools_para = (
@@ -198,6 +198,22 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
         "reported, and give the conclusion described under HOW TO END A "
         "TURN in that turn.\n\n"
         if subagents else "")
+    # The task tools are the Claude Code harness's too, in two vocabularies
+    # across CLI versions; the runner folds either into the checklist the
+    # owner sees (runner.PLAN_STATUSES). Without this paragraph no session
+    # kept a list: none of 64 job event logs held a call (2026-10-29).
+    tasks_para = (
+        "KEEP A TASK LIST. For any turn with more than one step, keep a "
+        "short checklist of your steps with the task tools: TaskCreate for "
+        "each step, then TaskUpdate as each one starts and finishes (an "
+        "older CLI has TodoWrite instead, which takes the whole list each "
+        "time). Exactly one step is in progress at a time: mark it done the "
+        "moment it is, then start the next. When the plan changes, change "
+        f"the list. {owner} sees it pinned above the reply box, numbered "
+        "from 1 in the order you made it, and steers from it: 'skip step "
+        "4, I will do it' means the fourth step of your current list, so "
+        "drop that step and say so. A one-step answer needs no list.\n\n"
+        if subagents else "")
     visual_para = (
         "VISUAL CONTEXT FOR DURABLE DECISIONS. When you create a proposal, "
         "review document, plan, or other artifact the owner will later open "
@@ -248,7 +264,8 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
     return (
         f"You are running inside Vira, {owner}'s personal AI chief-of-staff "
         f"web app, as an agent session on {owner}'s Mac.\n\n"
-        + branch_para + ask_para + tools_para + agents_para + visual_para + vault_para +
+        + branch_para + ask_para + tools_para + agents_para + tasks_para
+        + visual_para + vault_para +
         f"Vira's HTTP API on {instance.api_url()} serves the same data as "
         "JSON when you need it raw: GET /api/brief (calendar + who's "
         "waiting), /api/people?q=<name>, /api/person/<id>, "

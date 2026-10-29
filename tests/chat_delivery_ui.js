@@ -31,6 +31,7 @@ load('function mergeFindChatHistory(', 'async function loadEarlierFindChat(');
 load('async function loadEarlierFindChat(', 'const findChatVisible =');
 load('function findChatEnriching(', 'function findChatRestartRequired(');
 load('function chatAnswer(', '// Where a "looked at" card goes:');
+load('// ----- the pinned checklist', 'function renderPlanStrip(');
 const handle = {stop() { stopped++; }};
 function session(status, enrichment) {
   return {id: 'chat-test', turns: [{status, answer: 'Ready answer', enrichment}]};
@@ -76,6 +77,22 @@ function session(status, enrichment) {
   assert.equal(folded.children[0].children[1].cls, 'chat-think');
   assert.equal(folded.children[0].children[2].innerHTML, 'Two records agree.');
   assert.equal(folded.children[1].innerHTML, 'Ready answer', 'the answer follows the fold');
+
+  // The session's own checklist sits under the status line while the turn
+  // is pending: the same one the terminal pins above its reply box.
+  const planned = {id: 'chat-test', elapsed_s: 5, execution: {plan_steps: [
+    {text: 'Search the vault', status: 'completed'},
+    {text: 'Read the two notes', status: 'in_progress'}]}, turns: [{status: 'pending'}]};
+  const withPlan = context.chatAnswer(planned.turns[0], planned);
+  assert.match(withPlan.children[0].textContent, /^Preparing an answer/);
+  const check = withPlan.children[1];
+  assert.equal(check.cls, 'plan-check', 'the checklist follows the status line');
+  assert.equal(check.children[0].textContent, 'Steps · 1 of 2 done');
+  assert.equal(check.children[2].cls, 'plan-step st-in_progress');
+  assert.equal(check.children[2].children[0].textContent, '▸');
+  assert.equal(check.children[2].children[2].textContent, 'Read the two notes');
+  const unplanned = context.chatAnswer(planned.turns[0], {...planned, execution: {}});
+  assert.ok(!unplanned.children.some((c) => c.cls === 'plan-check'), 'no list, no checklist');
 
   // Reopening an answered chat still follows unfinished panel work.
   context.findChatSession = session('done', {status: 'pending'});

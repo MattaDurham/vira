@@ -456,6 +456,140 @@ class Reasoning(AgentsCase):
         self.assertEqual(r.state["execution"].get("message_items", []), [])
 
 
+def created(tool_id, task_id, subject):
+    """A TaskCreate's result, in CLI 2.1.283's words: the only place the
+    new step's id is said."""
+    return tool_result(tool_id, f"Task #{task_id} created successfully: {subject}")
+
+
+def steps(st):
+    return [(s["text"], s["status"]) for s in st["execution"].get("plan_steps", [])]
+
+
+class TaskList(AgentsCase):
+    """The session's checklist of its own steps (2026-10-29): the model
+    keeps it with the CLI's task tools and the runner publishes it as
+    execution.plan_steps, which the terminal pins above the reply box and
+    chat shows under a pending turn's status line."""
+
+    def test_task_create_then_update_leaves_the_steps_in_order(self):
+        """Through the real run_session loop and state.json, which is what
+        the terminal and chat read."""
+        r = self.make_runner()
+        saw = {}
+
+        async def script(client):
+            await client._queried.wait()
+            yield init()
+            for n, subject in enumerate(("Read the parser", "Fix blank lines",
+                                         "Run the tests"), 1):
+                yield use(f"toolu_c{n}", "TaskCreate",
+                          {"subject": subject, "description": "-", "activeForm": "-"})
+                yield created(f"toolu_c{n}", n, subject)
+            yield use("toolu_u1", "TaskUpdate", {"taskId": "1", "status": "in_progress"})
+            await until(lambda: steps(r.state)[:1] == [("Read the parser", "in_progress")])
+            saw["mid"] = steps(json.loads((r.dir / "state.json").read_text(encoding="utf-8")))
+            yield use("toolu_u2", "TaskUpdate", {"taskId": "1", "status": "completed"})
+            yield use("toolu_u3", "TaskUpdate", {"taskId": "2", "status": "in_progress"})
+            yield say("Parser read; fixing now.")
+            yield result("Parser read; fixing now.")
+            await asyncio.Event().wait()
+
+        self.drive(r, script, while_running=SessionOptions._finish)
+        self.assertEqual(saw["mid"], [("Read the parser", "in_progress"),
+                                      ("Fix blank lines", "pending"),
+                                      ("Run the tests", "pending")],
+                         "the list is published while the turn runs")
+        st = json.loads((r.dir / "state.json").read_text(encoding="utf-8"))
+        self.assertEqual(steps(st), [("Read the parser", "completed"),
+                                     ("Fix blank lines", "in_progress"),
+                                     ("Run the tests", "pending")])
+        out = self.output(r)
+        self.assertIn("  → planning a step: Fix blank lines\n", out)
+        self.assertIn("  → step done: Read the parser\n", out,
+                      "an update's line names the step, not the CLI's id")
+
+    def test_a_create_whose_result_failed_makes_no_step(self):
+        r = self.make_runner()
+        r.render_message(use("toolu_c1", "TaskCreate", {"subject": "Lost step"}))
+        self.assertEqual(steps(r.state), [("Lost step", "pending")],
+                         "listed at once, before the CLI names its id")
+        r.render_message(UserMessage(content=[ToolResultBlock(
+            tool_use_id="toolu_c1", content="Task list unavailable", is_error=True)],
+            parent_tool_use_id=None))
+        self.assertEqual(steps(r.state), [])
+
+    def test_todowrite_the_latest_list_wins(self):
+        """An older CLI's one tool sends the whole list every time."""
+        r = self.make_runner()
+        r.render_message(use("toolu_t1", "TodoWrite", {"todos": [
+            {"content": "Read the parser", "status": "in_progress", "activeForm": "Reading"},
+            {"content": "Fix it", "status": "pending", "activeForm": "Fixing"}]}))
+        r.render_message(use("toolu_t2", "TodoWrite", {"todos": [
+            {"content": "Read the parser", "status": "completed", "activeForm": "Reading"},
+            {"content": "Fix it", "status": "in_progress", "activeForm": "Fixing"},
+            {"content": "Run the tests", "status": "pending", "activeForm": "Testing"}]}))
+        self.assertEqual(steps(r.state), [("Read the parser", "completed"),
+                                          ("Fix it", "in_progress"),
+                                          ("Run the tests", "pending")])
+        self.assertIn("  → planning the steps…\n", self.output(r))
+
+    def test_a_subagents_list_is_not_the_sessions(self):
+        r = self.make_runner()
+        r.render_message(use("toolu_A", "Agent", {"description": "Scan"}))
+        r.render_message(use("toolu_s1", "TaskCreate", {"subject": "Agent step"},
+                             parent="toolu_A"))
+        r.render_message(tool_result("toolu_s1", "Task #1 created successfully: Agent step",
+                                     parent="toolu_A"))
+        r.render_message(use("toolu_s2", "TodoWrite", {"todos": [
+            {"content": "Agent todo", "status": "pending"}]}, parent="toolu_A"))
+        self.assertEqual(steps(r.state), [])
+
+    def test_an_unfinished_list_carries_into_the_next_turn_a_finished_one_does_not(self):
+        r = self.make_runner()
+        for n, subject in enumerate(("Draft", "Review"), 1):
+            r.render_message(use(f"toolu_c{n}", "TaskCreate", {"subject": subject}))
+            r.render_message(created(f"toolu_c{n}", n, subject))
+        r.render_message(use("toolu_u1", "TaskUpdate", {"taskId": "1", "status": "completed"}))
+        r.begin_cli_turn()
+        self.assertEqual(steps(r.state), [("Draft", "completed"), ("Review", "pending")],
+                         "a step is still open, so the list stays pinned")
+        r.render_message(use("toolu_u2", "TaskUpdate", {"taskId": "2", "status": "completed"}))
+        r.begin_cli_turn()
+        self.assertEqual(steps(r.state), [], "last turn's finished list is put away")
+        r.render_message(use("toolu_u3", "TaskUpdate", {"taskId": "2", "status": "in_progress"}))
+        self.assertEqual(steps(r.state), [], "a put-away step does not come back")
+        r.render_message(use("toolu_c3", "TaskCreate", {"subject": "Ship"}))
+        r.render_message(created("toolu_c3", 3, "Ship"))
+        self.assertEqual(steps(r.state), [("Ship", "pending")])
+
+    def test_a_dropped_step_leaves_the_list(self):
+        """'Skip step 2, I will do it': the model deletes the step."""
+        r = self.make_runner()
+        for n, subject in enumerate(("Draft", "Email the vendor", "Review"), 1):
+            r.render_message(use(f"toolu_c{n}", "TaskCreate", {"subject": subject}))
+            r.render_message(created(f"toolu_c{n}", n, subject))
+        r.render_message(use("toolu_u1", "TaskUpdate", {"taskId": "2", "status": "deleted"}))
+        self.assertEqual(steps(r.state), [("Draft", "pending"), ("Review", "pending")])
+        self.assertIn("  → step dropped: Email the vendor\n", self.output(r))
+
+    def test_a_list_past_the_cap_counts_what_it_does_not_show(self):
+        r = self.make_runner()
+        with mock.patch.object(runner_mod, "PLAN_STEPS_KEEP", 2):
+            r.render_message(use("toolu_t1", "TodoWrite", {"todos": [
+                {"content": f"Step {n}", "status": "pending"} for n in range(5)]}))
+        self.assertEqual(len(steps(r.state)), 2)
+        self.assertEqual(r.state["execution"]["plan_steps_more"], 3)
+
+    def test_the_task_tools_never_raise_a_card(self):
+        """Bookkeeping only, so allowed even in a read-only session whose
+        allow list predates them (the CLI's own default list does)."""
+        r = self.make_runner(read_only=True, mode="manual")
+        for tool in ("TaskCreate", "TaskUpdate", "TaskList", "TaskGet"):
+            decision = asyncio.run(r.gate(tool, {}, None))
+            self.assertIsInstance(decision, runner_mod.PermissionResultAllow, tool)
+
+
 class SettlingAndStopping(AgentsCase):
     def test_a_lost_report_turn_settles_after_the_grace(self):
         """The agent ends but the CLI never starts a turn: the boundary is
@@ -566,10 +700,32 @@ class Instructions(unittest.TestCase):
         self.assertIn("reports back by itself", p)
         self.assertIn("unless background agents you launched are still running", p)
 
+    def test_claude_sessions_are_told_to_keep_a_task_list(self):
+        """Without the rule no session kept one (none of 64 job event logs
+        held a task-list call, 2026-10-29). Both vocabularies are named:
+        current CLIs have TaskCreate / TaskUpdate, older ones TodoWrite."""
+        p = viratools.preamble(subagents=True)
+        self.assertIn("KEEP A TASK LIST", p)
+        for tool in ("TaskCreate", "TaskUpdate", "TodoWrite"):
+            self.assertIn(tool, p)
+        self.assertIn("Exactly one step is in progress at a time", p)
+        self.assertIn("numbered from 1", p)
+
     def test_other_engines_are_not_told_about_a_tool_they_lack(self):
         for p in (viratools.preamble(), viratools.preamble(native=False),
                   viratools.preamble(tool_prefix="vira.")):
             self.assertNotIn("SUBAGENTS", p)
+            self.assertNotIn("KEEP A TASK LIST", p)
+
+    def test_the_task_tools_lines_say_what_happened_to_the_list(self):
+        self.assertEqual(session._tool_summary({"name": "TaskCreate", "input": {
+            "subject": "Run  the\nsuite"}}), "planning a step: Run the suite")
+        self.assertEqual(session._tool_summary({"name": "TaskUpdate", "input": {
+            "taskId": "4", "status": "deleted"}}), "step #4 dropped")
+        self.assertEqual(session._tool_summary({"name": "TaskList", "input": {}}),
+                         "checking the steps…")
+        self.assertEqual(session._tool_summary({"name": "TodoWrite", "input": {}}),
+                         "planning the steps…")
 
     def test_the_agent_launch_line_names_the_agent(self):
         line = session._tool_summary({"name": "Agent", "input": {

@@ -31,7 +31,8 @@ import uuid
 from pathlib import Path
 
 from . import modeladmission as admission, agentbackend, answer_runtime, jobfiles, joblog, settings, toolresult, viratools, worktree
-from .session import (EDIT_TOOLS, OUTPUT_CAP, READ_ONLY_EXCLUDE,
+from .session import (EDIT_TOOLS, OUTPUT_CAP, PLAN_STATUS_WORD, PLAN_TOOLS,
+                      READ_ONLY_EXCLUDE,
                       _extract_plan_md, _finalize_plan, _mark_idea,
                       _plan_ref, _scfg, _sdk_env, _tool_preview,
                       _tool_summary, norm_mode)
@@ -318,6 +319,35 @@ TERMINAL_TASK = ("completed", "failed", "stopped", "killed")
 SETTLE_GRACE = 20.0
 # How often a parked runner re-checks for a turn the CLI started by itself.
 HOLD_POLL = 0.5
+
+# ---------- the session's task list ----------
+#
+# The model keeps a checklist of its steps with the CLI's own task tools
+# when the preamble asks it to (viratools.preamble, KEEP A TASK LIST), and
+# the owner reads it pinned above the reply box and under a pending chat
+# turn, to see where the work stands and point at a step. None of 64 job
+# event logs read on 2026-10-29 held a single task-list call: the model
+# keeps no list unasked. The runner folds the calls into
+# execution.plan_steps ({text, status} in order) the way CLI 2.1.283
+# rebuilds the list for its own remote-session view: a TaskCreate's step
+# goes by the id its result names, TaskUpdate changes one step by that id,
+# and with no Task-tool steps the latest TodoWrite list (an older CLI's one
+# tool, which sends the whole list each time) is the list.
+PLAN_STATUSES = ("pending", "in_progress", "completed")
+TASK_CREATED = re.compile(r"^Task #(\S+) created successfully")
+# Steps published in state.json, which is rewritten on every flush. The
+# preamble asks for a short list; past this many the rest are counted
+# (plan_steps_more), not shown.
+PLAN_STEPS_KEEP = 60
+# Characters of one step's words: one line of the pinned list.
+PLAN_TEXT_KEEP = 200
+
+
+def _plan_step(text, status):
+    return {"text": " ".join(str(text or "").split())[:PLAN_TEXT_KEEP],
+            "status": status if status in PLAN_STATUSES else "pending"}
+
+
 # Pump -> main loop sentinels.
 _STREAM_END = object()   # the CLI's stream ended (process exit)
 _CLI_TURN = object()     # the CLI started a turn by itself
@@ -499,7 +529,7 @@ class Runner:
         self.futures = {}                # req_id -> asyncio.Future
         self.session_allow = set()       # "approve for session" grants
         self.auto_allow = (set(self.spec.get("auto_allow") or [])
-                           | set(viratools.TOOL_NAMES))
+                           | set(viratools.TOOL_NAMES) | PLAN_TOOLS)
         self.client = None
         self.exec_proc = None            # the CLI-exec child, when that path runs
         self.closing = False
@@ -540,6 +570,15 @@ class Runner:
         self.tasks = {}
         self._settled_t = 0.0            # when the last background task ended
         self._reported = ""              # label of the agent that ended last
+        # The task list (PLAN_STATUSES above), held across turns because
+        # the CLI's own list is: Task-tool steps by the id the CLI gave
+        # them, creates whose result has not named an id yet (by tool_use
+        # id), the latest TodoWrite list, and the ids of a finished list a
+        # later turn put away (_carry_plan).
+        self._plan_tasks = {}
+        self._plan_pending = {}
+        self._plan_todos = []
+        self._plan_retired = set()
         self.flush_state()
 
     # ----- files -----
@@ -631,6 +670,7 @@ class Runner:
         public = copy.deepcopy(self.state["runtime"])
         public.pop("execution_lease", None)
         self.state["execution"]["runtime"] = public
+        self._carry_plan()
         self.record_event("turn_started", runtime=public, **event)
 
     def begin_cli_turn(self):
@@ -1830,6 +1870,86 @@ class Runner:
         self._publish_agents()
         self.flush_state()
 
+    # ----- the task list (see PLAN_STATUSES) -----
+
+    def _plan_rows(self):
+        rows = [*self._plan_tasks.values(), *self._plan_pending.values()]
+        return rows or self._plan_todos
+
+    def _publish_plan(self):
+        rows = self._plan_rows()
+        execution = self.state.setdefault("execution", {})
+        execution["plan_steps"] = [dict(r) for r in rows[:PLAN_STEPS_KEEP]]
+        execution["plan_steps_more"] = max(0, len(rows) - PLAN_STEPS_KEEP)
+
+    def _carry_plan(self):
+        """At a turn's start: an unfinished list stays pinned, a finished one
+        is put away, so last turn's ticked list never reads as this turn's
+        plan. Its ids are remembered, so a late update to one of them does
+        not bring a stray step back."""
+        rows = self._plan_rows()
+        if rows and all(r["status"] == "completed" for r in rows):
+            self._plan_retired.update(self._plan_tasks)
+            self._plan_tasks, self._plan_pending, self._plan_todos = {}, {}, []
+        if self._plan_rows():
+            self._publish_plan()
+
+    def _plan_line(self, b):
+        """A TaskUpdate's terminal line, naming the step by its words (the
+        call carries only the CLI's id), or "" for _tool_summary's line."""
+        inp = b.input if isinstance(b.input, dict) else {}
+        step = (self._plan_tasks.get(str(inp.get("taskId") or ""))
+                if b.name == "TaskUpdate" else None)
+        if step is None:
+            return ""
+        word = PLAN_STATUS_WORD.get(inp.get("status"), "updated")
+        return f"step {word}: {inp.get('subject') or step['text']}"
+
+    def _plan_call(self, b):
+        """Fold one main-agent task-list call into the list. A subagent's
+        calls never reach here (_render_agent_message): its list is its
+        own, not the session's."""
+        inp = b.input if isinstance(b.input, dict) else {}
+        if b.name == "TodoWrite" and isinstance(inp.get("todos"), list):
+            self._plan_todos = [_plan_step(t.get("content"), t.get("status"))
+                                for t in inp["todos"] if isinstance(t, dict)]
+        elif b.name == "TaskCreate" and inp.get("subject"):
+            self._plan_pending[b.id] = _plan_step(inp["subject"], "pending")
+        elif b.name == "TaskUpdate" and inp.get("taskId"):
+            tid = str(inp["taskId"])
+            if tid in self._plan_retired:
+                return
+            if inp.get("status") == "deleted":
+                self._plan_tasks.pop(tid, None)
+            else:
+                was = self._plan_tasks.get(tid) or {}
+                self._plan_tasks[tid] = _plan_step(
+                    inp.get("subject") or was.get("text") or tid,
+                    inp.get("status") or was.get("status"))
+        else:
+            return                          # TaskList / TaskGet only read it
+        self._publish_plan()
+        self.flush_state()
+
+    def _plan_result(self, block):
+        """A TaskCreate's result names the id its step goes by from then on
+        ("Task #3 created successfully: ..."). A failed create made no
+        step; a result in some other words leaves the step listed last."""
+        if block.is_error:
+            self._plan_pending.pop(block.tool_use_id, None)
+        else:
+            content = block.content
+            text = content if isinstance(content, str) else " ".join(
+                str(c.get("text") or "") for c in content or []
+                if isinstance(c, dict))
+            m = TASK_CREATED.match(text or "")
+            if not m:
+                return
+            step = self._plan_pending.pop(block.tool_use_id)
+            self._plan_tasks.setdefault(m.group(1), step)
+        self._publish_plan()
+        self.flush_state()
+
     def _opens_turn(self, msg):
         """Whether a message seen with no turn in flight is the CLI starting
         one by itself: its init, or main-agent speech. Task lifecycle and
@@ -1901,12 +2021,14 @@ class Runner:
                         self.publish_message("claude-" + uuid.uuid4().hex, txt,
                                              phase="commentary", completed=True)
                 elif isinstance(b, ToolUseBlock):
-                    out += "  → " + _tool_summary(
-                        {"name": b.name, "input": b.input}) + "\n"
+                    out += "  → " + (self._plan_line(b) or _tool_summary(
+                        {"name": b.name, "input": b.input})) + "\n"
                     if b.name in toolresult.SHELL_TOOLS:
                         self._shell_calls.add(b.id)
                     if b.name in AGENT_TOOLS:
                         self._agent_launched(b.id, b.input)
+                    if b.name in PLAN_TOOLS:
+                        self._plan_call(b)
                     if not b.name.startswith("mcp__vira__"):
                         self.native_tool(b.id, b.name, b.input)
                 elif isinstance(b, ThinkingBlock):
@@ -1938,6 +2060,8 @@ class Runner:
                     line, failed = toolresult.summarize(block.content)
                     if failed:
                         self.append(f"    ↳ {line}\n")
+                if block.tool_use_id in self._plan_pending:
+                    self._plan_result(block)
                 a = self.agents.get(block.tool_use_id)
                 if a is not None and not a["background"]:
                     # A FOREGROUND agent's call returns its report, so the

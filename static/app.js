@@ -3337,6 +3337,9 @@ function chatAnswer(turn, session) {
       : execution.phase === "tool" ? "Reading sources…" : "Preparing an answer…";
     if (turn.status !== "stopped" && elapsed) phase += " · " + elapsed + "s";
     box.appendChild(el("div", "hint", phase));
+    // the session's own checklist, the one pinned above its terminal's box
+    const plan = execution.plan_steps || [];
+    if (plan.length) box.appendChild(planChecklist(plan, execution.plan_steps_more));
     if (session?.job_id) {
       const details = el("button", "fchip sm", "Open session");
       details.addEventListener("click", () => openSession(session.job_id));
@@ -9950,6 +9953,48 @@ function renderAgentStrip(box, j) {
   box.appendChild(list);
 }
 
+// ----- the pinned checklist: the session's own steps -----
+//
+// The model keeps a task list with the CLI's task tools (the preamble's
+// KEEP A TASK LIST) and the runner folds those calls into
+// execution.plan_steps. The same checklist is pinned above the terminal's
+// reply box and sits under a pending chat turn's status line, so "where
+// are we" is on screen wherever the owner steers from. Steps are numbered
+// from 1 in the list's order, which is the number the preamble tells the
+// model the owner will use ("skip step 4, I will do it").
+
+const PLAN_MARK = { completed: "\u2713", in_progress: "\u25b8", pending: "\u25cb" };
+
+function planChecklist(steps, more) {
+  const done = steps.filter((s) => s.status === "completed").length;
+  const box = el("div", "plan-check");
+  box.appendChild(el("div", "plan-head", (done === steps.length && !more
+    ? `Steps · all ${steps.length} done` : `Steps · ${done} of ${steps.length} done`)
+    + (more ? ` · ${more} more not shown` : "")));
+  steps.forEach((s, i) => {
+    const st = PLAN_MARK[s.status] ? s.status : "pending";
+    const row = el("div", "plan-step st-" + st);
+    row.title = s.text || "";        // a long step is cut to one line
+    row.appendChild(el("span", "plan-mark", PLAN_MARK[st]));
+    row.appendChild(el("span", "plan-num", (i + 1) + "."));
+    row.appendChild(el("span", "plan-text", s.text || ""));
+    box.appendChild(row);
+  });
+  return box;
+}
+
+function renderPlanStrip(box, j) {
+  const steps = j.execution?.plan_steps || [];
+  const more = j.execution?.plan_steps_more || 0;
+  box.classList.toggle("on", steps.length > 0);
+  // Rebuilt only when a step changes, not on every 800ms poll.
+  const key = JSON.stringify([steps, more]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.innerHTML = "";
+  if (steps.length) box.appendChild(planChecklist(steps, more));
+}
+
 function createJobTerm(jid, refs) {
   // refs: { banner, output, pending, composebar, say, send, stopBtn,
   //         statusbar, led, title, scroller }
@@ -10017,6 +10062,7 @@ function createJobTerm(jid, refs) {
           : replying ? "complete — nothing pending" : "working" + agentsWord)
         : (j.status || "");
       if (r.agents) renderAgentStrip(r.agents, j);
+      if (r.plan) renderPlanStrip(r.plan, j);
       r.led.className = "term-dot " + (waiting || asking ? "wait"
         : j.awaiting === "paused" ? "wait"
         : replying ? "done"
@@ -10213,9 +10259,11 @@ function openJobPanel(jid) {
   $("#job-output").innerHTML = "";
   $("#job-pending").innerHTML = "";
   $("#job-agents").innerHTML = "";
+  $("#job-plan").innerHTML = "";
+  delete $("#job-plan").dataset.key;
   panelTerm = createJobTerm(jid, {
     banner: $("#job-banner"), cmd: $("#job-cmd"), output: $("#job-output"),
-    pending: $("#job-pending"), agents: $("#job-agents"),
+    pending: $("#job-pending"), agents: $("#job-agents"), plan: $("#job-plan"),
     composebar: $("#job-composebar"),
     say: $("#job-say"), send: $("#job-send"), stopBtn: $("#job-stop"),
     statusbar: $("#job-statusbar"), led: $("#job-runled"),
@@ -10403,8 +10451,12 @@ function openJobWindow(jid) {
   // The session's subagents, pinned above the box so they stay in view
   // however far the feed has scrolled (renderAgentStrip).
   const agents = el("div", "term-agents");
+  // The session's own checklist, between the agents and the box the owner
+  // steers from (renderPlanStrip).
+  const plan = el("div", "term-plan");
   body.appendChild(scroll);
   body.appendChild(agents);
+  body.appendChild(plan);
   body.appendChild(composebar);
   body.appendChild(statusbar);
   win.appendChild(bar);
@@ -10439,7 +10491,7 @@ function openJobWindow(jid) {
   armTermRetreat(win);
   const term = createJobTerm(jid, {
     banner, cmd, output, pending, composebar, say, send, stopBtn,
-    statusbar, led, scroller: scroll, agents,
+    statusbar, led, scroller: scroll, agents, plan,
     onName: (n) => { win.dataset.wname = n; },
   });
   jobWindows[jid] = { win, term };
