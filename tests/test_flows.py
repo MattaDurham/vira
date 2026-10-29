@@ -767,7 +767,7 @@ class LoopCardTests(unittest.TestCase):
         final = self._advance(run["id"])
         self.assertEqual(final["status"], "done")
         text = final["stages"]["record"]["result_text"]
-        self.assertIn("LOOP Demo capture", text)
+        self.assertIn("PROGRAM Demo capture", text)
         self.assertIn("5 captured, 1 failed", text)
         self.assertIn("FAILED abc: timed out", text)
         self.assertIn("done: 5 captured, 1 failed", text)
@@ -813,3 +813,192 @@ class LoopCardTests(unittest.TestCase):
         self.assertTrue(text.startswith("Tell: "), text)
         self.assertIn("Logic gate always: passed", text)
         self.assertNotIn("Output instructions", text)
+
+
+class ProgramCardTests(unittest.TestCase):
+    """A Program card runs a command as its own process: the card waits for
+    the runner to record an end and the wire carries the run in words. A
+    Schedule runs only the cards it is wired to and what is downstream of
+    them, so two Schedules on one board run two chains (2026-10-29)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = root = Path(self.tmp.name)
+        patches = [
+            mock.patch.object(flows, "STORE", root / "flow-graphs.json"),
+            mock.patch.object(circuits, "DEFS", root / "circuits.json"),
+            mock.patch.object(circuits, "RUNS", root / "circuit-runs.json"),
+            mock.patch.object(routines, "STORE", root / "routines.json"),
+            mock.patch.object(routines, "SEEDS", []),
+            mock.patch.object(routinerun, "STORE", root / "routine-runs.json"),
+            mock.patch.object(routinerun, "RUNS", root / "routine-runs"),
+            mock.patch.object(routinerun, "_spawn",
+                              return_value=types.SimpleNamespace(pid=4242)),
+            mock.patch.dict(os.environ, {"VIRA_RUNTIME_ROOT": str(root / "runtime")}),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        os.environ.pop("VIRA_INSTANCE_ID", None)
+        self.driver = circuits.Driver.__new__(circuits.Driver)
+
+    def board(self, **extra):
+        """Two chains on one board: hourly Schedule -> Program, nightly
+        Schedule -> Report agent -> Output."""
+        folder = str(self.root)
+        payload = {
+            "name": "Notes capture",
+            "nodes": [
+                {"id": "input", "type": "input", "prompt": "Report the day"},
+                {"id": "hourly", "type": "trigger", "every_hours": 1, "enabled": True},
+                {"id": "nightly", "type": "trigger", "daily_at": "20:45", "enabled": True},
+                {"id": "export", "type": "program", "name": "Export notes",
+                 "program": {"command_line": f"/bin/bash {folder}/notes.sh --hourly",
+                             "cwd": folder, "env": "PATH=/usr/bin:/bin"}},
+                {"id": "report", "type": "agent", "name": "Report", "prompt": "Say what landed."},
+                {"id": "out", "type": "output", "name": "Text me",
+                 "output": {"destination": "record"}},
+            ],
+            "edges": [
+                {"from": "hourly", "to": "export"},
+                {"from": "nightly", "to": "report"},
+                {"from": "input", "to": "report"},
+                {"from": "report", "to": "out"},
+            ],
+        }
+        payload.update(extra)
+        return flows.save_flow(payload, save_as=True)
+
+    def schedules(self, flow):
+        rows = {r["id"]: r for r in routines.list_routines()}
+        return {n["routine_id"]: rows[n["routine_id"]] for n in flow["nodes"] if n["type"] == "trigger"}
+
+    def test_the_card_compiles_to_a_program_stage_and_keeps_its_run_key(self):
+        flow = self.board()
+        stage = next(s for s in circuits.get_circuit(flow["id"])["stages"] if s["id"] == "export")
+        self.assertEqual(stage["mode"], "program")
+        self.assertEqual(stage["program"]["command"],
+                         ["/bin/bash", f"{self.root}/notes.sh", "--hourly"])
+        self.assertEqual(stage["program"]["env"], {"PATH": "/usr/bin:/bin"})
+        key = stage["program"]["run_key"]
+        self.assertRegex(key, r"^prog_[0-9a-f]{10}$")
+        node = next(n for n in flow["nodes"] if n["id"] == "export")
+        self.assertEqual(node["type"], "program")
+        # the line the editor shows splits back into the same arguments
+        # (Windows quotes a backslash path, a Mac does not)
+        self.assertEqual(routines._split_command(node["program"]["command_line"]),
+                         stage["program"]["command"])
+        # saved again from the board, the card keeps its lock and history
+        again = flows.save_flow({**flow, "id": flow["id"]})
+        stage2 = next(s for s in circuits.get_circuit(again["id"])["stages"] if s["id"] == "export")
+        self.assertEqual(stage2["program"]["run_key"], key)
+
+    def test_a_relative_folder_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "absolute path"):
+            flows.save_flow({"name": "Bad", "nodes": [
+                {"id": "p", "type": "program", "program": {"command_line": "echo hi", "cwd": "vault"}}],
+                "edges": []}, save_as=True)
+
+    def test_each_schedule_keeps_the_cards_it_is_wired_to(self):
+        flow = self.board()
+        rows = self.schedules(flow)
+        targets = sorted(tuple(r["targets"]) for r in rows.values())
+        self.assertEqual(targets, [("export",), ("report",)])
+        # the board draws each Schedule's own wires, not a wire to every entry card
+        wires = {(e["from"], e["to"]) for e in flow["edges"] if e["from"].startswith("routine:")}
+        self.assertEqual(len(wires), 2)
+        self.assertEqual({to for _, to in wires}, {"export", "report"})
+
+    def test_a_schedule_runs_only_its_own_chain(self):
+        flow = self.board()
+        hourly = next(r for r in self.schedules(flow).values() if r.get("every_hours"))
+        nightly = next(r for r in self.schedules(flow).values() if r.get("daily_at"))
+        with mock.patch.object(routines, "_ai_ready", return_value=True):
+            first = routines.dispatch(hourly, trigger="schedule")
+            second = routines.dispatch(nightly, trigger="schedule")
+        hour_run = circuits.get_run(first["run_id"])
+        night_run = circuits.get_run(second["run_id"])
+        self.assertEqual(set(hour_run["stages"]), {"export"})
+        self.assertEqual(set(night_run["stages"]), {"report", "out"})
+        self.assertEqual(hour_run["entry"], ["export"])
+
+    def test_the_card_waits_for_its_program_then_the_wire_carries_the_result(self):
+        flow = self.board(edges=[{"from": "export", "to": "out"}])
+        # only the Program card's chain: the board's report card is a model
+        # session, which a unit test never launches
+        run = circuits.start_run(flow["id"], "now", entry=["export"])
+        self.assertEqual(set(run["stages"]), {"export", "out"})
+        self.driver._advance(run)
+        stage = circuits.get_run(run["id"])["stages"]["export"]
+        self.assertEqual(stage["status"], "running")
+        rec = routinerun.get(stage["command_run"])
+        key = next(s for s in circuits.get_circuit(flow["id"])["stages"]
+                   if s["id"] == "export")["program"]["run_key"]
+        self.assertEqual(rec["routine_id"], key)
+        self.assertEqual(rec["trigger"], "manual")
+        out = routinerun.run_dir(rec["id"]) / "output.log"
+        out.write_text("[notes] start\ndone: 4 exported, 0 failed\n", encoding="utf-8")
+        routinerun._update(rec["id"], status="ok", exit_code=0,
+                           finished="2026-10-29T03:00:00+00:00",
+                           counts={"exported": 4, "failed": 0})
+        self.driver._advance(circuits.get_run(run["id"]))
+        self.driver._advance(circuits.get_run(run["id"]))
+        final = circuits.get_run(run["id"])
+        self.assertEqual(final["stages"]["export"]["status"], "done")
+        self.assertIn("PROGRAM Export notes", final["stages"]["out"]["result_text"])
+        self.assertIn("done: 4 exported, 0 failed", final["stages"]["out"]["result_text"])
+
+    def test_a_program_already_going_is_waited_for(self):
+        flow = self.board()
+        stage = next(s for s in circuits.get_circuit(flow["id"])["stages"] if s["id"] == "export")
+        first = routinerun.start(circuits.program_spec(stage), trigger="schedule")
+        with mock.patch.object(routinerun, "held", return_value=True):
+            run = circuits.start_run(flow["id"], "now", entry=["export"])
+            self.driver._advance(run)
+        st = circuits.get_run(run["id"])["stages"]["export"]
+        self.assertEqual(st["command_run"], first["id"])
+        self.assertIn("Waiting for", st["result_text"])
+
+    def test_a_schedule_wired_to_nothing_is_skipped_and_stamped(self):
+        flow = self.board(edges=[{"from": "input", "to": "report"}, {"from": "report", "to": "out"}])
+        row = next(iter(self.schedules(flow).values()))
+        self.assertEqual(row["targets"], [])
+        with mock.patch.object(routines, "_ai_ready", return_value=True):
+            result = routines.dispatch(row, trigger="schedule")
+        self.assertEqual(result, {"skipped": "no_targets"})
+        self.assertIn("wired to no card", routines.get_routine(row["id"])["last_status"])
+        self.assertEqual(circuits.list_runs(10), [])
+
+    def test_run_now_on_a_schedule_runs_its_chain(self):
+        flow = self.board()
+        nightly = next(r for r in self.schedules(flow).values() if r.get("daily_at"))
+        run = flows.run_flow(flow["id"], "", trigger=nightly["id"])
+        self.assertEqual(set(run["stages"]), {"report", "out"})
+        with self.assertRaises(KeyError):
+            flows.run_flow(flow["id"], "", trigger="rt_nope")
+
+    def test_archive_stops_every_schedule_and_restore_puts_them_back(self):
+        flow = self.board()
+        rows = self.schedules(flow)
+        off = next(iter(rows.values()))
+        routines.save_routine({"enabled": False}, rid=off["id"])
+        archived = flows.archive_flow(flow["id"])
+        self.assertTrue(archived["archived"])
+        self.assertTrue(all(not routines.get_routine(r["id"])["enabled"] for r in rows.values()))
+        # saving an archived board keeps it archived
+        again = flows.save_flow({**archived, "id": flow["id"]})
+        self.assertTrue(again["archived"])
+        restored = flows.restore_flow(flow["id"])
+        self.assertIsNone(restored["archived"])
+        states = {r["id"]: routines.get_routine(r["id"])["enabled"] for r in rows.values()}
+        self.assertFalse(states[off["id"]])
+        self.assertEqual(sum(states.values()), 1)
+
+    def test_an_archived_routine_is_never_due(self):
+        row = routines.save_routine({"name": "Sweep", "kind": "custom",
+                                     "prompt": "x", "every_hours": 1, "enabled": True})
+        self.assertTrue(routines.is_due(row))
+        archived = routines.archive_routine(row["id"])
+        self.assertFalse(routines.is_due(archived))
+        self.assertTrue(routines.restore_routine(row["id"])["enabled"])

@@ -195,6 +195,16 @@
   scrollbar-color: var(--line-warm) transparent;
 }
 .forge-library-group { margin: 10px 2px 5px; }
+/* the one list: state chips, the group-by menu (2026-10-29) */
+.forge-filter { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 2px 6px; }
+.forge-filter .fchip { flex: none; }
+.forge-groupby { display: flex; align-items: center; gap: 6px; margin: 0 2px 8px; color: var(--text-faint); font-size: 11.5px; }
+.forge-groupby select {
+  min-width: 0; flex: 1 1 auto; padding: 4px 6px;
+  color: var(--text); border: 1px solid var(--line); border-radius: var(--radius);
+  outline: none; background: var(--bg-window); font: 12px var(--sans);
+}
+.forge-groupby select:focus { border-color: var(--sel-line); }
 .forge-library-card {
   position: relative;
   display: grid;
@@ -340,6 +350,7 @@
 .forge-node[data-type="env"] { --node-accent: var(--forge-source); border-style: dashed; }
 .forge-node[data-type="context"], .forge-node[data-type="tool"] { --node-accent: var(--forge-source); }
 .forge-node[data-type="output"], .forge-node[data-type="approval"] { --node-accent: var(--forge-output); }
+.forge-node[data-type="program"], .forge-node[data-type="native"], .forge-node[data-type="vira"] { --node-accent: var(--forge-source); }
 .forge-node.is-selected { border-color: var(--sel-line); box-shadow: 0 0 0 2px var(--sel-bg), 0 18px 38px var(--scrim-strong); }
 .forge-node.is-dragging { opacity: .92; cursor: grabbing; }
 .forge-node-head {
@@ -687,6 +698,7 @@
   .forge-boardbar { align-items: stretch; }
   .forge-status { order: 3; flex-basis: 100%; }
   .forge-row { grid-template-columns: 1fr; }
+  .forge-groupby select { font-size: 16px; }
 }
 
 /* ---- Run trace overlay --------------------------------------------------
@@ -766,3 +778,15 @@
   .forge-node.run-running .forge-run-badge,
   .forge-wire.is-run-live { animation: none; }
 }
+
+/* panels for a row that is not a Flow, and the Program card (2026-10-29) */
+.forge-folder { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.forge-folder input { flex: 1 1 auto; min-width: 0; }
+.forge-note { margin: 8px 0; padding: 8px 10px; border-left: 2px solid var(--accent-line); color: var(--text-dim, var(--text)); font-size: 12.5px; line-height: 1.45; }
+.forge-code { width: 100%; min-width: 0; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; line-height: 1.4; }
+.forge-jobfile { margin-top: 12px; }
+.forge-jobfile summary { cursor: pointer; overflow: hidden; color: var(--text-faint); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.forge-jobfile .fchip { margin-top: 6px; }
+.forge-runs-block { margin-top: 12px; }
+.forge-node[data-type="program"] .forge-node-path { font-family: var(--mono, ui-monospace, monospace); }
+.forge-field textarea[rows="2"], .forge-field textarea[rows="3"] { flex: none; min-height: 0; }

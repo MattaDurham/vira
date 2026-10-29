@@ -1,59 +1,64 @@
 {
-  "id": "work/automations",
-  "name": "Automations",
-  "title": "The Forge",
-  "summary": "The Forge: Flows (cards wired on a board), circuits, standing loops (routines and command routines), and the source library.",
-  "owns": [
-    "server/flows.py",
-    "server/circuits.py",
-    "server/routines.py",
-    "server/routinerun.py",
-    "server/routinesrc.py",
-    "server/actions.py",
-    "server/launchdjobs.py",
-    "static/forge.css",
-    "static/forge.js",
-    "tests/test_forge_tools.py",
-    "tests/test_parity_flows.py",
-    "tests/test_flow_trace_contract.py",
-    "tests/test_judge_circuits_budget.py",
-    "tests/test_agentic.py",
-    "tests/test_flows.py",
-    "tests/test_routinerun.py",
-    "tests/test_routinesrc.py"
-  ],
-  "routes": [
-    "/api/flows",
-    "/api/circuits",
-    "/api/routines",
-    "/api/actions"
-  ],
-  "stores": [
-    "data/flows.json",
-    "data/circuits.json",
-    "data/routines.json",
-    "data/routine-runs.json",
-    "data/routine-runs/<run>/"
-  ],
-  "reads": [
-    "models/sessions",
-    "work/sessions",
-    "models/backends"
-  ],
-  "feeds": [
-    "work/sessions",
-    "reader/rooms",
-    "research/topics",
-    "maps/system",
-    "attention/now"
-  ],
-  "registry": [
-    "circuits-engine",
-    "scheduler",
-    "routines-store",
-    "routine-runs-store",
-    "circuits-win",
-    "routines-win",
-    "actions-win"
-  ]
+    "id": "work/automations",
+    "name": "Automations",
+    "title": "The Forge",
+    "summary": "The Forge: Flows (cards wired on a board, Schedules that run their own chains, Program cards that run a command), and one list of everything that runs on this Mac: Flows, Vira's own routines, launchd jobs, Claude task files and working sessions.",
+    "owns": [
+        "server/flows.py",
+        "server/circuits.py",
+        "server/routines.py",
+        "server/routinerun.py",
+        "server/routinesrc.py",
+        "server/actions.py",
+        "server/launchdjobs.py",
+        "static/forge.css",
+        "static/forge.js",
+        "tests/test_forge_tools.py",
+        "tests/test_parity_flows.py",
+        "tests/test_flow_trace_contract.py",
+        "tests/test_judge_circuits_budget.py",
+        "tests/test_agentic.py",
+        "tests/test_flows.py",
+        "tests/test_routinerun.py",
+        "tests/test_routinesrc.py",
+        "server/runlist.py",
+        "server/claudetasks.py",
+        "server/adopt.py",
+        "tests/test_forge_everything.py"
+    ],
+    "routes": [
+        "/api/flows",
+        "/api/circuits",
+        "/api/routines",
+        "/api/actions",
+        "/api/forge"
+    ],
+    "stores": [
+        "data/flows.json",
+        "data/circuits.json",
+        "data/routines.json",
+        "data/routine-runs.json",
+        "data/routine-runs/<run>/"
+    ],
+    "reads": [
+        "models/sessions",
+        "work/sessions",
+        "models/backends"
+    ],
+    "feeds": [
+        "work/sessions",
+        "reader/rooms",
+        "research/topics",
+        "maps/system",
+        "attention/now"
+    ],
+    "registry": [
+        "circuits-engine",
+        "scheduler",
+        "routines-store",
+        "routine-runs-store",
+        "circuits-win",
+        "routines-win",
+        "actions-win"
+    ]
 }

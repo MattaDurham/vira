@@ -83,7 +83,7 @@ from . import (
                routinerun,
                routinesrc,
                crmmerge,
-               launchdjobs,
+               launchdjobs, runlist, claudetasks, adopt,
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings, settingschema, restart, runtimework,
                genreroutes,
@@ -4705,6 +4705,8 @@ class FlowRunReq(BaseModel):
     # Set when the Flow was loaded from a Queue idea, so the run closes that
     # idea out the way a Plan/Implement dispatch does.
     idea_id: str | None = None
+    # A Schedule card's routine id: run only that Schedule's chain.
+    trigger: str | None = None
 
 
 @app.post("/api/flows/{flow_id}/run")
@@ -4715,7 +4717,8 @@ def api_flow_run(flow_id: str, req: FlowRunReq):
                               provider=req.provider,
                               idea_id=req.idea_id,
                               vault_destination=req.vault_destination,
-                              vault_context=req.vault_context)
+                              vault_context=req.vault_context,
+                              trigger=req.trigger)
     except KeyError:
         raise HTTPException(404, "unknown flow")
     except ValueError as e:
@@ -4740,6 +4743,152 @@ def api_idea_flow(idea_id: str, req: IdeaFlowReq):
 class FlowApprovalReq(BaseModel):
     approved: bool
     note: str | None = ""
+
+
+@app.post("/api/flows/{flow_id}/archive")
+def api_flow_archive(flow_id: str):
+    try:
+        return flows.archive_flow(flow_id)
+    except KeyError:
+        raise HTTPException(404, "unknown flow")
+
+
+@app.post("/api/flows/{flow_id}/restore")
+def api_flow_restore(flow_id: str):
+    try:
+        return flows.restore_flow(flow_id)
+    except KeyError:
+        raise HTTPException(404, "unknown flow")
+
+
+# ---------- The Forge's one list: everything that runs on this Mac ---------
+
+@app.get("/api/forge/everything")
+def api_forge_everything():
+    """Every Flow, routine, launchd job, Claude task file and working
+    session, as one list (server/runlist.py)."""
+    return runlist.everything()
+
+
+def _forge_err(e):
+    if isinstance(e, (KeyError, FileNotFoundError)):
+        return HTTPException(404, f"not found: {e}")
+    return HTTPException(400, str(e))
+
+
+@app.get("/api/forge/programs/{run_key}/runs")
+def api_forge_program_runs(run_key: str, offset: int = 0, limit: int = 50):
+    """A Program card's runs, newest first (its run key is its history)."""
+    if not circuits.RUN_KEY.fullmatch(run_key):
+        raise HTTPException(400, "not a run key")
+    return routinerun.runs(run_key, offset=offset, limit=limit)
+
+
+@app.get("/api/forge/programs/{run_key}/runs/{run_id}/log")
+def api_forge_program_log(run_key: str, run_id: str):
+    rec = routinerun.get(run_id)
+    if not rec or rec.get("routine_id") != run_key:
+        raise HTTPException(404, "unknown run")
+    try:
+        return {"run": rec, "files": routinerun.log_files(run_id)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/forge/launchd")
+def api_forge_launchd(path: str, archived: bool = False):
+    try:
+        return launchdjobs.detail(path, archived=archived)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise _forge_err(e)
+
+
+class LaunchdSaveReq(BaseModel):
+    path: str
+    xml: str | None = None
+    fields: dict | None = None
+
+
+@app.put("/api/forge/launchd")
+def api_forge_launchd_save(req: LaunchdSaveReq):
+    try:
+        return launchdjobs.save(req.path, xml=req.xml, fields=req.fields)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise _forge_err(e)
+
+
+class LaunchdActReq(BaseModel):
+    path: str
+
+
+@app.post("/api/forge/launchd/{action}")
+def api_forge_launchd_act(action: str, req: LaunchdActReq):
+    acts = {"pause": lambda p: launchdjobs.set_paused(p, True),
+            "resume": lambda p: launchdjobs.set_paused(p, False),
+            "run": launchdjobs.run_now, "archive": launchdjobs.archive,
+            "restore": launchdjobs.restore, "adopt": adopt.adopt_launchd}
+    if action not in acts:
+        raise HTTPException(404, "unknown action")
+    try:
+        return acts[action](req.path)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise _forge_err(e)
+
+
+@app.get("/api/forge/tasks/{name}")
+def api_forge_task(name: str, archived: bool = False):
+    try:
+        return claudetasks.read(name, archived=archived)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise _forge_err(e)
+
+
+class TaskSaveReq(BaseModel):
+    text: str
+    archived: bool = False
+
+
+@app.put("/api/forge/tasks/{name}")
+def api_forge_task_save(name: str, req: TaskSaveReq):
+    try:
+        return claudetasks.save(name, req.text, archived=req.archived)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise _forge_err(e)
+
+
+class TaskActReq(BaseModel):
+    daily_at: str | None = None
+    every_hours: float | None = None
+    cwd: str | None = None
+
+
+@app.post("/api/forge/tasks/{name}/{action}")
+def api_forge_task_act(name: str, action: str, req: TaskActReq):
+    try:
+        if action == "archive":
+            return claudetasks.archive(name)
+        if action == "restore":
+            return claudetasks.restore(name)
+        if action == "adopt":
+            return adopt.adopt_task(name, daily_at=req.daily_at,
+                                    every_hours=req.every_hours, cwd=req.cwd or "")
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise _forge_err(e)
+    raise HTTPException(404, "unknown action")
+
+
+class AdoptLoopsReq(BaseModel):
+    dry_run: bool = True
+
+
+@app.post("/api/forge/adopt/loops")
+def api_forge_adopt_loops(req: AdoptLoopsReq):
+    """Turn every command routine into Program cards (server/adopt.py).
+    dry_run (the default) says what would change and changes nothing."""
+    try:
+        return {"results": adopt.adopt_all_command_routines(dry_run=req.dry_run)}
+    except (ValueError, KeyError) as e:
+        raise _forge_err(e)
 
 
 @app.post("/api/flows/runs/{run_id}/approval/{stage_id}")
@@ -5079,6 +5228,8 @@ class RoutineReq(BaseModel):
     env: dict[str, str] | None = None
     output_log: str | None = None
     watch_logs: list[str] | None = None
+    # kind "circuit": the cards this Schedule is wired to
+    targets: list[str] | None = None
 
 
 @app.post("/api/routines")
@@ -5108,6 +5259,22 @@ def api_routines_delete(rid: str):
     return {"deleted": rid}
 
 
+@app.post("/api/routines/{rid}/archive")
+def api_routines_archive(rid: str):
+    try:
+        return routines.archive_routine(rid)
+    except KeyError:
+        raise HTTPException(404, "unknown routine")
+
+
+@app.post("/api/routines/{rid}/restore")
+def api_routines_restore(rid: str):
+    try:
+        return routines.restore_routine(rid)
+    except KeyError:
+        raise HTTPException(404, "unknown routine")
+
+
 @app.post("/api/routines/{rid}/run")
 def api_routines_run(rid: str):
     r = routines.get_routine(rid)
@@ -5121,7 +5288,7 @@ def api_routines_run(rid: str):
 
 @app.get("/api/routines/background")
 def api_routines_background():
-    """Every launchd job on this Mac, read-only (The Forge's This Mac tab)."""
+    """Every launchd job on this Mac (server/launchdjobs.py inventory)."""
     return launchdjobs.inventory()
 
 
