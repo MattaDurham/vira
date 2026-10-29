@@ -31,8 +31,8 @@ try:
     from claude_agent_sdk import (AssistantMessage, ResultMessage,
                                   SystemMessage, TaskNotificationMessage,
                                   TaskProgressMessage, TaskStartedMessage,
-                                  TextBlock, ToolResultBlock, ToolUseBlock,
-                                  UserMessage)
+                                  TextBlock, ThinkingBlock, ToolResultBlock,
+                                  ToolUseBlock, UserMessage)
     SDK = True
 except Exception:  # noqa: BLE001 — the SDK path is what is under test
     SDK = False
@@ -54,6 +54,13 @@ def init():
 def say(text, parent=None):
     return AssistantMessage(content=[TextBlock(text=text)], model=MODEL,
                             parent_tool_use_id=parent)
+
+
+def think(text, parent=None):
+    """A thinking block as CLI 2.1.283 emits it: text only when the launch
+    asked for `--thinking-display summarized`, the signature always."""
+    return AssistantMessage(content=[ThinkingBlock(thinking=text, signature="sig")],
+                            model=MODEL, parent_tool_use_id=parent)
 
 
 def use(tool_id, name, inp, parent=None):
@@ -405,6 +412,50 @@ class AgentsReportBack(AgentsCase):
         self.assertNotIn("\n", label)
 
 
+class Reasoning(AgentsCase):
+    """The model's summarized thinking is drawn before the step it
+    precedes (2026-10-29): what it is about to do and why, which is the
+    one thing a reader following along to steer could not see while the
+    block arrived empty and was dropped."""
+
+    def test_the_reasoning_line_precedes_the_step_it_explains(self):
+        r = self.make_runner()
+        r.render_message(think("The parser drops blank lines.\n\nI'll read it before changing it."))
+        r.render_message(use("toolu_1", "Read", {"file_path": "server/parse.py"}))
+        mark = runner_mod.THINK_MARK
+        self.assertIn(f"  {mark} The parser drops blank lines.\n"
+                      f"  {mark} I'll read it before changing it.\n"
+                      "  \u2192 Read server/parse.py\n", self.output(r))
+        items = r.state["execution"]["message_items"]
+        self.assertEqual([(i["phase"], i["status"]) for i in items], [("thinking", "completed")])
+        self.assertEqual(items[0]["text"],
+                         "The parser drops blank lines.\n\nI'll read it before changing it.")
+
+    def test_an_empty_thinking_block_adds_nothing(self):
+        """Without the display option Opus 4.7+ sends the signature alone."""
+        r = self.make_runner()
+        r.render_message(think(""))
+        r.render_message(think("   \n  "))
+        self.assertEqual(self.output(r), "")
+        self.assertEqual(r.state["execution"].get("message_items", []), [])
+
+    def test_reasoning_off_keeps_the_feed_to_actions_and_text(self):
+        r = self.make_runner()
+        r.show_reasoning = False
+        r.render_message(think("Private scratchpad"))
+        r.render_message(say("main words"))
+        self.assertNotIn("scratchpad", self.output(r))
+        self.assertEqual([i["phase"] for i in r.state["execution"]["message_items"]],
+                         ["commentary"])
+
+    def test_a_subagents_thinking_stays_off_its_lane(self):
+        r = self.make_runner()
+        r.render_message(use("toolu_A", "Agent", {"description": "Scan"}))
+        r.render_message(think("agent thoughts", parent="toolu_A"))
+        self.assertNotIn("agent thoughts", self.output(r))
+        self.assertEqual(r.state["execution"].get("message_items", []), [])
+
+
 class SettlingAndStopping(AgentsCase):
     def test_a_lost_report_turn_settles_after_the_grace(self):
         """The agent ends but the CLI never starts a turn: the boundary is
@@ -488,6 +539,23 @@ class SessionOptions(AgentsCase):
         seen = self._seen("")
         for tool in ("ScheduleWakeup", "CronCreate"):
             self.assertIn(tool, seen["disallowed_tools"])
+
+    def _seen_with_reasoning(self, value):
+        # the one setting run_session reads through _scfg once
+        # _max_buffer_bytes is pinned (setUp); never the real config
+        with mock.patch.object(runner_mod, "_scfg",
+                               lambda key: {"session_show_reasoning": value}[key]):
+            return self._seen("")
+
+    def test_sessions_ask_for_the_models_summarized_thinking(self):
+        """Measured 2026-10-29: the SDK turns this into `--thinking adaptive
+        --thinking-display summarized`, and the ThinkingBlock then carries
+        text; without it the same block arrives empty."""
+        self.assertEqual(self._seen_with_reasoning(True)["thinking"],
+                         {"type": "adaptive", "display": "summarized"})
+
+    def test_reasoning_off_leaves_the_clis_thinking_default_alone(self):
+        self.assertIsNone(self._seen_with_reasoning(False)["thinking"])
 
 
 

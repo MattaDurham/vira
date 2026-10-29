@@ -227,6 +227,8 @@
   "session_ask_timeout": 21600,
   "session_max_buffer_mb": 64,
   "_session_max_buffer_mb": "The SDK bounds one NDJSON line; 1 MiB killed three sessions that ran Edit on static/app.js. Bounded, not removed, so a runaway CLI cannot exhaust the runner.",
+  "session_show_reasoning": true,
+  "_session_show_reasoning": "Asks the model for its summarized thinking and draws it as a dim line before each step in the session window, and folded under a chat answer: what it is about to do and why, which is what following along to steer needs. Off keeps the transcript to actions and text. Claude sessions only; applies from the next launch.",
   "_atlas": "Contact Atlas: The relationship graph.",
   "atlas_anchor_org": "",
   "_atlas_anchor_org": "Company name pinned as the Contact Atlas anchor cluster (substring-matched against CRM company fields). Empty = no pinned cluster; communities still form by label propagation.",

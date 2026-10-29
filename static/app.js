@@ -3323,11 +3323,9 @@ function chatAnswer(turn, session) {
   const box = el("div", "brain-msg vira");
   if (turn.status === "pending" || turn.status === "stopped") {
     const messages = turn.messages || [];
-    messages.forEach((m) => {
-      const body = el("div", "chat-md chat-stream");
-      body.innerHTML = mdToHtml(m.text || "");
-      box.appendChild(body);
-    });
+    // the model's words stream as markdown; its reasoning as dim lines
+    messages.forEach((m) => box.appendChild(chatTrailLine(m)));
+    const said = messages.filter((m) => m.phase !== "thinking");
     const elapsed = Math.floor(session?.elapsed_s || 0);
     const queue = session?.admission;
     const execution = session?.execution || {};
@@ -3335,7 +3333,7 @@ function chatAnswer(turn, session) {
       : turn.stop_requested_t ? "Stopping the model… Your follow-up will be available when it acknowledges."
       : queue?.status === "queued" ? "Waiting for a model slot" + (queue.queue_position ? " · position " + queue.queue_position : "")
       : execution.status === "awaiting_input" ? "Waiting for your input in the session"
-      : messages.length ? "Checking the remaining evidence…"
+      : said.length ? "Checking the remaining evidence…"
       : execution.phase === "tool" ? "Reading sources…" : "Preparing an answer…";
     if (turn.status !== "stopped" && elapsed) phase += " · " + elapsed + "s";
     box.appendChild(el("div", "hint", phase));
@@ -3359,6 +3357,15 @@ function chatAnswer(turn, session) {
     box.classList.add("error");
     box.textContent = turn.answer || "Vira could not answer.";
     return box;
+  }
+  // How the answer came about: the reasoning and progress notes the turn
+  // streamed, folded above the answer so the answer stays first.
+  const trail = (turn.messages || []).filter((m) => m.phase !== "final_answer" && m.text);
+  if (trail.length) {
+    const details = el("details", "chat-reasoning");
+    details.appendChild(el("summary", "hint", "How Vira got here (" + trail.length + ")"));
+    trail.forEach((m) => details.appendChild(chatTrailLine(m)));
+    box.appendChild(details);
   }
   const body = el("div", "chat-md");
   body.innerHTML = mdToHtml(turn.answer || "");
@@ -3393,6 +3400,20 @@ function chatAnswer(turn, session) {
     box.appendChild(rail);
   }
   return box;
+}
+
+// One streamed message of a chat turn. The model's summarized thinking
+// (phase "thinking", runner.render_message) is a dim line under the same
+// mark the session terminal uses; its words to the owner are markdown.
+function chatTrailLine(m) {
+  if (m.phase === "thinking") {
+    const line = el("div", "chat-think");
+    line.textContent = "\u273b " + (m.text || "").trim();
+    return line;
+  }
+  const body = el("div", "chat-md chat-stream");
+  body.innerHTML = mdToHtml(m.text || "");
+  return body;
 }
 
 // Where a "looked at" card goes: the surface that shows what the session
@@ -9319,6 +9340,10 @@ function renderTermLine(line, lanes) {
     div.className = "term-line term-you"; div.textContent = line;
   } else if (t.startsWith("[vira]")) {
     div.className = "term-line term-sys"; div.textContent = line;
+  } else if (t.startsWith("\u273b")) {
+    // The model's summarized thinking, written by the runner before the
+    // step it precedes (runner.THINK_MARK): what it is about to do and why.
+    div.className = "term-line term-think"; div.textContent = line;
   } else if (t.startsWith("→")) {
     div.className = "term-line term-tool";
     const m = t.match(/^→\s+([A-Za-z]+)(.*)$/);

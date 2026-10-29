@@ -57,6 +57,26 @@ function session(status, enrichment) {
   assert.equal(failed.children[0].innerHTML, 'Ready answer');
   assert.match(failed.children[1].textContent, /could not finish/);
 
+  // The model's reasoning streams as a dim line while the turn is pending
+  // and is not yet "the model's words"; once answered it folds above the
+  // answer with the progress notes, and the answer stays first to read.
+  const streaming = {id: 'chat-test', elapsed_s: 3, turns: [{status: 'pending', messages: [
+    {phase: 'thinking', text: 'Check the parser before the tests.'}]}]};
+  const live = context.chatAnswer(streaming.turns[0], streaming);
+  assert.equal(live.children[0].cls, 'chat-think');
+  assert.match(live.children[0].textContent, /^\u273b Check the parser/);
+  assert.match(live.children[1].textContent, /^Preparing an answer/);
+  const settled = {id: 'chat-test', turns: [{status: 'done', answer: 'Ready answer', messages: [
+    {phase: 'thinking', text: 'Check the parser before the tests.'},
+    {phase: 'commentary', text: 'Two records agree.'},
+    {phase: 'final_answer', text: 'Ready answer'}]}]};
+  const folded = context.chatAnswer(settled.turns[0], settled);
+  assert.equal(folded.children[0].cls, 'chat-reasoning');
+  assert.equal(folded.children[0].children[0].textContent, 'How Vira got here (2)');
+  assert.equal(folded.children[0].children[1].cls, 'chat-think');
+  assert.equal(folded.children[0].children[2].innerHTML, 'Two records agree.');
+  assert.equal(folded.children[1].innerHTML, 'Ready answer', 'the answer follows the fold');
+
   // Reopening an answered chat still follows unfinished panel work.
   context.findChatSession = session('done', {status: 'pending'});
   context.findChatWatch();

@@ -82,6 +82,11 @@ assert.equal(find(ctx.renderTermLine('  → Bash: ls', lanes), 'tcmd').length, 0
 // a failed shell command, written by the runner under its line
 const failLine = ctx.renderTermLine('    ↳ exit 127: (eval):1: command not found: timeout', lanes);
 assert.ok(failLine.classList.contains('term-fail'), failLine.className);
+// the model's reasoning line (runner.THINK_MARK): dim, neither a tool nor a lane
+const think = ctx.renderTermLine('  \u273b I will read the parser before changing it.', lanes);
+assert.ok(think.classList.contains('term-think'), think.className);
+assert.ok(!think.classList.contains('term-text') && !think.classList.contains('term-agent'));
+assert.match(think.textContent, /\u273b I will read the parser/);
 
 // the strip: one card per agent, running ones say what they are doing
 const box = new Element();
