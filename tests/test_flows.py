@@ -922,7 +922,10 @@ class ProgramCardTests(unittest.TestCase):
 
     def test_the_card_waits_for_its_program_then_the_wire_carries_the_result(self):
         flow = self.board(edges=[{"from": "export", "to": "out"}])
-        run = circuits.start_run(flow["id"], "now")
+        # only the Program card's chain: the board's report card is a model
+        # session, which a unit test never launches
+        run = circuits.start_run(flow["id"], "now", entry=["export"])
+        self.assertEqual(set(run["stages"]), {"export", "out"})
         self.driver._advance(run)
         stage = circuits.get_run(run["id"])["stages"]["export"]
         self.assertEqual(stage["status"], "running")
