@@ -35,3 +35,18 @@ class NamesTest(unittest.TestCase):
         self.assertFalse(names.compatible("Acme Client Services (role account)",
                                           "Acme Client Services SF (role account)"))
         self.assertTrue(names.compatible("Sean M. Example, CFP", "Sean Example"))
+
+    def test_agree_is_the_shared_handle_gate(self):
+        self.assertTrue(names.agree("", "Pat Example"))              # an unnamed card
+        self.assertTrue(names.agree("Pat Example", "Patricia Example"))
+        self.assertTrue(names.agree("Ariana Example", "Arianna"))     # a spelling slip
+        # two surnames on one handle is never folded on a shared handle
+        # alone, even with one first name: a fold deletes a card
+        self.assertFalse(names.agree("Pat Example", "Pat Other"))
+        self.assertFalse(names.agree("Lee Fifth", "Kim Sixth"))       # colleagues on a line
+        self.assertFalse(names.agree("Jeany", "Jennifer Example"))    # no bridge
+        self.assertFalse(names.agree("Jeany", "Lee Fifth"))
+        self.assertFalse(names.agree("Ariana Example", "Arianna Other"))
+        self.assertTrue(names.similar_first("Ariana", "Arianna"))
+        self.assertFalse(names.similar_first("Al", "Ali"))
+        self.assertFalse(names.similar_first("Pat", "Sam"))

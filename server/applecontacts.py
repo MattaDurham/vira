@@ -373,10 +373,13 @@ def find_duplicates(cards, lines=(), max_cards=SWITCHBOARD_CARDS):
     """Groups of phone cards that read as one person: the same full name,
     a nickname-equivalent first name with the same surname, or a shared
     email or phone that is not on more than `max_cards` cards and is not
-    a line. A shared handle between two NAMED cards whose names are not
-    compatible is an office line, not a duplicate, and is left to the
-    Shared lines list. Returns [{uids, keep, cards: [{uid, name, org,
-    emails, phones, created}], why: [str]}], largest groups first."""
+    a line. A shared handle counts only when the two names allow one
+    person (names.agree: the same, nickname-equivalent or nearly the same
+    first name, and the same surname when both have one): two colleagues
+    on one office line are left to the Shared lines list, and a card with
+    a first name only cannot bridge them. Returns [{uids, keep, cards:
+    [{uid, name, org, emails, phones, created}], why: [str]}], largest
+    groups first."""
     from . import names
     parent = {c["uid"]: c["uid"] for c in cards}
     reasons = {}
@@ -419,9 +422,8 @@ def find_duplicates(cards, lines=(), max_cards=SWITCHBOARD_CARDS):
             for i in range(len(uids)):
                 for j in range(i + 1, len(uids)):
                     na, nb = by_uid[uids[i]].get("name"), by_uid[uids[j]].get("name")
-                    if na and nb and not names.compatible(na, nb) \
-                            and names.split(na)[1] and names.split(nb)[1]:
-                        continue        # two named people on one line
+                    if not names.agree(na, nb):
+                        continue        # two people on one line
                     link(uids[i], uids[j], f"share {key}")
     groups = {}
     for c in cards:

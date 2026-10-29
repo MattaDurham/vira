@@ -17,6 +17,7 @@ short: a table that maps every spelling to every other merges people it
 should not, and the owner decides every pair from the tab anyway.
 Deterministic, stdlib only.
 """
+import difflib
 import re
 
 # formal name -> the nicknames it is commonly shortened to. Every spelling
@@ -108,6 +109,33 @@ def same_first(a, b):
     if len(ka) < 2 or len(kb) < 2:
         return False
     return ka == kb or kb in nick_set(a)
+
+
+def similar_first(a, b):
+    """Nearly the same first name ("Ariana" / "Arianna"): a spelling slip,
+    not a different person. Both at least three letters, four in five
+    characters in common."""
+    ka, kb = first_key(a), first_key(b)
+    if len(ka) < 3 or len(kb) < 3:
+        return False
+    return difflib.SequenceMatcher(None, ka, kb).ratio() >= 0.8
+
+
+def agree(name_a, name_b):
+    """Do two card names allow one person, given a handle they share? An
+    unnamed card agrees with anything. Otherwise the first names must be
+    the same, nickname-equivalent or nearly the same spelling, and when
+    both carry a surname the surnames must match too (a shared office
+    line between two colleagues is not a duplicate). A card with a first
+    name only ("Jeany") agrees only when its first name does, so it can
+    never bridge two colleagues into one group."""
+    if not clean(name_a) or not clean(name_b):
+        return True
+    fa, la = split(name_a)
+    fb, lb = split(name_b)
+    if la and lb and surname_key(la) != surname_key(lb):
+        return False
+    return same_first(fa, fb) or similar_first(fa, fb)
 
 
 def compatible(name_a, name_b):

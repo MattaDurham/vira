@@ -513,21 +513,33 @@ class DuplicatesTest(unittest.TestCase):
             _dup_card("J", "Y Three", phones=["5550100400"]),
             _dup_card("K", "Z Four", phones=["5550100400"]),         # a switchboard
             _dup_card("L", "J. Example", emails=["j@example.com"]),  # an initial: no match
+            # an office line on three cards, one of them first-name only:
+            # the single name must not bridge the two colleagues
+            _dup_card("M", "Lee Fifth", phones=["5550100500"], emails=["team@example.com"]),
+            _dup_card("N", "Jeany", phones=["5550100500"]),
+            _dup_card("O", "Kim Sixth", emails=["team@example.com"]),
+            # a spelling slip on a first name, two handles shared: one person
+            _dup_card("P", "Ariana Seventh", emails=["ari@example.com"], phones=["5550100600"]),
+            _dup_card("Q", "Arianna", emails=["ari@example.com"], phones=["5550100600"]),
         ]
 
     def test_find_duplicates_groups_names_and_shared_handles(self):
         groups = ac.find_duplicates(self._cards())
-        self.assertEqual([set(g["uids"]) for g in groups], [{"A", "B", "G"}, {"C", "D"}])
+        # largest group first, then by the kept card's name
+        self.assertEqual([set(g["uids"]) for g in groups],
+                         [{"A", "B", "G"}, {"P", "Q"}, {"C", "D"}])
         pat = groups[0]
         self.assertEqual(pat["keep"], "A")
         self.assertIn("Pat / Patricia", pat["why"])
         self.assertIn("share pat@example.com", pat["why"])
-        self.assertEqual(groups[1]["why"], ["same name"])
+        self.assertEqual(groups[1]["why"], ["share ari@example.com", "share 5550100600"])
+        self.assertEqual(groups[2]["why"], ["same name"])
         self.assertEqual([c["uid"] for c in pat["cards"]][0], "A")
 
     def test_a_line_is_not_a_signal(self):
         groups = ac.find_duplicates(self._cards(), lines={"pat@example.com"})
-        self.assertEqual([set(g["uids"]) for g in groups], [{"A", "B"}, {"C", "D"}])
+        self.assertEqual([set(g["uids"]) for g in groups],
+                         [{"P", "Q"}, {"A", "B"}, {"C", "D"}])
 
     def test_fold_pushes_the_union_then_deletes(self):
         cards = self._cards()
