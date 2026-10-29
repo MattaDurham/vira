@@ -79,6 +79,32 @@ class Base(unittest.TestCase):
         return mock.patch.object(routinerun, "_spawn", side_effect=spawn)
 
 
+class ResultTextTests(Base):
+    """A finished run in words: what the wire carries into the card after a
+    Loop card in a Flow."""
+
+    def test_a_finished_run_in_words(self):
+        with self.inline():
+            rec = routinerun.start(self.routine(), trigger="schedule")
+        text = routinerun.result_text(routinerun.get(rec["id"]))
+        self.assertTrue(text.startswith(f"LOOP Demo capture: run {rec['id']} ok"), text)
+        self.assertIn("Counts: 1 captured, 1 failed, 4 reused", text)
+        self.assertIn("Errors (1):", text)
+        self.assertIn("FAILED chan/abc123", text)
+        self.assertIn("[demo 10:00:00] starting", text)
+        self.assertIn("lines of the output:", text)
+
+    def test_a_failed_run_says_so(self):
+        with self.inline():
+            rec = routinerun.start(self.routine(code=2), trigger="schedule")
+        text = routinerun.result_text(routinerun.get(rec["id"]))
+        self.assertIn(" failed (exit 2)", text)
+
+    def test_a_run_with_no_log_still_reads(self):
+        self.assertEqual(routinerun.result_text({"id": "nope", "status": "ok"}),
+                         "LOOP loop: run nope ok")
+
+
 class ParseTests(unittest.TestCase):
     def test_counts_come_from_the_last_done_line(self):
         counts, errors, total = routinerun.parse(

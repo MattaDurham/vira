@@ -24,6 +24,11 @@ Execution facts:
   resumes every running circuit exactly where it was.
 - The live-session cap applies naturally: a stage that can't launch yet
   (cap reached) just stays ready and is retried next tick.
+- A native stage over a command loop (routinerun) starts the program and
+  stays running until the runner records an end; its result text is the
+  run in words (routinerun.result_text), so the wire carries the counts,
+  the errors and the last lines into the next card (2026-10-29). If the
+  program is already going, the stage waits for that run.
 
 Stores:
   data/circuits.json      — definitions (seeded with builtin templates)
@@ -1481,6 +1486,15 @@ def logic_passes(operation, expected, combined, run, st_def):
     return False, f"unknown gate {operation!r}"
 
 
+def _live_command_run(row):
+    """The newest run of a command loop that is still going, or None."""
+    from . import routinerun
+    for rec in routinerun.runs(row["id"], limit=5)["runs"]:
+        if rec.get("status") in routinerun.LIVE:
+            return rec
+    return None
+
+
 class Driver(threading.Thread):
     """Stateless per tick: read running runs from disk, advance each one.
     Restart-safe by construction — stage jobs are detached processes and
@@ -1514,6 +1528,24 @@ class Driver(threading.Thread):
         defs = {st["id"]: st for st in run["stages_def"]}
         # 1) refresh running stages from their jobs
         for sid, st in run["stages"].items():
+            if st["status"] == "running" and st.get("command_run"):
+                from . import routinerun
+                rec = routinerun.get(st["command_run"])
+                if rec and rec.get("status") in routinerun.LIVE:
+                    # A runner that died leaves its record marked running;
+                    # settle closes it as interrupted (the scheduler does
+                    # the same each minute), so no card waits for a ghost.
+                    routinerun.settle(rec.get("routine_id"))
+                    rec = routinerun.get(st["command_run"])
+                if rec and rec.get("status") in routinerun.LIVE:
+                    continue
+                changed[sid] = {
+                    "status": "done" if (rec or {}).get("status") == "ok" else "error",
+                    "result_text": (routinerun.result_text(rec) if rec else
+                                    f"The run {st['command_run']} is gone from "
+                                    "the loop's history"),
+                }
+                continue
             if st["status"] == "running" and st.get("child_run_id"):
                 child = get_run(st["child_run_id"])
                 if not child or child.get("status") == "running":
@@ -1747,7 +1779,20 @@ class Driver(threading.Thread):
             if not row:
                 return {"status": "error", "attempts": attempts,
                         "result_text": f"Unknown native system {routine_id}"}
-            launched = routines.dispatch(row)
+            name = row.get("name") or routine_id
+            try:
+                launched = routines.dispatch(row)
+            except ValueError as e:
+                # The loop's program is already going (its own cadence
+                # fired, or a Run now in Loops): this card waits for that
+                # run instead of failing, so two schedules never fight
+                # over one program.
+                live = (_live_command_run(row)
+                        if row.get("kind") == "command" else None)
+                if not live:
+                    return {"status": "error", "attempts": attempts,
+                            "result_text": f"Could not start the loop {name}: {e}"}
+                launched = {"command_run": live["id"], "attached": True}
             if launched.get("job_id"):
                 return {"status": "running", "attempts": attempts,
                         "job_id": launched["job_id"],
@@ -1756,6 +1801,17 @@ class Driver(threading.Thread):
                 return {"status": "running", "attempts": attempts,
                         "child_run_id": launched["run_id"],
                         "result_text": f"Dispatched nested Flow {launched['run_id']}"}
+            if launched.get("command_run"):
+                # A program, not a session. The card stays running until
+                # the runner records an end (_advance reads the run record
+                # each tick), and the wire then carries the run in words
+                # (routinerun.result_text).
+                verb = "Waiting for" if launched.get("attached") else "Started"
+                return {"status": "running", "attempts": attempts,
+                        "command_run": launched["command_run"],
+                        "started": _now(),
+                        "result_text": f"{verb} the loop {name}, "
+                                       f"run {launched['command_run']}"}
             return {"status": "done" if not launched.get("error") else "error",
                     "attempts": attempts,
                     "result_text": json.dumps(launched, ensure_ascii=False)}
@@ -1863,7 +1919,8 @@ class Driver(threading.Thread):
                                      f"Circuits window")
             except Exception:  # noqa: BLE001 — closing the loop is best-effort
                 pass
-        if run.get("notify"):
+        delivered = self._deliver_notifications(run)
+        if run.get("notify") and not delivered:
             tail = f" — graded {', '.join(grades)}" if grades else ""
             try:
                 from . import notify
@@ -1872,6 +1929,34 @@ class Driver(threading.Thread):
                     key=f"circuit:{run['id']}")
             except Exception:  # noqa: BLE001 — notification is best-effort
                 pass
+
+    def _deliver_notifications(self, run):
+        """An Output card set to a notification sends the text it received
+        to the owner on the ping path (notify.agent_ping, its 300-character
+        budget), so a Flow can end on the owner's phone rather than only in
+        the Runs list. Returns how many were sent; a run that sent one
+        skips the generic 'circuit done' ping."""
+        sent = 0
+        for st_def in run.get("stages_def") or []:
+            if norm_stage_mode(st_def.get("mode")) != "output":
+                continue
+            if _destination(st_def.get("output") or {}, run) != "notification":
+                continue
+            st = (run.get("stages") or {}).get(st_def["id"]) or {}
+            if st.get("status") != "done":
+                continue
+            text = str(st.get("result_text") or "").split(
+                "\n\nOutput instructions:")[0].strip()
+            if not text:
+                continue
+            try:
+                from . import notify
+                if notify.agent_ping(f"{run['circuit_name']}: {text}",
+                                     key=f"circuit:{run['id']}:{st_def['id']}"):
+                    sent += 1
+            except Exception:  # noqa: BLE001 — notification is best-effort
+                pass
+        return sent
 
 
 driver = Driver()

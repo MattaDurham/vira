@@ -14,12 +14,14 @@ holds only that. These tests pin the contract the editor relies on:
 - standing loops are not Flows.
 """
 import json
+import os
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import actions, circuits, flows, ideas, routines
+from server import actions, circuits, flows, ideas, notify, routinerun, routines
 
 
 def _agent(nid, name, prompt="Do {{input}}", **extra):
@@ -699,3 +701,115 @@ class IdeaToFlowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoopCardTests(unittest.TestCase):
+    """A Loop card over a command loop: the Flow starts the program, waits
+    for the runner to record an end, and the wire carries the run in words.
+    Until 2026-10-29 the card finished the moment the program started, so
+    the card after it ran on a line of JSON about a launch."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        patches = [
+            mock.patch.object(flows, "STORE", root / "flow-graphs.json"),
+            mock.patch.object(circuits, "DEFS", root / "circuits.json"),
+            mock.patch.object(circuits, "RUNS", root / "circuit-runs.json"),
+            mock.patch.object(routines, "STORE", root / "routines.json"),
+            mock.patch.object(routines, "SEEDS", []),
+            mock.patch.object(routinerun, "STORE", root / "routine-runs.json"),
+            mock.patch.object(routinerun, "RUNS", root / "routine-runs"),
+            mock.patch.object(routinerun, "_spawn",
+                              return_value=types.SimpleNamespace(pid=4242)),
+            mock.patch.dict(os.environ, {"VIRA_RUNTIME_ROOT": str(root / "runtime")}),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        os.environ.pop("VIRA_INSTANCE_ID", None)
+        self.loop = routines.save_routine({
+            "name": "Demo capture", "kind": "command", "every_hours": 24,
+            "command": ["/bin/echo", "hi"], "cwd": str(root)})
+        circuits.save_circuit({"id": "capture", "name": "Capture", "stages": [
+            {"id": "loop", "name": "Demo capture", "mode": "native", "needs": [],
+             "native": {"routine_id": self.loop["id"]}},
+            {"id": "record", "name": "Record", "mode": "output",
+             "needs": ["loop"], "output": {"destination": "record"}},
+        ]})
+        self.driver = circuits.Driver.__new__(circuits.Driver)
+
+    def _advance(self, run_id):
+        self.driver._advance(circuits.get_run(run_id))
+        return circuits.get_run(run_id)
+
+    def _finish(self, run_id, **fields):
+        out = routinerun.run_dir(run_id) / "output.log"
+        out.write_text("[demo] start\ndone: 5 captured, 1 failed\n", encoding="utf-8")
+        routinerun._update(run_id, finished="2026-10-29T03:00:00+00:00", **fields)
+
+    def test_the_flow_waits_for_the_program_then_the_wire_carries_its_result(self):
+        run = circuits.start_run("capture", "tonight")
+        self.driver._advance(run)
+        stage = circuits.get_run(run["id"])["stages"]["loop"]
+        self.assertEqual(stage["status"], "running")
+        self.assertEqual(routinerun.get(stage["command_run"])["status"], "starting")
+        # the program is still going: nothing moves
+        after = self._advance(run["id"])
+        self.assertEqual(after["stages"]["loop"]["status"], "running")
+        self.assertEqual(after["stages"]["record"]["status"], "pending")
+        # the runner records an end
+        self._finish(stage["command_run"], status="ok", exit_code=0,
+                     counts={"captured": 5, "failed": 1},
+                     errors=["FAILED abc: timed out"], error_count=1)
+        self._advance(run["id"])
+        final = self._advance(run["id"])
+        self.assertEqual(final["status"], "done")
+        text = final["stages"]["record"]["result_text"]
+        self.assertIn("LOOP Demo capture", text)
+        self.assertIn("5 captured, 1 failed", text)
+        self.assertIn("FAILED abc: timed out", text)
+        self.assertIn("done: 5 captured, 1 failed", text)
+
+    def test_a_failed_program_fails_the_card_and_skips_the_card_after(self):
+        run = circuits.start_run("capture", "tonight")
+        self.driver._advance(run)
+        stage = circuits.get_run(run["id"])["stages"]["loop"]
+        self._finish(stage["command_run"], status="failed", exit_code=1)
+        self._advance(run["id"])
+        final = self._advance(run["id"])
+        self.assertEqual(final["status"], "error")
+        self.assertEqual(final["stages"]["loop"]["status"], "error")
+        self.assertEqual(final["stages"]["record"]["status"], "skipped")
+        self.assertIn("failed (exit 1)", final["stages"]["loop"]["result_text"])
+
+    def test_a_program_already_going_is_waited_for_not_started_again(self):
+        first = routinerun.start(self.loop, trigger="schedule")
+        with mock.patch.object(routinerun, "held", return_value=True):
+            run = circuits.start_run("capture", "tonight")
+            self.driver._advance(run)
+        stage = circuits.get_run(run["id"])["stages"]["loop"]
+        self.assertEqual(stage["status"], "running")
+        self.assertEqual(stage["command_run"], first["id"])
+        self.assertIn("Waiting for", stage["result_text"])
+        self.assertEqual(routinerun.runs(self.loop["id"])["total"], 1)
+
+    def test_an_output_set_to_a_notification_reaches_the_owner(self):
+        circuits.save_circuit({"id": "tell", "name": "Tell", "stages": [
+            {"id": "gate", "name": "Always", "mode": "logic", "needs": [],
+             "logic": {"operation": "always", "value": ""}},
+            {"id": "phone", "name": "Tell me", "mode": "output", "needs": ["gate"],
+             "output": {"destination": "notification",
+                        "instructions": "Lead with the count."}},
+        ]})
+        with mock.patch.object(notify, "agent_ping", return_value=True) as ping:
+            run = circuits.start_run("tell", "the ask")
+            self.driver._advance(run)
+            self.driver._advance(circuits.get_run(run["id"]))
+        self.assertEqual(circuits.get_run(run["id"])["status"], "done")
+        ping.assert_called_once()
+        text = ping.call_args[0][0]
+        self.assertTrue(text.startswith("Tell: "), text)
+        self.assertIn("Logic gate always: passed", text)
+        self.assertNotIn("Output instructions", text)

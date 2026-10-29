@@ -153,6 +153,61 @@ def run_dir(run_id):
     return RUNS / run_id
 
 
+# How much of a finished run the wire may carry into the card after it in
+# a Flow: the outcome, the counts, every recorded error, and the program's
+# last lines. The same budget circuits.RESULT_TEXT_CAP gives a finished run
+# row; the per-part handoff share (circuits._handoff_cap) trims it again at
+# delivery, so the next card's window is never the thing this bounds.
+RESULT_CAP = 12_000
+# The last lines of output.log a result carries: enough for a capture
+# script's per-item lines and its done line, not the whole night.
+TAIL_LINES = 40
+
+
+def result_text(rec, lines=TAIL_LINES):
+    """A finished run in words, for the card after it in a Flow (the wire
+    delivers it under that card's box, circuits._delivered): the outcome,
+    when it ran, the counts, the errors, the runner's note, and the last
+    lines the program wrote."""
+    rec = rec or {}
+    name = rec.get("routine") or rec.get("routine_id") or "loop"
+    status = rec.get("status") or "unknown"
+    code = rec.get("exit_code")
+    head = f"LOOP {name}: run {rec.get('id') or '?'} {status}"
+    if code not in (None, 0):
+        head += f" (exit {code})"
+    parts = [head]
+    when = [f"{k} {rec[k]}" for k in ("started", "finished") if rec.get(k)]
+    if when:
+        parts.append(", ".join(when))
+    counts = rec.get("counts") or {}
+    if counts:
+        parts.append("Counts: " + ", ".join(f"{n} {k}" for k, n in counts.items()))
+    errors = [str(e) for e in rec.get("errors") or []]
+    if errors:
+        total = int(rec.get("error_count") or len(errors))
+        parts.append(f"Errors ({total}):\n" + "\n".join(f"- {e}" for e in errors))
+    if rec.get("note"):
+        parts.append(str(rec["note"]))
+    tail = _tail(rec.get("id"), lines)
+    if tail:
+        shown = tail.count("\n") + 1
+        parts.append(f"Last {shown} line{'s' if shown != 1 else ''} of the output:\n{tail}")
+    return "\n".join(parts)[:RESULT_CAP]
+
+
+def _tail(run_id, lines):
+    """The last `lines` lines of a run's output.log, or '' when it has none."""
+    try:
+        path = run_dir(run_id) / "output.log"
+    except ValueError:
+        return ""
+    if not path.exists():
+        return ""
+    text = path.read_bytes()[-MAX_SERVE:].decode("utf-8", errors="replace")
+    return "\n".join(text.splitlines()[-max(1, int(lines)):]).strip()
+
+
 # ---------------------------------------------------------------- lock
 
 def lock_path(rid):

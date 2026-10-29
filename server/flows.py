@@ -13,7 +13,8 @@ skill, a script, a file) wired into a stage, wire notes, and revision
 numbers.
 
 A card is one of eleven kinds. Six run: agent, judge, logic (a gate),
-approval (ask me), output, native (a Vira routine). Five do not: input
+approval (ask me), output, native (a loop from the Loops tab: the Flow
+runs it and waits for it, and the wire carries its result). Five do not: input
 (the ask, one per board), trigger (a schedule), tool and context
 (sources: a thing with a name and a path that a card is told about when
 it is wired in) and env (a saved set of sources as one card). A wire means

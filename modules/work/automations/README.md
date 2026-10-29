@@ -26,8 +26,10 @@ plugins and the CLI's MCP servers. The right column is the only editor.
 pipelines that run as DAGs underneath, and the runner applies the
 environment at launch (`flows.kit_preview` is what the column shows). Routines are standing loops on a
 cadence, and a `command` routine runs a program in its own process on a
-schedule (the two TC-IL captures run this way); they are listed in the
-Forge's Loops tab, not as Flows. `actions` enumerates the central
+schedule (the three TC-IL captures run this way); they are listed in the
+Forge's Loops tab, not as Flows, and a Flow runs one as a Loop card:
+it starts the loop, waits for it, and the wire carries the run in words
+(`routinerun.result_text`). `actions` enumerates the central
 library's skills and commands, which the Sources tab offers as cards;
 `launchdjobs` lists every launchd job on this Mac, read-only, folded under
 the Loops tab. `routinesrc` is "under the hood": what a standing loop
