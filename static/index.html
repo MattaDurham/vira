@@ -377,6 +377,7 @@
           <button class="fchip sm" id="forge-new" type="button">New</button>
           <button class="fchip sm" id="forge-save-as" type="button">Save as</button>
           <button class="fchip sm" id="forge-save" type="button">Save</button>
+          <button class="fchip sm" id="forge-archive" type="button" title="Stop it and move it to Archived">Archive</button>
           <button class="btn primary" id="forge-run" type="button" title="Run this Flow on its Input card's ask">Run</button>
         </div>
       </header>
@@ -384,9 +385,8 @@
       <div class="forge-shell" id="forge-shell">
         <aside class="forge-library" id="forge-library">
           <div class="seg mini forge-library-tabs" id="forge-library-tabs">
-            <button class="seg-btn on" data-forge-library="flows">Flows</button>
+            <button class="seg-btn on" data-forge-library="flows" title="Everything that runs on this Mac: Flows, Vira's routines, launchd jobs, Claude task files, working sessions">Flows</button>
             <button class="seg-btn" data-forge-library="sources" title="Skills, commands, scripts and files to wire into a card">Sources</button>
-            <button class="seg-btn" data-forge-library="loops" title="What Vira runs on a schedule">Loops</button>
           </div>
           <div class="forge-library-tools">
             <input class="search" id="forge-library-search" type="search"
@@ -397,7 +397,7 @@
 
         <main class="forge-workspace">
           <div class="forge-boardbar">
-            <button class="btn primary sm" id="forge-add" type="button" aria-haspopup="true" title="Input, Agent, Judge, Gate, Ask me, Output, Schedule, or a source">+ Add</button>
+            <button class="btn primary sm" id="forge-add" type="button" aria-haspopup="true" title="Input, Agent, Program, Judge, Gate, Ask me, Output, Schedule, or a source">+ Add</button>
             <span class="forge-status" id="forge-status">Live definitions</span>
             <div class="forge-zoom" aria-label="Board zoom">
               <button type="button" id="forge-zoom-out" aria-label="Zoom out">&minus;</button>

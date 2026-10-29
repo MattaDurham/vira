@@ -337,11 +337,9 @@ SETTINGS_NAMES = {"user": "Your Claude settings", "project": "The project's sett
 
 
 def list_flows():
-    """Every circuit as a Flow. Standing loops (routines) are NOT Flows:
-    they have their own list in the Forge, over /api/routines, where Run
-    now, Pause and Under the hood live. Until 2026-10-27 each one was
-    dressed as a locked two-card Flow, which is how eleven loops came to
-    outnumber the Flows in a list called My Flows."""
+    """Every circuit as a Flow. The Forge's left column lists these beside
+    everything else that runs on the Mac (server/runlist.py), where a
+    routine opens as a board of its Schedule and what it runs."""
     sidecar = _store()["graphs"]
     rows = routines.list_routines()
     return [_graph_for_circuit(c, rows, sidecar.get(c["id"]) or {})

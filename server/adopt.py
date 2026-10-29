@@ -16,8 +16,12 @@ Flow. Three kinds of thing can become one:
     Loop card over it becomes a Program card in place, keeping the
     routine's id as its run key so the lock and the run history carry
     on; if the routine's own cadence was on, it becomes a Schedule card
-    wired to that Program card. With no Flow over it, it becomes a new
-    Flow. The routine row is then deleted.
+    wired to that Program card. A Schedule runs what is downstream of the
+    card it starts, so when the Program card has cards after it that
+    Schedule is created paused: on, it would run those cards on the
+    loop's cadence too, and that is a wiring decision for the owner. With
+    no Flow over it, it becomes a new Flow. The routine row is then
+    deleted.
 
 CLI: python -m server.adopt loops [--dry-run]   (every command routine)
 """
@@ -159,15 +163,20 @@ def adopt_command_routine(rid, dry_run=False):
         report["flows"][-1]["id"] = flow["id"]
     else:
         for flow, cards in hosts:
+            card_ids = {c["id"] for c in cards}
+            after = sorted({e["to"] for e in flow["edges"] if e["from"] in card_ids})
+            hold = own_schedule and bool(after)
             report["flows"].append({"id": flow["id"], "name": flow["name"],
-                                    "cards": [c["id"] for c in cards]})
+                                    "cards": [c["id"] for c in cards],
+                                    "cards_after": after,
+                                    "new_schedule_paused": hold})
             if dry_run:
                 continue
             nodes = [(_program_from(row, n) if n in cards else n) for n in flow["nodes"]]
             edges = list(flow["edges"])
             if own_schedule:
                 for index, schedule in enumerate(_schedule_nodes(
-                        times, every, cwd=row.get("cwd") or "",
+                        times, every, cwd=row.get("cwd") or "", enabled=not hold,
                         x=min(n.get("x", 0) for n in nodes) - 60,
                         y=max(n.get("y", 0) for n in nodes) + 180)):
                     schedule["id"] = f"own-schedule-{index + 1}"

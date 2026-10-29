@@ -1906,7 +1906,7 @@ class Driver(threading.Thread):
                 launched = routines.dispatch(row)
             except ValueError as e:
                 # The loop's program is already going (its own cadence
-                # fired, or a Run now in Loops): this card waits for that
+                # fired, or a Run now on its routine): this card waits for that
                 # run instead of failing, so two schedules never fight
                 # over one program.
                 live = (_live_command_run(row)

@@ -2,16 +2,25 @@
    execution live in Vira; this file owns the board, the library and the
    right-column editor.
 
-   A Flow is a board of cards wired in one direction. Six kinds run
-   (agent, judge, gate, ask me, output, native); the Input card is the ask;
-   a schedule runs it; sources (a skill, a settings file, a script, a file,
+   A Flow is a board of cards wired in one direction. Seven kinds run
+   (agent, judge, gate, ask me, output, program, and the older native card);
+   the Input card is the ask; a Schedule runs the cards it is wired to and
+   what comes after them, so two Schedules on one board run two chains;
+   sources (a skill, a settings file, a script, a file,
    a Find reference) and saved environments are wired into a card and are
    the whole of what its session is told about. A card is who runs it,
    what it must do and what it may touch; the board shows it small and the
    right column is the only editor. A wire means the finished text of the
    card before goes into the card after (the server appends it unless the
    box places it), and it may carry a note. server/flows.py reads nothing
-   else, so the editor draws nothing else (2026-10-27, rebuilt 10-28). */
+   else, so the editor draws nothing else (2026-10-27, rebuilt 10-28).
+
+   The left column is one list of everything that runs on this Mac
+   (2026-10-29): Flows, Vira's own routines, launchd jobs, Claude task
+   files and working sessions, from /api/forge/everything, filtered by
+   state and grouped by any column. Every row opens a board: a Flow its
+   own, and the others a board of their Schedule and the one card they
+   run, edited in the right column and saved where they live. */
 (() => {
   "use strict";
 
@@ -51,7 +60,9 @@
     approval: { name: "Ask me", hint: "Pauses until you answer." },
     output: { name: "Output", hint: "Where the result lands and what shape it takes." },
     trigger: { name: "Schedule", hint: "Runs the Flow on a cadence." },
-    native: { name: "Loop", hint: "Runs one of your loops inside this Flow and waits for it; the card after gets its result." },
+    program: { name: "Program", hint: "Runs a command in a folder as its own process and waits for it; the card after gets the run in words." },
+    native: { name: "Loop (older card)", hint: "A card over a routine row, from before Program cards. Moving the loop into Vira turns it into a Program card." },
+    vira: { name: "Vira", hint: "Code inside Vira that runs on this schedule." },
     tool: { name: "Source", hint: "A skill, command, script or file the card is told about." },
     context: { name: "Reference", hint: "A note or file from Find the card is told about." },
     env: { name: "Environment", hint: "A saved set of sources, wired in as one card." },
@@ -67,7 +78,7 @@
   // ENV_KEYS); the rest reach the card as a line of text.
   const ENV_KINDS = new Set(["skill", "plugin", "agent", "command", "mcp", "hook", "settings", "instructions"]);
   const INPUT_ID = "input";
-  const EXEC = new Set(["agent", "judge", "logic", "approval", "output", "native"]);
+  const EXEC = new Set(["agent", "judge", "logic", "approval", "output", "program", "native"]);
   const SOURCE = new Set(["tool", "context"]);
   const CARD_W = 264;
 
@@ -131,6 +142,10 @@
     context: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5",
     tool: "M14 5a4 4 0 0 0-5 5L4 15l5 5 5-5a4 4 0 0 0 5-5l-3 3-3-3 3-3z",
     loop: "M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4",
+    program: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
+    launchd: "M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6",
+    task: "M7 4h10v16H7zM10 8h4M10 12h4M10 16h2",
+    session: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
   };
 
   const state = {
@@ -139,13 +154,18 @@
     flows: [],
     kit: [],
     loops: [],
+    everything: [],
+    sources: {},
+    // the list's chip and grouping, remembered per viewer (lsGet below)
+    filter: "all",
+    groupBy: "none",
+    selectedRow: null,
     envs: [],
     defaults: { provider: "", provider_label: "" },
     mac: null,
     current: null,
     selectedNode: null,
     selectedEdge: null,
-    selectedLoop: null,
     library: "flows",
     query: "",
     findRows: [],
@@ -330,6 +350,7 @@
   function pasteNode() {
     const clip = readClip();
     if (!clip || !editable()) return;
+    if (!structural()) return fixedShape();
     if (clip.node.type === "input" && inputCard()) return toast("A board has one Input card.");
     const clone = copy(clip.node);
     clone.id = cardId(clone.name, clone.type);
@@ -379,8 +400,12 @@
     line.textContent = !flow ? "Live definitions"
       : value ? "Unsaved changes"
         : flow.kind === "trace" ? "A finished run's own cards; nothing to save"
-          : flow.builtin ? "Shipped starter. Save as makes your own copy."
-            : flow.id ? "Saved" : "Not saved yet";
+          : flow.archived ? "Archived. Restore brings it back as it was."
+            : flow.kind === "routine" ? "One of Vira's routines: its Schedule and what it runs. Save writes the routine."
+              : flow.kind === "launchd" ? "A launchd job: its Schedule and the program it runs. Save writes its job file."
+                : flow.kind === "task" ? "A Claude task file: its Schedule and its prompt. Save writes the file."
+                  : flow.builtin ? "Shipped starter. Save as makes your own copy."
+                    : flow.id ? "Saved" : "Not saved yet";
   }
 
   function toast(message) {
@@ -411,6 +436,11 @@
       state.defaults = flowData.defaults || state.defaults;
       state.envs = flowData.environments || [];
       state.kit = kitData.items || [];
+      state.filter = lsRead("vira-forge-filter", "all");
+      state.groupBy = lsRead("vira-forge-group", "none");
+      if (!FILTERS.some(([key]) => key === state.filter)) state.filter = "all";
+      if (!GROUPS.some(([key]) => key === state.groupBy)) state.groupBy = "none";
+      loadEverything();
       const wanted = options.flowId || state.current?.id || localStorage.getItem("vira-forge-flow") || "plan-build-judge";
       const selected = state.flows.find((flow) => flow.id === wanted) || state.flows[0] || null;
       state.current = selected ? copy(selected) : null;
@@ -443,14 +473,161 @@
     if (state.trace && (tracedRun() || {}).circuit_id !== flow.id) state.trace = null;
     state.selectedNode = null;
     state.selectedEdge = null;
-    state.selectedLoop = null;
     state.zoom = 1;
     state.panX = 25;
     state.panY = 55;
     localStorage.setItem("vira-forge-flow", flow.id);
+    state.selectedRow = `flow:${flow.id}`;
     setDirty(false);
     renderAll();
     if (matchMedia("(max-width: 1099px)").matches) closeLibrary();
+  }
+
+  /* ---------- a row that is not a Flow -----------------------------------
+     A routine, a launchd job or a Claude task file opens as a board of
+     what it is: its Schedule and the one card it runs. The cards are edited
+     in the right column and saved where the thing lives (the routine row,
+     the job file, the task file). Its shape is fixed because the thing is
+     one program on one schedule; Move into Vira turns a launchd job or a
+     task file into a Flow, where cards can be added. */
+
+  function boardKind() {
+    return state.current?.kind || "flow";
+  }
+
+  // Cards may be added, wired and removed only on a Flow's own board.
+  function structural() {
+    return editable() && boardKind() === "flow";
+  }
+
+  function fixedShape() {
+    const kind = boardKind();
+    return toast(kind === "launchd" ? "A launchd job is one program on its schedule. Move it into Vira to add cards."
+      : kind === "task" ? "A Claude task file is one prompt. Give it a schedule in Vira to make it a Flow with cards."
+        : "This routine is code inside Vira on a schedule; its cards are fixed.");
+  }
+
+  function isComposed(row) {
+    const prompt = String(row.prompt || "");
+    return row.kind === "muse" || /^__[a-z_]+__(:.*)?$/.test(prompt);
+  }
+
+  function baseBoard(row, extra) {
+    return { kind: row.kind, rowId: row.id, id: null, name: row.name, description: row.line || "",
+      note: row.note || "", builtin: false, revision: 0, contexts: [], triggers: [], executable: true,
+      archived: row.state === "archived" ? (row.archived || true) : null, ...extra };
+  }
+
+  function twoCards(schedule, work) {
+    return {
+      nodes: [{ id: "schedule", type: "trigger", name: "Schedule", x: 40, y: 150, ...schedule },
+        { id: "work", x: 40 + CARD_W + 90, y: 150, ...work }],
+      edges: [{ id: "wire-schedule", from: "schedule", to: "work", instructions: "" }],
+    };
+  }
+
+  async function boardFor(row) {
+    if (row.kind === "routine") {
+      await loadLoops();
+      const record = (state.loops || []).find((item) => item.id === row.ref.routine_id);
+      if (!record) throw new Error("the routine is gone");
+      const type = record.kind === "command" ? "program" : isComposed(record) ? "vira" : "agent";
+      const work = { type, name: record.name, description: record.description || "",
+        prompt: type === "agent" ? record.prompt || "" : "", model: record.model || "", mode: record.mode || "manual",
+        read_only: false };
+      if (type === "program") {
+        work.program = { command_line: (record.command || []).map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" "),
+          cwd: record.cwd || "", env: record.env || {}, output_log: record.output_log || "",
+          watch_logs: record.watch_logs || [], run_key: record.id };
+      }
+      return baseBoard(row, { record, ...twoCards({ routine_id: record.id, daily_at: record.daily_at || "",
+        every_hours: record.every_hours || null, enabled: !!record.enabled, notify: !!record.notify,
+        cwd: record.cwd || "" }, work) });
+    }
+    if (row.kind === "launchd") {
+      const archived = row.state === "archived";
+      const job = await request(`/api/forge/launchd?path=${encodeURIComponent(row.ref.path)}&archived=${archived}`);
+      return launchdBoard(row, job);
+    }
+    if (row.kind === "task") {
+      const archived = row.state === "archived";
+      const task = await request(`/api/forge/tasks/${encodeURIComponent(row.ref.task)}?archived=${archived}`);
+      return baseBoard(row, { task, adopt: { kind: "daily", daily_at: "21:00", every_hours: 24, cwd: "" },
+        ...twoCards({ daily_at: "", every_hours: null, enabled: false, when_text: "Not scheduled by Vira" },
+          { type: "agent", name: task.title, prompt: task.body, read_only: false }) });
+    }
+    throw new Error(`a ${row.kind} row has no board`);
+  }
+
+  function launchdBoard(row, job) {
+    const fields = copy(job.fields);
+    return baseBoard(row, { job, fields, name: job.label, description: job.archived
+      ? `Archived from ${job.origin}` : job.path,
+    ...twoCards({ when_text: (job.when || []).join("; "), enabled: !["disabled", "not loaded", "archived"].includes(job.state),
+      daily_at: "", every_hours: null },
+    { type: "program", name: job.label, program: { command_line: fields.command_line, cwd: fields.cwd } }) });
+  }
+
+  async function openRow(row) {
+    if (row.kind === "flow") {
+      state.selectedRow = row.id;
+      if (!state.flows.some((flow) => flow.id === row.ref.flow_id)) await refreshFlows();
+      return selectFlow(row.ref.flow_id);
+    }
+    if (row.kind === "session") {
+      if (row.ref.job && typeof window.openSession === "function") return window.openSession(row.ref.job);
+      if (row.ref.open_url) {
+        window.open(row.ref.open_url, "_blank", "noopener");
+        return;
+      }
+      return toast("This session has no link to open.");
+    }
+    if (state.dirty && !await forgeDialog({
+      title: "Open another board?",
+      message: "This board has unsaved changes. Discard them and open the other one?",
+      confirm: "Discard changes",
+    })) return;
+    let board;
+    try {
+      board = await boardFor(row);
+    } catch (error) {
+      return toast(`Could not open ${row.name}: ${error.message}`);
+    }
+    state.selectedRow = row.id;
+    state.current = board;
+    state.trace = null;
+    state.idea = null;
+    state.selectedEdge = null;
+    state.selectedNode = "work";
+    state.zoom = 1; state.panX = 25; state.panY = 55;
+    setDirty(false);
+    renderAll();
+    if (matchMedia("(max-width: 1099px)").matches) closeLibrary();
+  }
+
+  // The Flows list, fetched again after a change made elsewhere (an
+  // archive, a move into Vira), with the open Flow refreshed if it moved.
+  async function refreshFlows() {
+    try {
+      const data = await requestRaw("/api/flows");
+      state.flows = data.flows || [];
+      if (boardKind() === "flow" && state.current?.id && !state.dirty) {
+        const fresh = state.flows.find((flow) => flow.id === state.current.id);
+        if (fresh) state.current = copy(fresh);
+      }
+    } catch (error) {
+      toast(`Could not read the Flows: ${error.message}`);
+    }
+  }
+
+  async function reopenRow(rowId) {
+    await loadEverything();
+    const row = state.everything.find((item) => item.id === rowId);
+    if (!row) return;
+    setDirty(false);
+    const keep = state.selectedNode;
+    await openRow(row);
+    if (keep && state.current?.nodes.some((node) => node.id === keep)) openNode(keep);
   }
 
   function forgeDialog({ title, message, value = null, confirm = "Continue", choices = null }) {
@@ -509,11 +686,20 @@
     q("#forge-flow-name").textContent = flow?.name || "Choose a Flow";
     q("#forge-flow-description").textContent = flow?.description
       || "Who runs each step, what it must do, and what it may touch. Wire the cards; the finished text of one is the input of the next.";
-    q("#forge-flow-revision").textContent = flow ? `v${flow.revision || 1}` : "";
+    q("#forge-flow-revision").textContent = flow && boardKind() === "flow" ? `v${flow.revision || 1}` : "";
     const ghost = flow?.kind === "trace";
-    q("#forge-save").disabled = !flow || ghost;
-    q("#forge-save-as").disabled = !flow || ghost;
-    q("#forge-run").disabled = !flow || ghost;
+    const kind = boardKind();
+    const archived = Boolean(flow?.archived);
+    q("#forge-save").disabled = !flow || ghost || (kind !== "flow" && archived);
+    q("#forge-save-as").disabled = !flow || ghost || kind !== "flow";
+    q("#forge-run").disabled = !flow || ghost || kind === "task" || archived && kind !== "flow";
+    const archive = q("#forge-archive");
+    if (archive) {
+      archive.disabled = !flow || ghost || (kind === "flow" && !flow.id);
+      archive.textContent = archived ? "Restore" : "Archive";
+      archive.title = archived ? "Bring it back as it was" : "Stop it and move it to Archived";
+    }
+    if (flow && kind !== "flow" && flow.note) q("#forge-flow-description").textContent = `${flow.description} ${flow.note}`.trim();
     syncTools();
   }
 
@@ -678,12 +864,16 @@
     return span;
   }
 
+  // The same words server/runlist.py cadence_of uses for the list.
   function cadenceText(row) {
-    if (!row) return "Manual";
-    if (row.daily_at) return `Daily at ${row.daily_at}`;
+    if (!row) return "On demand";
+    if (row.daily_at) return `Every day at ${row.daily_at}`;
     const hours = Number(row.every_hours);
-    if (!hours) return "Manual";
-    return hours === 1 ? "Every hour" : `Every ${hours} hours`;
+    if (!hours) return "On demand";
+    if (hours === 1) return "Every hour";
+    if (hours === 24) return "Every day";
+    if (hours === 168) return "Every week";
+    return `Every ${hours} hours`;
   }
 
   function libraryCard({ title, line, iconKey, active, draggable, dot, tone }) {
@@ -712,32 +902,168 @@
       button.classList.toggle("on", button.dataset.forgeLibrary === state.library));
     body.replaceChildren();
     const term = state.query.trim().toLowerCase();
-    if (state.library === "flows") renderFlowsTab(body, term);
-    else if (state.library === "sources") renderSourcesTab(body, term);
-    else renderLoopsTab(body, term);
+    if (state.library === "sources") renderSourcesTab(body, term);
+    else renderEverythingTab(body, term);
   }
 
-  function renderFlowsTab(body, term) {
-    const groups = [["Starters", state.flows.filter((f) => f.builtin)],
-      ["My Flows", state.flows.filter((f) => !f.builtin)]];
-    let any = false;
-    groups.forEach(([label, flows]) => {
-      const rows = flows.filter((f) => matches(term, f.name, f.description));
-      if (!rows.length) return;
-      any = true;
-      body.appendChild(make("div", "forge-library-group", label));
-      rows.forEach((flow) => {
-        const schedule = flow.triggers?.[0];
-        const paused = schedule && schedule.enabled === false ? ", paused" : "";
-        const card = libraryCard({
-          title: flow.name, iconKey: "flow", active: flow.id === state.current?.id,
-          line: `${flow.nodes?.length || 0} cards, ${cadenceText(schedule).toLowerCase()}${paused}`,
-        });
-        card.addEventListener("click", () => selectFlow(flow.id));
+  /* ---------- the one list ----------------------------------------------
+     Everything that runs on this Mac, one row each, from
+     /api/forge/everything (server/runlist.py). A chip narrows it by state
+     the way the search box narrows it by words; the menu groups it by any
+     column, or not at all. Archived rows show only under Archived. */
+
+  const FILTERS = [["all", "All"], ["running", "Running"], ["scheduled", "Scheduled"],
+    ["paused", "Paused"], ["archived", "Archived"]];
+  const GROUPS = [["none", "nothing"], ["who", "who runs it"], ["state", "state"],
+    ["cadence", "cadence"], ["folder", "folder"], ["origin", "starters and mine"]];
+  const STATE_LABEL = { running: "Running", scheduled: "Scheduled", paused: "Paused",
+    manual: "On demand", archived: "Archived" };
+  const CADENCE_LABEL = { now: "Running now", hourly: "Every hour or more often",
+    hours: "Every few hours", daily: "Daily", weekly: "Weekly or less often", login: "At login",
+    kept: "Kept running", event: "When something happens", demand: "On demand" };
+  const ORIGIN_LABEL = { starter: "Starters", mine: "My Flows", vira: "Vira's own",
+    mac: "This Mac (launchd)", claude: "Claude task files", session: "Sessions" };
+  const GROUP_ORDERS = { state: Object.keys(STATE_LABEL), cadence: Object.keys(CADENCE_LABEL),
+    origin: Object.keys(ORIGIN_LABEL), who: ["Vira", "launchd", "Claude", "Codex"] };
+  const ROW_ICON = { flow: "flow", routine: "loop", launchd: "launchd", task: "task", session: "session" };
+
+  // Per-viewer conveniences only; a blocked store just means the defaults.
+  function lsRead(key, fallback) {
+    try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+  }
+  function lsWrite(key, value) {
+    try { localStorage.setItem(key, value); } catch { /* not remembered, still works */ }
+  }
+
+  function shortPath(path) {
+    return String(path || "").replace(/^\/Users\/[^/]+/, "~");
+  }
+
+  function inFilter(row, filter) {
+    if (filter === "archived") return row.state === "archived";
+    if (row.state === "archived") return false;
+    return filter === "all" || row.state === filter;
+  }
+
+  function groupOf(row, by) {
+    if (by === "who") return [row.who, row.who];
+    if (by === "state") return [row.state, STATE_LABEL[row.state] || row.state];
+    if (by === "cadence") return [row.cadence_kind, CADENCE_LABEL[row.cadence_kind] || row.cadence_kind];
+    if (by === "folder") return [row.folder || "~none", row.folder ? shortPath(row.folder) : "No folder named"];
+    if (by === "origin") return [row.origin, ORIGIN_LABEL[row.origin] || row.origin];
+    return ["", ""];
+  }
+
+  function groupRank(by, key) {
+    const order = GROUP_ORDERS[by];
+    const at = order ? order.indexOf(key) : -1;
+    return at < 0 ? 1000 : at;
+  }
+
+  function rowLine(row) {
+    const cadence = String(row.cadence || "");
+    if (row.kind === "session") {
+      return `${row.who}, ${cadence.toLowerCase()}${row.last_run ? ` since ${stamp(row.last_run)}` : ""}`;
+    }
+    const parts = [row.who, cadence.charAt(0).toLowerCase() + cadence.slice(1)];
+    if (row.state === "paused" && row.kind !== "launchd") parts.push("paused");
+    if (row.state === "archived") parts.push(row.archived ? `archived ${stamp(row.archived)}` : "archived");
+    if (row.kind === "flow" && row.state === "scheduled" && row.paused_schedules) {
+      parts.push(`${row.paused_schedules} of its Schedules paused`);
+    }
+    if (row.kind === "launchd" && row.status_line && row.state !== "archived") parts.push(row.status_line);
+    else if (row.last_run) parts.push(`last ${stamp(row.last_run)}${row.last_status ? ` ${row.last_status}` : ""}`);
+    return parts.filter(Boolean).join(", ");
+  }
+
+  function rowDot(row) {
+    if (row.state === "running") return "is-live";
+    const status = String(row.last_status || "").toLowerCase();
+    if (["error", "failed", "interrupted"].includes(status) && row.state !== "archived") return "is-error";
+    return row.state === "scheduled" ? "is-on" : "";
+  }
+
+  function rowIsOpen(row) {
+    if (row.kind === "flow") return state.current?.kind !== "routine" && state.current?.id === row.ref.flow_id;
+    return row.id === state.selectedRow && state.current?.rowId === row.id;
+  }
+
+  function renderEverythingTab(body, term) {
+    const bar = make("div", "forge-filter");
+    const counts = {};
+    state.everything.forEach((row) => FILTERS.forEach(([key]) => {
+      if (inFilter(row, key)) counts[key] = (counts[key] || 0) + 1;
+    }));
+    FILTERS.forEach(([key, label]) => {
+      const chip = make("button", `fchip sm${state.filter === key ? " on" : ""}`, `${label} ${counts[key] || 0}`);
+      chip.type = "button";
+      chip.setAttribute("aria-pressed", String(state.filter === key));
+      chip.addEventListener("click", () => {
+        state.filter = key;
+        lsWrite("vira-forge-filter", key);
+        renderLibrary();
+      });
+      bar.appendChild(chip);
+    });
+    const grouping = make("label", "forge-groupby");
+    grouping.append("Group by ");
+    grouping.appendChild(selectControl(GROUPS, state.groupBy, (value) => {
+      state.groupBy = value;
+      lsWrite("vira-forge-group", value);
+      renderLibrary();
+    }));
+    body.append(bar, grouping);
+    Object.entries(state.sources || {}).forEach(([name, source]) => {
+      if (source.status !== "ok" && source.status !== "not_mac") {
+        body.appendChild(make("p", "hint", `Could not read ${name}: ${source.note || source.status}`));
+      }
+    });
+    if (!state.everything.length) {
+      body.appendChild(make("p", "hint", state.everythingLoaded ? "Nothing runs on this Mac yet." : "Reading everything that runs on this Mac"));
+      return;
+    }
+    const order = Object.keys(STATE_LABEL);
+    const rows = state.everything
+      .filter((row) => inFilter(row, state.filter)
+        && matches(term, row.name, row.line, row.who, row.folder, row.cadence, STATE_LABEL[row.state]))
+      .sort((a, b) => (order.indexOf(a.state) - order.indexOf(b.state))
+        || String(a.name).localeCompare(String(b.name)));
+    if (!rows.length) {
+      body.appendChild(make("p", "hint", term ? "Nothing matches." : "Nothing in this view."));
+      return;
+    }
+    const groups = new Map();
+    rows.forEach((row) => {
+      const [key, label] = groupOf(row, state.groupBy);
+      if (!groups.has(key)) groups.set(key, { label, rows: [] });
+      groups.get(key).rows.push(row);
+    });
+    const keys = [...groups.keys()].sort((a, b) => (groupRank(state.groupBy, a) - groupRank(state.groupBy, b))
+      || String(groups.get(a).label).localeCompare(String(groups.get(b).label)));
+    keys.forEach((key) => {
+      const group = groups.get(key);
+      if (state.groupBy !== "none") body.appendChild(make("div", "forge-library-group", `${group.label} (${group.rows.length})`));
+      group.rows.forEach((row) => {
+        const card = libraryCard({ title: row.name, iconKey: ROW_ICON[row.kind] || "flow",
+          active: rowIsOpen(row), line: rowLine(row), dot: rowDot(row),
+          tone: row.state === "running" ? "running" : "" });
+        card.title = [row.line, row.note].filter(Boolean).join("\n\n");
+        card.addEventListener("click", () => openRow(row));
         body.appendChild(card);
       });
     });
-    if (!any) body.appendChild(make("p", "hint", term ? "No Flow matches." : "No Flows yet. New starts a blank board."));
+  }
+
+  async function loadEverything() {
+    try {
+      const data = await requestRaw("/api/forge/everything");
+      state.everything = data.rows || [];
+      state.sources = data.sources || {};
+      state.everythingLoaded = true;
+    } catch (error) {
+      toast(`Could not read everything that runs: ${error.message}`);
+    }
+    if (state.library !== "sources") renderLibrary();
   }
 
   function sourceLine(item) {
@@ -892,81 +1218,16 @@
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
-  function renderLoopsTab(body, term) {
-    if (!state.loops.length) body.appendChild(make("p", "hint", "Reading the schedule"));
-    const rows = state.loops.filter((r) => matches(term, r.name, r.description, r.kind));
-    rows.forEach((row) => {
-      const last = row.last_run ? `last ${stamp(row.last_run)}${row.last_status ? ` (${row.last_status})` : ""}` : "never run";
-      // A paused loop that a Flow runs as a card is not idle: the Flow's
-      // schedule is its schedule now, and the line says so.
-      const hosts = flowsRunning(row.id);
-      const when = hosts.length && !row.enabled
-        ? `Run by ${hosts.map((flow) => flow.name).join(", ")}`
-        : `${cadenceText(row)}${row.enabled ? "" : ", paused"}`;
-      const card = libraryCard({
-        title: row.name, iconKey: "loop", active: row.id === state.selectedLoop,
-        line: `${when}, ${last}`, dot: loopDot(row), draggable: true,
-      });
-      card.addEventListener("click", () => openLoop(row.id));
-      card.addEventListener("dragstart", (event) => {
-        state.libraryDrag = { loop: copy(row) };
-        event.dataTransfer.effectAllowed = "copy";
-        event.dataTransfer.setData("text/plain", row.name || row.id);
-      });
-      body.appendChild(card);
-    });
-    if (state.loops.length && !rows.length) body.appendChild(make("p", "hint", "No loop matches."));
-    body.appendChild(macSection());
-  }
-
-  // This Mac: every launchd job on the machine, read-only. launchd runs
-  // these, not Vira (server/launchdjobs.py reads the three job folders).
-  function macSection() {
-    const details = make("details", "forge-mac");
-    details.open = Boolean(state.macOpen);
-    details.appendChild(make("summary", "", "This Mac: launchd jobs, read-only"));
-    const box = make("div");
-    details.appendChild(box);
-    const paint = () => {
-      box.replaceChildren();
-      const mac = state.mac;
-      if (!mac) { box.appendChild(make("p", "hint", "Reading launchd's job folders")); return; }
-      if (mac.status === "not_mac") { box.appendChild(make("p", "hint", mac.note || "Not a Mac.")); return; }
-      box.appendChild(make("p", "hint", `launchd runs these, not Vira. ~/Library/LaunchAgents, /Library/LaunchAgents and /Library/LaunchDaemons${mac.checked ? `, read ${stamp(mac.checked)}` : ""}.`));
-      (mac.groups || []).forEach((group) => {
-        if (group.error) box.appendChild(make("p", "hint", `${group.dir}: ${group.error}`));
-        (group.jobs || []).forEach((job) => {
-          const card = libraryCard({ title: job.label, line: `${job.state || ""}${(job.when || []).length ? ", " + job.when.join("; ") : ""}`,
-            iconKey: "command", tone: job.tone === "running" ? "running" : "" });
-          card.addEventListener("click", () => {
-            const open = card.nextElementSibling?.classList.contains("forge-path");
-            if (open) card.nextElementSibling.remove();
-            else card.after(make("code", "forge-path", `${job.program || "(no program)"}\n${job.path}${job.error ? `\n${job.error}` : ""}`));
-          });
-          box.appendChild(card);
-        });
-      });
-    };
-    details.addEventListener("toggle", async () => {
-      state.macOpen = details.open;
-      if (!details.open || state.mac) return;
-      paint();
-      try { state.mac = await request("/api/routines/background"); }
-      catch (error) { state.mac = { status: "error", groups: [], note: error.message }; }
-      paint();
-    });
-    if (details.open) paint();
-    return details;
-  }
-
+  // The routine rows (a routine board's record, and what its panel
+  // edits), refreshed with the list.
   async function loadLoops() {
     try {
-      const data = await request("/api/routines");
+      const data = await requestRaw("/api/routines");
       state.loops = data.routines || [];
     } catch (error) {
-      toast(`Could not read the schedule: ${error.message}`);
+      toast(`Could not read Vira's routines: ${error.message}`);
     }
-    if (state.library === "loops") renderLibrary();
+    loadEverything();
   }
 
   function switchLibrary(tab) {
@@ -975,7 +1236,7 @@
     state.findRows = [];
     const search = q("#forge-library-search");
     if (search) search.value = "";
-    if (tab === "loops") loadLoops();
+    if (tab !== "sources") loadEverything();
     renderLibrary();
   }
 
@@ -1030,11 +1291,13 @@
     if (type === "approval") base.prompt = "Show me the result so far and ask whether to go on.";
     if (type === "output") { base.output = { destination: "record" }; base.prompt = ""; }
     if (type === "trigger") Object.assign(base, { daily_at: "07:30", every_hours: null, enabled: true, notify: false });
+    if (type === "program") base.program = { command_line: "", cwd: "", env: {}, output_log: "", watch_logs: [] };
     return base;
   }
 
   function addCard(type, text) {
     if (!editable()) return;
+    if (!structural()) return fixedShape();
     if (type === "input" && inputCard()) {
       const existing = inputCard();
       if (text && !existing.prompt) { existing.prompt = text; touch(existing); }
@@ -1072,47 +1335,9 @@
     return node;
   }
 
-  // The Flows that run a loop as a card (the server: a native stage naming it).
-  function flowsRunning(rid) {
-    return (state.flows || []).filter((flow) => (flow.nodes || []).some((node) =>
-      node.type === "native" && (node.native?.routine_id || node.routine_id) === rid));
-  }
-
-  function loopOf(node) {
-    const rid = node.native?.routine_id || node.routine_id || "";
-    return (state.loops || []).find((row) => row.id === rid) || null;
-  }
-
-  // A loop from the Loops tab becomes a Loop card: the Flow runs that loop
-  // and waits for it, and the card after gets what it wrote. Wired from the
-  // selected running card, as addCard does.
-  function addLoop(row, point) {
-    if (!editable() || !row?.id) return;
-    const selected = currentNode();
-    const p = point || (selected
-      ? { x: selected.x + CARD_W + 90, y: selected.y }
-      : (() => {
-        const rect = q("#forge-viewport").getBoundingClientRect();
-        return boardPoint(rect.left + rect.width / 2 - CARD_W / 2, rect.top + rect.height / 2 - 60);
-      })());
-    const spot = freeSpot({ x: p.x - 42, y: p.y - 42 });
-    const node = { id: cardId(row.name, "native"), type: "native", name: row.name || "Loop",
-      native: { routine_id: row.id }, prompt: "", x: spot.x, y: spot.y, z: ++state.z };
-    state.current.nodes.push(node);
-    if (selected && EXEC.has(selected.type) && selected.type !== "output") {
-      state.current.edges.push({ id: id("wire"), from: selected.id, to: node.id, instructions: "" });
-      if (hasExecutableCycle()) state.current.edges.pop();
-    }
-    state.selectedNode = node.id;
-    state.selectedEdge = null;
-    setDirty();
-    renderBoard();
-    renderInspector();
-    return node;
-  }
-
   function addSource(item, point) {
     if (!editable()) return;
+    if (!structural()) return fixedShape();
     const isFind = String(item.id || "").startsWith("find:") || item.type === "context";
     const p = point || (() => {
       const rect = q("#forge-viewport").getBoundingClientRect();
@@ -1146,6 +1371,7 @@
   }
 
   function addEnvironment(env, point) {
+    if (!structural()) return fixedShape();
     if (!editable()) return;
     const selected = currentNode();
     const p = point || (selected ? { x: selected.x - CARD_W - 90, y: selected.y + 120 } : (() => {
@@ -1243,6 +1469,9 @@
     } else if (node.type === "env") {
       tag(`${(node.items || []).length} source${(node.items || []).length === 1 ? "" : "s"}`);
       text = (node.items || []).map((i) => i.name).join(", ");
+    } else if (node.type === "agent" && boardKind() === "task") {
+      tag("a Claude task file");
+      text = node.prompt || "";
     } else if (node.type === "agent") {
       tag(modelLabel(node));
       const perm = permOf(node);
@@ -1261,13 +1490,23 @@
       tag(DESTINATION_LABEL[node.output?.destination] || node.output?.destination || "a Vira record");
       text = node.prompt || "";
     } else if (node.type === "trigger") {
-      tag(cadenceText(node));
-      tag(node.enabled === false ? "paused" : "on", node.enabled === false ? "is-off" : "");
+      tag(node.when_text || cadenceText(node));
+      if (!node.when_text || boardKind() === "launchd") {
+        tag(node.enabled === false ? "paused" : "on", node.enabled === false ? "is-off" : "");
+      }
       if (node.notify) tag("tells me");
+      if (node.cwd) text = `in ${shortPath(node.cwd)}`;
+    } else if (node.type === "program") {
+      tag("a program");
+      path = node.program?.command_line || (node.program?.command || []).join(" ")
+        || "No command yet. Click to write one.";
+      if (node.program?.cwd) text = `in ${shortPath(node.program.cwd)}`;
+    } else if (node.type === "vira") {
+      tag("inside Vira");
+      text = node.description || "";
     } else if (node.type === "native") {
-      const loop = loopOf(node);
-      if (loop) tag(loop.kind === "command" ? "a program" : "a session");
-      text = `Runs the loop ${loop?.name || node.native?.routine_id || node.routine_id || ""} and waits for it. The card after gets its result.`;
+      tag("older card");
+      text = `Runs the routine ${node.native?.routine_id || node.routine_id || ""} and waits for it. The card after gets its result.`;
     } else {
       path = node.source_ref || "";
       text = node.description || "";
@@ -1326,7 +1565,7 @@
     const kindLabel = SOURCE.has(node.type) ? (SOURCE_LABEL[node.source] || meta.name) : meta.name;
     title.append(make("span", "forge-node-type", kindLabel), make("strong", "forge-node-name", node.name || meta.name));
     head.appendChild(title);
-    if (editable()) {
+    if (structural()) {
       const menu = make("button", "forge-node-menu", "×");
       menu.type = "button";
       menu.title = "Remove this card";
@@ -1457,20 +1696,15 @@
     if (node) return setInspector(KIND[node.type]?.name || "Card", node.name || "", nodeEditor(node));
     const edge = state.current?.edges.find((item) => item.id === state.selectedEdge);
     if (edge) return setInspector("Wire", `${nameOf(edge.from)} to ${nameOf(edge.to)}`, edgeEditor(edge));
-    if (state.selectedLoop) {
-      const row = state.loops.find((item) => item.id === state.selectedLoop);
-      if (row) return setInspector("Standing loop", row.name, loopDetail(row));
-    }
     q("#forge-inspector-kind").textContent = "Selection";
     q("#forge-inspector-title").textContent = "Nothing selected";
-    q("#forge-inspector-body").replaceChildren(make("p", "hint", "Click a card, a wire, or a loop. It opens here."));
+    q("#forge-inspector-body").replaceChildren(make("p", "hint", "Click a card or a wire. It opens here."));
     q("#forge-inspector").classList.remove("is-open");
   }
 
   function openNode(nodeId) {
     state.selectedNode = nodeId;
     state.selectedEdge = null;
-    state.selectedLoop = null;
     qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.toggle("is-selected", item.dataset.nodeId === nodeId));
     renderWires();
     renderInspector();
@@ -1479,7 +1713,6 @@
   function openEdge(edge) {
     state.selectedEdge = edge.id;
     state.selectedNode = null;
-    state.selectedLoop = null;
     qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-selected"));
     renderWires();
     renderInspector();
@@ -1488,11 +1721,9 @@
   function closeInspector() {
     state.selectedNode = null;
     state.selectedEdge = null;
-    state.selectedLoop = null;
     qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-selected"));
     renderWires();
     renderInspector();
-    if (state.library === "loops") renderLibrary();
   }
 
   // The pills under an instruction box: everything the card can place in
@@ -1812,9 +2043,40 @@
     };
     paint();
     editor.appendChild(sentence);
-    editor.appendChild(make("p", "hint", node.routine_id
-      ? "This schedule is a standing loop; Save applies a change. Pause or Run now from the Loops tab."
-      : "Save the Flow to put it on the schedule. It then appears in Loops."));
+    if (boardKind() === "routine") {
+      editor.appendChild(make("p", "hint", "Save applies it to this routine. Run now and Pause are below."));
+      return editor;
+    }
+    editor.appendChild(field("Folder it runs in (optional)", folderInput(node.cwd || "", (value) => {
+      node.cwd = value; touch(node);
+    })));
+    const wired = (state.current.edges || []).filter((edge) => edge.from === node.id).map((edge) => nameOf(edge.to));
+    editor.appendChild(make("p", "hint", wired.length
+      ? `It runs ${wired.join(", ")} and what comes after ${wired.length === 1 ? "it" : "them"}. Another Schedule on this board runs its own chain.`
+      : "Wire it to the card it should start. It runs that card and what comes after it."));
+    if (node.routine_id && state.current.id) {
+      const run = make("button", "fchip sm", "Run now");
+      run.type = "button";
+      run.title = "Run this Schedule's chain now, the way its time would";
+      run.addEventListener("click", async () => {
+        if (state.dirty) return toast("Save the board first, so the run is the board you see.");
+        run.disabled = true;
+        try {
+          const result = await send(`/api/flows/${encodeURIComponent(state.current.id)}/run`, "POST",
+            { input: "", trigger: node.routine_id });
+          toast(`Started ${result.id || "a run"}`);
+          loadForgeRuns();
+          loadEverything();
+        } catch (error) {
+          toast(`Run refused: ${error.message}`);
+        } finally {
+          run.disabled = false;
+        }
+      });
+      editor.appendChild(run);
+    } else {
+      editor.appendChild(make("p", "hint", "Save the Flow to put it on the schedule."));
+    }
     return editor;
   }
 
@@ -2088,21 +2350,342 @@
     const editor = make("div", "forge-editor");
     editor.appendChild(nameField(node));
     const rid = node.native?.routine_id || node.routine_id || "";
-    const loop = loopOf(node);
-    editor.appendChild(make("code", "forge-path", loop
-      ? `${loop.name}: ${loop.kind === "command" ? "a program" : loop.kind}, ${cadenceText(loop).toLowerCase()}${loop.enabled ? "" : ", paused"}`
-      : `Loop ${rid}`));
-    editor.appendChild(make("p", "hint", loop?.kind === "command"
-      ? "Runs the loop's program and waits for it to finish. The card after gets the run in words: the outcome, the counts, the errors and the last lines it wrote. If the program is already going, this card waits for that run."
-      : "Runs the loop as a step of this Flow and waits for it. The card after gets what it wrote."));
-    const open = make("button", "fchip sm", "Open in Loops");
-    open.type = "button";
-    open.addEventListener("click", () => { openLibrary(); switchLibrary("loops"); openLoop(rid); });
-    editor.appendChild(open);
+    editor.appendChild(make("code", "forge-path", `Routine ${rid}`));
+    editor.appendChild(make("p", "hint", "An older card: it runs a routine row and waits for it. Moving the loops into Vira (the landing step for this build) turns it into a Program card that keeps the loop's history."));
+    return editor;
+  }
+
+  function envText(env) {
+    if (typeof env === "string") return env;
+    return Object.entries(env || {}).map(([key, value]) => `${key}=${value}`).join("\n");
+  }
+
+  function folderInput(value, onChange) {
+    const row = make("div", "forge-folder");
+    const input = textInput(value || "", onChange, { placeholder: "~/folder" });
+    row.appendChild(input);
+    const pick = make("button", "fchip sm", "Pick");
+    pick.type = "button";
+    pick.title = atTheKeyboard() ? "Pick a folder in a window" : "Type the folder's path";
+    pick.addEventListener("click", async () => {
+      const chosen = await pickOnThisMac("Pick the folder it runs in", "folder", input.value);
+      if (chosen) { input.value = chosen; onChange(chosen); }
+    });
+    row.appendChild(pick);
+    return row;
+  }
+
+  // A run history and its logs, over any run key: a Program card's, or a
+  // command routine's (their history is the same store, routinerun).
+  function runsBlock(runKey) {
+    const box = make("div", "forge-runs-block");
+    box.appendChild(make("span", "forge-card-kind", "Runs"));
+    const list = make("div", "forge-runs");
+    const foot = make("p", "forge-run-foot", "");
+    box.append(list, foot);
+    const open = new Set();
+    let rows = [];
+    let total = 0;
+    const base = `/api/forge/programs/${encodeURIComponent(runKey)}/runs`;
+    function paint() {
+      list.replaceChildren();
+      rows.forEach((r) => {
+        const rowEl = make("div", `forge-run run-${r.status}`);
+        const top = make("div", "forge-run-top");
+        const end = LIVE_RUN.has(r.status) ? "still running" : stamp(r.finished);
+        const span = took(r.started, r.finished);
+        top.append(make("span", `forge-run-chip is-${r.status}`, r.status),
+          make("span", "", `${stamp(r.started || r.queued)} to ${end}${span ? ` (${span})` : ""}`),
+          make("span", "forge-run-dim", r.trigger === "schedule" ? "schedule" : "by hand"),
+          make("span", "forge-run-dim", `exit ${r.exit_code == null ? "-" : r.exit_code}`));
+        const bottom = make("div", "forge-run-bottom");
+        const c = r.counts || {};
+        bottom.appendChild(make("span", "", Object.keys(c).length ? Object.keys(c).map((k) => `${c[k]} ${k}`).join(", ") : "-"));
+        bottom.appendChild(make("span", r.error_count ? "has-errors" : "forge-run-dim",
+          `${r.error_count || 0} error line${r.error_count === 1 ? "" : "s"}`));
+        const log = make("button", "fchip sm", open.has(r.id) ? "Hide log" : "Log");
+        log.type = "button";
+        log.addEventListener("click", () => { if (open.has(r.id)) open.delete(r.id); else open.add(r.id); paint(); });
+        bottom.appendChild(log);
+        rowEl.append(top, bottom);
+        if (open.has(r.id)) {
+          const cell = make("div", "forge-run-logbox", "");
+          cell.appendChild(make("p", "hint", "Loading this run's log"));
+          rowEl.appendChild(cell);
+          request(`${base}/${encodeURIComponent(r.id)}/log`).then((res) => {
+            cell.replaceChildren();
+            if (res.run?.note) cell.appendChild(make("p", "hint", res.run.note));
+            (res.files || []).forEach((f) => {
+              cell.appendChild(make("strong", "", `${f.source ? `${f.source} (this run's new lines)` : "Output"}${f.cut ? ", last 1 MB" : ""}`));
+              cell.appendChild(make("pre", "", f.text || "(empty)"));
+            });
+            if (!(res.files || []).length) cell.appendChild(make("p", "hint", "This run wrote no log."));
+          }).catch((e) => cell.replaceChildren(make("p", "hint", `Could not load the log: ${e.message}`)));
+        }
+        list.appendChild(rowEl);
+      });
+      if (!rows.length) list.appendChild(make("p", "hint", "No runs yet."));
+      foot.textContent = `${rows.length} of ${total} runs shown.`;
+    }
+    async function load(offset = 0) {
+      try {
+        const page = await requestRaw(`${base}?offset=${offset}&limit=20`);
+        rows = offset ? rows.concat(page.runs || []) : (page.runs || []);
+        total = page.total || 0;
+        paint();
+        if (rows.length < total && !box.querySelector(".forge-run-more")) {
+          const more = make("button", "fchip sm forge-run-more", "Show older runs");
+          more.type = "button";
+          more.addEventListener("click", () => { more.remove(); load(rows.length); });
+          box.appendChild(more);
+        }
+        if (rows.some((r) => LIVE_RUN.has(r.status)) && box.isConnected) setTimeout(() => box.isConnected && load(), RUN_POLL_MS);
+      } catch (e) {
+        list.replaceChildren(make("p", "hint", `Could not read its runs: ${e.message}`));
+      }
+    }
+    setTimeout(() => load(), 0);
+    return box;
+  }
+
+  function programEditor(node) {
+    const prog = node.program || (node.program = { command_line: "", cwd: "", env: {}, output_log: "", watch_logs: [] });
+    const editor = make("div", "forge-editor");
+    editor.appendChild(nameField(node));
+    editor.appendChild(field("Command", textArea(prog.command_line || "", (value) => {
+      prog.command_line = value; delete prog.command; touch(node);
+    }, 2)));
+    editor.appendChild(field("Folder it runs in", folderInput(prog.cwd, (value) => { prog.cwd = value; touch(node); })));
+    editor.appendChild(field("Environment, one NAME=value per line", textArea(envText(prog.env), (value) => {
+      prog.env = value; touch(node);
+    }, 3)));
+    editor.appendChild(field("Also append its output to (optional)", textInput(prog.output_log || "", (value) => {
+      prog.output_log = value; touch(node);
+    })));
+    editor.appendChild(field("Log files it writes itself, one per line (optional)", textArea(
+      Array.isArray(prog.watch_logs) ? prog.watch_logs.join("\n") : String(prog.watch_logs || ""),
+      (value) => { prog.watch_logs = value; touch(node); }, 2)));
+    editor.appendChild(make("p", "hint", "It runs as its own process, so closing Vira does not stop it, and one run of it never overlaps another. The card after gets the run in words: the outcome, the counts from its last \"done:\" line, the errors and the last 40 lines it wrote."));
+    if (prog.run_key && boardKind() === "flow") editor.appendChild(runsBlock(prog.run_key));
+    return editor;
+  }
+
+  /* ---------- panels for a row that is not a Flow ---------------------- */
+
+  function noteLine(text) {
+    return text ? make("p", "forge-note", text) : null;
+  }
+
+  // A routine Vira runs for itself: the Schedule card edits its cadence,
+  // the work card its name, description and prompt; below them, its runs,
+  // Run now, Pause and Under the hood (loopDetail).
+  function routinePanel(node) {
+    const record = state.current.record;
+    const editor = make("div", "forge-editor");
+    if (node.type === "trigger") {
+      editor.appendChild(scheduleEditor(node));
+    } else {
+      editor.appendChild(nameField(node));
+      editor.appendChild(field("What it is for", textArea(node.description || "", (value) => {
+        node.description = value; touch(node);
+      }, 3)));
+      if (node.type === "agent") {
+        editor.appendChild(field("Its prompt", textArea(node.prompt || "", (value) => { node.prompt = value; touch(node); }, 8), true));
+        editor.appendChild(modelField(node, editor));
+      } else if (node.type === "program") {
+        editor.appendChild(make("code", "forge-path", node.program.command_line || ""));
+        editor.appendChild(make("p", "hint", "An older command loop. Moving the loops into Vira (the landing step for this build) makes it a Flow with a Program card that keeps this history."));
+      } else {
+        editor.appendChild(make("p", "hint", record.kind === "muse"
+          ? "Vira writes this prompt fresh at each run from the backlog and the radar. Under the hood shows the code that writes it."
+          : "This runs code inside Vira, or a prompt Vira writes at each run. Under the hood shows the code, and edits it."));
+      }
+    }
+    const note = noteLine(state.current.note);
+    if (note) editor.appendChild(note);
+    editor.appendChild(loopDetail(record));
+    return editor;
+  }
+
+  function jobActions(job) {
+    const box = make("div", "forge-editor-actions");
+    const add = (label, action, title) => {
+      const button = make("button", "fchip sm", label);
+      button.type = "button";
+      if (title) button.title = title;
+      button.addEventListener("click", () => launchdAct(action, button));
+      box.appendChild(button);
+    };
+    if (job.archived) {
+      add("Restore", "restore", `Put it back in ${job.origin} and load it`);
+      return box;
+    }
+    add("Run now", "run", "Start it now (launchctl kickstart)");
+    const off = ["disabled", "not loaded"].includes(job.state);
+    add(off ? "Resume" : "Pause", off ? "resume" : "pause",
+      off ? "Allow it again and load it" : "Tell launchd not to start it, and unload it");
+    add("Move into Vira", "adopt", "Make it a Flow (Schedule and Program cards) and archive the job file");
+    return box;
+  }
+
+  async function launchdAct(action, button) {
+    const job = state.current.job;
+    if (action === "adopt" && !await forgeDialog({
+      title: `Move ${job.label} into Vira?`,
+      message: "It becomes a Flow with a Schedule card for each time it runs and a Program card with its command, folder, environment and log. The job file then moves to ~/Library/LaunchAgents-archive, so launchd never runs it a second time. Restore from Archived puts it back.",
+      confirm: "Move it",
+    })) return;
+    if (action === "pause" && state.current.note && !await forgeDialog({
+      title: `Pause ${job.label}?`, message: state.current.note, confirm: "Pause it",
+    })) return;
+    button.disabled = true;
+    try {
+      const result = await send(`/api/forge/launchd/${action}`, "POST", { path: job.path });
+      if (action === "adopt") {
+        await refreshFlows();
+        await loadEverything();
+        toast(`Moved into Vira as the Flow "${result.flow.name}"`);
+        state.selectedRow = `flow:${result.flow.id}`;
+        return selectFlow(result.flow.id);
+      }
+      toast({ run: "Started", pause: "Paused", resume: "Resumed", restore: "Restored" }[action] || "Done");
+      const rowId = action === "restore" ? `launchd:${result.path}` : state.current.rowId;
+      await reopenRow(rowId);
+    } catch (error) {
+      toast(`launchd: ${error.message}`);
+      button.disabled = false;
+    }
+  }
+
+  // A launchd job: the Schedule card edits when it runs, the Program card
+  // what it runs; both save into its job file. The whole file is below,
+  // for any key the fields do not cover.
+  function launchdPanel(node) {
+    const job = state.current.job;
+    const fields = state.current.fields;
+    const editor = make("div", "forge-editor");
+    const mark = () => { setDirty(); paintNode(node); };
+    editor.appendChild(make("p", "forge-loop-state", job.archived ? `Archived. It came from ${job.origin}.` : `launchd: ${job.state}.`));
+    if (node.type === "trigger") {
+      editor.appendChild(make("p", "forge-sentence", (job.when || []).join("; ") || "Only when something starts it."));
+      if (fields.calendar_simple) {
+        editor.appendChild(field("Every day at (times, comma separated)", textInput((fields.daily_at || []).join(", "), (value) => {
+          fields.daily_at = value.split(",").map((t) => t.trim()).filter(Boolean); mark();
+        }, { placeholder: "20:00, 08:30" })));
+      } else {
+        editor.appendChild(make("p", "hint", "Its calendar has weekdays or dates: edit those in the job file below."));
+      }
+      editor.appendChild(field("Every N minutes (empty for none)", textInput(fields.interval_minutes == null ? "" : String(fields.interval_minutes), (value) => {
+        fields.interval_minutes = value.trim() ? Math.max(1, Number(value) || 1) : null; mark();
+      }, { type: "number", min: "1" })));
+      const flags = make("p", "forge-sentence");
+      flags.appendChild(checkbox("at login", fields.run_at_load, (value) => { fields.run_at_load = value; mark(); }));
+      flags.appendChild(checkbox("kept running", fields.keep_alive, (value) => { fields.keep_alive = value; mark(); }));
+      editor.appendChild(flags);
+    } else {
+      editor.appendChild(field("Command", textArea(fields.command_line, (value) => {
+        fields.command_line = value; node.program.command_line = value; mark();
+      }, 2)));
+      editor.appendChild(field("Folder it runs in", folderInput(fields.cwd, (value) => {
+        fields.cwd = value; node.program.cwd = value; mark();
+      })));
+      editor.appendChild(field("Environment, one NAME=value per line", textArea(fields.env, (value) => { fields.env = value; mark(); }, 3)));
+      editor.appendChild(field("Output goes to", textInput(fields.stdout, (value) => { fields.stdout = value; mark(); })));
+      editor.appendChild(field("Errors go to", textInput(fields.stderr, (value) => { fields.stderr = value; mark(); })));
+    }
+    const note = noteLine(state.current.note);
+    if (note) editor.appendChild(note);
+    editor.appendChild(make("p", "hint", job.archived ? "Restore it to change it." : "Save writes the job file (the previous one is kept in ~/Library/LaunchAgents-archive/backups) and reloads the job if it was loaded."));
+    editor.appendChild(jobActions(job));
+    const file = make("details", "forge-jobfile");
+    file.appendChild(make("summary", "", `The job file: ${job.path}`));
+    const area = textArea(job.xml, () => {}, 16);
+    area.classList.add("forge-code");
+    file.appendChild(area);
+    if (!job.archived) {
+      const save = make("button", "fchip sm", "Save the file");
+      save.type = "button";
+      save.addEventListener("click", async () => {
+        save.disabled = true;
+        try {
+          await send("/api/forge/launchd", "PUT", { path: job.path, xml: area.value });
+          toast("Saved the job file");
+          await reopenRow(state.current.rowId);
+        } catch (error) {
+          toast(`Not saved: ${error.message}`);
+          save.disabled = false;
+        }
+      });
+      file.appendChild(save);
+    }
+    editor.appendChild(file);
+    return editor;
+  }
+
+  // A Claude task file: the agent card is the file itself; the Schedule
+  // card gives it a Vira schedule, which makes it a Flow.
+  function taskPanel(node) {
+    const task = state.current.task;
+    const editor = make("div", "forge-editor");
+    editor.appendChild(make("code", "forge-path", task.path));
+    if (node.type === "trigger") {
+      editor.appendChild(make("p", "forge-sentence", "The Claude app keeps this task's schedule in its own storage, and Vira cannot read it."));
+      if (task.archived) {
+        editor.appendChild(make("p", "hint", "Archived: the Claude app cannot run it. Restore it first."));
+      } else {
+        const adopt = state.current.adopt;
+        const sentence = make("p", "forge-sentence");
+        const paint = () => {
+          sentence.replaceChildren("Run it from Vira ");
+          sentence.appendChild(selectControl([["daily", "every day at"], ["hours", "every"]], adopt.kind, (value) => { adopt.kind = value; paint(); }));
+          sentence.append(" ");
+          if (adopt.kind === "daily") sentence.appendChild(textInput(adopt.daily_at, (value) => { adopt.daily_at = value; }, { type: "time" }));
+          else {
+            sentence.appendChild(textInput(String(adopt.every_hours), (value) => { adopt.every_hours = Number(value) || 24; }, { type: "number", min: "0.25", step: "0.25" }));
+            sentence.append(" hours");
+          }
+          sentence.append(".");
+        };
+        paint();
+        editor.appendChild(sentence);
+        editor.appendChild(field("Folder it runs in (optional)", folderInput(adopt.cwd, (value) => { adopt.cwd = value; })));
+        const go = make("button", "btn primary sm", "Schedule it in Vira");
+        go.type = "button";
+        go.addEventListener("click", async () => {
+          if (!await forgeDialog({
+            title: `Run ${task.title} from Vira?`,
+            message: "It becomes a Flow: this Schedule, and an Agent card whose box is the task's prompt, allowed to edit files. The task folder then moves to ~/.claude/scheduled-tasks-archive, so the Claude app cannot run it a second time. Restore from Archived puts it back.",
+            confirm: "Make it a Flow",
+          })) return;
+          go.disabled = true;
+          try {
+            const body = adopt.kind === "daily" ? { daily_at: adopt.daily_at } : { every_hours: adopt.every_hours };
+            const result = await send(`/api/forge/tasks/${encodeURIComponent(task.name)}/adopt`, "POST", { ...body, cwd: adopt.cwd || null });
+            await refreshFlows();
+            await loadEverything();
+            toast(`Now the Flow "${result.flow.name}"`);
+            state.selectedRow = `flow:${result.flow.id}`;
+            selectFlow(result.flow.id);
+          } catch (error) {
+            toast(`Not moved: ${error.message}`);
+            go.disabled = false;
+          }
+        });
+        editor.appendChild(go);
+      }
+    } else {
+      const area = textArea(task.text, (value) => { state.current.taskText = value; setDirty(); }, 18);
+      area.classList.add("forge-code");
+      editor.appendChild(field("The task file", area, true));
+      editor.appendChild(make("p", "hint", "Save writes the file; the previous one is kept in ~/.claude/scheduled-tasks-archive/backups."));
+    }
     return editor;
   }
 
   function nodeEditor(node) {
+    if (boardKind() === "routine") return routinePanel(node);
+    if (boardKind() === "launchd") return launchdPanel(node);
+    if (boardKind() === "task") return taskPanel(node);
     if (!editable()) {
       const view = make("div", "forge-editor");
       view.appendChild(cardSummary(node));
@@ -2118,8 +2701,9 @@
           : node.type === "approval" ? approvalEditor(node)
             : node.type === "output" ? outputEditor(node)
               : node.type === "trigger" ? scheduleEditor(node)
-                : node.type === "native" ? nativeEditor(node)
-                  : sourceEditor(node);
+                : node.type === "program" ? programEditor(node)
+                  : node.type === "native" ? nativeEditor(node)
+                    : sourceEditor(node);
     const actions = make("div", "forge-editor-actions");
     const dup = make("button", "fchip sm", "Duplicate");
     dup.type = "button";
@@ -2170,16 +2754,6 @@
   };
   let loopTimer = null;
 
-  function openLoop(rid) {
-    state.selectedLoop = rid;
-    state.selectedNode = null;
-    state.selectedEdge = null;
-    qa(".forge-node", q("#forge-nodes")).forEach((item) => item.classList.remove("is-selected"));
-    renderWires();
-    renderLibrary();
-    renderInspector();
-  }
-
   function loopDetail(row) {
     const rid = row.id;
     const wrap = make("div", "forge-editor");
@@ -2190,13 +2764,6 @@
     const pause = make("button", "fchip sm", "");
     pause.type = "button";
     actions.append(runNow, pause);
-    if (editable()) {
-      const add = make("button", "fchip sm", "Add to this Flow");
-      add.type = "button";
-      add.title = "A Loop card that runs this loop and waits for it";
-      add.addEventListener("click", () => addLoop(row));
-      actions.appendChild(add);
-    }
     if (row.last_job) {
       const open = make("button", "fchip sm", "Open the last session");
       open.type = "button";
@@ -2454,6 +3021,7 @@
 
   function connect(from, to) {
     if (!state.current || !from || !to || from === to) return;
+    if (!structural()) return fixedShape();
     const fromNode = state.current.nodes.find((n) => n.id === from);
     const toNode = state.current.nodes.find((n) => n.id === to);
     if (!fromNode || !toNode) return;
@@ -2569,6 +3137,7 @@
   }
 
   function removeNode(nodeId) {
+    if (!structural()) return fixedShape();
     const node = state.current?.nodes.find((item) => item.id === nodeId);
     if (!node || !editable()) return;
     state.current.nodes = state.current.nodes.filter((item) => item.id !== nodeId);
@@ -2585,6 +3154,7 @@
   }
 
   function duplicateNode(node) {
+    if (!structural()) return fixedShape();
     if (!editable()) return;
     const clone = copy(node);
     clone.id = cardId(`${clone.name} copy`, clone.type);
@@ -2633,12 +3203,13 @@
 
   function showAddMenu(anchor) {
     if (!editable()) return toast("Pick a Flow or start a new one first.");
+    if (!structural()) return fixedShape();
     closeMenu();
     const menu = make("div", "forge-menu");
     const title = make("div", "forge-menu-title");
     title.append(make("span", "forge-kicker", "Add a card"), make("strong", "", currentNode() ? `after ${currentNode().name}` : "to the board"));
     menu.appendChild(title);
-    ["input", "agent", "judge", "logic", "approval", "output", "trigger"].forEach((type) => {
+    ["input", "agent", "program", "judge", "logic", "approval", "output", "trigger"].forEach((type) => {
       if (type === "input" && inputCard()) return;
       menuAction(menu, KIND[type].name, KIND[type].hint, () => addCard(type));
     });
@@ -2646,10 +3217,6 @@
       openLibrary();
       switchLibrary("sources");
       q("#forge-library-search")?.focus();
-    });
-    menuAction(menu, "A loop", "From the Loops tab: open one and add it, or drag it onto the board. The Flow runs it and waits for it.", () => {
-      openLibrary();
-      switchLibrary("loops");
     });
     const rect = anchor.getBoundingClientRect();
     placeMenu(menu, rect.left, rect.bottom + 6);
@@ -2774,7 +3341,6 @@
       if (!state.libraryDrag) return;
       const point = boardPoint(event.clientX, event.clientY);
       if (state.libraryDrag.environment) addEnvironment(state.libraryDrag.environment, point);
-      else if (state.libraryDrag.loop) addLoop(state.libraryDrag.loop, point);
       else addSource(state.libraryDrag, point);
       state.libraryDrag = null;
     });
@@ -2784,6 +3350,7 @@
 
   async function saveFlow(mode = null) {
     if (!editable()) return;
+    if (boardKind() !== "flow") return saveOther();
     let create = mode === "copy" || !state.current.id;
     if (!create && state.current.builtin) {
       const choice = await forgeDialog({
@@ -2819,10 +3386,102 @@
       localStorage.setItem("vira-forge-flow", saved.id);
       setDirty(false);
       renderAll();
-      if ((saved.triggers || []).length) loadLoops();
+      loadEverything();
       toast(create ? `Saved as "${saved.name}"` : "Saved");
     } catch (error) {
       toast(`Save refused: ${error.message}`);
+    }
+  }
+
+  // Save on a board that is not a Flow writes where the thing lives.
+  async function saveOther() {
+    const board = state.current;
+    const kind = boardKind();
+    try {
+      if (kind === "routine") {
+        const schedule = board.nodes.find((n) => n.id === "schedule");
+        const work = board.nodes.find((n) => n.id === "work");
+        const body = { name: work.name, description: work.description || "",
+          enabled: schedule.enabled !== false, notify: Boolean(schedule.notify) };
+        if (schedule.daily_at) body.daily_at = schedule.daily_at;
+        else if (schedule.every_hours) body.every_hours = Number(schedule.every_hours);
+        else return toast("A routine needs a time of day or an interval. Pause it to stop it.");
+        if (work.type === "agent") Object.assign(body, { prompt: work.prompt || "", model: work.model || "" });
+        await send(`/api/routines/${encodeURIComponent(board.record.id)}`, "PUT", body);
+      } else if (kind === "launchd") {
+        await send("/api/forge/launchd", "PUT", { path: board.job.path, fields: board.fields });
+      } else if (kind === "task") {
+        if (board.taskText == null) return toast("Nothing changed in the task file.");
+        await send(`/api/forge/tasks/${encodeURIComponent(board.task.name)}`, "PUT",
+          { text: board.taskText, archived: Boolean(board.task.archived) });
+      }
+      toast("Saved");
+      await reopenRow(board.rowId);
+    } catch (error) {
+      toast(`Save refused: ${error.message}`);
+    }
+  }
+
+  async function runOther() {
+    const board = state.current;
+    const kind = boardKind();
+    try {
+      if (kind === "routine") {
+        const res = await send(`/api/routines/${encodeURIComponent(board.record.id)}/run`, "POST", {});
+        toast(res.command_run ? `Run started (${res.command_run})` : res.job_id ? `Started session ${res.job_id}` : "Started");
+        if (res.job_id && typeof window.openSession === "function") window.openSession(res.job_id);
+      } else if (kind === "launchd") {
+        await send("/api/forge/launchd/run", "POST", { path: board.job.path });
+        toast("Started");
+      } else {
+        return toast("Vira does not run a Claude task file. Give it a schedule on its Schedule card to make it a Flow.");
+      }
+      setTimeout(() => reopenRow(board.rowId), 1500);
+    } catch (error) {
+      toast(`Run refused: ${error.message}`);
+    }
+  }
+
+  // Archive stops the thing and moves it to Archived; Restore brings it
+  // back as it was. One button, whatever runs it.
+  async function archiveCurrent() {
+    const board = state.current;
+    if (!board) return;
+    const kind = boardKind();
+    const restoring = Boolean(board.archived);
+    const what = {
+      flow: "Every Schedule on it stops, and it moves to Archived. Restore brings each Schedule back as it was.",
+      routine: "It stops running and moves to Archived. Restore turns it back on if it was on.",
+      launchd: "launchd unloads it, and its job file moves to ~/Library/LaunchAgents-archive, which launchd never reads. Restore puts it back and loads it.",
+      task: "Its folder moves to ~/.claude/scheduled-tasks-archive, which the Claude app does not read. Restore puts it back.",
+    }[kind];
+    if (!restoring && !await forgeDialog({
+      title: `Archive ${board.name}?`, message: [what, board.note].filter(Boolean).join("\n\n"), confirm: "Archive it",
+    })) return;
+    if (kind === "flow" && state.dirty && !await forgeDialog({
+      title: "Unsaved changes", message: "This board has unsaved changes. Archive it without them?", confirm: "Archive it",
+    })) return;
+    const verb = restoring ? "restore" : "archive";
+    try {
+      let rowId = board.rowId;
+      if (kind === "flow") {
+        await send(`/api/flows/${encodeURIComponent(board.id)}/${verb}`, "POST", {});
+        setDirty(false);
+        await refreshFlows();
+        await loadEverything();
+        renderAll();
+      } else if (kind === "routine") {
+        await send(`/api/routines/${encodeURIComponent(board.record.id)}/${verb}`, "POST", {});
+      } else if (kind === "launchd") {
+        const job = await send(`/api/forge/launchd/${verb}`, "POST", { path: board.job.path });
+        rowId = `launchd:${job.path}`;
+      } else if (kind === "task") {
+        await send(`/api/forge/tasks/${encodeURIComponent(board.task.name)}/${verb}`, "POST", {});
+      }
+      toast(restoring ? "Restored" : "Archived. It is under the Archived chip.");
+      if (kind !== "flow") await reopenRow(rowId);
+    } catch (error) {
+      toast(`Could not ${verb} it: ${error.message}`);
     }
   }
 
@@ -2852,6 +3511,7 @@
 
   async function runFlow() {
     if (!editable()) return;
+    if (boardKind() !== "flow") return runOther();
     const card = inputCard();
     if (!card) {
       toast("Add an Input card first: it holds what the Flow works on.");
@@ -2861,6 +3521,7 @@
     const input = String(card.prompt || "").trim();
     if (!input) { openNode(card.id); return toast("Write what the Flow should work on in the Input card."); }
     if (!state.current.id) return toast("Save the Flow first, then run it.");
+    if (state.current.archived) return toast("This Flow is archived. Restore it to run it.");
     // Typing the ask makes the board dirty. Your own Flow saves itself
     // before it runs; a shipped starter runs on the ask without being
     // changed (the ask rides the request).
@@ -3003,6 +3664,11 @@
     q("#forge-save").addEventListener("click", () => saveFlow());
     q("#forge-save-as").addEventListener("click", () => saveFlow("copy"));
     q("#forge-run").addEventListener("click", runFlow);
+    q("#forge-archive")?.addEventListener("click", archiveCurrent);
+    // what runs on the Mac changes on its own: refresh the list while it shows
+    setInterval(() => {
+      if (forgeShowing() && state.library !== "sources" && !document.hidden) loadEverything();
+    }, 20000);
     q("#forge-add").addEventListener("click", (event) => { event.stopPropagation(); showAddMenu(event.currentTarget); });
     q("#forge-arrange").addEventListener("click", arrange);
     q("#forge-zoom-in").addEventListener("click", () => zoomAt(state.zoom * 1.12));

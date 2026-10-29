@@ -1,9 +1,12 @@
-"""Command routines: a program Vira starts on a schedule, as its own process.
+"""Programs Vira runs, each as its own process: a Program card's command.
 
-A standing loop of kind "command" (server/routines.py) runs a program
-instead of an agent: a capture script, an export, anything with an argv.
-The Scheduler decides when; this module carries out each run and keeps
-its history.
+A Program card in a Flow (server/circuits.py, mode "program") runs a
+program instead of an agent: a capture script, an export, anything with
+an argv. Its run key is the id this module keys a lock and a history by;
+an older command routine (server/routines.py, kind "command") uses its
+routine id the same way, which is how a routine moved into a Program
+card keeps its history. A Schedule or the Flow decides when; this module
+carries out each run and keeps its history.
 
 Every run is a detached process (``python -m server.routinerun <run
 dir>``) in its own session, the job runner's rule (session._spawn_runner):

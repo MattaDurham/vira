@@ -199,11 +199,15 @@ class AdoptTests(Stores):
         self.assertEqual(stage["program"]["run_key"], loop["id"])
         self.assertEqual(stage["program"]["command"], ["/bin/bash", "/opt/notes.sh"])
         self.assertEqual(routinerun.runs(loop["id"])["runs"][0]["id"], earlier["id"])
-        # the loop's own hourly cadence is now a Schedule card wired to it
+        # the loop's own hourly cadence is now a Schedule card wired to it,
+        # created paused: on, it would also run the Output card after it
+        self.assertEqual(plan["flows"][0]["cards_after"], ["out"])
+        self.assertTrue(plan["flows"][0]["new_schedule_paused"])
         rows = [r for r in routines.list_routines() if r.get("circuit_id") == "notes"]
         hourly = next(r for r in rows if r.get("every_hours"))
         self.assertEqual(hourly["targets"], ["loop"])
         self.assertEqual(hourly["cwd"], str(self.root))
+        self.assertFalse(hourly["enabled"])
         nightly = next(r for r in rows if r.get("daily_at"))
         self.assertEqual(nightly["targets"], ["loop"])
 

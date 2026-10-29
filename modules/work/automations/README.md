@@ -24,16 +24,28 @@ project, the project's private one), settings files, skills, commands,
 plugins and the CLI's MCP servers. The right column is the only editor.
 `flows` compiles a board into a circuit; circuits are the multi-model
 pipelines that run as DAGs underneath, and the runner applies the
-environment at launch (`flows.kit_preview` is what the column shows). Routines are standing loops on a
-cadence, and a `command` routine runs a program in its own process on a
-schedule (the three TC-IL captures run this way); they are listed in the
-Forge's Loops tab, not as Flows, and a Flow runs one as a Loop card:
-it starts the loop, waits for it, and the wire carries the run in words
-(`routinerun.result_text`). `actions` enumerates the central
-library's skills and commands, which the Sources tab offers as cards;
-`launchdjobs` lists every launchd job on this Mac, read-only, folded under
-the Loops tab. `routinesrc` is "under the hood": what a standing loop
-actually is, and editing it.
+environment at launch (`flows.kit_preview` is what the column shows). A
+Program card runs a command in a folder as its own process (`routinerun`):
+the card waits, and the wire carries the run in words
+(`routinerun.result_text`); its run key is its lock and its history. A
+Schedule card runs the cards it is wired to and what comes after them, so
+two Schedules on one board run two chains (the three TC-IL captures are
+Flows built this way).
+
+The left column is one list of everything that runs on this Mac
+(`runlist`): Flows, the routines Vira runs for itself, every launchd job
+(`launchdjobs`), Claude's scheduled task files (`claudetasks`) and the
+sessions working right now, filtered by state (running, scheduled,
+paused, archived) and grouped by who runs it, state, cadence, folder or
+origin. Nothing in it is read-only: a routine's board edits its cadence,
+prompt and code (`routinesrc` is "under the hood"); a launchd job's board
+saves its job file, pauses, resumes, runs and archives it (root-owned
+jobs through macOS's administrator prompt); a task file's board edits the
+file. Archive stops anything and files it under Archived; Restore brings
+it back as it was. `adopt` moves a launchd job, a task file or an older
+command routine into Vira as a Flow and archives the original. `actions`
+enumerates the central library's skills and commands, which the Sources
+tab offers as cards.
 
 ## What lives here
 
@@ -57,7 +69,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `server/claudetasks.py` | Claude's scheduled task files on this Mac, for The Forge's one list. |
 | `server/flows.py` | The Forge's product model over Vira's existing orchestration engines. |
 | `server/launchdjobs.py` | Every launchd job defined on this Mac, and the controls to change one. |
-| `server/routinerun.py` | Command routines: a program Vira starts on a schedule, as its own process. |
+| `server/routinerun.py` | Programs Vira runs, each as its own process: a Program card's command. |
 | `server/routines.py` | Routines — Vira's standing agent loops. |
 | `server/routinesrc.py` | Under the hood — what a standing loop actually IS, and editing it. |
 | `server/runlist.py` | Everything that runs on this Mac, as one list: The Forge's left column. |
