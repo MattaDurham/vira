@@ -12,10 +12,13 @@ that those stores cannot represent: card placement, the source cards (a
 skill, a script, a file) wired into a stage, wire notes, and revision
 numbers.
 
-A card is one of eleven kinds. Six run: agent, judge, logic (a gate),
-approval (ask me), output, native (a loop from the Loops tab: the Flow
-runs it and waits for it, and the wire carries its result). Five do not: input
-(the ask, one per board), trigger (a schedule), tool and context
+A card is one of twelve kinds. Seven run: agent, judge, logic (a gate),
+approval (ask me), output, program (a command run in a folder as its own
+process: the card waits for it and the wire carries its result) and native
+(the older card over a routine row, kept for boards saved before Program
+cards). Five do not: input (the ask, one per board), trigger (a schedule:
+it runs the cards it is wired to and what is downstream of them, so two
+Schedules on one board run two chains), tool and context
 (sources: a thing with a name and a path that a card is told about when
 it is wired in) and env (a saved set of sources as one card). A wire means
 the finished text of the card before goes into the card after, delivered
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,7 +56,8 @@ MAX_SOURCE = 250_000
 SOURCE_SUFFIXES = {".md", ".txt", ".py", ".sh", ".zsh", ".js", ".ts",
                    ".json", ".yaml", ".yml", ".toml", ".html", ".css"}
 AGENT_NODE_TYPES = {"agent", "judge"}
-EXECUTABLE_NODE_TYPES = AGENT_NODE_TYPES | {"logic", "approval", "output", "native"}
+LOCAL_NODE_TYPES = {"logic", "approval", "output", "native", "program"}
+EXECUTABLE_NODE_TYPES = AGENT_NODE_TYPES | LOCAL_NODE_TYPES
 SOURCE_NODE_TYPES = {"tool", "context"}
 # input: the ask, one card per board (what Run sends). env: a saved set of
 # sources wired in as one card.
@@ -130,7 +135,7 @@ def _layout(stages):
 
 def _node(stage, placed):
     mode = circuits.norm_stage_mode(stage.get("mode"))
-    node_type = mode if mode in {"judge", "logic", "approval", "output", "native"} else "agent"
+    node_type = mode if mode == "judge" or mode in LOCAL_NODE_TYPES else "agent"
     data = {
         "id": stage["id"],
         "type": node_type,
@@ -151,6 +156,7 @@ def _node(stage, placed):
         "approval": dict(stage.get("approval") or {}),
         "output": dict(stage.get("output") or {}),
         "native": dict(stage.get("native") or {}),
+        "program": _program_view(stage.get("program")),
         "forge": dict(stage.get("forge") or {}),
         # The card's own environment row: the project's instruction file
         # (on by default), or a custom file, or none. Skills, settings and
@@ -233,8 +239,15 @@ def _graph_for_circuit(circuit, rows, saved):
             "every_hours": trigger.get("every_hours"),
             "enabled": bool(trigger.get("enabled")),
             "notify": bool(trigger.get("notify")),
+            "cwd": trigger.get("cwd") or "",
+            "last_run": trigger.get("last_run"), "last_status": trigger.get("last_status"),
         })
-        for entry_id in entry_ids:
+        # A Schedule runs the cards it is wired to (the row's targets,
+        # written at save) and what is downstream of them. A row saved
+        # before targets existed runs every entry card, as it always did.
+        targets = ([t for t in trigger["targets"] if t in stage_ids]
+                   if isinstance(trigger.get("targets"), list) else entry_ids)
+        for entry_id in targets:
             edges.append(_edge(trigger_id, entry_id,
                                edge_meta.get((trigger_id, entry_id))))
     return {
@@ -251,6 +264,7 @@ def _graph_for_circuit(circuit, rows, saved):
         "contexts": list(saved.get("contexts") or [])[:MAX_CONTEXTS],
         "triggers": triggers,
         "executable": True,
+        "archived": saved.get("archived") or None,
     }
 
 
@@ -391,7 +405,7 @@ def _compile(payload):
     for node in exec_nodes:
         sid = str(node["id"])
         node_type = node.get("type")
-        mode = node_type if node_type in {"judge", "logic", "approval", "output", "native"} \
+        mode = node_type if node_type in LOCAL_NODE_TYPES | {"judge"} \
             else circuits.norm_stage_mode(node.get("mode"), "manual")
         stage = {
             "id": sid,
@@ -404,7 +418,7 @@ def _compile(payload):
         # circuits.validate_stages is the one place that judges them.
         if node.get("provider"):
             stage["provider"] = str(node.get("provider")).strip()[:20]
-        if mode not in {"judge", "logic", "approval", "output", "native"}:
+        if mode != "judge" and mode not in LOCAL_NODE_TYPES:
             try:
                 timeout_s = int(node.get("timeout_s") or 0)
             except (TypeError, ValueError):
@@ -467,6 +481,8 @@ def _compile(payload):
             if not routine_id:
                 raise ValueError(f"part {sid}: native system has no routine source")
             stage["native"] = {"routine_id": routine_id}
+        elif mode == "program":
+            stage["program"] = _clean_program(node, sid)
         else:
             prompt = str(node.get("prompt") or "").strip()[:MAX_TEXT]
             if not prompt:
@@ -479,7 +495,7 @@ def _compile(payload):
             if node.get("extra"):
                 stage["extra"] = str(node.get("extra"))[:circuits.EXTRA_CAP]
         attachments = {"contexts": [], "tools": [], "wire_instructions": []}
-        if mode not in {"logic", "approval", "output", "native"}:
+        if mode not in LOCAL_NODE_TYPES:
             # The card's environment: what its session is told about, and
             # nothing else (owner's rule, 2026-10-28). Built from the cards
             # wired in plus the card's own instruction-file row.
@@ -575,6 +591,77 @@ def _env_add(env, kind, value):
         env[key].append(value)
 
 
+def _program_view(prog):
+    """A Program card's fields as the editor shows them: the argv, and the
+    same argv as one command line."""
+    prog = dict(prog or {})
+    argv = [str(a) for a in prog.get("command") or []]
+    return {"command": argv, "command_line": shlex.join(argv) if argv else "",
+            "cwd": str(prog.get("cwd") or ""), "env": dict(prog.get("env") or {}),
+            "output_log": str(prog.get("output_log") or ""),
+            "watch_logs": [str(x) for x in prog.get("watch_logs") or []],
+            "run_key": str(prog.get("run_key") or "")}
+
+
+def _abs_path(value, sid, what):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"part {sid}: {what} must be an absolute path: {text}")
+    return str(path)
+
+
+def _clean_program(node, sid):
+    """A Program card as the stage it compiles to. The editor sends the
+    command as one line (split the way a shell would) or as an argv; env
+    and watched logs come as a mapping and a list, or as text, one per
+    line. The run key is kept once set, so the card keeps its lock and its
+    history across edits; a new card gets a fresh one."""
+    raw = dict(node.get("program") or {})
+    line = raw.get("command_line")
+    if isinstance(line, str) and line.strip():
+        try:
+            argv = routines._split_command(line.strip())
+        except ValueError as e:
+            raise ValueError(f"part {sid}: the command line does not parse: {e}")
+    else:
+        argv = raw.get("command")
+        if isinstance(argv, str):
+            argv = routines._split_command(argv)
+    argv = [str(a) for a in argv or [] if str(a).strip()]
+    if not argv:
+        raise ValueError(f"part {sid}: a Program card needs a command to run")
+    env = raw.get("env") or {}
+    if isinstance(env, str):
+        pairs = {}
+        for row in env.splitlines():
+            row = row.strip()
+            if not row or row.startswith("#"):
+                continue
+            if "=" not in row:
+                raise ValueError(f"part {sid}: an environment line is NAME=value: {row}")
+            key, value = row.split("=", 1)
+            pairs[key.strip()] = value
+        env = pairs
+    if not isinstance(env, dict) or not all(
+            routines._ENV_KEY.fullmatch(str(k)) for k in env):
+        raise ValueError(f"part {sid}: environment names are letters, digits and _")
+    logs = raw.get("watch_logs") or []
+    if isinstance(logs, str):
+        logs = [row.strip() for row in logs.splitlines() if row.strip()]
+    run_key = str(raw.get("run_key") or "").strip()
+    if not circuits.RUN_KEY.fullmatch(run_key):
+        run_key = "prog_" + uuid.uuid4().hex[:10]
+    return {"command": argv,
+            "cwd": _abs_path(raw.get("cwd"), sid, "the folder"),
+            "env": {str(k): str(v) for k, v in env.items()},
+            "output_log": _abs_path(raw.get("output_log"), sid, "the output log"),
+            "watch_logs": [_abs_path(x, sid, "a watched log") for x in logs][:20],
+            "run_key": run_key}
+
+
 def save_flow(payload, save_as=False):
     """Save a circuit-backed Flow and its editor sidecar."""
     if ((payload.get("kind") == "native"
@@ -594,6 +681,7 @@ def save_flow(payload, save_as=False):
     placement = {}
     input_text = next((str(n.get("prompt") or "").strip() for n in payload.get("nodes") or []
                        if isinstance(n, dict) and n.get("type") == "input"), "")
+    stage_ids = {stage["id"] for stage in stages}
     for node in payload.get("nodes") or []:
         if not isinstance(node, dict) or node.get("type") != "trigger":
             continue
@@ -611,7 +699,15 @@ def save_flow(payload, save_as=False):
             "every_hours": every_hours if not daily_at else None,
             "enabled": bool(node.get("enabled", True)),
             "notify": bool(node.get("notify")),
+            # the cards this Schedule is wired to: a scheduled run covers
+            # them and what is downstream of them, nothing else
+            "targets": [str(e.get("to")) for e in payload.get("edges") or []
+                        if isinstance(e, dict) and str(e.get("from") or "") == str(node.get("id") or "")
+                        and str(e.get("to") or "") in stage_ids],
         }
+        if "cwd" in node:
+            # the folder a scheduled run works in; empty means Vira's own
+            routine_data["cwd"] = str(node.get("cwd") or "").strip()[:1000]
         routine_id = None if save_as else str(node.get("routine_id") or "") or None
         row = routines.save_routine(routine_data, rid=routine_id)
         placement[str(node.get("id") or "")] = f"routine:{row['id']}"
@@ -670,6 +766,9 @@ def save_flow(payload, save_as=False):
         "contexts": _clean_contexts(payload.get("contexts")),
         "updated": _now(),
     }
+    for key in ("archived", "archived_schedules"):
+        if previous.get(key) and not save_as:
+            graph[key] = previous[key]
 
     def mutate(state):
         state.setdefault("graphs", {})[rec["id"]] = graph
@@ -701,19 +800,71 @@ def input_text(flow_id):
 
 
 def run_flow(flow_id, input_text_given, cwd=None, notify=False, output="",
-             idea_id=None, provider=None, vault_destination=None, vault_context=None):
+             idea_id=None, provider=None, vault_destination=None, vault_context=None,
+             trigger=None):
     """Start a run. The ask is the Input card's text; the API may hand one
     in (the Queue's idea) and it wins. `provider` is kept for the API: a
     card that names no engine runs on the configured default. `output` is
     kept for the API's sake; the destination of a run is what its Output
-    cards say."""
+    cards say. `trigger` (a Schedule card's routine id) runs only that
+    Schedule's chain, in its folder, the way its cadence would."""
     ask = str(input_text_given or "").strip() or input_text(flow_id)
-    return circuits.start_run(flow_id, ask, cwd=cwd, notify=notify,
-                              source="forge", idea_id=idea_id,
+    entry = None
+    source = "forge"
+    if trigger:
+        row = routines.get_routine(str(trigger))
+        if not row or row.get("circuit_id") != flow_id:
+            raise KeyError(trigger)
+        entry = row.get("targets") if isinstance(row.get("targets"), list) else None
+        cwd = cwd or row.get("cwd") or None
+        ask = str(input_text_given or "").strip() or row.get("prompt") or ask
+        source = f"forge:{row['id']}"
+    return circuits.start_run(flow_id, ask or "Run", cwd=cwd, notify=notify,
+                              source=source, idea_id=idea_id,
                               flow_options={"output": output},
                               provider=provider,
                               vault_destination=vault_destination,
-                              vault_context=vault_context)
+                              vault_context=vault_context, entry=entry)
+
+
+def archive_flow(flow_id):
+    """Archive a Flow: every Schedule on it stops, and it leaves the list
+    for the Archived view. What each Schedule was (on or off) is kept, so
+    Restore puts it back exactly."""
+    if not circuits.get_circuit(flow_id):
+        raise KeyError(flow_id)
+    remembered = {}
+    for row in routines.list_routines():
+        if row.get("kind") == "circuit" and row.get("circuit_id") == flow_id:
+            remembered[row["id"]] = bool(row.get("enabled"))
+            if row.get("enabled"):
+                routines.save_routine({"enabled": False}, rid=row["id"])
+
+    def mutate(state):
+        graph = state.setdefault("graphs", {}).setdefault(flow_id, {})
+        if not graph.get("archived"):
+            graph["archived"] = _now()
+            graph["archived_schedules"] = remembered
+    jsonstore.mutate(STORE, mutate, _blank(), indent=1, ensure_ascii=False)
+    return get_flow(flow_id)
+
+
+def restore_flow(flow_id):
+    """Bring an archived Flow back: its Schedules return to what they were
+    when it was archived."""
+    if not circuits.get_circuit(flow_id):
+        raise KeyError(flow_id)
+    graph = _store()["graphs"].get(flow_id) or {}
+    for rid, enabled in (graph.get("archived_schedules") or {}).items():
+        if enabled and routines.get_routine(rid):
+            routines.save_routine({"enabled": True}, rid=rid)
+
+    def mutate(state):
+        graph = state.setdefault("graphs", {}).setdefault(flow_id, {})
+        graph.pop("archived", None)
+        graph.pop("archived_schedules", None)
+    jsonstore.mutate(STORE, mutate, _blank(), indent=1, ensure_ascii=False)
+    return get_flow(flow_id)
 
 
 def defaults():

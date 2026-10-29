@@ -170,10 +170,10 @@ def result_text(rec, lines=TAIL_LINES):
     when it ran, the counts, the errors, the runner's note, and the last
     lines the program wrote."""
     rec = rec or {}
-    name = rec.get("routine") or rec.get("routine_id") or "loop"
+    name = rec.get("routine") or rec.get("routine_id") or "program"
     status = rec.get("status") or "unknown"
     code = rec.get("exit_code")
-    head = f"LOOP {name}: run {rec.get('id') or '?'} {status}"
+    head = f"PROGRAM {name}: run {rec.get('id') or '?'} {status}"
     if code not in (None, 0):
         head += f" (exit {code})"
     parts = [head]

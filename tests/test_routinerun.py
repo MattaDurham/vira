@@ -87,7 +87,7 @@ class ResultTextTests(Base):
         with self.inline():
             rec = routinerun.start(self.routine(), trigger="schedule")
         text = routinerun.result_text(routinerun.get(rec["id"]))
-        self.assertTrue(text.startswith(f"LOOP Demo capture: run {rec['id']} ok"), text)
+        self.assertTrue(text.startswith(f"PROGRAM Demo capture: run {rec['id']} ok"), text)
         self.assertIn("Counts: 1 captured, 1 failed, 4 reused", text)
         self.assertIn("Errors (1):", text)
         self.assertIn("FAILED chan/abc123", text)
@@ -102,7 +102,7 @@ class ResultTextTests(Base):
 
     def test_a_run_with_no_log_still_reads(self):
         self.assertEqual(routinerun.result_text({"id": "nope", "status": "ok"}),
-                         "LOOP loop: run nope ok")
+                         "PROGRAM program: run nope ok")
 
 
 class ParseTests(unittest.TestCase):

@@ -45,19 +45,22 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Work / Sessions](../sessions/README.md), [Reader / Rooms](../../reader/rooms/README.md), [Research / Topics](../../research/topics/README.md), [Maps / System](../../maps/system/README.md), [Attention / Now](../../attention/now/README.md)
 
-### Files (17)
+### Files (21)
 
 **Server**
 
 | File | What it is |
 |---|---|
 | `server/actions.py` | Agent cockpit: enumerate the central library's skills and commands as buttons. |
+| `server/adopt.py` | Move a thing that runs somewhere else into Vira, as a Flow. |
 | `server/circuits.py` | Circuits — multi-model agent pipelines as executable DAGs. |
+| `server/claudetasks.py` | Claude's scheduled task files on this Mac, for The Forge's one list. |
 | `server/flows.py` | The Forge's product model over Vira's existing orchestration engines. |
-| `server/launchdjobs.py` | Every launchd job defined on this Mac, read-only. |
+| `server/launchdjobs.py` | Every launchd job defined on this Mac, and the controls to change one. |
 | `server/routinerun.py` | Command routines: a program Vira starts on a schedule, as its own process. |
 | `server/routines.py` | Routines — Vira's standing agent loops. |
 | `server/routinesrc.py` | Under the hood — what a standing loop actually IS, and editing it. |
+| `server/runlist.py` | Everything that runs on this Mac, as one list: The Forge's left column. |
 
 **Frontend**
 
@@ -73,15 +76,16 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_agentic.py` | Agentic-OS engine tests: vault chunking/search/ask grounding, judge verdict parsing + grade gates, circuit DAG validation + execution + grader-gated retry, r... |
 | `tests/test_flow_trace_contract.py` | The flow-trace source contracts. |
 | `tests/test_flows.py` | The Forge product adapter and its executable graph parts. |
+| `tests/test_forge_everything.py` | The Forge's one list and the controls behind each row (2026-10-29): server/runlist.py, server/launchdjobs.py's writes, server/claudetasks.py and server/adopt... |
 | `tests/test_forge_tools.py` | Contract: the Forge's edit toolbar, and the join that makes undo record. |
 | `tests/test_judge_circuits_budget.py` | The two modules that size an AGENT SESSION's prompt: judge and circuits. |
 | `tests/test_parity_flows.py` | The Forge's parity machinery: provider pins, stage timeouts, continued conversations, the record-reading logic gates, and the three parity starters. |
 | `tests/test_routinerun.py` | Command routines: the detached runner, its history, and the launchd list. |
 | `tests/test_routinesrc.py` | Under the hood — resolution, explanation, and the guarded write. |
 
-### Routes (36)
+### Routes (50)
 
-Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
+Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`, `/api/forge`
 
 - `GET /api/actions`
 - `POST /api/actions/run`
@@ -99,6 +103,18 @@ Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
 - `POST /api/flows`
 - `PUT /api/flows/{flow_id}`
 - `POST /api/flows/{flow_id}/run`
+- `POST /api/flows/{flow_id}/archive`
+- `POST /api/flows/{flow_id}/restore`
+- `GET /api/forge/everything`
+- `GET /api/forge/programs/{run_key}/runs`
+- `GET /api/forge/programs/{run_key}/runs/{run_id}/log`
+- `GET /api/forge/launchd`
+- `PUT /api/forge/launchd`
+- `POST /api/forge/launchd/{action}`
+- `GET /api/forge/tasks/{name}`
+- `PUT /api/forge/tasks/{name}`
+- `POST /api/forge/tasks/{name}/{action}`
+- `POST /api/forge/adopt/loops`
 - `POST /api/flows/runs/{run_id}/approval/{stage_id}`
 - `GET /api/circuits`
 - `POST /api/circuits`
@@ -112,6 +128,8 @@ Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`
 - `POST /api/routines`
 - `PUT /api/routines/{rid}`
 - `DELETE /api/routines/{rid}`
+- `POST /api/routines/{rid}/archive`
+- `POST /api/routines/{rid}/restore`
 - `POST /api/routines/{rid}/run`
 - `GET /api/routines/background`
 - `GET /api/routines/{rid}/runs`

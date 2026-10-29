@@ -17,6 +17,14 @@ dispatch — a prompt (or a whole circuit) on a cadence. Kinds:
             by Vira. Each run's record and log copy live in
             server/routinerun.py's store, and The Forge lists them.
 
+A circuit row is a Schedule card on a Flow's board: its targets are the
+cards it is wired to, and a run it starts covers those and what is
+downstream of them (circuits.start_run entry). A row with no targets key
+predates that and runs the whole board.
+
+Archive: a row with archived set never fires; archive_routine remembers
+whether it was on, and restore_routine puts that back.
+
 Cadence: every_hours (float) OR daily_at "HH:MM" (local). The Scheduler
 thread (60s tick) dispatches due routines as normal durable jobs / circuit
 runs — terminals, ledger rows, restart survival all apply — records
@@ -273,6 +281,11 @@ def save_routine(data, rid=None):
         for k in ("enabled", "notify"):
             if k in data and data[k] is not None:
                 r[k] = bool(data[k])
+        if "targets" in data and data["targets"] is not None:
+            if not isinstance(data["targets"], list):
+                raise ValueError("targets must be a list of card ids")
+            r["targets"] = [str(t).strip()[:100] for t in data["targets"]
+                            if str(t).strip()][:80]
         if r.get("kind") not in KINDS:
             r["kind"] = "custom"
         _command_fields(r, data)
@@ -381,8 +394,39 @@ def _stamp(rid, **fields):
 
 # ---------- due logic ----------
 
+def archive_routine(rid):
+    """Stop a routine and file it under Archived; Restore turns it back
+    on only if it was on."""
+    with _lock, locked(STORE):
+        s = _load()
+        r = next((r for r in s["routines"] if r["id"] == rid), None)
+        if not r:
+            raise KeyError(rid)
+        if not r.get("archived"):
+            r["archived"] = _now_iso()
+            r["archived_enabled"] = bool(r.get("enabled"))
+            r["enabled"] = False
+            r["updated"] = _now_iso()
+            _save(s)
+        return r
+
+
+def restore_routine(rid):
+    with _lock, locked(STORE):
+        s = _load()
+        r = next((r for r in s["routines"] if r["id"] == rid), None)
+        if not r:
+            raise KeyError(rid)
+        if r.get("archived"):
+            r["enabled"] = bool(r.pop("archived_enabled", False))
+            r.pop("archived", None)
+            r["updated"] = _now_iso()
+            _save(s)
+        return r
+
+
 def is_due(r, now=None):
-    if not r.get("enabled"):
+    if not r.get("enabled") or r.get("archived"):
         return False
     now = now or datetime.now().astimezone()
     last = r.get("last_run")
@@ -526,12 +570,20 @@ def dispatch(r, trigger="manual"):
         return {"run_id": topic["run_id"]}
     if r["kind"] == "circuit":
         cid = r.get("circuit_id") or ""
+        targets = r.get("targets") if isinstance(r.get("targets"), list) else None
+        if targets == []:
+            # Wired to nothing: there is nothing to run. Stamped, so the
+            # scheduler does not retry it every minute until tomorrow.
+            _stamp(r["id"], last_run=_now_iso(), last_job=None,
+                   last_run_id=None, last_status="skipped: wired to no card")
+            return {"skipped": "no_targets"}
         run = circuits.start_run(cid, r.get("prompt") or r["name"],
                                  cwd=r.get("cwd") or None,
                                  notify=bool(r.get("notify")),
                                  source=f"routine:{r['id']}",
                                  vault_destination=r.get("vault_destination"),
-                                 vault_context=r.get("vault_context"))
+                                 vault_context=r.get("vault_context"),
+                                 entry=targets)
         _stamp(r["id"], last_run=_now_iso(), last_run_id=run["id"],
                last_job=None, last_status="running")
         return {"run_id": run["id"]}

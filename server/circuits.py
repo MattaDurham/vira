@@ -24,11 +24,19 @@ Execution facts:
   resumes every running circuit exactly where it was.
 - The live-session cap applies naturally: a stage that can't launch yet
   (cap reached) just stays ready and is retried next tick.
-- A native stage over a command loop (routinerun) starts the program and
-  stays running until the runner records an end; its result text is the
-  run in words (routinerun.result_text), so the wire carries the counts,
-  the errors and the last lines into the next card (2026-10-29). If the
-  program is already going, the stage waits for that run.
+- A program stage runs a command (an argv, a folder, an environment) as
+  its own detached process through server/routinerun.py and stays running
+  until the runner records an end; its result text is the run in words
+  (routinerun.result_text), so the wire carries the counts, the errors and
+  the last lines into the next card. Its run_key names its lock and its
+  history, so two runs of one program never overlap, and a run already
+  going is waited for instead of failed (2026-10-29). The older native
+  stage (a card over a routine row) still runs for definitions saved
+  before Program cards existed.
+- A run may start from one Schedule: start_run(entry=[stage ids]) keeps
+  only those stages and every stage downstream of them, so two Schedules
+  on one board run two different chains. A need outside the run is
+  dropped from that run (the card works with what the run delivers).
 
 Stores:
   data/circuits.json      — definitions (seeded with builtin templates)
@@ -76,8 +84,11 @@ STAGE_OUTPUT_STORE_CAP = 24_000
 # import) plus "judge", the one stage kind that is a role rather than a
 # rung: read-only, grading the stages it names.
 MODES = ("manual", "acceptEdits", "bypassPermissions", "judge",
-         "approval", "logic", "output", "native")
-LOCAL_MODES = ("approval", "logic", "output", "native")
+         "approval", "logic", "output", "native", "program")
+LOCAL_MODES = ("approval", "logic", "output", "native", "program")
+# A Program card's run_key names a lock file and a history key in
+# server/routinerun.py, so it stays a plain file name on every OS.
+RUN_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 
 # Stage definitions are DATA, stored in data/circuits.json and in owner-saved
 # retunes, so they hold whatever rung name was current when they were saved.
@@ -643,10 +654,90 @@ def validate_stages(stages):
                 if ref not in known:
                     raise ValueError(
                         f"judge stage {st['id']}: unknown stage {ref!r}")
+        elif norm_stage_mode(st.get("mode")) == "program":
+            _validate_program(st)
         elif norm_stage_mode(st.get("mode")) not in LOCAL_MODES and not (
                 st.get("prompt") or "").strip():
             raise ValueError(f"stage {st['id']}: empty prompt")
     return topo_order(stages)
+
+
+def _validate_program(st):
+    """A program stage names an argv to run, and a run_key for its lock
+    and history; its folder and logs are absolute paths (routinerun runs
+    it detached, where a relative path would mean Vira's own checkout)."""
+    sid = st.get("id")
+    prog = st.get("program") or {}
+    argv = prog.get("command")
+    if not isinstance(argv, list) or not argv or not all(
+            isinstance(a, str) and a.strip() for a in argv):
+        raise ValueError(f"stage {sid}: a Program card needs a command to run")
+    if not RUN_KEY.fullmatch(str(prog.get("run_key") or "")):
+        raise ValueError(f"stage {sid}: the program's run key must be a "
+                         "plain name (letters, digits, - _ .)")
+    for key in ("cwd", "output_log"):
+        value = str(prog.get(key) or "")
+        if value and not Path(value).is_absolute():
+            raise ValueError(f"stage {sid}: {key} must be an absolute path")
+    for value in prog.get("watch_logs") or []:
+        if not Path(str(value)).is_absolute():
+            raise ValueError(f"stage {sid}: a watched log must be an absolute path")
+    env = prog.get("env") or {}
+    if not isinstance(env, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        raise ValueError(f"stage {sid}: env must map names to text")
+
+
+def program_spec(st_def, name=None):
+    """The routine-shaped dict server/routinerun.py starts a program from:
+    its id is the stage's run_key, so the lock and the history follow the
+    card, not the run."""
+    prog = st_def.get("program") or {}
+    return {"id": prog["run_key"], "name": name or st_def.get("name") or st_def["id"],
+            "command": list(prog.get("command") or []),
+            "cwd": prog.get("cwd") or "", "env": dict(prog.get("env") or {}),
+            "output_log": prog.get("output_log") or "",
+            "watch_logs": list(prog.get("watch_logs") or [])}
+
+
+def downstream(stages, entry):
+    """The ids of the stages a run from these entry stages covers: the
+    entries and every stage that needs one of them, transitively."""
+    children = {}
+    for st in stages:
+        for need in st.get("needs") or []:
+            children.setdefault(need, []).append(st["id"])
+    known = {st["id"] for st in stages}
+    seen = set()
+    todo = [sid for sid in entry if sid in known]
+    while todo:
+        sid = todo.pop()
+        if sid in seen:
+            continue
+        seen.add(sid)
+        todo.extend(children.get(sid) or [])
+    return seen
+
+
+def _trim_to(stages, keep):
+    """Only the stages in keep, with needs and judge references that
+    point outside it dropped."""
+    out = []
+    for st in stages:
+        if st["id"] not in keep:
+            continue
+        st = dict(st)
+        st["needs"] = [n for n in st.get("needs") or [] if n in keep]
+        if st.get("continues") and st["continues"] not in keep:
+            st.pop("continues")
+        if norm_stage_mode(st.get("mode")) == "judge":
+            judge = dict(st.get("judge") or {})
+            judge["of"] = [n for n in judge.get("of") or [] if n in keep]
+            if judge.get("retry_stage") and judge["retry_stage"] not in keep:
+                judge.pop("retry_stage")
+            st["judge"] = judge
+        out.append(st)
+    return out
 
 
 def _validate_knobs(st, by_id):
@@ -871,7 +962,10 @@ def get_run(run_id):
 @runtimework.tracked("Starting a flow")
 def start_run(cid, input_text, cwd=None, notify=False, source="manual",
               idea_id=None, overrides=None, flow_options=None, provider=None,
-              vault_destination=None, vault_context=None):
+              vault_destination=None, vault_context=None, entry=None):
+    """Start a run. entry: the stage ids one Schedule card is wired to;
+    the run then covers those stages and what is downstream of them, and
+    nothing else on the board. None runs the whole board."""
     circ = get_circuit(cid)
     if not circ:
         raise KeyError(cid)
@@ -896,6 +990,12 @@ def start_run(cid, input_text, cwd=None, notify=False, source="manual",
             if norm_stage_mode(stage.get("mode")) == "output":
                 stage["output"] = {**(stage.get("output") or {}),
                                    "destination": destination}
+    if entry is not None:
+        keep = downstream(stages, [str(x) for x in entry])
+        if not keep:
+            raise ValueError("this Schedule is wired to no card, so it has "
+                             "nothing to run")
+        stages = _trim_to(stages, keep)
     validate_stages(stages)
     input_text = (input_text or "").strip()
     if not input_text:
@@ -910,6 +1010,7 @@ def start_run(cid, input_text, cwd=None, notify=False, source="manual",
         "vault_context": str(vault_context or "").strip(),
         "status": "running", "source": source, "notify": bool(notify),
         "launch_options": flow_options,
+        "entry": [str(x) for x in entry] if entry is not None else None,
         "started": _now(), "finished": None, "error": "",
         "stages_def": stages,
         "stages": {st["id"]: {"status": "pending", "job_id": None,
@@ -1772,6 +1873,27 @@ class Driver(threading.Thread):
                       + (f" - {detail}" if detail else ""))
             return {"status": "done" if passed else "error",
                     "attempts": attempts, "result_text": result}
+        if mode == "program":
+            from . import routinerun
+            spec = program_spec(st_def)
+            trigger = ("schedule" if str(run.get("source") or "").startswith("routine:")
+                       else "manual")
+            try:
+                rec = routinerun.start(spec, trigger=trigger)
+                verb, run_id = "Started", rec["id"]
+            except ValueError as e:
+                # Its program is already going (another Schedule on this
+                # board fired it, or Run now on the card): wait for that run
+                # instead of failing, so two schedules never fight over one
+                # program.
+                live = _live_command_run(spec)
+                if not live:
+                    return {"status": "error", "attempts": attempts,
+                            "result_text": f"Could not start {spec['name']}: {e}"}
+                verb, run_id = "Waiting for", live["id"]
+            return {"status": "running", "attempts": attempts,
+                    "command_run": run_id, "started": _now(),
+                    "result_text": f"{verb} {spec['name']}, run {run_id}"}
         if mode == "native":
             from . import routines
             routine_id = str((st_def.get("native") or {}).get("routine_id") or "")
