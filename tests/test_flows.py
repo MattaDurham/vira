@@ -885,7 +885,10 @@ class ProgramCardTests(unittest.TestCase):
         self.assertRegex(key, r"^prog_[0-9a-f]{10}$")
         node = next(n for n in flow["nodes"] if n["id"] == "export")
         self.assertEqual(node["type"], "program")
-        self.assertEqual(node["program"]["command_line"], f"/bin/bash {self.root}/notes.sh --hourly")
+        # the line the editor shows splits back into the same arguments
+        # (Windows quotes a backslash path, a Mac does not)
+        self.assertEqual(routines._split_command(node["program"]["command_line"]),
+                         stage["program"]["command"])
         # saved again from the board, the card keeps its lock and history
         again = flows.save_flow({**flow, "id": flow["id"]})
         stage2 = next(s for s in circuits.get_circuit(again["id"])["stages"] if s["id"] == "export")
@@ -961,7 +964,8 @@ class ProgramCardTests(unittest.TestCase):
         flow = self.board(edges=[{"from": "input", "to": "report"}, {"from": "report", "to": "out"}])
         row = next(iter(self.schedules(flow).values()))
         self.assertEqual(row["targets"], [])
-        result = routines.dispatch(row, trigger="schedule")
+        with mock.patch.object(routines, "_ai_ready", return_value=True):
+            result = routines.dispatch(row, trigger="schedule")
         self.assertEqual(result, {"skipped": "no_targets"})
         self.assertIn("wired to no card", routines.get_routine(row["id"])["last_status"])
         self.assertEqual(circuits.list_runs(10), [])

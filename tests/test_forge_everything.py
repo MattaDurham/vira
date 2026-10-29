@@ -114,7 +114,7 @@ class LaunchdTests(Stores):
         path = self.job()
         with mock.patch.object(launchdjobs, "_gui_state",
                                return_value={"com.example.capture": (None, "0")}):
-            launchdjobs.save(str(path), fields={"cwd": "/tmp"})
+            launchdjobs.save(str(path), fields={"cwd": str(self.root)})
         verbs = [argv[1] for argv, _ in self.calls if argv[0] == "launchctl"]
         self.assertEqual(verbs, ["bootout", "bootstrap"])
 
@@ -226,14 +226,15 @@ class AdoptTests(Stores):
         self.assertEqual(trigger["daily_at"], "06:00")
 
     def test_a_launchd_job_on_a_calendar_moves_into_vira(self):
+        log = str(self.root / "capture.log")
         path = self.job(StartCalendarInterval=[{"Hour": 20, "Minute": 0}, {"Hour": 8, "Minute": 30}],
-                        StandardOutPath="/tmp/capture.log")
+                        StandardOutPath=log)
         out = adopt.adopt_launchd(str(path))
         self.assertFalse(path.exists())
         flow = out["flow"]
         program = next(n for n in flow["nodes"] if n["type"] == "program")
         self.assertEqual(program["program"]["command"], ["/bin/bash", "/opt/capture.sh"])
-        self.assertEqual(program["program"]["output_log"], "/tmp/capture.log")
+        self.assertEqual(program["program"]["output_log"], log)
         times = sorted(n["daily_at"] for n in flow["nodes"] if n["type"] == "trigger")
         self.assertEqual(times, ["08:30", "20:00"])
 
