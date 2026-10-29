@@ -51,7 +51,7 @@
     approval: { name: "Ask me", hint: "Pauses until you answer." },
     output: { name: "Output", hint: "Where the result lands and what shape it takes." },
     trigger: { name: "Schedule", hint: "Runs the Flow on a cadence." },
-    native: { name: "Vira routine", hint: "Runs one of Vira's own loops inside this Flow." },
+    native: { name: "Loop", hint: "Runs one of your loops inside this Flow and waits for it; the card after gets its result." },
     tool: { name: "Source", hint: "A skill, command, script or file the card is told about." },
     context: { name: "Reference", hint: "A note or file from Find the card is told about." },
     env: { name: "Environment", hint: "A saved set of sources, wired in as one card." },
@@ -897,11 +897,22 @@
     const rows = state.loops.filter((r) => matches(term, r.name, r.description, r.kind));
     rows.forEach((row) => {
       const last = row.last_run ? `last ${stamp(row.last_run)}${row.last_status ? ` (${row.last_status})` : ""}` : "never run";
+      // A paused loop that a Flow runs as a card is not idle: the Flow's
+      // schedule is its schedule now, and the line says so.
+      const hosts = flowsRunning(row.id);
+      const when = hosts.length && !row.enabled
+        ? `Run by ${hosts.map((flow) => flow.name).join(", ")}`
+        : `${cadenceText(row)}${row.enabled ? "" : ", paused"}`;
       const card = libraryCard({
         title: row.name, iconKey: "loop", active: row.id === state.selectedLoop,
-        line: `${cadenceText(row)}${row.enabled ? "" : ", paused"}, ${last}`, dot: loopDot(row),
+        line: `${when}, ${last}`, dot: loopDot(row), draggable: true,
       });
       card.addEventListener("click", () => openLoop(row.id));
+      card.addEventListener("dragstart", (event) => {
+        state.libraryDrag = { loop: copy(row) };
+        event.dataTransfer.effectAllowed = "copy";
+        event.dataTransfer.setData("text/plain", row.name || row.id);
+      });
       body.appendChild(card);
     });
     if (state.loops.length && !rows.length) body.appendChild(make("p", "hint", "No loop matches."));
@@ -1052,6 +1063,45 @@
     if (selected && (type === "trigger" || type === "input") && EXEC.has(selected.type)
         && !(type === "input" && ["logic", "approval", "output"].includes(selected.type))) {
       state.current.edges.push({ id: id("wire"), from: node.id, to: selected.id, instructions: "" });
+    }
+    state.selectedNode = node.id;
+    state.selectedEdge = null;
+    setDirty();
+    renderBoard();
+    renderInspector();
+    return node;
+  }
+
+  // The Flows that run a loop as a card (the server: a native stage naming it).
+  function flowsRunning(rid) {
+    return (state.flows || []).filter((flow) => (flow.nodes || []).some((node) =>
+      node.type === "native" && (node.native?.routine_id || node.routine_id) === rid));
+  }
+
+  function loopOf(node) {
+    const rid = node.native?.routine_id || node.routine_id || "";
+    return (state.loops || []).find((row) => row.id === rid) || null;
+  }
+
+  // A loop from the Loops tab becomes a Loop card: the Flow runs that loop
+  // and waits for it, and the card after gets what it wrote. Wired from the
+  // selected running card, as addCard does.
+  function addLoop(row, point) {
+    if (!editable() || !row?.id) return;
+    const selected = currentNode();
+    const p = point || (selected
+      ? { x: selected.x + CARD_W + 90, y: selected.y }
+      : (() => {
+        const rect = q("#forge-viewport").getBoundingClientRect();
+        return boardPoint(rect.left + rect.width / 2 - CARD_W / 2, rect.top + rect.height / 2 - 60);
+      })());
+    const spot = freeSpot({ x: p.x - 42, y: p.y - 42 });
+    const node = { id: cardId(row.name, "native"), type: "native", name: row.name || "Loop",
+      native: { routine_id: row.id }, prompt: "", x: spot.x, y: spot.y, z: ++state.z };
+    state.current.nodes.push(node);
+    if (selected && EXEC.has(selected.type) && selected.type !== "output") {
+      state.current.edges.push({ id: id("wire"), from: selected.id, to: node.id, instructions: "" });
+      if (hasExecutableCycle()) state.current.edges.pop();
     }
     state.selectedNode = node.id;
     state.selectedEdge = null;
@@ -1215,7 +1265,9 @@
       tag(node.enabled === false ? "paused" : "on", node.enabled === false ? "is-off" : "");
       if (node.notify) tag("tells me");
     } else if (node.type === "native") {
-      text = `Runs the Vira routine ${node.native?.routine_id || node.routine_id || ""}.`;
+      const loop = loopOf(node);
+      if (loop) tag(loop.kind === "command" ? "a program" : "a session");
+      text = `Runs the loop ${loop?.name || node.native?.routine_id || node.routine_id || ""} and waits for it. The card after gets its result.`;
     } else {
       path = node.source_ref || "";
       text = node.description || "";
@@ -2035,8 +2087,18 @@
   function nativeEditor(node) {
     const editor = make("div", "forge-editor");
     editor.appendChild(nameField(node));
-    editor.appendChild(make("code", "forge-path", `Vira routine ${node.native?.routine_id || node.routine_id || ""}`));
-    editor.appendChild(make("p", "hint", "Runs one of Vira's own loops as a step of this Flow. Open the loop itself in Loops."));
+    const rid = node.native?.routine_id || node.routine_id || "";
+    const loop = loopOf(node);
+    editor.appendChild(make("code", "forge-path", loop
+      ? `${loop.name}: ${loop.kind === "command" ? "a program" : loop.kind}, ${cadenceText(loop).toLowerCase()}${loop.enabled ? "" : ", paused"}`
+      : `Loop ${rid}`));
+    editor.appendChild(make("p", "hint", loop?.kind === "command"
+      ? "Runs the loop's program and waits for it to finish. The card after gets the run in words: the outcome, the counts, the errors and the last lines it wrote. If the program is already going, this card waits for that run."
+      : "Runs the loop as a step of this Flow and waits for it. The card after gets what it wrote."));
+    const open = make("button", "fchip sm", "Open in Loops");
+    open.type = "button";
+    open.addEventListener("click", () => { openLibrary(); switchLibrary("loops"); openLoop(rid); });
+    editor.appendChild(open);
     return editor;
   }
 
@@ -2128,6 +2190,13 @@
     const pause = make("button", "fchip sm", "");
     pause.type = "button";
     actions.append(runNow, pause);
+    if (editable()) {
+      const add = make("button", "fchip sm", "Add to this Flow");
+      add.type = "button";
+      add.title = "A Loop card that runs this loop and waits for it";
+      add.addEventListener("click", () => addLoop(row));
+      actions.appendChild(add);
+    }
     if (row.last_job) {
       const open = make("button", "fchip sm", "Open the last session");
       open.type = "button";
@@ -2393,7 +2462,7 @@
     if (fromNode.type === "output") return toast("An output is the end of a line.");
     if (SOURCE.has(toNode.type) || toNode.type === "env") return toast("A source is told about; wire it the other way, into the card that should know it.");
     if ((SOURCE.has(fromNode.type) || fromNode.type === "env" || fromNode.type === "input")
-        && !["agent", "judge", "native"].includes(toNode.type)) return toast("Only a card that runs a session can be told about a source or the ask.");
+        && !["agent", "judge"].includes(toNode.type)) return toast("Only a card that runs a session can be told about a source or the ask.");
     if (state.current.edges.some((edge) => edge.from === from && edge.to === to)) return toast("That wire already exists.");
     const edge = { id: id("wire"), from, to, instructions: "" };
     state.current.edges.push(edge);
@@ -2578,6 +2647,10 @@
       switchLibrary("sources");
       q("#forge-library-search")?.focus();
     });
+    menuAction(menu, "A loop", "From the Loops tab: open one and add it, or drag it onto the board. The Flow runs it and waits for it.", () => {
+      openLibrary();
+      switchLibrary("loops");
+    });
     const rect = anchor.getBoundingClientRect();
     placeMenu(menu, rect.left, rect.bottom + 6);
   }
@@ -2701,6 +2774,7 @@
       if (!state.libraryDrag) return;
       const point = boardPoint(event.clientX, event.clientY);
       if (state.libraryDrag.environment) addEnvironment(state.libraryDrag.environment, point);
+      else if (state.libraryDrag.loop) addLoop(state.libraryDrag.loop, point);
       else addSource(state.libraryDrag, point);
       state.libraryDrag = null;
     });
