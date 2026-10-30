@@ -217,6 +217,32 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(rows[0]["daily_at"], "08:00")
         self.assertEqual([n["type"] for n in again["nodes"]].count("trigger"), 1)
 
+    def test_a_weekly_schedule_card_keeps_its_weekday(self):
+        payload = {"name": "Weekly", "nodes": [
+            _agent("a", "A"),
+            {"id": "when", "type": "trigger", "name": "Sundays",
+             "daily_at": "09:40", "weekday": "Sunday", "enabled": True,
+             "x": 40, "y": 300}],
+            "edges": [{"from": "when", "to": "a"}]}
+        saved = flows.save_flow(payload, save_as=True)
+        row = next(r for r in routines.list_routines() if r.get("circuit_id") == saved["id"])
+        self.assertEqual((row["daily_at"], row["weekday"]), ("09:40", "sunday"))
+        trigger = next(n for n in saved["nodes"] if n["type"] == "trigger")
+        self.assertEqual(trigger["weekday"], "sunday")
+        # back to every day: the weekday goes with the change
+        trigger["weekday"] = ""
+        again = flows.save_flow(saved)
+        row = next(r for r in routines.list_routines() if r.get("circuit_id") == saved["id"])
+        self.assertNotIn("weekday", row)
+        trigger = next(n for n in again["nodes"] if n["type"] == "trigger")
+        self.assertEqual(trigger["weekday"], "")
+        # an interval never carries a weekday, whatever the card says
+        trigger.update({"daily_at": "", "every_hours": 2, "weekday": "monday"})
+        flows.save_flow(again)
+        row = next(r for r in routines.list_routines() if r.get("circuit_id") == saved["id"])
+        self.assertEqual(row["every_hours"], 2.0)
+        self.assertNotIn("weekday", row)
+
     def test_standing_loops_are_not_flows(self):
         routines.save_routine({"name": "Hourly thing", "kind": "custom",
                                "prompt": "look", "every_hours": 1})

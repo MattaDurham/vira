@@ -241,6 +241,7 @@ def _graph_for_circuit(circuit, rows, saved):
             "y": int(placed.get("y", 120 + index * 170)),
             "source": "routine", "routine_id": trigger["id"],
             "daily_at": trigger.get("daily_at") or "",
+            "weekday": trigger.get("weekday") or "",
             "every_hours": trigger.get("every_hours"),
             "enabled": bool(trigger.get("enabled")),
             "notify": bool(trigger.get("notify")),
@@ -707,6 +708,8 @@ def save_flow(payload, save_as=False):
         every_hours = node.get("every_hours")
         if not daily_at and not every_hours:
             continue
+        # a weekday with a time of day makes the Schedule weekly
+        weekday = str(node.get("weekday") or "").strip().lower() if daily_at else ""
         routine_data = {
             "name": str(node.get("name") or f"{rec['name']} schedule")[:200],
             "kind": "circuit", "circuit_id": rec["id"],
@@ -714,6 +717,7 @@ def save_flow(payload, save_as=False):
             "prompt": input_text[:MAX_TEXT],
             "description": str(node.get("description") or "")[:2000],
             "daily_at": daily_at or None,
+            "weekday": weekday,
             "every_hours": every_hours if not daily_at else None,
             "enabled": bool(node.get("enabled", True)),
             "notify": bool(node.get("notify")),

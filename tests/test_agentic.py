@@ -638,6 +638,27 @@ class RoutineTests(unittest.TestCase):
         r["enabled"] = False
         self.assertFalse(routines.is_due(r, now))
 
+    def test_due_weekly(self):
+        # A time of day with a weekday fires once a week: on that day,
+        # at that time, and never on the other six.
+        r = {"enabled": True, "daily_at": "09:40", "weekday": "sunday",
+             "last_run": None}
+        now = datetime.now().astimezone().replace(hour=10, minute=0,
+                                                   second=0, microsecond=0)
+        sunday = now + timedelta(days=(6 - now.weekday()) % 7)
+        self.assertTrue(routines.is_due(r, sunday))
+        self.assertFalse(routines.is_due(r, sunday.replace(hour=9, minute=0)))
+        for days in range(1, 7):
+            self.assertFalse(routines.is_due(r, sunday + timedelta(days=days)),
+                             f"fired {days} days after its Sunday")
+        # this Sunday's run uses up this Sunday; next Sunday is due again
+        r["last_run"] = sunday.isoformat()
+        self.assertFalse(routines.is_due(r, sunday.replace(hour=11)))
+        self.assertTrue(routines.is_due(r, sunday + timedelta(days=7)))
+        # a run by hand on Wednesday does not use up Sunday's run
+        r["last_run"] = (sunday + timedelta(days=3)).isoformat()
+        self.assertTrue(routines.is_due(r, sunday + timedelta(days=7)))
+
     def test_save_validation(self):
         with self.assertRaises(ValueError):
             routines.save_routine({"name": "x"})          # no cadence
@@ -647,6 +668,26 @@ class RoutineTests(unittest.TestCase):
         self.assertEqual(r["kind"], "watch")
         r2 = routines.save_routine({"daily_at": "09:00"}, rid=r["id"])
         self.assertNotIn("every_hours", r2)
+
+    def test_weekday_is_kept_lowercase_and_only_with_a_time_of_day(self):
+        r = routines.save_routine({"name": "lint", "kind": "custom",
+                                   "prompt": "lint", "daily_at": "09:40",
+                                   "weekday": "Sunday"})
+        self.assertEqual(r["weekday"], "sunday")
+        with self.assertRaisesRegex(ValueError, "weekday must be"):
+            routines.save_routine({"weekday": "someday"}, rid=r["id"])
+        with self.assertRaisesRegex(ValueError, "time of day"):
+            routines.save_routine({"name": "y", "kind": "custom", "prompt": "y",
+                                   "every_hours": 2, "weekday": "monday"})
+        # "" clears it: the routine is daily again
+        r = routines.save_routine({"weekday": ""}, rid=r["id"])
+        self.assertNotIn("weekday", r)
+        r = routines.save_routine({"weekday": "friday"}, rid=r["id"])
+        self.assertEqual(r["weekday"], "friday")
+        # an interval replaces the time of day and the weekday with it
+        r = routines.save_routine({"every_hours": 3}, rid=r["id"])
+        self.assertNotIn("daily_at", r)
+        self.assertNotIn("weekday", r)
 
 
 # ---------- radar ----------

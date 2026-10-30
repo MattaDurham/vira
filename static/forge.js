@@ -545,6 +545,7 @@
           watch_logs: record.watch_logs || [], run_key: record.id };
       }
       return baseBoard(row, { record, ...twoCards({ routine_id: record.id, daily_at: record.daily_at || "",
+        weekday: record.weekday || "",
         every_hours: record.every_hours || null, enabled: !!record.enabled, notify: !!record.notify,
         cwd: record.cwd || "" }, work) });
     }
@@ -556,7 +557,7 @@
     if (row.kind === "task") {
       const archived = row.state === "archived";
       const task = await request(`/api/forge/tasks/${encodeURIComponent(row.ref.task)}?archived=${archived}`);
-      return baseBoard(row, { task, adopt: { kind: "daily", daily_at: "21:00", every_hours: 24, cwd: "" },
+      return baseBoard(row, { task, adopt: { kind: "daily", daily_at: "21:00", weekday: "sunday", every_hours: 24, cwd: "" },
         ...twoCards({ daily_at: "", every_hours: null, enabled: false, when_text: "Not scheduled by Vira" },
           { type: "agent", name: task.title, prompt: task.body, read_only: false }) });
     }
@@ -869,9 +870,15 @@
   }
 
   // The same words server/runlist.py cadence_of uses for the list.
+  const WEEKDAYS = [["monday", "Monday"], ["tuesday", "Tuesday"], ["wednesday", "Wednesday"],
+    ["thursday", "Thursday"], ["friday", "Friday"], ["saturday", "Saturday"], ["sunday", "Sunday"]];
+  const dayName = (day) => (WEEKDAYS.find(([key]) => key === day) || [])[1] || "";
+
   function cadenceText(row) {
     if (!row) return "On demand";
-    if (row.daily_at) return `Every day at ${row.daily_at}`;
+    if (row.daily_at) {
+      return row.weekday ? `Every ${dayName(row.weekday)} at ${row.daily_at}` : `Every day at ${row.daily_at}`;
+    }
     const hours = Number(row.every_hours);
     if (!hours) return "On demand";
     if (hours === 1) return "Every hour";
@@ -1294,7 +1301,7 @@
     if (type === "logic") base.logic = { operation: "contains", value: "" };
     if (type === "approval") base.prompt = "Show me the result so far and ask whether to go on.";
     if (type === "output") { base.output = { destination: "record" }; base.prompt = ""; }
-    if (type === "trigger") Object.assign(base, { daily_at: "07:30", every_hours: null, enabled: true, notify: false });
+    if (type === "trigger") Object.assign(base, { daily_at: "07:30", weekday: "", every_hours: null, enabled: true, notify: false });
     if (type === "program") base.program = { command_line: "", cwd: "", env: {}, output_log: "", watch_logs: [] };
     return base;
   }
@@ -2026,16 +2033,22 @@
     const sentence = make("p", "forge-sentence");
     const paint = () => {
       sentence.replaceChildren();
-      const kind = node.daily_at ? "daily" : (node.every_hours ? "hours" : "manual");
+      const kind = node.daily_at ? (node.weekday ? "weekly" : "daily") : (node.every_hours ? "hours" : "manual");
       sentence.append("Run ");
-      sentence.appendChild(selectControl([["daily", "every day at"], ["hours", "every"], ["manual", "only when I run it"]], kind, (value) => {
-        if (value === "daily") { node.daily_at = "07:30"; node.every_hours = null; }
-        else if (value === "hours") { node.daily_at = ""; node.every_hours = 24; }
-        else { node.daily_at = ""; node.every_hours = null; }
+      sentence.appendChild(selectControl([["daily", "every day at"], ["weekly", "every week on"], ["hours", "every"], ["manual", "only when I run it"]], kind, (value) => {
+        if (value === "daily") { node.daily_at = node.daily_at || "07:30"; node.weekday = ""; node.every_hours = null; }
+        else if (value === "weekly") { node.daily_at = node.daily_at || "07:30"; node.weekday = node.weekday || "sunday"; node.every_hours = null; }
+        else if (value === "hours") { node.daily_at = ""; node.weekday = ""; node.every_hours = 24; }
+        else { node.daily_at = ""; node.weekday = ""; node.every_hours = null; }
         touch(node); paint();
       }));
       if (kind === "daily") {
         sentence.append(" ");
+        sentence.appendChild(textInput(node.daily_at, (value) => { node.daily_at = value; touch(node); }, { type: "time" }));
+      } else if (kind === "weekly") {
+        sentence.append(" ");
+        sentence.appendChild(selectControl(WEEKDAYS, node.weekday, (value) => { node.weekday = value; touch(node); }));
+        sentence.append(" at ");
         sentence.appendChild(textInput(node.daily_at, (value) => { node.daily_at = value; touch(node); }, { type: "time" }));
       } else if (kind === "hours") {
         sentence.append(" ");
@@ -2875,10 +2888,14 @@
         const sentence = make("p", "forge-sentence");
         const paint = () => {
           sentence.replaceChildren("Run it from Vira ");
-          sentence.appendChild(selectControl([["daily", "every day at"], ["hours", "every"]], adopt.kind, (value) => { adopt.kind = value; paint(); }));
+          sentence.appendChild(selectControl([["daily", "every day at"], ["weekly", "every week on"], ["hours", "every"]], adopt.kind, (value) => { adopt.kind = value; paint(); }));
           sentence.append(" ");
           if (adopt.kind === "daily") sentence.appendChild(textInput(adopt.daily_at, (value) => { adopt.daily_at = value; }, { type: "time" }));
-          else {
+          else if (adopt.kind === "weekly") {
+            sentence.appendChild(selectControl(WEEKDAYS, adopt.weekday, (value) => { adopt.weekday = value; }));
+            sentence.append(" at ");
+            sentence.appendChild(textInput(adopt.daily_at, (value) => { adopt.daily_at = value; }, { type: "time" }));
+          } else {
             sentence.appendChild(textInput(String(adopt.every_hours), (value) => { adopt.every_hours = Number(value) || 24; }, { type: "number", min: "0.25", step: "0.25" }));
             sentence.append(" hours");
           }
@@ -2897,7 +2914,9 @@
           })) return;
           go.disabled = true;
           try {
-            const body = adopt.kind === "daily" ? { daily_at: adopt.daily_at } : { every_hours: adopt.every_hours };
+            const body = adopt.kind === "daily" ? { daily_at: adopt.daily_at }
+              : adopt.kind === "weekly" ? { daily_at: adopt.daily_at, weekday: adopt.weekday }
+                : { every_hours: adopt.every_hours };
             const result = await send(`/api/forge/tasks/${encodeURIComponent(task.name)}/adopt`, "POST", { ...body, cwd: adopt.cwd || null });
             await refreshFlows();
             await loadEverything();
@@ -3662,7 +3681,7 @@
         const work = board.nodes.find((n) => n.id === "work");
         const body = { name: work.name, description: work.description || "",
           enabled: schedule.enabled !== false, notify: Boolean(schedule.notify) };
-        if (schedule.daily_at) body.daily_at = schedule.daily_at;
+        if (schedule.daily_at) { body.daily_at = schedule.daily_at; body.weekday = schedule.weekday || ""; }
         else if (schedule.every_hours) body.every_hours = Number(schedule.every_hours);
         else return toast("A routine needs a time of day or an interval. Pause it to stop it.");
         if (work.type === "agent") Object.assign(body, { prompt: work.prompt || "", model: work.model || "" });

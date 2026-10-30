@@ -255,6 +255,18 @@ class AdoptTests(Stores):
                          ("21:30", ["task"], str(self.root)))
         self.assertTrue(claudetasks.list_tasks()[0]["archived"])
 
+    def test_a_claude_task_can_be_adopted_on_one_weekday(self):
+        self.task(name="weekly-lint", body="Lint the wiki.\n")
+        with self.assertRaisesRegex(ValueError, "time of day"):
+            adopt.adopt_task("weekly-lint", every_hours=168, weekday="sunday")
+        out = adopt.adopt_task("weekly-lint", daily_at="09:40", weekday="sunday")
+        trigger = next(n for n in out["flow"]["nodes"] if n["type"] == "trigger")
+        self.assertEqual((trigger["name"], trigger["daily_at"], trigger["weekday"]),
+                         ("Every Sunday at 09:40", "09:40", "sunday"))
+        row = next(r for r in routines.list_routines() if r.get("circuit_id") == out["flow"]["id"])
+        self.assertEqual((row["daily_at"], row["weekday"]), ("09:40", "sunday"))
+        self.assertEqual(runlist.cadence_of(row), ("Every Sunday at 09:40", "weekly"))
+
 
 class EverythingTests(Stores):
     def test_one_list_with_the_same_fields_for_every_kind(self):

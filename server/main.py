@@ -4921,6 +4921,7 @@ def api_forge_task_save(name: str, req: TaskSaveReq):
 
 class TaskActReq(BaseModel):
     daily_at: str | None = None
+    weekday: str | None = None      # with daily_at: once a week, on that day
     every_hours: float | None = None
     cwd: str | None = None
 
@@ -4934,7 +4935,8 @@ def api_forge_task_act(name: str, action: str, req: TaskActReq):
             return claudetasks.restore(name)
         if action == "adopt":
             return adopt.adopt_task(name, daily_at=req.daily_at,
-                                    every_hours=req.every_hours, cwd=req.cwd or "")
+                                    every_hours=req.every_hours, cwd=req.cwd or "",
+                                    weekday=req.weekday)
     except (ValueError, KeyError, FileNotFoundError) as e:
         raise _forge_err(e)
     raise HTTPException(404, "unknown action")
@@ -5284,6 +5286,7 @@ class RoutineReq(BaseModel):
     description: str | None = None
     every_hours: float | None = None
     daily_at: str | None = None
+    weekday: str | None = None      # with daily_at: once a week; "" clears it
     enabled: bool | None = None
     notify: bool | None = None
     # kind "command" only (routines._command_fields validates them)

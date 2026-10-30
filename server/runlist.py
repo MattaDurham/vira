@@ -71,6 +71,8 @@ def _hours_kind(hours):
 def cadence_of(row):
     """A routine row's cadence in words, and its bucket."""
     if row.get("daily_at"):
+        if row.get("weekday"):
+            return f"Every {str(row['weekday']).capitalize()} at {row['daily_at']}", "weekly"
         return f"Every day at {row['daily_at']}", "daily"
     hours = row.get("every_hours")
     try:
