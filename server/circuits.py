@@ -86,6 +86,8 @@ STAGE_OUTPUT_STORE_CAP = 24_000
 MODES = ("manual", "acceptEdits", "bypassPermissions", "judge",
          "approval", "logic", "output", "native", "program")
 LOCAL_MODES = ("approval", "logic", "output", "native", "program")
+# Local cards with no text to hand the card after them (_delivered).
+FEEDLESS_MODES = ("approval", "logic", "output", "judge")
 # A Program card's run_key names a lock file and a history key in
 # server/routinerun.py, so it stays a plain file name on every OS.
 RUN_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
@@ -1269,7 +1271,12 @@ def _delivered(stage, run, template):
     if not str(stage.get("continues") or "").strip():
         for need in needs:
             d = defs.get(need) or {}
-            if norm_stage_mode(d.get("mode")) in LOCAL_MODES + ("judge",):
+            # A program or a loop finishes with its run in words
+            # (routinerun.result_text), which the card after it reads. A
+            # gate, an approval, an output or a judge has nothing to hand
+            # on. Until 2026-10-29 programs were skipped here too, so a
+            # report after a Program card never got the run.
+            if norm_stage_mode(d.get("mode")) in FEEDLESS_MODES:
                 continue
             if need not in states or f"{{{{stage.{need}.output}}}}" in prompt:
                 continue
@@ -1287,6 +1294,8 @@ def _delivered(stage, run, template):
     for need in feeds:
         name = (defs.get(need) or {}).get("name") or need
         text = _stage_output(run, need, cap=cap).strip()
+        if not text and (states.get(need) or {}).get("status") == "skipped":
+            text = "(it did not run: a card before it failed)"
         blocks.append(f"FROM {name}\n{text or '(it wrote nothing)'}")
     return blocks
 
@@ -1691,10 +1700,19 @@ class Driver(threading.Thread):
                 continue
             needs = st_def.get("needs") or []
             if any(run["stages"][n]["status"] != "done" for n in needs):
-                if any(run["stages"][n]["status"] in ("error", "skipped")
-                       for n in needs):
+                settled = all(run["stages"][n]["status"] in ("done", "error", "skipped")
+                              for n in needs)
+                if st_def.get("after_failure"):
+                    # It runs once everything before it has finished, failed
+                    # or not: a report that says what went wrong.
+                    if not settled:
+                        continue
+                elif any(run["stages"][n]["status"] in ("error", "skipped")
+                         for n in needs):
                     changed[sid] = {"status": "skipped"}
-                continue
+                    continue
+                else:
+                    continue
             mode = norm_stage_mode(st_def.get("mode"))
             if mode in LOCAL_MODES:
                 changed[sid] = self._run_local_stage(run, st_def)

@@ -80,6 +80,10 @@
   const INPUT_ID = "input";
   const EXEC = new Set(["agent", "judge", "logic", "approval", "output", "program", "native"]);
   const SOURCE = new Set(["tool", "context"]);
+  // Cards that can write a file: a wire from one into a source card.
+  const WRITERS = new Set(["program", "native", "agent"]);
+  // A file a code card runs or points at (server/cardcode.py CODE_SUFFIXES).
+  const CODE_FILE = /\.(py|sh|zsh|bash|js|mjs|ts|rb|pl|swift|applescript|scpt)$/i;
   const CARD_W = 264;
 
   // Who runs a card. One picker: the model aliases Vira resolves, or a
@@ -1511,6 +1515,7 @@
       path = node.source_ref || "";
       text = node.description || "";
     }
+    if (node.after_failure) tag("runs after a failure too");
     if (tags.childElementCount) body.appendChild(tags);
     if (path) body.appendChild(make("p", "forge-node-path", path));
     if (text) body.appendChild(make("p", "", text));
@@ -1595,7 +1600,7 @@
       if (stage.grade) card.appendChild(make("span", "forge-run-grade", stage.grade));
     }
 
-    if (node.type !== "trigger" && node.type !== "input" && !SOURCE.has(node.type) && node.type !== "env") card.appendChild(port(node, "in"));
+    if (node.type !== "trigger" && node.type !== "input" && node.type !== "env") card.appendChild(port(node, "in"));
     if (node.type !== "output") card.appendChild(port(node, "out"));
     bindNodeDrag(card, head, node);
     card.addEventListener("pointerdown", () => bringNodeFront(node, card));
@@ -2094,7 +2099,9 @@
     if (node.type === "tool" && node.source === "plugin" && node.source_ref) {
       editor.appendChild(pluginSwitches(node));
     }
-    if (node.type === "tool" && node.source_ref) {
+    if (node.source_ref && CODE_FILE.test(node.source_ref)) {
+      editor.appendChild(codeBlock(node, { path: node.source_ref }));
+    } else if (node.type === "tool" && node.source_ref) {
       editor.appendChild(previewBlock(node.source_ref, node.source));
     } else if (node.type === "tool") {
       editor.appendChild(make("code", "forge-path", "(no path)"));
@@ -2448,10 +2455,203 @@
     return box;
   }
 
+  /* ---------- a code card: what it does, the code, change it ---------- */
+
+  const CHANGE_LABEL = { starting: "starting", running: "changing", done: "changed", unchanged: "no change",
+    undone: "undone", failed: "failed" };
+
+  // A code card's file (server/cardcode.py): what it says it does, in plain
+  // words, the code itself, and a box to type a change. `where` is
+  // { path } for a source card, { command, cwd } for a Program card.
+  function codeBlock(node, where) {
+    const box = make("div", "forge-code");
+    const query = new URLSearchParams(where).toString();
+    async function load() {
+      try {
+        paint(await request(`/api/forge/code?${query}`));
+      } catch (error) {
+        box.replaceChildren(make("p", "hint", `Could not read its code: ${error.message}`));
+      }
+    }
+    function paint(shown) {
+      box.replaceChildren();
+      if (!shown.exists) { box.appendChild(make("p", "hint", `${shown.path}: not on this Mac.`)); return; }
+      box.appendChild(make("span", "forge-card-kind", "What it does"));
+      box.appendChild(shown.description
+        ? make("div", "forge-code-about", shown.description)
+        : make("p", "hint", "The file does not say what it does. Ask for it below: \"Write a plain description of what this code does at the top of the file.\""));
+      const code = make("details", "forge-code-text");
+      code.appendChild(make("summary", "", `The code: ${shown.name}, ${shown.lines} line${shown.lines === 1 ? "" : "s"}${shown.cut ? ", cut at 400 KB" : ""}`));
+      code.appendChild(make("code", "forge-path", shown.path));
+      code.appendChild(make("pre", "", shown.text));
+      box.append(code, changeBox(node, shown, load));
+    }
+    box.appendChild(make("p", "hint", "Reading the code"));
+    setTimeout(load, 0);
+    return box;
+  }
+
+  function changeBox(node, shown, reload) {
+    const wrap = make("div", "forge-code-change");
+    wrap.appendChild(make("span", "forge-card-kind", "Change it"));
+    const area = make("textarea", "forge-input");
+    area.rows = 3;
+    area.placeholder = "Type what to change, in plain words";
+    const go = make("button", "btn primary", "Make the change");
+    go.type = "button";
+    const row = make("div", "forge-editor-actions");
+    row.appendChild(go);
+    wrap.append(area, row, make("p", "hint", "A session edits this one file, and keeps the description at its top true. The file is copied first, so any change can be undone here."));
+    const list = make("div", "forge-code-changes");
+    (shown.changes || []).forEach((c, index) => list.appendChild(changeRow(c, index === 0, reload)));
+    wrap.appendChild(list);
+    go.addEventListener("click", async () => {
+      const instruction = area.value.trim();
+      if (!instruction) return toast("Type what to change first");
+      go.disabled = true;
+      try {
+        await send("/api/forge/code/change", "POST", {
+          path: shown.path, instruction, flow_id: state.current?.id || "", card_id: node.id,
+          card: node.name || "", flow: state.current?.name || "",
+        });
+        reload();
+      } catch (error) {
+        toast(`Change refused: ${error.message}`);
+        go.disabled = false;
+      }
+    });
+    return wrap;
+  }
+
+  // One typed change: what was asked, then (opened) what the session said,
+  // the diff from the copy taken before it, and Undo.
+  function changeRow(change, opened, reload) {
+    const row = make("div", "forge-run");
+    const top = make("div", "forge-run-top");
+    top.append(make("span", `forge-run-chip is-${change.status}`, CHANGE_LABEL[change.status] || change.status),
+      make("span", "", stamp(change.started)));
+    const toggle = make("button", "fchip sm", "Show");
+    toggle.type = "button";
+    top.appendChild(toggle);
+    const detail = make("div", "forge-run-logbox");
+    detail.hidden = true;
+    row.append(top, make("p", "forge-code-ask", change.instruction), detail);
+    let loaded = false;
+    async function open() {
+      loaded = true;
+      detail.hidden = false;
+      toggle.textContent = "Hide";
+      let rec;
+      try {
+        rec = await request(`/api/forge/code/change/${encodeURIComponent(change.id)}`);
+      } catch (error) {
+        detail.replaceChildren(make("p", "hint", `Could not read it: ${error.message}`));
+        return;
+      }
+      detail.replaceChildren();
+      if (rec.status === "running" || rec.status === "starting") {
+        detail.appendChild(make("p", "", "A session is changing the file now."));
+        if (rec.job_id) {
+          const watch = make("button", "fchip sm", "Open the session");
+          watch.type = "button";
+          watch.addEventListener("click", () => window.openSession?.(rec.job_id));
+          detail.appendChild(watch);
+        }
+        setTimeout(() => { if (row.isConnected) (change.status === "running" ? reloadWhenDone() : open()); }, RUN_POLL_MS);
+        return;
+      }
+      if (rec.note) detail.appendChild(make("p", "hint", rec.note));
+      if (rec.summary) detail.appendChild(make("div", "forge-code-about", rec.summary));
+      if (rec.status === "unchanged") detail.appendChild(make("p", "hint", "The file is the same as before."));
+      if (rec.diff) detail.appendChild(make("pre", "forge-code-diff", rec.diff));
+      if (rec.status === "done") {
+        const undo = make("button", "fchip sm is-danger", "Undo this change");
+        undo.type = "button";
+        undo.addEventListener("click", async () => {
+          if (!await forgeDialog({ title: "Undo this change?", message: "The file goes back to the copy taken before this change. What it holds now is kept beside that copy.", confirm: "Undo it" })) return;
+          try {
+            await send(`/api/forge/code/change/${encodeURIComponent(change.id)}/undo`, "POST", {});
+            toast("Undone");
+            reload();
+          } catch (error) { toast(`Could not undo it: ${error.message}`); }
+        });
+        detail.appendChild(undo);
+      }
+    }
+    async function reloadWhenDone() {
+      try {
+        const rec = await request(`/api/forge/code/change/${encodeURIComponent(change.id)}`);
+        if (rec.status === "running" || rec.status === "starting") {
+          setTimeout(() => { if (row.isConnected) reloadWhenDone(); }, RUN_POLL_MS);
+        } else reload();
+      } catch { /* the next open shows the error */ }
+    }
+    toggle.addEventListener("click", () => {
+      if (!detail.hidden) { detail.hidden = true; toggle.textContent = "Show"; return; }
+      if (loaded) { detail.hidden = false; toggle.textContent = "Hide"; return; }
+      open();
+    });
+    if (opened || change.status === "running" || change.status === "starting") setTimeout(open, 0);
+    return row;
+  }
+
+  // What a card reads (source cards wired in) and writes (source cards it
+  // is wired into); for a source card, which cards read it and write it.
+  function ioBlock(node) {
+    const nodes = state.current?.nodes || [];
+    const edges = state.current?.edges || [];
+    const find = (nodeId) => nodes.find((item) => item.id === nodeId);
+    let groups;
+    if (SOURCE.has(node.type)) {
+      groups = [
+        ["Read by", edges.filter((e) => e.from === node.id).map((e) => find(e.to)).filter((n) => n && EXEC.has(n.type))],
+        ["Written by", edges.filter((e) => e.to === node.id).map((e) => find(e.from)).filter((n) => n && EXEC.has(n.type))],
+      ];
+    } else if (EXEC.has(node.type)) {
+      groups = [
+        ["Reads", edges.filter((e) => e.to === node.id).map((e) => find(e.from)).filter((n) => n && SOURCE.has(n.type))],
+        ["Writes", edges.filter((e) => e.from === node.id).map((e) => find(e.to)).filter((n) => n && SOURCE.has(n.type))],
+      ];
+    } else return null;
+    groups = groups.filter(([, items]) => items.length);
+    if (!groups.length) return null;
+    const box = make("div", "forge-io");
+    groups.forEach(([label, items]) => {
+      const line = make("div", "forge-io-row");
+      line.appendChild(make("span", "forge-card-kind", label));
+      const chips = make("div", "forge-io-chips");
+      items.forEach((item) => {
+        const chip = make("button", "fchip sm", item.name || item.id);
+        chip.type = "button";
+        chip.title = item.source_ref || "";
+        chip.addEventListener("click", () => openNode(item.id));
+        chips.appendChild(chip);
+      });
+      line.appendChild(chips);
+      box.appendChild(line);
+    });
+    return box;
+  }
+
+  // A card with cards before it can run even when one of them failed: a
+  // report that should say what went wrong.
+  function afterFailureRow(node) {
+    if (!EXEC.has(node.type) || !wiredIn(node).length) return null;
+    const box = make("div", "forge-after-failure");
+    box.appendChild(checkbox(" Run it even when a card before it fails", node.after_failure, (on) => {
+      node.after_failure = on; touch(node);
+    }));
+    box.appendChild(make("p", "hint", node.after_failure
+      ? "It waits for every card before it to finish, then runs, failed or not. The card after a failed one gets that card's run in words."
+      : "Off: when a card before it fails, this card is skipped."));
+    return box;
+  }
+
   function programEditor(node) {
     const prog = node.program || (node.program = { command_line: "", cwd: "", env: {}, output_log: "", watch_logs: [] });
     const editor = make("div", "forge-editor");
     editor.appendChild(nameField(node));
+    if (prog.command_line) editor.appendChild(codeBlock(node, { command: prog.command_line, cwd: prog.cwd || "" }));
     editor.appendChild(field("Command", textArea(prog.command_line || "", (value) => {
       prog.command_line = value; delete prog.command; touch(node);
     }, 2)));
@@ -2704,6 +2904,10 @@
                 : node.type === "program" ? programEditor(node)
                   : node.type === "native" ? nativeEditor(node)
                     : sourceEditor(node);
+    const io = ioBlock(node);
+    if (io) editor.appendChild(io);
+    const after = afterFailureRow(node);
+    if (after) editor.appendChild(after);
     const actions = make("div", "forge-editor-actions");
     const dup = make("button", "fchip sm", "Duplicate");
     dup.type = "button";
@@ -2718,7 +2922,15 @@
 
   function edgeEditor(edge) {
     const editor = make("div", "forge-editor");
-    editor.appendChild(make("p", "hint", `The finished text of ${nameOf(edge.from)} goes into ${nameOf(edge.to)}.`));
+    const fromNode = state.current?.nodes.find((n) => n.id === edge.from);
+    const toNode = state.current?.nodes.find((n) => n.id === edge.to);
+    editor.appendChild(make("p", "hint", SOURCE.has(toNode?.type)
+      ? `${nameOf(edge.from)} writes ${nameOf(edge.to)}. The card's own code or prompt does the writing; the wire shows it.`
+      : SOURCE.has(fromNode?.type) && ["program", "native"].includes(toNode?.type)
+        ? `${nameOf(edge.to)} reads ${nameOf(edge.from)}. Its code does the reading; the wire shows it.`
+        : SOURCE.has(fromNode?.type)
+          ? `${nameOf(edge.to)} is told about ${nameOf(edge.from)}: its name, its path and its note.`
+          : `The finished text of ${nameOf(edge.from)} goes into ${nameOf(edge.to)}.`));
     if (editable()) {
       editor.appendChild(field("Note for the card after (optional)", textArea(edge.instructions, (value) => {
         edge.instructions = value; setDirty(); renderWires();
@@ -2983,7 +3195,9 @@
     button.type = "button";
     button.dataset.nodeId = node.id;
     button.dataset.direction = direction;
-    button.title = direction === "out" ? "Drag to the card this feeds" : "Drag to the card that feeds this";
+    button.title = direction === "out"
+      ? (SOURCE.has(node.type) ? "Drag to the card that reads this" : "Drag to the card this feeds, or to a file it writes")
+      : (SOURCE.has(node.type) ? "Drag to the card that writes this" : "Drag to the card that feeds this");
     button.addEventListener("pointerdown", (event) => {
       if (!editable()) return;
       event.preventDefault();
@@ -3028,9 +3242,15 @@
     if (toNode.type === "trigger") return toast("A schedule starts a Flow; nothing feeds it.");
     if (toNode.type === "input") return toast("The Input is the ask; nothing feeds it.");
     if (fromNode.type === "output") return toast("An output is the end of a line.");
-    if (SOURCE.has(toNode.type) || toNode.type === "env") return toast("A source is told about; wire it the other way, into the card that should know it.");
-    if ((SOURCE.has(fromNode.type) || fromNode.type === "env" || fromNode.type === "input")
-        && !["agent", "judge"].includes(toNode.type)) return toast("Only a card that runs a session can be told about a source or the ask.");
+    if (SOURCE.has(toNode.type)) {
+      // A wire into a source card says which card writes that file.
+      if (!WRITERS.has(fromNode.type)) return toast("A wire into a source says which card writes it, and only a card that runs can write.");
+    } else if (toNode.type === "env") {
+      return toast("A source is told about; wire it the other way, into the card that should know it.");
+    } else if (SOURCE.has(fromNode.type) && ["program", "native"].includes(toNode.type)) {
+      // A program reads it: its code does, so the wire records that.
+    } else if ((SOURCE.has(fromNode.type) || fromNode.type === "env" || fromNode.type === "input")
+        && !["agent", "judge"].includes(toNode.type)) return toast("Only a card that runs a session can be told about the ask or a set of sources; a program can read a source.");
     if (state.current.edges.some((edge) => edge.from === from && edge.to === to)) return toast("That wire already exists.");
     const edge = { id: id("wire"), from, to, instructions: "" };
     state.current.edges.push(edge);
@@ -3099,7 +3319,8 @@
       const toStage = runStage(edge.to);
       const runLive = fromStage?.status === "running" || toStage?.status === "running";
       const runDone = fromStage?.status === "done";
-      path.setAttribute("class", `forge-wire${edge.id === state.selectedEdge ? " is-selected" : ""}${edge.instructions ? " has-note" : ""}${runLive ? " is-run-live" : (runDone ? " is-run-done" : "")}`);
+      const dataWire = SOURCE.has(from.type) || SOURCE.has(to.type);
+      path.setAttribute("class", `forge-wire${dataWire ? " is-data" : ""}${edge.id === state.selectedEdge ? " is-selected" : ""}${edge.instructions ? " has-note" : ""}${runLive ? " is-run-live" : (runDone ? " is-run-done" : "")}`);
       path.addEventListener("click", (event) => { event.stopPropagation(); openEdge(edge); });
       svg.append(hit, path);
       if (edge.instructions) {

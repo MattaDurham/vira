@@ -83,7 +83,7 @@ from . import (
                routinerun,
                routinesrc,
                crmmerge,
-               launchdjobs, runlist, claudetasks, adopt,
+               launchdjobs, runlist, claudetasks, adopt, cardcode,
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings, settingschema, restart, runtimework,
                genreroutes,
@@ -4759,6 +4759,54 @@ def api_flow_restore(flow_id: str):
         return flows.restore_flow(flow_id)
     except KeyError:
         raise HTTPException(404, "unknown flow")
+
+
+# ---------- A code card's code: what it does, the code, changes by instruction ----
+
+@app.get("/api/forge/code")
+def api_forge_code(path: str = "", command: str = "", cwd: str = ""):
+    """The file a card runs or points at, the description it opens with,
+    and its recent changes (server/cardcode.py). A Program card sends its
+    command and folder; a source card sends its path."""
+    try:
+        return cardcode.view(path=path, command=command, cwd=cwd)
+    except cardcode.CodeError as e:
+        raise HTTPException(400, str(e))
+
+
+class CodeChangeReq(BaseModel):
+    path: str
+    instruction: str
+    flow_id: str = ""
+    card_id: str = ""
+    card: str = ""
+    flow: str = ""
+
+
+@app.post("/api/forge/code/change")
+def api_forge_code_change(req: CodeChangeReq):
+    """Back the file up and start the session that changes it as typed."""
+    try:
+        return cardcode.change(req.path, req.instruction, flow_id=req.flow_id,
+                               card_id=req.card_id, card=req.card, flow=req.flow)
+    except cardcode.CodeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/forge/code/change/{cid}")
+def api_forge_code_change_status(cid: str):
+    try:
+        return cardcode.change_status(cid)
+    except cardcode.CodeError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/forge/code/change/{cid}/undo")
+def api_forge_code_change_undo(cid: str):
+    try:
+        return cardcode.undo(cid)
+    except cardcode.CodeError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------- The Forge's one list: everything that runs on this Mac ---------

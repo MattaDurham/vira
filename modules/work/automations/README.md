@@ -57,7 +57,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Work / Sessions](../sessions/README.md), [Reader / Rooms](../../reader/rooms/README.md), [Research / Topics](../../research/topics/README.md), [Maps / System](../../maps/system/README.md), [Attention / Now](../../attention/now/README.md)
 
-### Files (21)
+### Files (23)
 
 **Server**
 
@@ -65,6 +65,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 |---|---|
 | `server/actions.py` | Agent cockpit: enumerate the central library's skills and commands as buttons. |
 | `server/adopt.py` | Move a thing that runs somewhere else into Vira, as a Flow. |
+| `server/cardcode.py` | A code card's code: what the file says it does, the code itself, and changes made by typing what to change. |
 | `server/circuits.py` | Circuits — multi-model agent pipelines as executable DAGs. |
 | `server/claudetasks.py` | Claude's scheduled task files on this Mac, for The Forge's one list. |
 | `server/flows.py` | The Forge's product model over Vira's existing orchestration engines. |
@@ -86,6 +87,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | File | What it is |
 |---|---|
 | `tests/test_agentic.py` | Agentic-OS engine tests: vault chunking/search/ask grounding, judge verdict parsing + grade gates, circuit DAG validation + execution + grader-gated retry, r... |
+| `tests/test_cardcode.py` | A code card's code (server/cardcode.py): the file a Program card runs, the plain description it opens with, and a typed change that backs the file up, shows... |
 | `tests/test_flow_trace_contract.py` | The flow-trace source contracts. |
 | `tests/test_flows.py` | The Forge product adapter and its executable graph parts. |
 | `tests/test_forge_everything.py` | The Forge's one list and the controls behind each row (2026-10-29): server/runlist.py, server/launchdjobs.py's writes, server/claudetasks.py and server/adopt... |
@@ -95,7 +97,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_routinerun.py` | Command routines: the detached runner, its history, and the launchd list. |
 | `tests/test_routinesrc.py` | Under the hood — resolution, explanation, and the guarded write. |
 
-### Routes (50)
+### Routes (54)
 
 Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`, `/api/forge`
 
@@ -117,6 +119,10 @@ Prefixes: `/api/flows`, `/api/circuits`, `/api/routines`, `/api/actions`, `/api/
 - `POST /api/flows/{flow_id}/run`
 - `POST /api/flows/{flow_id}/archive`
 - `POST /api/flows/{flow_id}/restore`
+- `GET /api/forge/code`
+- `POST /api/forge/code/change`
+- `GET /api/forge/code/change/{cid}`
+- `POST /api/forge/code/change/{cid}/undo`
 - `GET /api/forge/everything`
 - `GET /api/forge/programs/{run_key}/runs`
 - `GET /api/forge/programs/{run_key}/runs/{run_id}/log`
