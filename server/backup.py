@@ -37,6 +37,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # the Forge's editor sidecar (card placement, source cards, the
          # Input card's ask) and its saved environments
          "flow-graphs.json", "forge-environments.json",
+         # every typed change to a code card's file, with its backup's path
+         # (the backups themselves sit in data/card-code/)
+         "card-code-changes.json",
          # atlas-groups.json is created lazily on the FIRST group edit
          # (atlas._groups_write); until then it does not exist on disk and
          # the missing-file skip below is the correct behavior, not a dead

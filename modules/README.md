@@ -89,7 +89,7 @@ branch; the suite and `check` say when it is whole.
 - [Models](models/README.md) - Which AI backends this Mac has, how much a prompt may carry, and the harness a live session runs in.  
   Backends, Sessions (31 files)
 - [Work](work/README.md) - The cockpit: live agent sessions, the ideas backlog, The Forge's automations, and every branch.  
-  Sessions, Branches, Ideas, Automations (84 files)
+  Sessions, Branches, Ideas, Automations (86 files)
 - [Fleet](fleet/README.md) - Every Claude Code, Codex and Vira session on this machine, live, with the repositories around them.  
   Window, Readers (9 files)
 - [Applications](applications/README.md) - The job search: a merged role catalog, live boards, per-role scores, and the documents behind an application.  
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-802 of 802 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+804 of 804 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->

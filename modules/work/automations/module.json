@@ -23,6 +23,8 @@
         "tests/test_routinesrc.py",
         "server/runlist.py",
         "server/claudetasks.py",
+        "server/cardcode.py",
+        "tests/test_cardcode.py",
         "server/adopt.py",
         "tests/test_forge_everything.py"
     ],

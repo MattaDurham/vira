@@ -1002,3 +1002,101 @@ class ProgramCardTests(unittest.TestCase):
         archived = routines.archive_routine(row["id"])
         self.assertFalse(routines.is_due(archived))
         self.assertTrue(routines.restore_routine(row["id"])["enabled"])
+
+
+class StepBoardTests(unittest.TestCase):
+    """A board that shows every piece of a process (2026-10-29): each step
+    is its own Program card, the files a step reads and writes are source
+    cards wired in and out, the card after a Program card gets its run in
+    words, and a report marked to run after a failure still runs when a
+    step before it failed."""
+
+    setUp = ProgramCardTests.setUp
+
+    def board(self, after_failure=True):
+        folder = str(self.root)
+        return flows.save_flow({
+            "name": "Steps",
+            "nodes": [
+                {"id": "check", "type": "program", "name": "Check",
+                 "program": {"command_line": f"/bin/bash {folder}/check.sh", "cwd": folder}},
+                {"id": "capture", "type": "program", "name": "Capture",
+                 "program": {"command_line": f"/bin/bash {folder}/capture.sh", "cwd": folder}},
+                {"id": "tally", "type": "program", "name": "Tally", "after_failure": after_failure,
+                 "program": {"command_line": f"/bin/bash {folder}/tally.sh", "cwd": folder}},
+                {"id": "queue", "type": "context", "name": "Tonight's queue", "source": "file",
+                 "source_ref": f"{folder}/queue.json"},
+            ],
+            "edges": [
+                {"from": "check", "to": "capture"},
+                {"from": "capture", "to": "tally"},
+                {"from": "check", "to": "tally"},
+                {"from": "check", "to": "queue"},
+                {"from": "queue", "to": "capture"},
+            ],
+        }, save_as=True)
+
+    def finish(self, run_id, sid, status, text):
+        stage = circuits.get_run(run_id)["stages"][sid]
+        rec_id = stage["command_run"]
+        (routinerun.run_dir(rec_id) / "output.log").write_text(text, encoding="utf-8")
+        routinerun._update(rec_id, status=status, exit_code=0 if status == "ok" else 1,
+                           finished="2026-10-29T03:00:00+00:00")
+        self.driver._advance(circuits.get_run(run_id))
+
+    def test_a_file_wire_out_is_a_write_and_both_wires_survive_a_reload(self):
+        flow = self.board()
+        stages = {s["id"]: s for s in circuits.get_circuit(flow["id"])["stages"]}
+        self.assertEqual([w["name"] for w in stages["check"]["forge"]["writes"]], ["Tonight's queue"])
+        self.assertEqual([c["name"] for c in stages["capture"]["forge"]["contexts"]], ["Tonight's queue"])
+        # a write is not a dependency: capture still needs only check
+        self.assertEqual(stages["capture"]["needs"], ["check"])
+        again = flows.get_flow(flow["id"])
+        wires = {(e["from"], e["to"]) for e in again["edges"]}
+        self.assertIn(("check", "queue"), wires)
+        self.assertIn(("queue", "capture"), wires)
+        self.assertTrue(next(n for n in again["nodes"] if n["id"] == "tally")["after_failure"])
+
+    def test_the_card_after_a_program_gets_its_run_in_words(self):
+        flow = self.board()
+        run = circuits.start_run(flow["id"], "now")
+        self.driver._advance(run)
+        self.finish(run["id"], "check", "ok", "checking\ndone: 29 subscriptions, 20 bell on\n")
+        stage = next(s for s in circuits.get_run(run["id"])["stages_def"] if s["id"] == "capture")
+        report = {**stage, "mode": "manual", "prompt": "Say what happened."}
+        blocks = circuits._delivered(report, circuits.get_run(run["id"]), None)
+        self.assertTrue(blocks and blocks[0].startswith("FROM Check\nPROGRAM Check"), blocks)
+        self.assertIn("done: 29 subscriptions, 20 bell on", blocks[0])
+
+    def test_a_card_marked_to_run_after_a_failure_runs_when_a_step_fails(self):
+        flow = self.board()
+        run = circuits.start_run(flow["id"], "now")
+        self.driver._advance(run)
+        self.finish(run["id"], "check", "failed", "could not read your subscriptions\n")
+        self.driver._advance(circuits.get_run(run["id"]))
+        stages = circuits.get_run(run["id"])["stages"]
+        self.assertEqual(stages["check"]["status"], "error")
+        self.assertEqual(stages["capture"]["status"], "skipped")
+        self.assertEqual(stages["tally"]["status"], "running")
+
+    def test_without_the_switch_a_failed_step_skips_the_card(self):
+        flow = self.board(after_failure=False)
+        run = circuits.start_run(flow["id"], "now")
+        self.driver._advance(run)
+        self.finish(run["id"], "check", "failed", "could not read your subscriptions\n")
+        self.driver._advance(circuits.get_run(run["id"]))
+        stages = circuits.get_run(run["id"])["stages"]
+        self.assertEqual(stages["capture"]["status"], "skipped")
+        self.assertEqual(stages["tally"]["status"], "skipped")
+
+    def test_a_skipped_card_reads_as_not_run_to_the_card_after_it(self):
+        flow = self.board()
+        run = circuits.start_run(flow["id"], "now")
+        self.driver._advance(run)
+        self.finish(run["id"], "check", "failed", "signed out\n")
+        self.driver._advance(circuits.get_run(run["id"]))
+        tally = next(s for s in circuits.get_run(run["id"])["stages_def"] if s["id"] == "tally")
+        blocks = circuits._delivered({**tally, "mode": "manual", "prompt": "Report."},
+                                     circuits.get_run(run["id"]), None)
+        self.assertTrue(any(b.startswith("FROM Capture\n(it did not run") for b in blocks), blocks)
+        self.assertTrue(any(b.startswith("FROM Check\nPROGRAM Check") for b in blocks), blocks)

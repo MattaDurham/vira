@@ -158,6 +158,9 @@ def _node(stage, placed):
         "native": dict(stage.get("native") or {}),
         "program": _program_view(stage.get("program")),
         "forge": dict(stage.get("forge") or {}),
+        # Runs once every card before it has finished, even when one of
+        # them failed (a report that says what went wrong).
+        "after_failure": bool(stage.get("after_failure")),
         # The card's own environment row: the project's instruction file
         # (on by default), or a custom file, or none. Skills, settings and
         # plugins are cards wired in, never a field here.
@@ -416,6 +419,8 @@ def _compile(payload):
         # circuits.validate_stages is the one place that judges them.
         if node.get("provider"):
             stage["provider"] = str(node.get("provider")).strip()[:20]
+        if node.get("after_failure") and needs[sid]:
+            stage["after_failure"] = True
         if mode != "judge" and mode not in LOCAL_NODE_TYPES:
             try:
                 timeout_s = int(node.get("timeout_s") or 0)
@@ -525,8 +530,19 @@ def _compile(payload):
                     "instructions": str(source.get("description") or "")[:2000],
                 })
         attached_outputs = []
+        writes = []
         for edge in outgoing[sid]:
             target = by_id.get(str(edge.get("to") or "")) or {}
+            if target.get("type") in SOURCE_NODE_TYPES:
+                # A wire from a card into a source card: the card writes
+                # that file or folder. The Forge shows it; the run is not
+                # changed by it (a program writes what its code writes).
+                writes.append({
+                    "name": str(target.get("name") or "File")[:200],
+                    "source": str(target.get("source") or "")[:80],
+                    "ref": str(target.get("source_ref") or "")[:1000],
+                })
+                continue
             if target.get("type") != "output":
                 continue
             config = target.get("output") or {}
@@ -538,6 +554,8 @@ def _compile(payload):
             })
         if attached_outputs:
             attachments["outputs"] = attached_outputs
+        if writes:
+            attachments["writes"] = writes
         if any(value not in (None, [], {}) for value in attachments.values()):
             stage["forge"] = attachments
         stages.append(stage)
