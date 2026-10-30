@@ -15,6 +15,7 @@ holds only that. These tests pin the contract the editor relies on:
 """
 import json
 import os
+import plistlib
 import tempfile
 import types
 import unittest
@@ -508,6 +509,38 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(flows.kit_preview(str(outside), "instructions", local=True)["text"], "private")
         self.assertTrue(flows.kit_preview(str(project / "AGENTS.local.md"), "instructions")["exists"])
         self.assertTrue(flows.kit_preview(str(library / "CLAUDE.md"), "instructions")["exists"])
+
+    def test_a_board_file_log_folder_or_app_shows_what_it_holds(self):
+        """The files, logs, folders and apps a step board reads and writes
+        (2026-10-30): an app is its name and version, a log its newest
+        lines, a plain folder what is directly inside it, newest first."""
+        root = Path(self.tmp.name) / "board"
+        app = root / "Notes.app" / "Contents"
+        app.mkdir(parents=True)
+        with (app / "Info.plist").open("wb") as fh:
+            plistlib.dump({"CFBundleName": "Notes", "CFBundleShortVersionString": "4.13",
+                           "CFBundleIdentifier": "com.example.notes"}, fh)
+        shown = flows.kit_preview(str(root / "Notes.app"), "app", local=True)
+        self.assertEqual((shown["format"], shown["name"], shown["version"], shown["bundle_id"]),
+                         ("app", "Notes", "4.13", "com.example.notes"))
+        log = root / "run.log"
+        log.write_bytes(b"".join(f"line {i}\n".encode() for i in range(400)))
+        with mock.patch.object(flows, "PREVIEW_CAP", 100):
+            shown = flows.kit_preview(str(log), "file", local=True)
+        self.assertEqual(shown["format"], "log")
+        self.assertTrue(shown["truncated"])
+        self.assertTrue(shown["text"].endswith("line 399\n"))
+        self.assertTrue(shown["text"].startswith("line "))   # cut at a line start, not mid-line
+        records = root / "records"
+        for i, name in enumerate(["x-a-1", "x-b-2", ".hidden"]):
+            (records / name).mkdir(parents=True)
+            os.utime(records / name, (1_700_000_000 + i, 1_700_000_000 + i))
+        (records / "notes.txt").write_text("n", encoding="utf-8")
+        os.utime(records / "notes.txt", (1_600_000_000, 1_600_000_000))
+        shown = flows.kit_preview(str(records), "folder", local=True)
+        self.assertEqual((shown["format"], shown["count"], shown["folders"]), ("folder", 3, 2))
+        self.assertEqual([e["name"] for e in shown["entries"]], ["x-b-2", "x-a-1", "notes.txt"])
+        self.assertTrue(shown["entries"][0]["folder"])
 
     def test_a_plugin_card_brings_its_skills_unless_switched_off(self):
         library, plugin, project = self._mac()

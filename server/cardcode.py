@@ -20,6 +20,12 @@ column shows:
 Records: data/card-code-changes.json, newest last. Backups:
 data/card-code/<change id>/<file name>, kept with the record so any change
 can be undone later.
+
+Over the network (the tailnet, not this Mac's own keyboard) a card's code
+is shown and changed only where a source card's preview may be shown
+(flows._readable): the Claude library and the project's instruction and
+settings files. At the keyboard, any file. Every call takes `local`, which
+the route sets from where the request came from.
 """
 import ast
 import datetime as dt
@@ -29,7 +35,7 @@ import secrets
 import shutil
 from pathlib import Path
 
-from . import jsonstore, routines
+from . import flows, jsonstore, routines
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "card-code-changes.json"
@@ -49,6 +55,16 @@ LIVE = {"running", "queued", "waiting", "starting"}
 
 class CodeError(ValueError):
     pass
+
+
+class NotShown(CodeError):
+    """The file is outside what Vira shows over the network."""
+
+
+def _guard(path, local):
+    if not flows._readable(Path(path), None, local):
+        raise NotShown("That file is outside what Vira shows over the network; open the Forge on this Mac to see or "
+                       "change it.")
 
 
 def _now():
@@ -123,9 +139,10 @@ def resolve(path="", command="", cwd=""):
     return found
 
 
-def view(path="", command="", cwd=""):
+def view(path="", command="", cwd="", local=True):
     """The file, the description it opens with, and its recent changes."""
     p = resolve(path, command, cwd)
+    _guard(p, local)
     if not p.is_file():
         return {"path": str(p), "exists": False, "changes": changes_for(str(p))}
     raw = p.read_bytes()
@@ -167,7 +184,7 @@ def _launch(prompt, cwd, subject, about):
         kind_label="Code change")
 
 
-def change(path, instruction, flow_id="", card_id="", card="", flow=""):
+def change(path, instruction, flow_id="", card_id="", card="", flow="", local=True):
     """Back the file up and start the session that changes it."""
     instruction = str(instruction or "").strip()
     if not instruction:
@@ -178,6 +195,7 @@ def change(path, instruction, flow_id="", card_id="", card="", flow=""):
     if not p.is_absolute() or not p.is_file():
         raise CodeError(f"{path} is not a file on this Mac")
     p = p.resolve()     # the same spelling view() lists its changes under
+    _guard(p, local)
     cid = "cc_" + secrets.token_hex(4)
     folder = BACKUPS / cid
     folder.mkdir(parents=True, exist_ok=True)
@@ -251,12 +269,13 @@ def diff(rec):
     return "".join(difflib.unified_diff(before, after, f"{name} before", f"{name} now"))
 
 
-def change_status(cid):
+def change_status(cid, local=True):
     """The change's record, its session's state and, once that has ended,
     the diff between the backup and the file as it is now."""
     rec = get(cid)
     if not rec:
         raise CodeError("unknown change")
+    _guard(rec["path"], local)
     if rec.get("status") == "running":
         job = _job(rec.get("job_id"))
         status = str(job.get("status") or "running")
@@ -274,11 +293,12 @@ def change_status(cid):
     return out
 
 
-def undo(cid):
+def undo(cid, local=True):
     """Put the backup back. The text being replaced is kept beside it."""
     rec = get(cid)
     if not rec:
         raise CodeError("unknown change")
+    _guard(rec["path"], local)
     if rec.get("status") == "running":
         raise CodeError("the session is still changing it")
     backup = Path(rec["backup"])
