@@ -10,7 +10,8 @@ Flow. Three kinds of thing can become one:
     Flow. A job launchd keeps running (a service) has no Vira equivalent
     and stays a launchd job;
   - a Claude scheduled task file: a Schedule card with the cadence the
-    owner picks and an Agent card whose box is the file's prompt; the
+    owner picks (a time of day, every day or on one weekday, or an
+    interval) and an Agent card whose box is the file's prompt; the
     task folder is then archived (server/claudetasks.py);
   - a command routine (the loops Vira ran before Program cards): every
     Loop card over it becomes a Program card in place, keeping the
@@ -34,11 +35,16 @@ import sys
 from . import claudetasks, flows, launchdjobs, routines
 
 
-def _schedule_nodes(times=(), every_hours=None, cwd="", enabled=True, x=-200, y=330):
+def _schedule_nodes(times=(), every_hours=None, cwd="", enabled=True, x=-200, y=330,
+                    weekday=""):
+    """One Schedule card per time of day (every day, or on one weekday
+    when `weekday` names it), then one for the interval if any."""
     nodes = []
+    day = str(weekday or "").strip().lower()
     for index, at in enumerate(times):
         nodes.append({"id": f"schedule-{index + 1}", "type": "trigger",
-                      "name": f"Every day at {at}", "daily_at": at,
+                      "name": f"Every {day.capitalize()} at {at}" if day else f"Every day at {at}",
+                      "daily_at": at, "weekday": day,
                       "enabled": enabled, "cwd": cwd, "x": x, "y": y + index * 170})
     if every_hours:
         hours = max(0.25, float(every_hours))
@@ -93,11 +99,14 @@ def adopt_launchd(path):
     return {"flow": flow, "archived": archived["path"]}
 
 
-def adopt_task(name, daily_at=None, every_hours=None, cwd=""):
+def adopt_task(name, daily_at=None, every_hours=None, cwd="", weekday=None):
     task = claudetasks.read(name)
     if not daily_at and not every_hours:
         raise ValueError("give it a time of day or an interval")
-    schedules = _schedule_nodes([daily_at] if daily_at else [], every_hours, cwd=cwd or "")
+    if weekday and not daily_at:
+        raise ValueError("a weekly schedule needs a time of day")
+    schedules = _schedule_nodes([daily_at] if daily_at else [], every_hours, cwd=cwd or "",
+                                weekday=weekday or "")
     agent = {"id": "task", "type": "agent", "name": task["title"], "x": 150, "y": 330,
              "prompt": task["body"].strip() or task["text"], "read_only": False,
              "mode": "acceptEdits"}

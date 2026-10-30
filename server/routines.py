@@ -25,7 +25,8 @@ predates that and runs the whole board.
 Archive: a row with archived set never fires; archive_routine remembers
 whether it was on, and restore_routine puts that back.
 
-Cadence: every_hours (float) OR daily_at "HH:MM" (local). The Scheduler
+Cadence: every_hours (float) OR daily_at "HH:MM" (local), which with a
+weekday ("sunday") fires once a week, on that day at that time. The Scheduler
 thread (60s tick) dispatches due routines as normal durable jobs / circuit
 runs — terminals, ledger rows, restart survival all apply — records
 last_run/last_job/last_status, skips while the previous run is still
@@ -51,6 +52,9 @@ ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "routines.json"
 
 KINDS = ("muse", "watch", "digest", "circuit", "custom", "command")
+# datetime.weekday() order, so WEEKDAYS[now.weekday()] names today
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
+            "saturday", "sunday")
 TICK_S = 60
 
 _lock = threading.Lock()
@@ -273,11 +277,26 @@ def save_routine(data, rid=None):
         if "every_hours" in data and data["every_hours"] is not None:
             try:
                 r["every_hours"] = max(0.25, float(data["every_hours"]))
+                # an interval replaces a time of day, and the weekday
+                # that only meant something with it
                 r.pop("daily_at", None)
+                r.pop("weekday", None)
             except (TypeError, ValueError):
                 pass
         if r.get("daily_at"):
             r.pop("every_hours", None)
+        if "weekday" in data and data["weekday"] is not None:
+            # "" clears it: the Schedule is daily again
+            day = str(data["weekday"]).strip().lower()
+            if day and day not in WEEKDAYS:
+                raise ValueError("weekday must be one of "
+                                 + ", ".join(WEEKDAYS))
+            if day:
+                r["weekday"] = day
+            else:
+                r.pop("weekday", None)
+        if r.get("weekday") and not r.get("daily_at"):
+            raise ValueError("a weekly routine needs a time of day (daily_at)")
         for k in ("enabled", "notify"):
             if k in data and data[k] is not None:
                 r[k] = bool(data[k])
@@ -374,6 +393,8 @@ def _about(r):
     """The standing loop's own description, for the session's long form:
     its cadence and what it is for, read off the routine record."""
     cad = (f"every {r['every_hours']}h" if r.get("every_hours")
+           else f"{r['weekday']}s at {r['daily_at']}"
+           if r.get("daily_at") and r.get("weekday")
            else f"daily at {r['daily_at']}" if r.get("daily_at") else "")
     desc = " ".join((r.get("description") or "").split())
     head = " ".join((r.get("prompt") or "").split())[:400]
@@ -431,6 +452,9 @@ def is_due(r, now=None):
     now = now or datetime.now().astimezone()
     last = r.get("last_run")
     if r.get("daily_at"):
+        day = str(r.get("weekday") or "").lower()
+        if day and WEEKDAYS[now.weekday()] != day:
+            return False     # a weekly Schedule: not its day
         try:
             hh, mm = str(r["daily_at"]).split(":")
             gate = now.replace(hour=int(hh), minute=int(mm),
