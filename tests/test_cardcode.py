@@ -105,6 +105,24 @@ class CardCodeTests(unittest.TestCase):
         with self.assertRaisesRegex(cardcode.CodeError, "not a file"):
             cardcode.change("scripts/step.py", "Do it.")
 
+    def test_over_the_network_a_file_outside_the_library_is_not_shown_or_changed(self):
+        """The rule a source preview follows (flows._readable): from the
+        tailnet, only the Claude library and the project's instruction and
+        settings files; at this Mac's keyboard, any file."""
+        with self.assertRaises(cardcode.NotShown):
+            cardcode.view(path=str(self.step), local=False)
+        self.assertTrue(cardcode.view(path=str(self.step), local=True)["exists"])
+        with mock.patch.object(cardcode, "_launch", return_value="job5") as launch:
+            with self.assertRaises(cardcode.NotShown):
+                cardcode.change(str(self.step), "Anything.", local=False)
+            launch.assert_not_called()
+            rec = cardcode.change(str(self.step), "Anything.", local=True)
+        with self.assertRaises(cardcode.NotShown):
+            cardcode.change_status(rec["id"], local=False)
+        with self.assertRaises(cardcode.NotShown):
+            cardcode.undo(rec["id"], local=False)
+        self.assertEqual(list((self.root / "backups").iterdir()), [Path(rec["backup"]).parent])
+
     def test_a_running_change_cannot_be_undone(self):
         with mock.patch.object(cardcode, "_launch", return_value="job3"):
             rec = cardcode.change(str(self.step), "Anything.")

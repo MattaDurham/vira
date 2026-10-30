@@ -72,7 +72,7 @@
     skill: "Skill", command: "Command", script: "Script", agent: "Agent file",
     plugin: "Plugin", mcp: "MCP server", hook: "Hook", settings: "Settings",
     instructions: "Instructions", harness: "Harness", "scheduled-task": "Scheduled task",
-    file: "File", folder: "Folder", find: "Reference", library: "Source",
+    file: "File", folder: "Folder", app: "App", find: "Reference", library: "Source",
   };
   // Kinds that become part of a card's environment (server/flows.py
   // ENV_KEYS); the rest reach the card as a line of text.
@@ -2105,6 +2105,9 @@
       editor.appendChild(previewBlock(node.source_ref, node.source));
     } else if (node.type === "tool") {
       editor.appendChild(make("code", "forge-path", "(no path)"));
+    } else if (node.source_ref && node.source !== "find") {
+      // A file, log, folder or app the board reads or writes: what it holds now.
+      editor.appendChild(previewBlock(node.source_ref, node.source));
     } else if (node.source_ref) {
       editor.appendChild(make("code", "forge-path", node.source_ref));
     }
@@ -2232,6 +2235,13 @@
     return list;
   }
 
+  function sizeText(bytes) {
+    const n = Number(bytes) || 0;
+    if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+    return `${n} bytes`;
+  }
+
   function paintPreview(body, shown) {
     body.appendChild(make("code", "forge-path", shown.path || ""));
     if (!shown.exists) { body.appendChild(make("p", "hint", "Not on this Mac.")); return; }
@@ -2241,7 +2251,35 @@
         ["Scope", server.scope], ["Env", (server.env || []).join(", ")]].filter(([, value]) => value)));
       return;
     }
-    if (shown.format === "binary") { body.appendChild(make("p", "hint", "Not a text file.")); return; }
+    if (shown.format === "binary") {
+      body.appendChild(make("p", "hint", `Not a text file${shown.size != null ? `, ${sizeText(shown.size)}` : ""}.`));
+      return;
+    }
+    if (shown.format === "app") {
+      body.appendChild(outlineList([["App", shown.name], ["Version", shown.version], ["Bundle id", shown.bundle_id]]
+        .filter(([, value]) => value)));
+      return;
+    }
+    if (shown.format === "log") {
+      body.appendChild(make("p", "hint", `${sizeText(shown.size)}${shown.truncated ? "; its newest lines" : ""}, newest at the bottom.`));
+      const pre = make("pre", "forge-log-tail", shown.text || "(empty)");
+      body.appendChild(pre);
+      setTimeout(() => { pre.scrollTop = pre.scrollHeight; }, 0);
+      return;
+    }
+    if (shown.format === "folder" && shown.entries) {
+      const folders = shown.folders || 0;
+      const files = (shown.count || 0) - folders;
+      body.appendChild(make("p", "hint", `${shown.count || 0} item${shown.count === 1 ? "" : "s"} inside: ${folders} folder${folders === 1 ? "" : "s"}, ${files} file${files === 1 ? "" : "s"}. Newest first${shown.truncated ? `, the first ${shown.entries.length} shown` : ""}.`));
+      const list = make("ul", "forge-folder-list");
+      shown.entries.forEach((entry) => {
+        const li = make("li");
+        li.append(make("span", "", `${entry.name}${entry.folder ? "/" : ""}`), make("small", "", stamp(entry.modified)));
+        list.appendChild(li);
+      });
+      body.appendChild(list);
+      return;
+    }
     if (shown.format === "folder") {
       const listing = shown.listing;
       if (listing) {

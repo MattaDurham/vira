@@ -4594,6 +4594,11 @@ def api_flows_kit_file(request: Request, ref: str = "", kind: str = "", cwd: str
         raise HTTPException(404, f"not on this Mac: {shown.get('path')}")
     if shown.get("format") == "mcp":
         text = json.dumps(shown["server"], indent=2)
+    elif shown.get("format") == "app":
+        text = "\n".join(f"{k}: {shown.get(k)}" for k in ("path", "name", "version", "bundle_id") if shown.get(k))
+    elif shown.get("format") == "folder" and shown.get("entries") is not None:
+        text = "\n".join([shown["path"], f"{shown.get('count', 0)} items, newest first", ""]
+                         + [f"{e['modified']}  {e['name']}{'/' if e['folder'] else ''}" for e in shown["entries"]])
     elif shown.get("format") == "folder":
         listing = shown.get("listing") or {}
         lines = [f"{shown['path']}", ""]
@@ -4764,12 +4769,15 @@ def api_flow_restore(flow_id: str):
 # ---------- A code card's code: what it does, the code, changes by instruction ----
 
 @app.get("/api/forge/code")
-def api_forge_code(path: str = "", command: str = "", cwd: str = ""):
+def api_forge_code(request: Request, path: str = "", command: str = "", cwd: str = ""):
     """The file a card runs or points at, the description it opens with,
     and its recent changes (server/cardcode.py). A Program card sends its
-    command and folder; a source card sends its path."""
+    command and folder; a source card sends its path. Over the network only
+    what a source preview may show (cardcode.NotShown, 403)."""
     try:
-        return cardcode.view(path=path, command=command, cwd=cwd)
+        return cardcode.view(path=path, command=command, cwd=cwd, local=_at_the_keyboard(request))
+    except cardcode.NotShown as e:
+        raise HTTPException(403, str(e))
     except cardcode.CodeError as e:
         raise HTTPException(400, str(e))
 
@@ -4784,27 +4792,34 @@ class CodeChangeReq(BaseModel):
 
 
 @app.post("/api/forge/code/change")
-def api_forge_code_change(req: CodeChangeReq):
+def api_forge_code_change(request: Request, req: CodeChangeReq):
     """Back the file up and start the session that changes it as typed."""
     try:
         return cardcode.change(req.path, req.instruction, flow_id=req.flow_id,
-                               card_id=req.card_id, card=req.card, flow=req.flow)
+                               card_id=req.card_id, card=req.card, flow=req.flow,
+                               local=_at_the_keyboard(request))
+    except cardcode.NotShown as e:
+        raise HTTPException(403, str(e))
     except cardcode.CodeError as e:
         raise HTTPException(400, str(e))
 
 
 @app.get("/api/forge/code/change/{cid}")
-def api_forge_code_change_status(cid: str):
+def api_forge_code_change_status(request: Request, cid: str):
     try:
-        return cardcode.change_status(cid)
+        return cardcode.change_status(cid, local=_at_the_keyboard(request))
+    except cardcode.NotShown as e:
+        raise HTTPException(403, str(e))
     except cardcode.CodeError as e:
         raise HTTPException(404, str(e))
 
 
 @app.post("/api/forge/code/change/{cid}/undo")
-def api_forge_code_change_undo(cid: str):
+def api_forge_code_change_undo(request: Request, cid: str):
     try:
-        return cardcode.undo(cid)
+        return cardcode.undo(cid, local=_at_the_keyboard(request))
+    except cardcode.NotShown as e:
+        raise HTTPException(403, str(e))
     except cardcode.CodeError as e:
         raise HTTPException(400, str(e))
 

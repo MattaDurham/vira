@@ -32,6 +32,8 @@ them, so the editor no longer draws them (2026-10-27, 10-28).
 from __future__ import annotations
 
 import json
+import os
+import plistlib
 import re
 import shlex
 import uuid
@@ -1175,6 +1177,54 @@ def _readable(path, cwd=None, local=False):
     return resolved in allowed or resolved == CLAUDE_JSON.resolve()
 
 
+def _app_info(path):
+    """An app bundle's name, version and id, from its Info.plist."""
+    try:
+        with (path / "Contents" / "Info.plist").open("rb") as fh:
+            info = plistlib.load(fh)
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        info = {}
+    return {"name": str(info.get("CFBundleDisplayName") or info.get("CFBundleName") or path.stem),
+            "version": str(info.get("CFBundleShortVersionString") or ""),
+            "bundle_id": str(info.get("CFBundleIdentifier") or "")}
+
+
+# A folder card lists what is directly inside it, newest first: a records
+# folder holds one folder per record, and walking every file under raw/
+# (images included) would take seconds for nothing anyone reads.
+FOLDER_ENTRIES = 100
+
+
+def _folder_entries(path):
+    rows = []
+    with os.scandir(path) as it:
+        for entry in it:
+            if entry.name.startswith("."):
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
+                continue
+            rows.append((mtime, entry.name, entry.is_dir()))
+    rows.sort(reverse=True)
+    return {"count": len(rows), "folders": sum(1 for r in rows if r[2]),
+            "entries": [{"name": name, "folder": is_dir,
+                         "modified": datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")}
+                        for mtime, name, is_dir in rows[:FOLDER_ENTRIES]],
+            "files": [], "more_files": 0, "text": "", "truncated": len(rows) > FOLDER_ENTRIES}
+
+
+def _log_tail(path):
+    """A log's newest lines: the last PREVIEW_CAP bytes, from a line start."""
+    size = path.stat().st_size
+    with path.open("rb") as fh:
+        fh.seek(max(0, size - PREVIEW_CAP))
+        text = fh.read().decode("utf-8", errors="replace")
+    if size > PREVIEW_CAP:
+        text = text.split("\n", 1)[-1]
+    return {"text": text, "size": size, "truncated": size > PREVIEW_CAP}
+
+
 def kit_preview(ref, kind="", cwd=None, local=False):
     """What a source card stands for, ready to show: the file's text with
     its format, a settings file's outline, a plugin folder's listing, or an
@@ -1192,6 +1242,12 @@ def kit_preview(ref, kind="", cwd=None, local=False):
     out = {"kind": kind, "path": str(path), "exists": path.exists()}
     if not path.exists():
         return {**out, "format": "missing"}
+    if path.is_dir() and path.suffix.lower() == ".app":
+        return {**out, "format": "app", **_app_info(path)}
+    if path.is_dir() and kind == "folder":
+        return {**out, "format": "folder", "listing": None, **_folder_entries(path)}
+    if path.is_file() and path.suffix.lower() == ".log":
+        return {**out, "format": "log", **_log_tail(path)}
     if path.is_dir():
         readme = next((p for p in (path / "README.md", path / "readme.md") if p.is_file()), None)
         text = readme.read_text(encoding="utf-8", errors="replace") if readme else ""
