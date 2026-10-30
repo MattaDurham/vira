@@ -23,7 +23,8 @@ class CardCodeTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / "scripts").mkdir()
         self.step = self.root / "scripts" / "step.py"
-        self.step.write_text(STEP, encoding="utf-8")
+        # bytes, so the file is LF on Windows too (text mode writes CRLF there)
+        self.step.write_bytes(STEP.encode("utf-8"))
         for patch in (mock.patch.object(cardcode, "STORE", self.root / "changes.json"),
                       mock.patch.object(cardcode, "BACKUPS", self.root / "backups")):
             patch.start()
@@ -57,11 +58,11 @@ class CardCodeTests(unittest.TestCase):
         self.assertEqual(rec["status"], "running")
         self.assertEqual(rec["job_id"], "job1")
         prompt = launch.call_args.args[0]
-        self.assertIn(str(self.step), prompt)
+        self.assertIn(str(self.step.resolve()), prompt)
         self.assertIn("Queue at most 20.", prompt)
         self.assertIn("Keep it true", prompt)
         # the session edits the file while it runs
-        self.step.write_text(STEP.replace("3 queued", "20 queued"), encoding="utf-8")
+        self.step.write_bytes(STEP.replace("3 queued", "20 queued").encode("utf-8"))
         with mock.patch.object(cardcode, "_job", return_value={"status": "running"}):
             self.assertEqual(cardcode.change_status(rec["id"])["status"], "running")
         with mock.patch.object(cardcode, "_job", return_value={"status": "done", "result": "Capped the queue."}):
@@ -72,7 +73,7 @@ class CardCodeTests(unittest.TestCase):
         self.assertIn('+print("done: 20 queued")', done["diff"])
         self.assertEqual(cardcode.view(path=str(self.step))["changes"][0]["status"], "done")
         cardcode.undo(rec["id"])
-        self.assertEqual(self.step.read_text(encoding="utf-8"), STEP)
+        self.assertEqual(self.step.read_bytes().decode("utf-8"), STEP)
         kept = Path(rec["backup"]).with_name("step.py.before-undo")
         self.assertIn("20 queued", kept.read_text(encoding="utf-8"))
         self.assertEqual(cardcode.get(rec["id"])["status"], "undone")
@@ -80,7 +81,7 @@ class CardCodeTests(unittest.TestCase):
     def test_a_session_waiting_for_a_reply_has_made_its_change(self):
         with mock.patch.object(cardcode, "_launch", return_value="job4"):
             rec = cardcode.change(str(self.step), "Queue at most 20.")
-        self.step.write_text(STEP.replace("3 queued", "20 queued"), encoding="utf-8")
+        self.step.write_bytes(STEP.replace("3 queued", "20 queued").encode("utf-8"))
         job = {"status": "running", "awaiting": "reply", "result_text": "Capped it at 20."}
         with mock.patch.object(cardcode, "_job", return_value=job):
             out = cardcode.change_status(rec["id"])
