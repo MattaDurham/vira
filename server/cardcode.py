@@ -260,10 +260,14 @@ def change_status(cid):
     if rec.get("status") == "running":
         job = _job(rec.get("job_id"))
         status = str(job.get("status") or "running")
-        if status not in LIVE:
+        # A Vira session stays open after its turn, waiting for a reply
+        # (the owner can ask it for more); its turn ending is the change
+        # being made.
+        if status not in LIVE or job.get("awaiting") == "reply":
             text = diff(rec) or ""
+            said = job.get("result_text") or job.get("result") or ""
             rec = _update(cid, status="done" if text else "unchanged", finished=_now(),
-                          summary=str(job.get("result") or "").strip()[:4000])
+                          summary=str(said).strip()[:4000])
     out = dict(rec)
     if out.get("status") in ("done", "unchanged", "undone"):
         out["diff"] = diff(out) or ""

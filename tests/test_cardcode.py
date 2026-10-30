@@ -77,6 +77,17 @@ class CardCodeTests(unittest.TestCase):
         self.assertIn("20 queued", kept.read_text(encoding="utf-8"))
         self.assertEqual(cardcode.get(rec["id"])["status"], "undone")
 
+    def test_a_session_waiting_for_a_reply_has_made_its_change(self):
+        with mock.patch.object(cardcode, "_launch", return_value="job4"):
+            rec = cardcode.change(str(self.step), "Queue at most 20.")
+        self.step.write_text(STEP.replace("3 queued", "20 queued"), encoding="utf-8")
+        job = {"status": "running", "awaiting": "reply", "result_text": "Capped it at 20."}
+        with mock.patch.object(cardcode, "_job", return_value=job):
+            out = cardcode.change_status(rec["id"])
+        self.assertEqual(out["status"], "done")
+        self.assertEqual(out["summary"], "Capped it at 20.")
+        self.assertIn('+print("done: 20 queued")', out["diff"])
+
     def test_a_session_that_changes_nothing_says_so(self):
         with mock.patch.object(cardcode, "_launch", return_value="job2"):
             rec = cardcode.change(str(self.step), "Explain the limits.")
