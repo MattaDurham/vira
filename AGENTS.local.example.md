@@ -154,13 +154,15 @@ handoff appears.
 
 1. Open the PR: `scripts/branch.sh pr <slug>` (a draft until merge time;
    the merge requires one).
-2. **Watch CI yourself until every check finishes**, for example with
-   `gh pr checks <number> --watch` running in the background. If a check
-   fails, fix it, commit, push, and watch again. A check that fails on a
-   test your diff does not touch is rerun once (`gh run rerun <id>
-   --failed`) before anything else. Never hand the wait to the owner or
-   ask them to say when it is green.
-3. **The moment CI is green, post the handoff in the chat, unprompted:**
+2. **Start watching CI in the background, but do not wait for it**, for
+   example `gh pr checks <number> --watch`. A dispatched session's landing
+   card goes up while CI runs, and a direct session hands off the same
+   way. If a check fails, fix it, commit, push, and tell the owner. A
+   check that fails on a test your diff does not touch is rerun once
+   (`gh run rerun <id> --failed`) before anything else. Never hand the
+   watching to the owner.
+3. **Post the handoff in the chat as soon as the PR is open, unprompted,**
+   saying whether CI is still running:
    - **What I did** - a few short bullets.
    - **Where it is** - branch and PR link.
    - **Private state touched** - the kind of data and where it lives, or
@@ -189,12 +191,12 @@ authorization for the whole landing**, run end to end without stopping:
 1. Commit anything outstanding with a real message (ASCII, no emoji).
 2. If `main` moved, rebase in the worktree, never in the live tree, and
    push. The merge gate refuses a branch behind `main` (preflight `tree`),
-   so this step is never skipped. If the rebase was clean and the commits
-   on `main` touch none of your files, merge straight away: CI runs on
-   `main` after the push, so watch that run and fix forward if it goes
-   red. Only when files overlap do you re-run the affected tests and wait
-   for the branch's CI again. If preflight's `base` check says main's
-   history was rewritten, use `git rebase --onto main <old-base>`, not
+   so this step is never skipped. When the commits on `main` touched any
+   of your files, re-run the tests that cover those files. Then merge
+   straight away, without waiting for the branch's CI: preflight's `ci`
+   check blocks a red run and only warns on one still in progress, the
+   same gate Vira's own landing goes through. If preflight's `base` check
+   says main's history was rewritten, use `git rebase --onto main <old-base>`, not
    `git rebase main`.
 3. `scripts/branch.sh pr <slug> --ready`.
 4. `scripts/branch.sh merge <slug>`: preflight (it also judges the module
@@ -202,7 +204,11 @@ authorization for the whole landing**, run end to end without stopping:
    the merge and prints the fix), the merge into `main`, and the teardown
    of the spent worktree.
 5. Push: `git -C <live checkout> push`, then `scripts/branch.sh discard
-   <slug>` to remove the remote branch once the PR reads Merged.
+   <slug>` to remove the remote branch once the PR reads Merged. Then
+   watch `main`'s CI run for the merge in the background and fix forward
+   if it goes red: with the branch's CI possibly unfinished, that run is
+   the one that grades the merge (the Windows job is the only Windows
+   machine).
 6. If `server/` changed, say so and give the restart command. A session
    running inside Vira never runs it (it would kill itself); a session the
    owner runs directly runs it when the owner asks, then confirms the
