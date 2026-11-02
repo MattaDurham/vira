@@ -220,7 +220,7 @@ MODULES = [
             {"id": "record_dir", "kind": "text", "required": True,
              "label": "Where should your record live?",
              "help": "A folder Vira creates and owns. Your resume, your "
-                     "facts, and every application package land here.",
+                     "facts, and every application package are saved here.",
              "default": "~/.vira/self-record"},
         ],
     },

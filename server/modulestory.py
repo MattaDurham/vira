@@ -67,7 +67,7 @@ WINDOWS = {
                               "routines", "circuits", "flows", "forge",
                               "orphan-work"],
                      "keywords": ["the forge", "work window", "the queue",
-                                  "flow run", "unlanded work",
+                                  "flow run", "work not merged",
                                   "live session", "agent session"]},
     "attention":    {"map": "attention-win",
                      "tags": ["attention", "brief", "review",

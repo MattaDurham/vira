@@ -178,7 +178,7 @@ SEEDS = [
     },
     {
         "id": "orphan-sweep",
-        "name": "Orphan sweep — unlanded work",
+        "name": "Orphan sweep — work not merged",
         "kind": "digest",
         "every_hours": 24,
         "enabled": True,
@@ -186,7 +186,7 @@ SEEDS = [
         "model": "",
         "prompt": "__orphan_sweep__",     # internal dispatch, no session
         "description": "Daily inventory of every worktree and branch for "
-                       "work that never landed — uncommitted changes, "
+                       "work that never reached main — uncommitted changes, "
                        "unpushed commits, unmerged branches, stalled "
                        "sessions — surfaced in The Forge > Runs.",
     },

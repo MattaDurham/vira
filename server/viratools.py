@@ -158,7 +158,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             # landing follows, those read a contradiction with their own
             # prompt. Their empty branch is removed at session end
             # (session._tidy_worktree).
-            "WHEN YOUR TURN ENDS, VIRA HANDLES THE LANDING. If you changed "
+            "WHEN YOUR TURN ENDS, VIRA HANDLES THE MERGE. If you changed "
             "files on this branch, it opens the PR and raises the merge / "
             "try it first / keep playing / discard decision card itself; a "
             "fresh test instance is served only when the owner picks Try it "
@@ -166,7 +166,7 @@ def preamble(native=True, worktree_path="", branch="", live_root="",
             "not end on that question - end with what you built and what to "
             "look at when they try it. If you changed no file (your "
             "work went through Vira's tools, or you only read and "
-            "reported), there is nothing to land: no card goes up, the "
+            "reported), there is nothing to merge: no card goes up, the "
             "empty branch is removed when the session ends, and you end "
             "with what you did.\n\n")
     ask_para = (

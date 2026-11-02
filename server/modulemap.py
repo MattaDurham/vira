@@ -282,7 +282,7 @@ DEFAULT_MODULES = [
     {"id": "attention-engine", "name": "Live attention engine", "layer": "engine",
      "group": "rhythm", "kind": "edge-triggered live aggregator",
      "what": "Keeps the Now lane short: live sessions, exact question and "
-             "approval cards, running flows, unlanded branches, and silent "
+             "approval cards, running flows, branches not merged, and silent "
              "worker failures. Every verb targets the exact owning object.",
      "links": [{"to": "sessions", "how": "reads live work from"},
                {"to": "circuits-engine", "how": "reads running flows from"}],
@@ -296,7 +296,7 @@ DEFAULT_MODULES = [
              "move that fits (post to the thread they already have, start "
              "a group chat, make an introduction). Two triggers: standing "
              "profile overlap, and links your contacts actually shared "
-             "lately. An item that lands on one person becomes a "
+             "lately. An item that falls to one person becomes a "
              "conversation marker on their row instead.",
      "links": [{"to": "crm-data", "how": "scores people from"},
                {"to": "chat-db", "how": "reads shared links from"}],
@@ -323,17 +323,17 @@ DEFAULT_MODULES = [
      "what": "Every draft branch on this machine as a card: what it does "
              "and what state it is in (a Vira-written blurb over the "
              "sweeper's evidence and the pull request), banded as a live "
-             "session, unlanded work, or landed-and-never-cleaned-up. Each "
+             "session, work not merged, or merged-and-never-cleaned-up. Each "
              "card launches its own branch instance in a fresh tab, "
              "expands to the full read, and carries the verdict buttons - "
-             "Land / Resume / Discard through the orphan-work sweeper, "
-             "Clean up for a landed worktree. It builds nothing.",
+             "Resume / Discard through the orphan-work sweeper, "
+             "Clean up for a merged worktree. It builds nothing.",
      "links": [{"to": "orphan-sweeper", "how": "joins its rows and calls its verbs"},
                {"to": "sessions", "how": "reads the ledger for each branch's session"}],
      "endpoints": ["/api/showroom", "/api/showroom/serve",
                    "/api/showroom/context"],
      "keywords": ["showroom", "draft branch", "test instance", "worktree",
-                  "pull request", "land", "cleanup"],
+                  "pull request", "merge", "land", "cleanup"],
      "updated": TODAY},
     {"id": "circuits-engine", "name": "Flow execution engine", "layer": "engine",
      "group": "operate", "kind": "graph compiler + pipeline runner",
@@ -427,7 +427,7 @@ DEFAULT_MODULES = [
              "counted per folder and kind, never listed as sessions. Around "
              "them: each repository's worktrees and branches, pull requests "
              "through gh, the landings on the base branch and CHANGELOG.md "
-             "by the day each bullet landed. The live tier runs every two "
+             "by the day each bullet was merged. The live tier runs every two "
              "seconds and only while a Fleet window holds the stream open. "
              "The Analyze read (server/fleetread.py) is one model call, only "
              "on the owner's press, with no tools, saved to "
@@ -513,7 +513,7 @@ DEFAULT_MODULES = [
     {"id": "orphan-sweeper", "name": "Orphan-work sweeper", "layer": "engine",
      "group": "operate", "kind": "plain git + the job ledger, no model call",
      "what": "Daily inventory of every worktree and claude/* branch for "
-             "work that never landed — uncommitted changes, unpushed "
+             "work that never reached main — uncommitted changes, unpushed "
              "commits, unmerged branches, a stalled session found by "
              "joining against the job ledger. Cached in "
              "data/orphan-work.json, pings the owner when a genuinely new "
@@ -559,7 +559,7 @@ DEFAULT_MODULES = [
              "validates and applies — config and generated pages are "
              "never written by the agent's own hands. Readiness is "
              "derived by re-probing, so a module goes live because its "
-             "data landed, not because a run said so.",
+             "data arrived, not because a run said so.",
      "links": [{"to": "sessions", "how": "dispatches setup to"},
                {"to": "reader-win", "how": "sets up"},
                {"to": "applications-win", "how": "sets up"}],
@@ -666,7 +666,7 @@ DEFAULT_MODULES = [
      "what": "Who to talk to next and who to put in a room together — the "
              "relationship rhythm surface. Grouping cards name the topic, "
              "the audience, and the move; person rows carry the live "
-             "marker when something just landed on their ground.",
+             "marker when something new just arrived on their ground.",
      "links": [{"to": "radar-engine", "how": "renders"}],
      "keywords": ["radar window", "groupings"],
      "updated": TODAY},
@@ -681,7 +681,7 @@ DEFAULT_MODULES = [
      "group": "operate", "kind": "Forge parts (legacy window alias)",
      "what": "Scheduled trigger parts attached to Flows: cadence, next and "
              "last run, status, and editable instance configuration. Muse's "
-             "proposals land in Cues for approval. A command routine's node "
+             "proposals show up in Cues for approval. A command routine's node "
              "lists every run with its counts, errors and log lines, with "
              "Run now and Pause; the library's This Mac tab lists every "
              "launchd job on the machine, read-only.",
@@ -819,7 +819,7 @@ DEFAULT_MODULES = [
               {"to": "flows-engine", "how": "draws pipelines with"},
               {"to": "circuits-engine", "how": "runs pipelines via"},
               {"to": "lessonwatch-engine", "how": "shows the Rules panel from"},
-              {"to": "orphanwork-engine", "how": "lists unlanded work from"},
+              {"to": "orphanwork-engine", "how": "lists work not merged from"},
               {"to": "library-src", "how": "lists skills from"},
               {"to": "attention-engine", "how": "opens live traces and waiting work from"}],
      "keywords": ["forge", "work", "cockpit", "cues", "flows", "runs", "record", "undo", "trace", "chronological ledger"],
@@ -923,7 +923,7 @@ DEFAULT_MODULES = [
              "showing its live state that opens in place. A brand-new "
              "install doesn't start here; it starts on one screen asking "
              "for one thing, your go-to AI, and the rest of the app "
-             "unlocks as its data lands.",
+             "unlocks as its data arrives.",
      "links": [],
      "keywords": ["config", "setup", "onboarding", "settings", "first run"],
      "updated": TODAY},

@@ -232,7 +232,7 @@ def _probe_whatsapp(ctx):
     from . import whatsapp
     linked = whatsapp.linked()
     if linked:
-        detail = ("Linked as a WhatsApp device — inbound messages land in "
+        detail = ("Linked as a WhatsApp device — inbound messages show up in "
                   "the feed. Receive-only: Vira never sends.")
     elif whatsapp.installed():
         detail = ("Link Vira as a WhatsApp device to feed inbound messages "

@@ -210,10 +210,11 @@ LANDING_KIND = "landing"
 LANDING_VERDICTS = ("merge", "test", "keep", "discard")
 LANDING_OPTIONS = [
     {"label": "Merge it",
-     "description": "Land this branch on main: the session commits, "
+     "description": "Merge this branch into main: the session commits, "
                     "catches up with main and re-tests; then Vira merges "
-                    "(preflight, the suite gate, the required PR), pushes, "
-                    "and tears the branch and any test instance down."},
+                    "it (after the pre-merge checks, the full test suite "
+                    "and the PR), pushes, and deletes the branch and any "
+                    "test instance."},
     {"label": "Try it first",
      "description": "Serve a fresh, local-only instance of this branch "
                     "(about a minute) and bring this card back with its "
@@ -244,7 +245,7 @@ LANDING_OPTIONS = [
 # the turn ends. The session that wrote the work writes the commit
 # message; the harness never invents one.
 MERGE_STEER = (
-    "The owner chose MERGE IT. Do the landing in AGENTS.local.md section 3 "
+    "The owner chose MERGE IT. Do the merge steps in AGENTS.local.md section 3 "
     "up to, but not including, `branch.sh merge`: commit everything with a "
     "real message, catch this branch up with main if main moved (rebase in "
     "this worktree, re-run the tests, push the branch), and make sure its PR "
@@ -1308,7 +1309,7 @@ class Runner:
         return ((subject or f"Work from Vira session {self.spec['id']}")
                 + f"\n\nCommitted by Vira when session {self.spec['id']} "
                 "finished its turn: the agent left these changes uncommitted, "
-                "and the landing card needs a commit to open the pull "
+                "and the merge card needs a commit to open the pull "
                 "request.\n")
 
     def _commit_work(self):
@@ -1360,7 +1361,7 @@ class Runner:
         if self.landing is not None:
             self.finished_cleanly = True
             self.finished_by_owner = True
-            self.append(f"[vira] landing verdict on file: "
+            self.append(f"[vira] your merge card answer is on file: "
                         f"{self.landing.get('verdict')} - closing the "
                         "session; Vira acts on it below, in this "
                         "transcript\n")
@@ -1375,12 +1376,12 @@ class Runner:
             # Commit before the card, so the card can open its PR and an
             # unanswered card leaves a branch Merge can land.
             ok, note = await asyncio.to_thread(self._commit_work)
-            self.append(f"[vira] landing: committed {dirty} uncommitted "
+            self.append(f"[vira] committed {dirty} uncommitted "
                         f"path(s) on {branch}\n" if ok else
-                        f"[vira] landing: could not commit the work - {note}\n")
+                        f"[vira] could not commit the work - {note}\n")
             if ok:
                 dirty, ahead = await asyncio.to_thread(self._branch_work)
-        self.append(f"[vira] landing: {branch} carries "
+        self.append(f"[vira] {branch} carries "
                     f"{dirty} uncommitted path(s), {ahead} commit(s) ahead "
                     "of main\n")
         pr_url, pr_note = await asyncio.to_thread(self._ensure_pr)
@@ -1456,7 +1457,7 @@ class Runner:
         no sign main stood still while the card waited."""
         verdict = str(cmd.get("verdict") or "").strip().lower()
         if verdict not in LANDING_VERDICTS:
-            self.append(f"[vira] landing: unknown verdict {verdict!r} "
+            self.append(f"[vira] merge card: unknown answer {verdict!r} "
                         "ignored\n")
             return
         self._drop_landing_card()

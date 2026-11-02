@@ -1255,7 +1255,7 @@
 
   // ----- project: worktrees, branches, instances, its timeline
   const LABEL_CLS = { "Live": "live", "In use": "use", "Uncommitted changes": "dirty",
-                      "Unlanded commits": "unlanded", "Landed, can remove": "landed",
+                      "Commits not on main": "unlanded", "Merged, can remove": "landed",
                       "No commits, can remove": "fresh" };
   function aheadText(x) {
     if (x.ahead == null) return "-";
@@ -1466,7 +1466,7 @@
     q.placeholder = "Search landings and the change log";
     q.value = S.tl.q;
     q.addEventListener("input", () => { S.tl.q = q.value; renderTimelineList(list, f); });
-    tools.append(seg("Timeline shows", [["all", "Everything"], ["landed", "Landed"], ["log", "Change log"]], S.tl.mode,
+    tools.append(seg("Timeline shows", [["all", "Everything"], ["landed", "Merged"], ["log", "Change log"]], S.tl.mode,
       (v) => { S.tl.mode = v; render(); }), q);
     if (S.tl.day) tools.append(btn("fl-navbtn quiet", `${dayLabel(S.tl.day)} only - show all days`, () => { S.tl.day = null; render(); }));
     const list = el("div", "fl-tl-list");

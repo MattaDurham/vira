@@ -43,7 +43,7 @@ CONSEQUENCE = {
     "lesson-recurrence": "Paused, the counts of rules broken again stop updating.",
     "system-map": "Paused, the system map stops following the change log.",
     "room-ingest": "Paused, reading-room material stops being staged into the vault.",
-    "orphan-sweep": "Paused, the list of unlanded work in Runs stops refreshing.",
+    "orphan-sweep": "Paused, the list of work not merged in Runs stops refreshing.",
 }
 VIRA_SERVICE = "nyc.durham.vira"
 

@@ -181,7 +181,7 @@ def _card_rows(registry, names):
         card = p["card"]
         title = names.get(p["job_id"]) or p["job_id"]
         kind = ("a question" if card.get("kind") == "ask" else
-                "ready to land: " + (card.get("branch") or "a branch")
+                "ready to merge: " + (card.get("branch") or "a branch")
                 if card.get("kind") == "landing" else
                 "approval: " + (card.get("tool") or "a tool call"))
         rows.append(_row(

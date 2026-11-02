@@ -240,7 +240,7 @@ window.ViraAssistant = (() => {
     const saveFamilyDestination = calendarDestination(form, data, "family");
     add("assistant_kids_names", "Children's first names (comma-separated)", "text",
       { placeholder: "An event naming one of them files on the kids calendar" });
-    notice(form, "Kid and family events Vira reads out of messages and mail land on those calendars "
+    notice(form, "Kid and family events Vira reads out of messages and mail go on those calendars "
       + "as entries for you only; nobody is invited. Either lane falls back to the personal calendar.");
     add("assistant_calendar_work_start", "Weekday work hours start (0-23)", "number", { min: 0, max: 23, required: "" });
     add("assistant_calendar_work_end", "Weekday work hours end (1-24)", "number", { min: 1, max: 24, required: "" });

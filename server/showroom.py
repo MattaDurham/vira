@@ -513,19 +513,19 @@ def fallback_blurb(item):
             bits[0] += f" on {_when(item['merged_at'])}"
         if pr.get("number"):
             bits[0] += f" as PR #{pr['number']}"
-        left = ("its worktree was never torn down" if item.get("worktree")
+        left = ("its worktree was never removed" if item.get("worktree")
                 else "only the local branch ref is left")
-        return f"{bits[0]}. Nothing unlanded remains; {left}."
+        return f"{bits[0]}. Nothing is left to merge; {left}."
     parts = []
     if item.get("ahead"):
         parts.append(f"{item['ahead']} commit{'s' if item['ahead'] != 1 else ''} ahead of main")
     if item.get("dirty"):
         parts.append(f"{item['dirty']} uncommitted change{'s' if item['dirty'] != 1 else ''}")
-    head = ", ".join(parts) or "no unlanded work read yet"
+    head = ", ".join(parts) or "no unmerged work read yet"
     if band == "session":
         job = item.get("job") or {}
         return (f"A session is live on this branch ({job.get('title') or job.get('id') or 'unnamed'}) - "
-                f"{head}. Its landing is that session's to decide.")
+                f"{head}. Merging it is that session's call.")
     commits = item.get("commits") or []
     tail = f' Latest commit: "{commits[0]}".' if commits else ""
     return f"{head[:1].upper()}{head[1:]}.{tail}"

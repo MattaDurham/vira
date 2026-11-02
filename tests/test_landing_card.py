@@ -299,7 +299,7 @@ class CommitBeforeTheCard(_Placed):
         self.assertEqual((self.card(r)["dirty"], self.card(r)["ahead"]), (0, 1))
         self.assertEqual(g("log", "-1", "--format=%s", cwd=wt).stdout.strip(),
                          "agent's own")
-        self.assertNotIn("landing: committed", self.output(r))
+        self.assertNotIn("[vira] committed", self.output(r))
 
     def test_a_refused_commit_still_raises_the_card(self):
         """A pre-commit hook may refuse (the PII guard): the card still
@@ -444,7 +444,7 @@ class TheVerdict(_Placed):
         self.assertTrue(r.finished_by_owner)
         self.assertTrue(r.finished_cleanly)
         self.assertIsNone(self.card(r))
-        self.assertIn("verdict on file: merge", self.output(r))
+        self.assertIn("merge card answer is on file: merge", self.output(r))
 
     def test_an_unknown_verdict_is_ignored(self):
         r = self.raised(self.placed())
@@ -707,8 +707,8 @@ class LandSession(_BranchShCase):
             self._wait("claude/t")
         log = self.transcript()
         # in order: the session's words, the start, the verdict, the words
-        i_start = log.index("[vira] landing: merging claude/t into main")
-        i_done = log.index("[vira] landed: claude/t merged into main, "
+        i_start = log.index("[vira] merging claude/t into main")
+        i_done = log.index("[vira] merged: claude/t is in main, "
                            "pushed, branch and worktree removed")
         self.assertLess(log.index("Ready for Vira"), i_start)
         self.assertLess(i_start, i_done)
@@ -738,7 +738,7 @@ class LandSession(_BranchShCase):
             orphanwork.land_session(self.JID, "claude/t", "merge")
             self._wait("claude/t")
         self.assertEqual(len(seen), 1)
-        self.assertIn("[vira] landed:", seen[0])
+        self.assertIn("[vira] merged:", seen[0])
 
     def test_a_refused_landing_says_so_in_the_transcript(self):
         job_row, _ = self._rows(0, self.root)
@@ -749,7 +749,7 @@ class LandSession(_BranchShCase):
             orphanwork.land_session(self.JID, "claude/t", "merge")
             self._wait("claude/t")
         log = self.transcript()
-        self.assertIn("[vira] landing failed: claude/t was NOT merged", log)
+        self.assertIn("[vira] merge failed: claude/t was NOT merged", log)
         self.assertIn("uncommitted changes", log)
 
     def test_the_notes_the_owner_must_act_on_get_their_own_lines(self):
@@ -771,7 +771,7 @@ class LandSession(_BranchShCase):
             orphanwork.land_session(self.JID, "claude/t", "merge")
             self._wait("claude/t")
         log = self.transcript()
-        self.assertIn("[vira] landed: claude/t merged into main, push FAILED "
+        self.assertIn("[vira] merged: claude/t is in main, push FAILED "
                       "(main is local only)", log)
         self.assertNotIn("worktree removed", log)
         self.assertIn("[vira] push FAILED: fatal", log)
@@ -785,7 +785,7 @@ class LandSession(_BranchShCase):
             orphanwork.land_session(self.JID, "claude/t", "discard")
             self._wait("claude/t")
         log = self.transcript()
-        self.assertIn("[vira] landing: discarding claude/t", log)
+        self.assertIn("[vira] discarding claude/t", log)
         self.assertIn("[vira] discarded: claude/t", log)
         self.assertIn("  branch.sh discard t\n", log)
 
@@ -833,10 +833,10 @@ class ThePreamble(unittest.TestCase):
                   live_root="/tmp/live")
         for native in (True, False):
             p = viratools.preamble(native, **kw)
-            self.assertIn("VIRA HANDLES THE LANDING", p)
+            self.assertIn("VIRA HANDLES THE MERGE", p)
             self.assertIn("Do NOT ask whether to merge, test or discard", p)
             self.assertIn("served only when the owner picks Try it first", p)
-        self.assertNotIn("VIRA HANDLES THE LANDING", viratools.preamble(True))
+        self.assertNotIn("VIRA HANDLES THE MERGE", viratools.preamble(True))
 
     def test_a_session_that_changes_no_file_is_not_promised_a_landing(self):
         """offer_landing raises no card over a branch with nothing on it
@@ -848,7 +848,7 @@ class ThePreamble(unittest.TestCase):
         for native in (True, False):
             p = viratools.preamble(native, **kw)
             self.assertIn("If you changed files on this branch", p)
-            self.assertIn("there is nothing to land: no card goes up", p)
+            self.assertIn("there is nothing to merge: no card goes up", p)
 
 
 class TheSurfaces(unittest.TestCase):
@@ -876,7 +876,7 @@ class TheSurfaces(unittest.TestCase):
 
     def test_attention_names_the_card(self):
         src = (ROOT / "server" / "attention.py").read_text(encoding="utf-8")
-        self.assertIn('"ready to land: "', src)
+        self.assertIn('"ready to merge: "', src)
 
     def test_config_carries_the_card_switch_and_not_the_retired_serve_one(self):
         cfg = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
