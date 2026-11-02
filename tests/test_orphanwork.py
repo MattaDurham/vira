@@ -1025,6 +1025,37 @@ class FullContext(_RepoCase):
         launch.assert_not_called()
         self.assertEqual(self.store.read_bytes(), before)
 
+class NoteLanded(unittest.TestCase):
+    """An idea is done when its branch lands, not when its session ends."""
+
+    ROWS = [{"id": "j1", "branch": "claude/x", "idea_id": "idea_1"},
+            {"id": "j2", "branch": "claude/x", "idea_id": ""},      # a Resume
+            {"id": "j3", "branch": "claude/y", "idea_id": "idea_2"}]
+
+    def stamps(self, verdict):
+        from server import ideas, joblog
+        with mock.patch.object(joblog, "list_records", return_value=self.ROWS), \
+             mock.patch.object(ideas, "stamp_note") as stamp:
+            self.assertIsNone(orphanwork.note_landed("claude/x", verdict))
+        return stamp.call_args_list
+
+    def test_a_merge_marks_the_branch_ideas_done(self):
+        [c] = self.stamps("merge")
+        self.assertEqual(c.args[0], "idea_1")
+        self.assertIn("landed on main", c.args[1])
+        self.assertEqual(c.kwargs.get("status"), "done")
+
+    def test_a_discard_says_nothing_landed_and_keeps_it_open(self):
+        [c] = self.stamps("discard")
+        self.assertIn("nothing landed", c.args[1])
+        self.assertNotIn("status", c.kwargs)
+
+    def test_a_missing_idea_never_fails_the_landing(self):
+        from server import ideas, joblog
+        with mock.patch.object(joblog, "list_records", return_value=self.ROWS), \
+             mock.patch.object(ideas, "stamp_note", side_effect=KeyError("gone")):
+            self.assertIsNone(orphanwork.note_landed("claude/x", "merge"))
+
 
 if __name__ == "__main__":
     unittest.main()

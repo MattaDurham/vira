@@ -69,6 +69,30 @@ class ProjectPaths(unittest.TestCase):
         self.assertEqual(ideas.project_path(ideas.DEFAULT_PROJECT),
                          str(Path(self.tmp.name).resolve()))
 
+    def test_project_names_match_without_case(self):
+        """Muse filed an idea under "vira"; the exact-match lookup missed
+        Vira's folder and the Implement session ran in the home folder
+        (2026-10-30)."""
+        self.assertEqual(ideas.project_path("vira"),
+                         ideas.project_path(ideas.DEFAULT_PROJECT))
+        ideas.set_project_path("Qocha", self.tmp.name)
+        self.assertEqual(ideas.project_path(" qOCHA "),
+                         str(Path(self.tmp.name).resolve()))
+
+    def test_a_new_idea_takes_the_known_spelling(self):
+        self.assertEqual(ideas.add("x", project="vira")["project"],
+                         ideas.DEFAULT_PROJECT)
+        ideas.add_project("Qocha")
+        it = ideas.add("y", project="qocha")
+        self.assertEqual(it["project"], "Qocha")
+        ideas.update(it["id"], project="VIRA")
+        self.assertEqual(
+            next(i for i in ideas.list_items() if i["id"] == it["id"])["project"],
+            ideas.DEFAULT_PROJECT)
+        # a genuinely new project keeps the owner's spelling
+        self.assertEqual(ideas.add("z", project="Tiksi")["project"], "Tiksi")
+
+
 
 class PickFolderGuards(unittest.TestCase):
     """The picker opens a window on the owner's REAL desktop, so every

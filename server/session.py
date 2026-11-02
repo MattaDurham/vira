@@ -365,9 +365,23 @@ def _plan_ref(res):
     return f"[plan {res['plan_id']}: {title}]"
 
 
+def _idea_folder(idea_id):
+    """The folder connected to the idea's project, or "" (unknown idea,
+    or a project with no folder)."""
+    try:
+        it = next((i for i in ideas.list_items() if i.get("id") == idea_id),
+                  None)
+    except Exception:  # noqa: BLE001 - an unreadable store is "no folder"
+        return ""
+    return ideas.project_path((it or {}).get("project")) if it else ""
+
+
 def _mark_idea(job, ok, interrupted=False):
     """Final step of an idea-launched action: reflect the outcome back in the
-    backlog. Implement success -> done; Plan success -> stays open, stamped
+    backlog. Implement success -> done, unless the work sits on a branch
+    that has not landed (`job["landing_branch"]`): then it stays open,
+    noted, and orphanwork.note_landed closes it at the merge. Plan success
+    -> stays open, stamped
     with the published URL (a plan is a step toward the idea, not the
     finished work); interrupted -> stays open, noted; any failure -> stays
     open with a failure note (never silently marks done). Best-effort —
@@ -397,6 +411,12 @@ def _mark_idea(job, ok, interrupted=False):
             else:
                 note = f"plan produced {stamp} (job {jid}) — see terminal"
             ideas.stamp_note(job["idea_id"], note)
+        elif job.get("landing_branch"):
+            # Built is not landed: until the merge (2026-11-02 audit) the
+            # backlog said done for three branches that never reached main.
+            ideas.stamp_note(job["idea_id"],
+                             f"built by Vira {stamp} (job {jid}), waiting "
+                             f"to land: {job['landing_branch']}")
         else:
             ideas.stamp_note(job["idea_id"],
                              f"implemented by Vira {stamp} (job {jid})",
@@ -730,6 +750,16 @@ class Sessions:
             if mode is None:
                 mode = DEFAULT_MODE
         jid = uuid.uuid4().hex[:12]
+        if (idea_id and not cwd and not resume_session and not read_only
+                and not publish_plan):
+            # An Implement with no folder used to start in $HOME, with no
+            # branch and no landing card (2026-10-10, again 2026-10-30).
+            # The idea's project names the folder; with none, refuse.
+            cwd = _idea_folder(idea_id)
+            if not cwd:
+                raise ValueError(
+                    "this idea's project has no folder connected - connect "
+                    "it in Ideas, or pick a folder in the run sheet")
         if cwd:
             cwd = str(Path(cwd).expanduser())
             if not Path(cwd).is_dir():

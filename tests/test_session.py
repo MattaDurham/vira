@@ -288,6 +288,42 @@ class LaunchTests(unittest.TestCase):
             jid = reg.launch("do the thing", cwd=tempfile.gettempdir(), **kwargs)
         return jid
 
+    def test_an_idea_with_no_folder_is_refused_not_run_at_home(self):
+        """An Implement launched with no folder ran in $HOME with no branch
+        and no landing card (2026-10-30). The idea's project names the
+        folder; with none connected the launch refuses."""
+        reg = make_registry()
+        with mock.patch.object(session, "_idea_folder", return_value=""), \
+             mock.patch.object(session.Sessions, "_run_subprocess") as run:
+            with self.assertRaises(ValueError) as e:
+                reg.launch("do the thing", idea_id="idea_1",
+                           provider="anthropic")
+        self.assertIn("no folder connected", str(e.exception))
+        run.assert_not_called()
+
+    def test_an_idea_with_no_folder_runs_in_its_project_folder(self):
+        reg = make_registry()
+        folder = tempfile.gettempdir()
+
+        def fake_run(_self, s):
+            s.data["status"] = "done"
+            s.data["finished"] = 1.0
+
+        with mock.patch.object(session, "SDK_AVAILABLE", False), \
+             mock.patch.object(session, "_idea_folder", return_value=folder), \
+             mock.patch.object(session.Sessions, "_run_subprocess", fake_run):
+            jid = reg.launch("do the thing", idea_id="idea_1",
+                             provider="anthropic")
+        self.assertEqual(reg.get(jid)["cwd"], str(Path(folder).expanduser()))
+
+    def test_idea_folder_reads_the_project_without_case(self):
+        with mock.patch.object(session.ideas, "list_items", return_value=[
+                {"id": "idea_1", "project": "vira"}]), \
+             mock.patch.object(session.ideas, "project_paths",
+                               return_value={"Vira": "/x/vira"}):
+            self.assertEqual(session._idea_folder("idea_1"), "/x/vira")
+            self.assertEqual(session._idea_folder("idea_nope"), "")
+
     def test_mode_derivation_from_legacy_permission_mode(self):
         reg = make_registry()
         with mock.patch.object(session, "SDK_AVAILABLE", False):

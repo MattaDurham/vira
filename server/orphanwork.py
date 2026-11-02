@@ -813,13 +813,44 @@ def require_action_branch(branch):
 
 def merge(slug):
     """branch.sh merge <slug>, then the push/restart/teardown epilogue."""
-    return _run_action(slug, ["merge", slug], "merge",
-                       post_ok=lambda text: _push_and_note(text, slug))
+    def post(text):
+        note_landed(f"claude/{slug}", "merge")
+        return _push_and_note(text, slug)
+    return _run_action(slug, ["merge", slug], "merge", post_ok=post)
 
 
 def discard(slug, force=False):
     argv = ["discard", slug] + (["--force"] if force else [])
-    return _run_action(slug, argv, "discard")
+    return _run_action(slug, argv, "discard",
+                       post_ok=lambda text: note_landed(f"claude/{slug}",
+                                                        "discard"))
+
+
+def note_landed(branch, verdict):
+    """Close the loop on the ideas whose sessions built `branch`: a merge
+    marks them done, a discard says nothing landed and leaves them open.
+    The session's own finish only said "waiting to land" (session.
+    _mark_idea). Best-effort and silent: the merge has already happened,
+    and an idea edited or deleted meanwhile is not a failure of it.
+    Returns None so a post_ok caller appends nothing."""
+    stamp = datetime.now().date().isoformat()
+    try:
+        idea_ids = sorted({r.get("idea_id") for r in joblog.list_records()
+                           if r.get("branch") == branch and r.get("idea_id")})
+    except Exception:  # noqa: BLE001
+        return None
+    from . import ideas
+    for iid in idea_ids:
+        try:
+            if verdict == "merge":
+                ideas.stamp_note(iid, f"landed on main {stamp} ({branch})",
+                                 status="done")
+            else:
+                ideas.stamp_note(iid, f"branch discarded {stamp} ({branch}), "
+                                 "nothing landed")
+        except Exception:  # noqa: BLE001
+            pass
+    return None
 
 
 RESUME_PROMPT = """You are resuming stalled work in a branch-first repository.
@@ -1405,6 +1436,8 @@ def land_session(jid, branch, verdict):
             ok, text = _session_end_then(jid, slug, branch, verdict)
         except Exception as e:  # noqa: BLE001 - the outcome must always land
             ok, text = False, f"{name} failed: {e}"
+        if ok:
+            note_landed(branch, verdict)
         try:
             refresh()
         except Exception:  # noqa: BLE001 - a re-sweep must never eat the outcome

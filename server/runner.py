@@ -1296,6 +1296,46 @@ class Runner:
         tail = text.strip().splitlines()
         return "", ("no PR - " + (tail[-1] if tail else "branch.sh pr failed"))
 
+    def _commit_message(self):
+        """The backstop commit's message: the work's subject as its first
+        line, ASCII only (preflight refuses anything else), and a body
+        saying who made the commit and why."""
+        subject = " ".join(str(self.spec.get("subject")
+                               or self.spec.get("about") or "").split())
+        subject = subject.encode("ascii", "ignore").decode().strip()
+        if len(subject) > 72:
+            subject = subject[:69].rstrip() + "..."
+        return ((subject or f"Work from Vira session {self.spec['id']}")
+                + f"\n\nCommitted by Vira when session {self.spec['id']} "
+                "finished its turn: the agent left these changes uncommitted, "
+                "and the landing card needs a commit to open the pull "
+                "request.\n")
+
+    def _commit_work(self):
+        """Commit every uncommitted path in the session's worktree, on its
+        own branch. The Implement prompt asks the agent to commit; this
+        catches the turn that did not. Returns (ok, note). The pre-commit
+        hooks run as for any commit, so a refusal there is the note."""
+        wt = str(self.spec.get("worktree") or "")
+        try:
+            add = subprocess.run(["git", "-C", wt, "add", "-A"],
+                                 capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
+                                 timeout=60, check=False)
+            if add.returncode != 0:
+                return False, (add.stderr or add.stdout or "git add failed").strip()
+            out = subprocess.run(["git", "-C", wt, "commit", "-q", "-m",
+                                  self._commit_message()],
+                                 capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
+                                 timeout=300, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"git did not run: {e}"
+        if out.returncode != 0:
+            tail = ((out.stderr or "") + (out.stdout or "")).strip().splitlines()
+            return False, tail[-1] if tail else "git commit failed"
+        return True, ""
+
     def _drop_landing_card(self):
         had = [p for p in self.state["pending"]
                if p.get("kind") == LANDING_KIND]
@@ -1331,6 +1371,15 @@ class Runner:
         if not dirty and not ahead:
             return True
         branch = self.spec["branch"]
+        if dirty:
+            # Commit before the card, so the card can open its PR and an
+            # unanswered card leaves a branch Merge can land.
+            ok, note = await asyncio.to_thread(self._commit_work)
+            self.append(f"[vira] landing: committed {dirty} uncommitted "
+                        f"path(s) on {branch}\n" if ok else
+                        f"[vira] landing: could not commit the work - {note}\n")
+            if ok:
+                dirty, ahead = await asyncio.to_thread(self._branch_work)
         self.append(f"[vira] landing: {branch} carries "
                     f"{dirty} uncommitted path(s), {ahead} commit(s) ahead "
                     "of main\n")
@@ -2430,9 +2479,17 @@ class Runner:
         self.state["pending"] = []
         self.state["finished"] = time.time()
         if spec.get("idea_id"):
+            # Work still on its branch keeps the idea open until it lands
+            # (orphanwork.note_landed); an empty branch is done here.
+            landing_branch = ""
+            if ok and not aborted and self.landing_eligible():
+                dirty, ahead = await asyncio.to_thread(self._branch_work)
+                if dirty or ahead:
+                    landing_branch = spec["branch"]
             _mark_idea({"id": spec["id"], "idea_id": spec["idea_id"],
                         "publish_plan": spec.get("publish_plan"),
                         "plan": plan_res,
+                        "landing_branch": landing_branch,
                         "output": self.output_tail},
                        ok and not aborted, interrupted=aborted)
         joblog.record_finish(spec["id"], status,
