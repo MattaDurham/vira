@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import readingroom, research
+from tests.child_timeout import child_timeout
 
 
 SCHEMA = """
@@ -668,7 +669,7 @@ class ResearchFrontendContractTests(unittest.TestCase):
         result = subprocess.run(
             [node, str(root / "tests" / "research_frontend_harness.js")],
             cwd=root, capture_output=True, text=True, encoding="utf-8",
-            timeout=15, check=False,
+            timeout=child_timeout(15), check=False,
         )
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 

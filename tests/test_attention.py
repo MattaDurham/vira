@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import attention
+from tests.child_timeout import child_timeout
 
 
 class FakeHandle:
@@ -418,7 +419,7 @@ class AssistantFrontend(unittest.TestCase):
         result = subprocess.run(
             [node, str(root / "tests" / "assistant_frontend_harness.js")],
             cwd=root, capture_output=True, text=True, encoding="utf-8",
-            timeout=15, check=False)
+            timeout=child_timeout(15), check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 

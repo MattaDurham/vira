@@ -40,6 +40,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from server import circuits, ideas, ideatags, main
+from tests.child_timeout import child_timeout
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
@@ -161,7 +162,7 @@ class TheHelpersRunUnderNode(unittest.TestCase):
             self.skipTest("Node is not installed")
         result = subprocess.run([node, "tests/approve_builds_ui.js"], cwd=ROOT,
                                 capture_output=True, text=True,
-                                encoding="utf-8", timeout=20)
+                                encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("passed", result.stdout)
 

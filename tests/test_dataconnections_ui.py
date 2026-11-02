@@ -4,6 +4,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 HARNESS = r"""
 const assert = require('node:assert/strict');
@@ -100,5 +102,5 @@ class ConnectionUiTests(unittest.TestCase):
     def test_connection_forms(self):
         result = subprocess.run([shutil.which("node"), "-e", HARNESS],
                                 cwd=Path(__file__).resolve().parent.parent,
-                                capture_output=True, text=True, encoding="utf-8", timeout=20)
+                                capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

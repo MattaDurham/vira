@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import unittest
 
+from tests.child_timeout import child_timeout
+
 
 class AquariumPigmentTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the pigment harness")
@@ -11,6 +13,6 @@ class AquariumPigmentTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run(
             [shutil.which("node"), str(root / "tests" / "aquarium_pigment.mjs")],
-            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30,
+            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30),
         )
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from server import jobfiles
+from tests.child_timeout import child_timeout
 
 
 class PidAliveTests(unittest.TestCase):
@@ -69,7 +70,7 @@ class PidAliveTests(unittest.TestCase):
         script = ("import json, os; from server import jobfiles; "
                   "print(json.dumps({'alive': jobfiles.pid_alive(os.getpid())}))")
         result = subprocess.run([sys.executable, "-c", script], capture_output=True,
-                                text=True, encoding="utf-8", timeout=10)
+                                text=True, encoding="utf-8", timeout=child_timeout(10))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {"alive": True})
 

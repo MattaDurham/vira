@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import blog
+from tests.child_timeout import child_timeout
 
 
 class RendererTests(unittest.TestCase):
@@ -129,7 +130,7 @@ class AddPostTests(StoreBase):
 def _git(repo, *args):
     import subprocess
     res = subprocess.run(["git", "-C", str(repo), *args],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, timeout=child_timeout(30))
     if res.returncode != 0:
         raise AssertionError(f"git {args}: {res.stderr}")
     return res.stdout

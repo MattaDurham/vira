@@ -20,6 +20,7 @@
     ".github/**",
     "tests/__init__.py",
     "tests/datadir_guard.py",
+    "tests/child_timeout.py",
     "tests/test_zz_data_untouched.py",
     "tests/test_platform.py",
     "tests/test_timezone_portability.py",

@@ -24,7 +24,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Core / Shell](../shell/README.md), [Work / Sessions](../../work/sessions/README.md)
 
-### Files (31)
+### Files (32)
 
 **Server**
 
@@ -53,6 +53,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | File | What it is |
 |---|---|
 | `tests/__init__.py` | Armed on import of the package, before any case runs: a test that writes into a checkout's data/ is refused and recorded (see datadir_guard). |
+| `tests/child_timeout.py` | Give a test's child process (node, git, python) more time on Windows. |
 | `tests/datadir_guard.py` | Refuse, and remember, every write a test makes into a checkout's data/. |
 | `tests/restart_ui.js` | Execute the shipped restart UI, with synthetic work and no real server. |
 | `tests/test_admission.py` | The CPU admission gate and the event-loop stall watchdog — the two halves of the fix for the 2026-07-27 whole-process stalls. |

@@ -4,6 +4,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 class ModuleModelsUiTests(unittest.TestCase):
     def test_module_model_picker_lifecycle(self):
@@ -13,5 +15,5 @@ class ModuleModelsUiTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [node, "tests/module_models_ui.js"], cwd=root,
-            capture_output=True, text=True, encoding="utf-8", timeout=20)
+            capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

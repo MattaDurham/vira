@@ -12,6 +12,7 @@ from unittest import mock
 from urllib.error import URLError
 
 from server import circuits, instance, jobfiles, joblog, routines, session
+from tests.child_timeout import child_timeout
 
 BRANCH = {"VIRA_INSTANCE_ID": "branch:example",
           "VIRA_INSTANCE_URL": "http://localhost:8391",
@@ -113,7 +114,7 @@ print(json.dumps({"won": won, "lock": str(vaultwrite._lock_path(spec["root"] / "
                     text=True, encoding="utf-8"))
             results = []
             for process in processes:
-                stdout, stderr = process.communicate(timeout=30)
+                stdout, stderr = process.communicate(timeout=child_timeout(30))
                 self.assertEqual(process.returncode, 0, stderr)
                 results.append(json.loads(stdout))
             self.assertEqual(sum(row["won"] for row in results), 1)

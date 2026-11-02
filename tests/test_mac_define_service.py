@@ -10,6 +10,8 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 from urllib.parse import unquote, urlsplit
 
+from tests.child_timeout import child_timeout
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -79,7 +81,7 @@ class DefinitionLinkTests(unittest.TestCase):
             self.skipTest("Node is unavailable")
         result = subprocess.run(
             [node, "tests/define_link_ui.js", *args], cwd=ROOT,
-            capture_output=True, text=True, encoding="utf-8", timeout=20)
+            capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_links_use_live_module_on_desktop_and_mobile(self):

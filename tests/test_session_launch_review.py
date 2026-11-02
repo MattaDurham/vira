@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from server import codexapp, models, orphanwork
+from tests.child_timeout import child_timeout
 
 
 class CodexDiscoveryTests(unittest.TestCase):
@@ -119,7 +120,7 @@ class LaunchUiTests(unittest.TestCase):
             self.skipTest("Node is not installed")
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run([node, "tests/session_launch_ui.js"], cwd=root,
-                                capture_output=True, text=True, encoding="utf-8", timeout=20)
+                                capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_preparation_sheet_stacks_above_the_focus_view(self):

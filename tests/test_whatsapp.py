@@ -22,6 +22,7 @@ from unittest import mock
 
 from server import main, photos, settings, whatsapp
 from server import data as crm
+from tests.child_timeout import child_timeout
 
 
 ROW_TEXT = {
@@ -261,7 +262,7 @@ class SidecarProtocolTests(unittest.TestCase):
     def test_stop_requires_matching_instance_identity(self):
         result = subprocess.run(
             [shutil.which("node"), str(Path(__file__).with_name("whatsapp_sidecar_ownership.js"))],
-            capture_output=True, text=True, encoding="utf-8", timeout=15)
+            capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(15))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

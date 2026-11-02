@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 
 from server import calendarplan as plans
+from tests.child_timeout import child_timeout
 
 
 NOW = dt.datetime(2030, 9, 10, 12, tzinfo=dt.timezone.utc)
@@ -833,7 +834,7 @@ Object.defineProperty(calendar, 'events', {get: () => {throw Error('Metadata rea
 global.Application = () => ({calendars: () => [calendar]});
 '''
         result = subprocess.run([shutil.which("node"), "-e", harness + plans._METADATA_SCRIPT + "\nprocess.stdout.write(run());"],
-                                capture_output=True, text=True, encoding="utf-8", timeout=10, check=True)
+                                capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(10), check=True)
         metadata = json.loads(result.stdout)
         self.assertEqual(metadata["default_id"], "native-test")
         self.assertEqual(metadata["default_policy"], "last_selected")
@@ -869,7 +870,7 @@ try {
 } catch (error) { process.stdout.write(JSON.stringify({error: error.message, pushed})); }
 '''
         result = subprocess.run([shutil.which("node"), "-e", harness + plans._SCRIPT + footer, json.dumps(case)],
-                                capture_output=True, text=True, encoding="utf-8", timeout=10, check=True)
+                                capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(10), check=True)
         return json.loads(result.stdout)
 
     def test_nonunique_and_readonly_calendar_refuse_before_insert(self):

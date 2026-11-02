@@ -38,6 +38,7 @@ except Exception:  # noqa: BLE001 — the SDK path is what is under test
     SDK = False
 
 from tests.test_runner import make_spec
+from tests.child_timeout import child_timeout
 
 LANE = runner_mod.AGENT_LANE
 MODEL = "test-model"
@@ -781,7 +782,7 @@ class AgentsUI(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         res = subprocess.run([node, "tests/session_agents_ui.js"], cwd=root,
                              capture_output=True, text=True, encoding="utf-8",
-                             timeout=20)
+                             timeout=child_timeout(20))
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
 

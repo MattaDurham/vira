@@ -13,6 +13,8 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -251,6 +253,6 @@ class TheSunStaysOnTheStageAndCardsStayClickable(unittest.TestCase):
         if not node:
             self.skipTest("node is not installed here; the harness needs it")
         result = subprocess.run([node, "tests/orbits_refresh_harness.mjs"], cwd=ROOT,
-                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+                                capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         self.assertIn("orbits refresh harness: ok", result.stdout)
