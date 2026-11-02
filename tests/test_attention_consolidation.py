@@ -11,6 +11,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -192,7 +194,7 @@ class AttentionConsolidationContracts(unittest.TestCase):
             self.skipTest("Node is not installed")
         result = subprocess.run([node, "tests/attention_inspect_ui.js"],
                                 cwd=ROOT, capture_output=True, text=True,
-                                encoding="utf-8", timeout=20)
+                                encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("passed", result.stdout)
 

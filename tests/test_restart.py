@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server import backup, circuits, restart, runtimework, session, update
+from tests.child_timeout import child_timeout
 
 
 class RestartTests(unittest.TestCase):
@@ -250,7 +251,7 @@ class ActivityTests(unittest.TestCase):
             self.skipTest("node is unavailable")
         result = subprocess.run([node, "tests/restart_ui.js"],
                                 cwd=Path(__file__).resolve().parent.parent,
-                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+                                capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

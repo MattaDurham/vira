@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import instance, main
+from tests.child_timeout import child_timeout
 
 
 class BranchInstanceBadgeTests(unittest.TestCase):
@@ -46,5 +47,5 @@ context.location = {origin: "http://localhost:8392", protocol: "http:", hostname
 assert.equal(origin({kind: "branch", primary_url: "http://localhost:8450"}), "http://localhost:8450");
 """
         result = subprocess.run([node, "-e", script], cwd=root, capture_output=True,
-                                text=True, encoding="utf-8", timeout=10)
+                                text=True, encoding="utf-8", timeout=child_timeout(10))
         self.assertEqual(result.returncode, 0, result.stderr)

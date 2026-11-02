@@ -37,6 +37,7 @@ from unittest import mock
 import numpy as np
 
 from server import library, onboard, settings, vault, viratools
+from tests.child_timeout import child_timeout
 
 ROOT = Path(__file__).resolve().parents[1]
 REAL = [ROOT / "data" / "library", ROOT / "data" / "library-subsets.json"]
@@ -572,7 +573,7 @@ class TheHarness(unittest.TestCase):
         result = subprocess.run(
             [node, str(ROOT / "tests" / "library_frontend_harness.js")],
             cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
-            timeout=30, check=False)
+            timeout=child_timeout(30), check=False)
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 
 

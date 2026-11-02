@@ -6,6 +6,8 @@ import sys
 import textwrap
 import unittest
 
+from tests.child_timeout import child_timeout
+
 
 class TimezonePortability(unittest.TestCase):
     def test_assistant_dates_work_without_a_system_timezone_database(self):
@@ -50,7 +52,7 @@ class TimezonePortability(unittest.TestCase):
             [sys.executable, "-c", script],
             cwd=Path(__file__).resolve().parents[1],
             env={**os.environ, "PYTHONTZPATH": ""},
-            capture_output=True, text=True, encoding="utf-8", timeout=30,
+            capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30),
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.strip(), "timezone portability verified")

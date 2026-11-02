@@ -4,6 +4,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 HARNESS = r"""
 const assert = require('node:assert/strict');
@@ -353,7 +355,7 @@ class FolderPickerUiTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [node, "-e", HARNESS], cwd=root, capture_output=True,
-            text=True, encoding="utf-8", timeout=20, check=False)
+            text=True, encoding="utf-8", timeout=child_timeout(20), check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

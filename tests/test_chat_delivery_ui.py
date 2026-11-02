@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import unittest
 
+from tests.child_timeout import child_timeout
+
 
 class ChatDeliveryUI(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed for UI behavior checks")
@@ -11,6 +13,6 @@ class ChatDeliveryUI(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         result = subprocess.run(
             [shutil.which("node"), "tests/chat_delivery_ui.js"], cwd=root,
-            capture_output=True, text=True, encoding="utf-8", timeout=20,
+            capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(20),
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is needed for recorded water data")
 class AquariumWaterStudyDataTest(unittest.TestCase):
@@ -50,7 +52,7 @@ class AquariumWaterStudyDataTest(unittest.TestCase):
 
             def run_git(*arguments):
                 result = subprocess.run(git + list(arguments), capture_output=True, text=True,
-                                        encoding="utf-8", env=env, timeout=15)
+                                        encoding="utf-8", env=env, timeout=child_timeout(15))
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
             run_git("init", "--quiet")
@@ -101,7 +103,7 @@ console.log(JSON.stringify({runs:runs.length}));
                 [shutil.which("node"), "--input-type=module", "-e", script,
                  (root / "static/aquarium-water-study-data.js").as_uri(),
                  (checkout / recorded).as_uri() + "/"],
-                cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=15,
+                cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(15),
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["runs"], 3)
@@ -110,12 +112,12 @@ console.log(JSON.stringify({runs:runs.length}));
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [shutil.which("node"), str(root / "tests" / "aquarium_water_study_data.mjs")],
-            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_independent_frozen_kick_solver_and_physical_mutations(self):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [shutil.which("node"), str(root / "tests" / "aquarium_water_solver_oracle.mjs")],
-            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

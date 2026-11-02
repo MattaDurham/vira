@@ -10,6 +10,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 class AquariumBenchmarkTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the maneuver footprint harness")
@@ -30,7 +32,7 @@ class AquariumBenchmarkTest(unittest.TestCase):
     def test_research_shape_observes_actual_material_geometry(self):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_research_shape.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the finite fin task harness")
@@ -93,7 +95,7 @@ class AquariumBenchmarkTest(unittest.TestCase):
     def test_twist_follows_each_vertebras_rest_tangent(self):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_rig_axes.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the turning bend harness")
@@ -111,21 +113,21 @@ class AquariumBenchmarkTest(unittest.TestCase):
     def test_subpixel_fin_detail_follows_the_render_projection(self):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fin_detail.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin history harness")
     def test_fin_response_follows_observed_commands(self):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fin_history.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin normal harness")
     def test_fin_rays_retain_smooth_authored_seams(self):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_fin_normals.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the fin geometry harness")
@@ -139,7 +141,7 @@ class AquariumBenchmarkTest(unittest.TestCase):
     def test_research_tracks_the_rendered_rig(self):
         root = Path(__file__).resolve().parents[1]
         run = subprocess.run([shutil.which("node"), str(root / "tests" / "aquarium_research.mjs")],
-                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                             cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(30))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the graphics asset harness")

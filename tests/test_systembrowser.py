@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import settings, systembrowser
+from tests.child_timeout import child_timeout
 
 
 class SystemBrowserTests(unittest.TestCase):
@@ -15,7 +16,7 @@ class SystemBrowserTests(unittest.TestCase):
             self.skipTest("Node.js is unavailable")
         script = Path(__file__).resolve().parent / "microsoft_frontend_harness.js"
         result = subprocess.run([node, str(script)], capture_output=True, text=True,
-                                encoding="utf-8", timeout=15, check=False)
+                                encoding="utf-8", timeout=child_timeout(15), check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_supported_platforms_dispatch_without_shell_or_real_browser(self):

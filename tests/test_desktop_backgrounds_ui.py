@@ -4,6 +4,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.child_timeout import child_timeout
+
 
 class DesktopBackgroundTests(unittest.TestCase):
     def run_harness(self, name):
@@ -13,7 +15,7 @@ class DesktopBackgroundTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [node, "tests/" + name], cwd=root,
-            capture_output=True, text=True, encoding="utf-8", timeout=20)
+            capture_output=True, text=True, encoding="utf-8", timeout=child_timeout(20))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_scene_lifecycle(self):

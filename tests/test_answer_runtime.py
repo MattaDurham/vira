@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from server import modeladmission as admission, agentbackend, answer_runtime, codexapp, functionagent, modelbudget, modulemodels, runner, suggest
+from tests.child_timeout import child_timeout
 
 
 class AdmissionTests(unittest.TestCase):
@@ -67,7 +68,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(states.count("queued"), 2)
         finally:
             for process in processes:
-                process.communicate("release\n", timeout=10)
+                process.communicate("release\n", timeout=child_timeout(10))
 
     def test_queue_timeout_releases_ticket_without_evicting_running_work(self):
         busy, waiting = self.lease(capacity=1), self.lease(capacity=1)
