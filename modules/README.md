@@ -78,7 +78,7 @@ branch; the suite and `check` say when it is whole.
 - [Image Atlas](imageatlas/README.md) - The vault's images as a navigable 3D galaxy, and the Genre Studio that composes new genres.  
   Galaxy, Genres (13 files)
 - [Evidence](evidence/README.md) - Vira's own build provenance: the ledger, the change log, and the walkthrough films.  
-  Ledger, Change log, Walkthroughs (25 files)
+  Ledger, Change log, Walkthroughs (27 files)
 - [Maps](maps/README.md) - The System Map (this registry, live) and layered diagrams any request can fill.  
   System, Diagrams (8 files)
 
@@ -95,7 +95,7 @@ branch; the suite and `check` say when it is whole.
 - [Applications](applications/README.md) - The job search: a merged role catalog, live boards, per-role scores, and the documents behind an application.  
   Catalog, Boards, Scoring, Documents (26 files)
 - [Design](design/README.md) - The Design Studio hosted from the design-foundation repo, and the skins Vira can wear.  
-  Studio, Skins (13 files)
+  Studio, Skins (21 files)
 - [Aquarium](aquarium/README.md) - The desktop's living backgrounds: a metre-scaled koi pond with articulated fish, and photographic landscapes.  
   Koi, Backgrounds (184 files)
 
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-804 of 804 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+814 of 814 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->

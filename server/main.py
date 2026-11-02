@@ -6171,12 +6171,13 @@ def api_models(refresh: bool = False):
 subs_visuals.configure(jobs)
 app.include_router(subs_visuals.router)
 
-# ---------- Design Studio (the design-foundation repo, served in place) ----
+# ---------- Design Studio (bundled in static/design/) -----------------------
 # /design/ = the specimen book; /design/studio.html = the IDE frame. The
-# save endpoint (designstudio.router) rewrites theme tokens, commits, and
-# pushes in that repo. Dormant when the repo directory is missing; always
-# mounted, because the mount finds the checkout per request (a checkout that
-# appears after startup is served without a restart).
+# save endpoint (designstudio.router) rewrites the app's style.css, commits,
+# and pushes. A configured design_foundation_root that holds a studio is
+# served instead of the bundled copy. Always mounted, and the mount picks
+# its folder per request (designstudio.serve_root), so a checkout that
+# appears after startup is served without a restart.
 
 app.include_router(designstudio.router)
 app.mount("/design", designstudio.CheckoutFiles(), name="design")

@@ -17,13 +17,26 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** no other module directly
 
-### Files (2)
+### Files (10)
 
 **Server**
 
 | File | What it is |
 |---|---|
-| `server/designstudio.py` | Design Studio — Vira hosts the design-foundation repo's studio page (/design/studio.html, served by the static mount in main.py) and provides the save power... |
+| `server/designstudio.py` | Design Studio — Vira hosts the studio page (/design/studio.html, served by the mount in main.py) and provides the save power the standalone page lacks: POST... |
+
+**Frontend**
+
+| File | What it is |
+|---|---|
+| `static/design/foundation/base.css` | ============================================================ FOUNDATION / BASE — reset + element defaults. |
+| `static/design/foundation/components.css` | ============================================================ FOUNDATION / COMPONENTS — the primitive vocabulary. |
+| `static/design/foundation/tokens.css` | ============================================================ FOUNDATION / TOKENS — the structural contract. |
+| `static/design/index.html` | Design Foundation — Specimen Book |
+| `static/design/studio.css` | ============================================================ DESIGN STUDIO — canvas-first design tool chrome. |
+| `static/design/studio.html` | Design Studio |
+| `static/design/studio.js` | ============================================================ DESIGN STUDIO — a canvas-first design tool. |
+| `static/design/themes/taurid/theme.css` | ============================================================ THEME / TAURID CAPITAL — the first brand package. |
 
 **Tests**
 
@@ -39,11 +52,12 @@ Prefixes: `/api/design`
 - `POST /api/design/save` (server/designstudio.py)
 - `GET /api/design/history` (server/designstudio.py)
 
-### Stores (1)
+### Stores (2)
 
 Instance state under git-ignored `data/`; never hand-edit (see `AGENTS.local.md`, section 5).
 
-- `the design-foundation checkout (outside data/)`
+- `static/style.css (the vira target)`
+- `an optional design-foundation checkout (outside data/)`
 
 ### System map
 

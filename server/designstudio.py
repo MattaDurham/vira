@@ -1,16 +1,18 @@
-"""Design Studio — Vira hosts the design-foundation repo's studio page
-(/design/studio.html, served by the static mount in main.py) and provides
-the save power the standalone page lacks: POST /api/design/save rewrites
-token values inside themes/<theme>/theme.css in place, commits with a
-message naming the changed tokens, and pushes. The repo path comes from
-config ``design_foundation_root``; when the checkout is missing the
-studio is dormant: GET /api/design/status says so and where it looked,
-the window shows that instead of framing a 404, and save 404s.
+"""Design Studio — Vira hosts the studio page (/design/studio.html, served
+by the mount in main.py) and provides the save power the standalone page
+lacks: POST /api/design/save rewrites the target's stylesheet, commits with
+a message naming the changed tokens, and pushes.
 
-The path is read on every request, never at import. A fresh install
-starts without the checkout (installing Vira touches nothing outside its
-own repo), so the checkout usually arrives AFTER the server is up; a
-mount decided at startup kept the studio a 404 until a restart.
+The studio ships bundled in static/design/, so every install has it with
+no setup; it designs this checkout's own style.css (the "vira" target).
+Before 2026-10-17 it lived only in an external design-foundation checkout
+that a fresh install had no way to get, so the Design Studio window framed
+a 404. Config ``design_foundation_root`` still names an optional external
+checkout: when that directory holds a studio it is served instead, and it
+is the only repo the "foundation" save target writes (404 when unset).
+
+The folder is picked on every request, never at import: a checkout cloned
+(or a path changed in Config) while Vira runs is served without a restart.
 
 The rewrite is line-based and conservative: only the value between
 ``--token:`` and the first ``;`` changes, so trailing comments (the
@@ -54,35 +56,53 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 VIRA_PATHS = {"static/style.css"}
 
 
-def root() -> Path:
-    return Path(settings.get("design_foundation_root")).expanduser()
-
+BUNDLED = APP_ROOT / "static" / "design"
 
 # the page the window frames; a folder without it is not a studio checkout
 STUDIO_PAGE = "studio.html"
 
 
+def root() -> Path | None:
+    """The external design-system checkout, or None when none is configured.
+    An empty path is not Path(""), which would resolve to the cwd."""
+    value = (settings.get("design_foundation_root") or "").strip()
+    return Path(value).expanduser() if value else None
+
+
+def serve_root() -> Path:
+    """What /design serves: a configured checkout that holds a studio, else
+    the copy bundled with Vira."""
+    ext = root()
+    if ext is not None and (ext / STUDIO_PAGE).is_file():
+        return ext
+    return BUNDLED
+
+
 def status() -> dict:
-    """Whether the studio can be served, and if not, why, named for the
-    owner: the folder Vira looked in and what it found there."""
-    d = root()
-    if (d / STUDIO_PAGE).is_file():
-        return {"ready": True, "root": str(d), "reason": ""}
-    if d.is_dir():
-        reason = f"{d} has no {STUDIO_PAGE}, so it is not a design-system checkout"
-    else:
-        reason = f"no design-system checkout at {d}"
-    return {"ready": False, "root": str(d), "reason": reason}
+    """Whether the studio can be served, which copy, and (for a configured
+    checkout that is not a studio) why the bundled copy is served instead."""
+    d, ext = serve_root(), root()
+    source = "bundled" if d == BUNDLED else "checkout"
+    note = ""
+    if source == "bundled" and ext is not None:
+        note = (f"{ext} has no {STUDIO_PAGE}, so the studio bundled with Vira "
+                "is served" if ext.is_dir() else
+                f"no design-system checkout at {ext}, so the studio bundled "
+                "with Vira is served")
+    if not (d / STUDIO_PAGE).is_file():
+        return {"ready": False, "root": str(d), "source": source,
+                "reason": f"the bundled studio is missing from {d}"}
+    return {"ready": True, "root": str(d), "source": source, "reason": note}
 
 
 class CheckoutFiles:
-    """The /design mount: the checkout's files, looked up per request so a
+    """The /design mount: serve_root()'s files, picked per request so a
     checkout cloned (or a path changed in Config) after startup is served
     at once. A StaticFiles per request is cheap (it only records the
     directory) and keeps Starlette's path-escape and index.html handling."""
 
     async def __call__(self, scope, receive, send):
-        d = root()
+        d = serve_root()
         if scope["type"] != "http" or not d.is_dir():
             await JSONResponse({"detail": status()["reason"]},
                                status_code=404)(scope, receive, send)
@@ -285,7 +305,7 @@ def get_status():
 @router.post("/save")
 def save(req: SaveReq):
     repo = APP_ROOT if req.target == "vira" else root()
-    if not repo.is_dir():
+    if repo is None or not repo.is_dir():
         raise HTTPException(404, "target repo not found")
     if req.files:
         return _save_files(repo, req.theme, req.files, req.target)
@@ -363,7 +383,7 @@ def history(theme: str = "taurid", target: str = "foundation"):
         repo, rel = APP_ROOT, "static/style.css"
     else:
         repo, rel = root(), f"themes/{theme}/theme.css"
-    if not repo.is_dir():
+    if repo is None or not repo.is_dir():
         raise HTTPException(404, "target repo not found")
     log = _git(repo, "log", "--oneline", "-12", "--", rel)
     rows = [line.split(" ", 1) for line in log.stdout.strip().split("\n") if line]

@@ -1,0 +1,118 @@
+/* ============================================================
+   FOUNDATION / TOKENS — the structural contract.
+
+   This layer holds STRUCTURE ONLY: scales, slots, and voice
+   knobs. It deliberately has no brand look. The fallback values
+   below are a neutral "contract" rendering — plain on purpose —
+   so that an unthemed page is obviously unthemed.
+
+   A brand theme (themes/<brand>/theme.css) overrides these
+   custom properties under [data-theme="<brand>"] and supplies
+   whatever supplemental voice rules tokens cannot express.
+   Components consume ONLY these tokens.
+   ============================================================ */
+
+:root {
+  /* ---- color slots (semantic) ---- */
+  --bg:            #202124;
+  --bg-raised:     #26272b;
+  --bg-card:       #2c2d31;
+  --line:          #3a3b40;
+  --text:          #d4d4d8;
+  --text-dim:      #97979e;
+  --text-faint:    #6e6e75;
+  --accent:        #8f8f98;
+  --accent-bright: #b4b4bd;
+  --accent-soft:   rgba(143, 143, 152, 0.12);
+  --accent-contrast: #ffffff;   /* text sitting on --accent */
+  --positive:      #6f9a6f;
+  --negative:      #a86f6f;
+  --focus:         #7a8ba8;
+
+  /* ---- categorical (data viz, cluster color, avatar tiles) ---- */
+  --cat-1:  hsl(0,   25%, 55%);
+  --cat-2:  hsl(30,  25%, 55%);
+  --cat-3:  hsl(60,  25%, 55%);
+  --cat-4:  hsl(90,  25%, 55%);
+  --cat-5:  hsl(120, 25%, 55%);
+  --cat-6:  hsl(150, 25%, 55%);
+  --cat-7:  hsl(180, 25%, 55%);
+  --cat-8:  hsl(210, 25%, 55%);
+  --cat-9:  hsl(240, 25%, 55%);
+  --cat-10: hsl(270, 25%, 55%);
+  --cat-11: hsl(300, 25%, 55%);
+  --cat-12: hsl(330, 25%, 55%);
+  /* hash band: themes define the hue window for hash-generated
+     tile colors as three numbers consumed by JS helpers */
+  --hash-hue-base: 0;
+  --hash-hue-span: 360;
+  --hash-sat: 25%;
+  --hash-lit: 40%;
+
+  /* ---- type slots ---- */
+  --font-body:    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: var(--font-body);
+  --font-mono:    ui-monospace, "SF Mono", Menlo, monospace;
+  /* role fonts: what data, labels, and controls are set in.
+     The contract keeps them in body type; a brand may re-voice
+     them (e.g. data and controls in mono). */
+  --font-data:    var(--font-body);
+  --font-label:   var(--font-body);
+  --font-control: var(--font-body);
+
+  /* ---- voice knobs ---- */
+  --weight-display: 600;   /* wordmark / hero */
+  --weight-heading: 600;
+  --weight-strong:  600;   /* the heaviest weight anywhere */
+  --track-display:  0.01em;
+  --track-heading:  0;
+  --track-label:    0.02em;
+  --track-control:  0.01em;
+  --label-transform: none;  /* micro-labels + controls */
+
+  /* ---- type scale ---- */
+  --text-2xs: 9.5px;
+  --text-xs:  10.5px;
+  --text-sm:  12px;
+  --text-base: 14px;
+  --text-md:  16px;
+  --text-lg:  20px;
+  --text-xl:  26px;
+  --text-2xl: 34px;
+
+  /* ---- space scale ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --pad: var(--space-4);    /* container gutter */
+
+  /* ---- shape ---- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --border-w: 1px;
+
+  /* ---- motion ---- */
+  --dur-fast: 120ms;
+  --dur-med:  240ms;
+  --dur-slow: 400ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* ---- elevation ---- */
+  --z-raised:  10;
+  --z-window:  100;
+  --z-overlay: 700;
+  --z-toast:   900;
+  --z-menu:    4000;
+
+  font-size: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-med: 0ms; --dur-slow: 0ms; }
+}

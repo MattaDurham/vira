@@ -749,7 +749,10 @@ SCHEMA = [
       advanced=True),
     S("design_foundation_root", "system", "path",
       "~/workspace/design-foundation", "Design system checkout",
-      "The design-system repo the Design studio edits; missing = dormant.",
+      "Optional external design-system repo. When it holds a studio, the "
+      "Design Studio serves that copy and can save to it. Missing or "
+      "empty = the studio bundled with Vira, which edits Vira's own "
+      "stylesheet.",
       advanced=True),
 ]
 

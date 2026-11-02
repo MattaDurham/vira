@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="taurid">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Foundation — Specimen Book</title>
+<link rel="stylesheet" href="foundation/tokens.css">
+<link rel="stylesheet" href="foundation/base.css">
+<link rel="stylesheet" href="foundation/components.css">
+<link rel="stylesheet" href="themes/taurid/theme.css">
+<style>
+  /* specimen-book chrome only — not part of the system */
+  .book-section { margin: var(--space-7) 0; }
+  .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); }
+  .swatch {
+    border: var(--border-w) solid var(--line);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .swatch-color { height: 52px; }
+  .swatch-meta { padding: var(--space-2) var(--space-3); background: var(--bg-card); }
+  .swatch-name { font-size: var(--text-xs); color: var(--text); }
+  .swatch-hex {
+    font-family: var(--font-data); font-size: var(--text-2xs);
+    letter-spacing: 0.04em; color: var(--text-faint);
+  }
+  .cat-strip { display: flex; gap: var(--space-1); }
+  .cat-strip > div { flex: 1; height: 40px; border-radius: var(--radius-sm); position: relative; }
+  .cat-strip .swatch-hex {
+    position: absolute; bottom: -18px; left: 0; width: 100%; text-align: center;
+  }
+  .type-specimen { display: flex; flex-direction: column; gap: var(--space-4); }
+  .type-row { display: flex; align-items: baseline; gap: var(--space-4); }
+  .type-row > .label { width: 110px; flex: none; }
+  .display-specimen {
+    font-family: var(--font-display);
+    font-weight: var(--weight-display);
+    letter-spacing: var(--track-display);
+    font-size: var(--text-2xl);
+    color: var(--accent-bright);
+    text-transform: uppercase;
+  }
+  .space-ruler { display: flex; align-items: flex-end; gap: var(--space-3); }
+  .space-ruler > div { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 1px; }
+  .radii-demo { display: flex; gap: var(--space-3); }
+  .radii-demo > div {
+    width: 72px; height: 48px;
+    background: var(--bg-card); border: var(--border-w) solid var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .demo-block { display: flex; flex-direction: column; gap: var(--space-3); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+  .composed { display: grid; grid-template-columns: 3fr 2fr; gap: var(--space-4); align-items: start; }
+  @media (max-width: 860px) { .composed { grid-template-columns: 1fr; } }
+  .hero-sub { color: var(--text-dim); max-width: 60ch; margin-top: var(--space-3); }
+  .theme-note { font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-faint); }
+  .bars { display: flex; align-items: flex-end; gap: var(--space-2); height: 90px; }
+  .bars > div { flex: 1; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+  .footer {
+    margin: var(--space-8) 0 var(--space-7);
+    border-top: var(--border-w) solid var(--line);
+    padding-top: var(--space-5);
+    color: var(--text-dim); font-size: var(--text-sm);
+  }
+  #toast-dock {
+    position: fixed; bottom: var(--space-5); right: var(--space-5);
+    display: flex; flex-direction: column; gap: var(--space-2);
+    z-index: var(--z-toast);
+  }
+</style>
+</head>
+<body>
+
+<header class="toolbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 14 14" aria-hidden="true">
+      <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1"/>
+      <circle cx="7" cy="7" r="1.2" fill="currentColor"/>
+    </svg>
+    FOUNDATION
+  </div>
+  <div class="toolbar-sub">design system specimen — v0.1</div>
+  <div class="cluster" role="group" aria-label="Theme">
+    <button class="chip" data-set-theme="">contract</button>
+    <button class="chip on" data-set-theme="taurid">taurid</button>
+  </div>
+</header>
+
+<main class="container">
+
+  <section class="book-section">
+    <h1>One contract, many voices.</h1>
+    <p class="hero-sub">
+      The foundation layer defines structure only — scales, component
+      primitives, semantic slots, voice knobs. It carries no brand. Each brand
+      ships as a theme package that fills the slots. You are looking at the
+      <strong>Taurid Capital</strong> theme; flip to <em>contract</em> in the
+      toolbar to see the same page wearing nothing.
+    </p>
+    <p class="theme-note" id="theme-note" style="margin-top: var(--space-3);"></p>
+  </section>
+
+  <section class="book-section stack-4">
+    <div class="section-head"><span>01 — Palette</span><span class="data faint" id="palette-src">theme: taurid</span></div>
+    <div class="book-grid" id="core-swatches"></div>
+    <h4 style="margin-top: var(--space-5);">Categorical — 12 hues</h4>
+    <p class="theme-note">Data viz, cluster color, avatar tiles. Taurid keeps exactly one blue: Night, lifted.</p>
+    <div class="cat-strip" id="cat-strip" style="margin-bottom: var(--space-5);"></div>
+    <h4>Hash band</h4>
+    <p class="theme-note">Generated tile colors (from names, ids) clamp into a theme-owned hue window — no hash may escape the brand.</p>
+    <div class="cat-strip" id="hash-strip" style="margin-bottom: var(--space-5);"></div>
+  </section>
+
+  <section class="book-section stack-4">
+    <div class="section-head"><span>02 — Type and voice</span></div>
+    <div class="type-specimen">
+      <div class="type-row">
+        <span class="label">display</span>
+        <span class="display-specimen">Taurid Capital</span>
+      </div>
+      <div class="type-row">
+        <span class="label">heading</span>
+        <h2>Positions held through weather</h2>
+      </div>
+      <div class="type-row">
+        <span class="label">body</span>
+        <p>The quiet compounding of well-chosen exposure. Body text carries the argument; it stays regular weight, generous line height, and never shouts.</p>
+      </div>
+      <div class="type-row">
+        <span class="label">data</span>
+        <span class="data">2026-07-13 &nbsp; $48,210.66 &nbsp; +12.4% &nbsp; 14:32:08</span>
+      </div>
+      <div class="type-row">
+        <span class="label">micro-label</span>
+        <span class="kicker">renewal radar — 14 days</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="book-section stack-4">
+    <div class="section-head"><span>03 — Scale and shape</span></div>
+    <div class="two-col">
+      <div class="demo-block">
+        <span class="label">spacing — 4px base</span>
+        <div class="space-ruler">
+          <div style="width:4px;height:4px"></div>
+          <div style="width:8px;height:8px"></div>
+          <div style="width:12px;height:12px"></div>
+          <div style="width:16px;height:16px"></div>
+          <div style="width:24px;height:24px"></div>
+          <div style="width:32px;height:32px"></div>
+          <div style="width:48px;height:48px"></div>
+          <div style="width:64px;height:64px"></div>
+        </div>
+      </div>
+      <div class="demo-block">
+        <span class="label">radii — theme-owned</span>
+        <div class="radii-demo">
+          <div style="border-radius: var(--radius-sm)"><span class="data faint">sm</span></div>
+          <div style="border-radius: var(--radius-md)"><span class="data faint">md</span></div>
+          <div style="border-radius: var(--radius-lg)"><span class="data faint">lg</span></div>
+        </div>
+        <p class="theme-note">Taurid: every radius is 2px — engineered, not designed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="book-section stack-6">
+    <div class="section-head"><span>04 — Components</span></div>
+
+    <div class="demo-block">
+      <span class="label">buttons — one control language</span>
+      <div class="cluster">
+        <button class="btn primary">Send</button>
+        <button class="btn">Draft reply</button>
+        <button class="btn quiet">Dismiss</button>
+        <button class="btn danger">Decline</button>
+        <button class="btn small">Edit</button>
+        <button class="btn primary small">Run</button>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <span class="label">chips and badges</span>
+      <div class="cluster">
+        <button class="chip on">All</button>
+        <button class="chip">Unread</button>
+        <button class="chip">iMessage</button>
+        <button class="chip">Email</button>
+        <span class="badge">draft</span>
+        <span class="badge accent">proposed</span>
+        <span class="badge positive">verified</span>
+        <span class="badge negative">lapsed</span>
+        <span class="badge solid">TEST :8378</span>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <span class="label">list rows — feed pattern</span>
+      <div class="stack-2">
+        <div class="row unread">
+          <div class="avatar" data-tile="Ada Lovelace">AL</div>
+          <div class="row-main">
+            <div class="row-name">Ada Lovelace</div>
+            <div class="row-sub">The engine weaves algebraic patterns just as the loom weaves flowers</div>
+          </div>
+          <span class="row-time">14:32</span>
+        </div>
+        <div class="row">
+          <div class="avatar" data-tile="Charles Babbage">CB</div>
+          <div class="row-main">
+            <div class="row-name">Charles Babbage</div>
+            <div class="row-sub">Errors using inadequate data are much less than those using no data</div>
+          </div>
+          <span class="row-time">Tue</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <span class="label">kpi tiles</span>
+      <div class="kpi-band">
+        <div class="kpi"><div class="kpi-num" >$1,284</div><div class="kpi-label">monthly run-rate</div></div>
+        <div class="kpi"><div class="kpi-num">23</div><div class="kpi-label">active streams</div></div>
+        <div class="kpi"><div class="kpi-num">4</div><div class="kpi-label">renewals in 14d</div></div>
+        <div class="kpi"><div class="kpi-num">98.2%</div><div class="kpi-label">evidence coverage</div></div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="demo-block">
+        <span class="label">form fields</span>
+        <div class="stack-2">
+          <div class="field">
+            <span class="label">merchant</span>
+            <input class="input" value="Anthropic" />
+          </div>
+          <div class="field">
+            <span class="label">cadence</span>
+            <select class="select"><option>monthly</option><option>annual</option></select>
+          </div>
+        </div>
+      </div>
+      <div class="demo-block">
+        <span class="label">tabs</span>
+        <div class="tabs">
+          <button class="tab active">Ledger</button>
+          <button class="tab">Radar</button>
+          <button class="tab">Launchpad</button>
+        </div>
+        <span class="label" style="margin-top: var(--space-3);">status dots</span>
+        <div class="cluster">
+          <span class="dot"></span><span class="theme-note">idle</span>
+          <span class="dot on"></span><span class="theme-note">healthy</span>
+          <span class="dot err"></span><span class="theme-note">failed</span>
+          <span class="dot live on" id="live-dot"></span><span class="theme-note">live — solar marker in Taurid</span>
+        </div>
+        <span class="label" style="margin-top: var(--space-3);">toast</span>
+        <div><button class="btn small" id="fire-toast">Fire a toast</button></div>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <span class="label">table</span>
+      <table class="table">
+        <thead><tr><th>Merchant</th><th>Cadence</th><th>Last charge</th><th style="text-align:right">Amount</th></tr></thead>
+        <tbody>
+          <tr><td>Anthropic</td><td>monthly</td><td class="data">Jul 09</td><td class="num">$200.00</td></tr>
+          <tr><td>Google One</td><td>annual</td><td class="data">Jul 13</td><td class="num">$99.99</td></tr>
+          <tr><td>PropertyShark</td><td>monthly</td><td class="data">Jul 13</td><td class="num">$49.95</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="book-section stack-4">
+    <div class="section-head"><span>05 — Composed</span><span class="data faint">everything above, working together</span></div>
+    <div class="composed">
+      <div class="window">
+        <div class="window-bar">
+          <button class="window-close" aria-label="close"></button>
+          <span class="window-title">Daily Brief</span>
+          <span style="flex:1"></span>
+          <span class="dot live on"></span>
+        </div>
+        <div class="window-body stack-4">
+          <div class="section-head"><span>waiting on you</span><span class="data faint">2</span></div>
+          <div class="stack-2">
+            <div class="row unread">
+              <div class="avatar" data-tile="Grace Hopper">GH</div>
+              <div class="row-main">
+                <div class="row-name">Grace Hopper</div>
+                <div class="row-sub">A ship in port is safe, but that is not what ships are built for</div>
+              </div>
+              <button class="btn small">Reply</button>
+            </div>
+            <div class="row">
+              <div class="avatar" data-tile="Edwin Land">EL</div>
+              <div class="row-main">
+                <div class="row-name">Edwin Land</div>
+                <div class="row-sub">Owes you: the Q3 term sheet redline</div>
+              </div>
+              <button class="btn quiet small">Nudge</button>
+            </div>
+          </div>
+          <div class="section-head"><span>renewals and money</span></div>
+          <div class="cluster">
+            <span class="badge negative">Google One — today</span>
+            <span class="badge">PropertyShark — 3d</span>
+            <span class="badge accent">evidence found</span>
+          </div>
+        </div>
+      </div>
+      <div class="card stack-4">
+        <div class="section-head"><span>allocation</span><span class="data faint">by strategy</span></div>
+        <div class="bars" id="cat-bars"></div>
+        <p class="theme-note">Categorical hues drawn straight from the theme tokens.</p>
+        <div class="cluster">
+          <button class="btn primary small">Rebalance</button>
+          <button class="btn small">Export</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>
+      Consume: link <span class="data">foundation/tokens.css + base.css + components.css</span>,
+      then one theme, then set <span class="data">data-theme</span> on the html element.
+      Adding a brand is one file: copy <span class="data">themes/taurid/theme.css</span>,
+      refill the slots.
+    </p>
+  </footer>
+</main>
+
+<div id="toast-dock"></div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+
+  /* ---- theme toggle ---- */
+  var chips = document.querySelectorAll("[data-set-theme]");
+  function applyTheme(name) {
+    if (name) { root.dataset.theme = name; } else { delete root.dataset.theme; }
+    localStorage.setItem("df-theme", name || "");
+    chips.forEach(function (c) { c.classList.toggle("on", c.dataset.setTheme === (name || "")); });
+    document.getElementById("theme-note").textContent = name
+      ? "wearing: themes/" + name + "/theme.css"
+      : "wearing: nothing — foundation contract fallbacks only";
+    document.getElementById("palette-src").textContent = name ? "theme: " + name : "contract fallbacks";
+    paint();
+  }
+  chips.forEach(function (c) {
+    c.addEventListener("click", function () { applyTheme(c.dataset.setTheme); });
+  });
+
+  /* ---- palette rendering (reads live computed tokens) ---- */
+  var CORE = [
+    ["bg", "--bg"], ["bg raised", "--bg-raised"], ["bg card", "--bg-card"],
+    ["line", "--line"], ["text", "--text"], ["text dim", "--text-dim"],
+    ["text faint", "--text-faint"], ["accent", "--accent"],
+    ["accent bright", "--accent-bright"], ["positive", "--positive"],
+    ["negative", "--negative"], ["focus", "--focus"]
+  ];
+  function tok(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
+  function swatch(label, value) {
+    return '<div class="swatch"><div class="swatch-color" style="background:' + value + '"></div>' +
+      '<div class="swatch-meta"><div class="swatch-name">' + label + '</div>' +
+      '<div class="swatch-hex">' + value + '</div></div></div>';
+  }
+  function hashHue(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; }
+    return "hsl(" + (parseFloat(tok("--hash-hue-base")) + (h % parseFloat(tok("--hash-hue-span")))) +
+      ", " + tok("--hash-sat") + ", " + tok("--hash-lit") + ")";
+  }
+  function paint() {
+    document.getElementById("core-swatches").innerHTML =
+      CORE.map(function (c) { return swatch(c[0], tok(c[1])); }).join("");
+    var cat = document.getElementById("cat-strip");
+    cat.innerHTML = "";
+    for (var i = 1; i <= 12; i++) {
+      var v = tok("--cat-" + i);
+      cat.innerHTML += '<div style="background:' + v + '"><span class="swatch-hex">' + i + "</span></div>";
+    }
+    var names = ["Atlas", "Beacon", "Cinder", "Delta", "Ember", "Fjord", "Garnet", "Vira"];
+    document.getElementById("hash-strip").innerHTML = names.map(function (n) {
+      return '<div style="background:' + hashHue(n) + '"><span class="swatch-hex">' + n + "</span></div>";
+    }).join("");
+    var bars = document.getElementById("cat-bars");
+    var heights = [88, 64, 76, 40, 55, 30];
+    bars.innerHTML = heights.map(function (h, i) {
+      return '<div style="height:' + h + '%;background:' + tok("--cat-" + (i + 1)) + '"></div>';
+    }).join("");
+    document.querySelectorAll(".avatar[data-tile]").forEach(function (a) {
+      a.style.background = hashHue(a.dataset.tile);
+    });
+  }
+
+  /* ---- live dot pulse ---- */
+  var live = document.getElementById("live-dot");
+  setInterval(function () { live.classList.toggle("on"); }, 1600);
+
+  /* ---- toast ---- */
+  document.getElementById("fire-toast").addEventListener("click", function () {
+    var t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = '<span>Draft saved to outbox</span><button class="btn quiet small">Undo</button>';
+    document.getElementById("toast-dock").appendChild(t);
+    setTimeout(function () { t.remove(); }, 3200);
+  });
+
+  applyTheme(localStorage.getItem("df-theme") !== null ? (localStorage.getItem("df-theme") || "") : "taurid");
+
+  /* hook for the Design Studio (studio.html): lets the parent frame
+     repaint computed swatches and drive the theme after live edits */
+  window.DF = { paint: paint, applyTheme: applyTheme };
+})();
+</script>
+</body>
+</html>
