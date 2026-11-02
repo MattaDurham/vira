@@ -250,6 +250,17 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Fixed
 
+- The Design Studio works on a fresh install. The studio page lived only
+  in a separate design-system checkout that a new install had no way to
+  get, so the window showed its skins and background pickers above an
+  empty frame (main's earlier fix replaced the frame with a note saying the
+  checkout was missing). The studio now ships in `static/design/` and
+  opens with no setup. `design_foundation_root` keeps its default and is
+  optional: when that folder holds a `studio.html` it is served instead,
+  picked per request so a checkout cloned while Vira runs needs no
+  restart, and it remains the only place the "foundation" save target
+  writes. `GET /api/design/status` names which copy is served and why.
+
 - The media index's FTS5 table no longer "corrupts" between repairs, and
   heals itself when it is malformed. Both corruption reports were one
   SQLite build reading an index another build wrote: SQLite 3.54.0's

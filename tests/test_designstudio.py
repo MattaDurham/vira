@@ -245,11 +245,65 @@ class ViraSaveSyncsTheBaseSkin(unittest.TestCase):
         self.assertNotIn(f"static/skins/{self.skins.BASE_ID}.json", self.committed)
 
 
+class BundledStudioTests(unittest.TestCase):
+    """A fresh install has no external checkout, so /design must serve the
+    studio bundled in static/design/ (it framed a 404 before 2026-10-17)."""
+
+    def _with_root(self, value):
+        return mock.patch.object(ds.settings, "get", lambda key: value)
+
+    def test_bundle_holds_everything_the_studio_page_loads(self):
+        page = (ds.BUNDLED / "studio.html").read_text(encoding="utf-8")
+        for ref in ("foundation/tokens.css", "foundation/base.css",
+                    "themes/taurid/theme.css", "studio.css", "studio.js"):
+            self.assertIn(ref, page)
+            self.assertTrue((ds.BUNDLED / ref).is_file(), ref)
+
+    def test_unset_root_is_none_not_the_cwd(self):
+        with self._with_root(""):
+            self.assertIsNone(ds.root())
+            self.assertEqual(ds.serve_root(), ds.BUNDLED)
+
+    def test_missing_checkout_falls_back_to_the_bundle(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self._with_root(str(Path(td) / "absent")):
+                self.assertEqual(ds.serve_root(), ds.BUNDLED)
+            # a directory without a studio page is not a studio either
+            with self._with_root(td):
+                self.assertEqual(ds.serve_root(), ds.BUNDLED)
+
+    def test_configured_checkout_with_a_studio_wins(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "studio.html").write_text("<html></html>", encoding="utf-8")
+            with self._with_root(td):
+                self.assertEqual(ds.serve_root(), Path(td))
+
+    def test_foundation_save_without_a_checkout_is_a_404(self):
+        with self._with_root(""):
+            with self.assertRaises(ds.HTTPException) as cm:
+                ds.save(ds.SaveReq(target="foundation",
+                                   changes={"bg": "#000000"}))
+            self.assertEqual(cm.exception.status_code, 404)
+
+    def test_the_app_serves_the_studio(self):
+        from fastapi.testclient import TestClient
+        from server import main
+        client = TestClient(main.app)
+        self.enterContext(self._with_root(""))   # never the real config
+        r = client.get("/design/studio.html")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("studio.js", r.text)
+        self.assertEqual(client.get("/design/studio.js").status_code, 200)
+        self.assertEqual(
+            client.get("/design/themes/taurid/theme.css").status_code, 200)
+
+
 
 class CheckoutServingTests(unittest.TestCase):
     """THE JOIN, through the real app: a fresh install has no design-system
-    checkout, and the owner clones one while Vira runs. The mount used to be
-    decided at import, so the studio stayed a JSON 404 until a restart."""
+    checkout, so the bundled studio is served; the owner may clone one while
+    Vira runs. The mount used to be decided at import, so a checkout that
+    arrived later was ignored until a restart."""
     def setUp(self):
         from fastapi.testclient import TestClient
         from server import main
@@ -264,28 +318,42 @@ class CheckoutServingTests(unittest.TestCase):
         (self.checkout / "studio.html").write_text("<p>studio</p>", encoding="utf-8")
         (self.checkout / "index.html").write_text("<p>specimens</p>", encoding="utf-8")
 
-    def test_missing_checkout_is_named_not_framed(self):
+    def test_missing_checkout_serves_the_bundle_and_says_so(self):
         st = self.client.get("/api/design/status").json()
-        self.assertFalse(st["ready"])
+        self.assertTrue(st["ready"])
+        self.assertEqual(st["source"], "bundled")
         self.assertIn(str(self.checkout), st["reason"])
         r = self.client.get("/design/studio.html")
-        self.assertEqual(r.status_code, 404)
-        self.assertIn(str(self.checkout), r.json()["detail"])
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("studio.js", r.text)
 
     def test_checkout_cloned_after_startup_is_served_without_restart(self):
-        self.assertEqual(self.client.get("/design/studio.html").status_code, 404)
+        self.assertIn("studio.js", self.client.get("/design/studio.html").text)
         self._clone()
-        self.assertTrue(self.client.get("/api/design/status").json()["ready"])
+        st = self.client.get("/api/design/status").json()
+        self.assertTrue(st["ready"])
+        self.assertEqual(st["source"], "checkout")
         r = self.client.get("/design/studio.html")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("studio", r.text)
+        self.assertIn("<p>studio</p>", r.text)
         self.assertIn("specimens", self.client.get("/design/").text)
 
-    def test_a_folder_without_the_studio_page_is_not_ready(self):
+    def test_a_folder_without_the_studio_page_falls_back_to_the_bundle(self):
         self.checkout.mkdir()
         st = self.client.get("/api/design/status").json()
-        self.assertFalse(st["ready"])
+        self.assertTrue(st["ready"])
+        self.assertEqual(st["source"], "bundled")
         self.assertIn("studio.html", st["reason"])
+
+    def test_a_missing_bundle_is_named_not_framed(self):
+        gone = self.tmp / "no-bundle"
+        with mock.patch.object(ds, "BUNDLED", gone):
+            st = self.client.get("/api/design/status").json()
+            self.assertFalse(st["ready"])
+            self.assertIn(str(gone), st["reason"])
+            r = self.client.get("/design/studio.html")
+            self.assertEqual(r.status_code, 404)
+            self.assertIn(str(gone), r.json()["detail"])
 
     def test_paths_cannot_escape_the_checkout(self):
         self._clone()

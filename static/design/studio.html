@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="taurid">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Studio</title>
+<link rel="stylesheet" href="foundation/tokens.css?v=7">
+<link rel="stylesheet" href="foundation/base.css?v=7">
+<link rel="stylesheet" href="themes/taurid/theme.css?v=7">
+<link rel="stylesheet" href="studio.css?v=7">
+</head>
+<body>
+
+<header id="bar">
+  <div id="bar-brand">
+    <svg viewBox="0 0 14 14" aria-hidden="true">
+      <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1"/>
+      <circle cx="7" cy="7" r="1.2" fill="currentColor"/>
+    </svg>
+    <span>STUDIO</span>
+  </div>
+
+  <nav id="bar-targets" role="group" aria-label="Design target"></nav>
+
+  <div id="bar-spacer"></div>
+
+  <button class="bar-btn" id="undo-btn" title="Undo (Cmd-Z)" disabled>
+    <svg viewBox="0 0 16 16"><path d="M6.5 3.5 3 7l3.5 3.5M3 7h6a4 4 0 0 1 0 8H7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="bar-btn" id="redo-btn" title="Redo (Shift-Cmd-Z)" disabled>
+    <svg viewBox="0 0 16 16"><path d="M9.5 3.5 13 7l-3.5 3.5M13 7H7a4 4 0 0 0 0 8h2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="bar-btn" id="history-btn" title="Saved versions">
+    <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.2l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+  </button>
+  <button class="bar-btn" id="code-btn" title="Show the code behind the design">
+    <svg viewBox="0 0 16 16"><path d="m5.5 5-3 3 3 3M10.5 5l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button id="save-btn" disabled>Save</button>
+</header>
+
+<main id="main">
+  <section id="stage">
+    <div id="canvas-frame">
+      <iframe id="preview" title="The surface you are designing"></iframe>
+    </div>
+    <aside id="phone-dock" hidden>
+      <div id="phone-head">Mobile<span id="phone-label"></span></div>
+      <div id="phone-shell">
+        <div id="phone-island"></div>
+        <iframe id="phone" title="Mobile parallel of the module being edited"></iframe>
+        <div id="phone-grip" title="drag to resize"></div>
+      </div>
+    </aside>
+    <div id="mode-switch" role="group" aria-label="Canvas mode">
+      <button class="on" data-canvas-mode="design">Design</button>
+      <button data-canvas-mode="use">Use</button>
+    </div>
+  </section>
+
+  <aside id="rail">
+    <div id="rail-head">
+      <button id="rail-back" hidden>
+        <svg viewBox="0 0 14 14"><path d="M8.5 3 4.5 7l4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span id="rail-title">Styles</span>
+      <span style="flex:1"></span>
+      <a id="rail-code-link" hidden>code</a>
+    </div>
+    <div id="rail-body"></div>
+  </aside>
+</main>
+
+<section id="code-drawer" hidden>
+  <div id="drawer-grip" title="drag to resize"></div>
+  <div id="drawer-head">
+    <nav id="file-tabs"></nav>
+    <span style="flex:1"></span>
+    <span id="code-hint">the code is live — type and the design follows</span>
+    <button class="bar-btn" id="drawer-close" title="Hide code">
+      <svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <div id="code-scroll">
+    <div id="code-wrap">
+      <pre id="gutter" aria-hidden="true"></pre>
+      <div id="code-area">
+        <div id="hl-layer" aria-hidden="true"></div>
+        <pre id="code-tint" aria-hidden="true"></pre>
+        <textarea id="code-edit" spellcheck="false" autocapitalize="off"
+                  autocomplete="off" wrap="off"
+                  aria-label="Edit the active stylesheet"></textarea>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="pop-layer"></div>
+<div id="toast-dock"></div>
+
+<div id="modal-back" hidden>
+  <div id="save-modal">
+    <header>Save — no host detected</header>
+    <p>This studio is running without its host, so it cannot write files.
+       Copy the updated stylesheet(s) below.</p>
+    <textarea id="modal-text" rows="14" spellcheck="false"></textarea>
+    <div><button id="modal-copy">Copy</button>
+         <button id="modal-close">Close</button></div>
+  </div>
+</div>
+
+<script src="studio.js?v=7"></script>
+</body>
+</html>

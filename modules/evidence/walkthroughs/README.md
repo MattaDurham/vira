@@ -18,7 +18,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Library / Documents](../../library/documents/README.md)
 
-### Files (19)
+### Files (21)
 
 **Server**
 
@@ -53,6 +53,8 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `walkthroughs/childcare-coverage/README.md` | The owner enters each child's pickup time and who normally covers each |
 | `walkthroughs/childcare-coverage/childcare-desktop.png` |  |
 | `walkthroughs/childcare-coverage/childcare-mobile.png` |  |
+| `walkthroughs/design-studio-bundled/README.md` | The Design Studio window frames `/design/studio.html`. |
+| `walkthroughs/design-studio-bundled/studio.png` |  |
 | `walkthroughs/event-prep/README.md` | Every open loop tied to an upcoming dated event (a trip, a birthday, a |
 | `walkthroughs/event-prep/brief-desktop.png` |  |
 | `walkthroughs/event-prep/brief-mobile.png` |  |

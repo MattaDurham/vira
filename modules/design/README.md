@@ -17,7 +17,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 ### Submodules
 
-- [Studio](studio/README.md) - The hosted studio page and its save path into the design-foundation checkout. (2 files)
+- [Studio](studio/README.md) - The studio page bundled with Vira (an optional design-foundation checkout overrides it) and its save path. (10 files)
 - [Skins](skins/README.md) - Skins: the :root rewrite, manifest validation, apply and reset. (11 files)
 
 ### Neighbours
@@ -30,6 +30,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `design` (ids from `WINDOWS` in `static/app.js`).
 
-13 tracked files across 2 submodules. `python -m server.moduletree brief design` prints every submodule's page in one go.
+21 tracked files across 2 submodules. `python -m server.moduletree brief design` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

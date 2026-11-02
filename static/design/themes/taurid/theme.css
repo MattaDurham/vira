@@ -1,0 +1,110 @@
+/* ============================================================
+   THEME / TAURID CAPITAL — the first brand package.
+
+   Source of truth: Taurid Capital brand book v1.0 (OneDrive)
+   as realized in the Vira taurid-skin build (merged 2026-07-13).
+   Stone, charcoal, oxidized metals; tracked Helvetica Neue Light
+   display; mono data voice; engineered 2px chrome.
+
+   Nearly everything is a token override — the supplemental
+   rules at the bottom are the few voice moves tokens cannot
+   express (the solar live-dot, the wordmark's brandmark row).
+   ============================================================ */
+
+:root[data-theme="taurid"] {
+  /* ---- palette: stone, charcoal, oxidized metals ---- */
+  --bg:            #1a1d1e;   /* Graphite */
+  --bg-raised:     #222522;
+  --bg-card:       #2d2d2a;   /* Stone */
+  --line:          #34342f;
+  --text:          #cfcbc2;
+  --text-dim:      #8f8d85;
+  --text-faint:    #6a6a64;
+  --accent:        #8a8478;   /* Bone */
+  --accent-bright: #a39c8d;   /* Bone lifted for text on dark */
+  --accent-soft:   rgba(138, 132, 120, 0.12);
+  --accent-contrast: #191713; /* near-black on Bone */
+  --positive:      #7d8a74;   /* sage — desaturated, earthbound */
+  --negative:      #a0715f;   /* clay — desaturated, earthbound */
+  --focus:         #3d4a52;   /* Night — reserved emphasis */
+
+  /* brand extras beyond the contract */
+  --taurid-night:    #3d4a52;
+  --taurid-oxidized: #5a4f43;
+
+  /* ---- categorical: the 12-hue earthbound set ---- */
+  --cat-1:  #8a8478;   /* bone */
+  --cat-2:  #7d8a74;   /* sage */
+  --cat-3:  #7a8f9c;   /* slate (the one blue: Night, lifted) */
+  --cat-4:  #a0715f;   /* clay */
+  --cat-5:  #8f7d96;   /* heather */
+  --cat-6:  #a89a6a;   /* ochre */
+  --cat-7:  #6f948c;   /* patina */
+  --cat-8:  #a08292;   /* rose ash */
+  --cat-9:  #8a9a6f;   /* lichen */
+  --cat-10: #9c8f7a;   /* sand */
+  --cat-11: #a08a6f;   /* corten */
+  --cat-12: #96a38c;   /* moss */
+  /* hash-generated tile hues clamp into the warm earth band:
+     hsl(20-90, 16%, 27%) */
+  --hash-hue-base: 20;
+  --hash-hue-span: 70;
+  --hash-sat: 16%;
+  --hash-lit: 27%;
+
+  /* ---- type: tracked thin display, mono data ---- */
+  --font-body:    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono:    "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  --font-data:    var(--font-mono);
+  --font-label:   var(--font-mono);
+  --font-control: var(--font-mono);
+
+  /* ---- voice: no heavy faces anywhere; instrument labels ---- */
+  --weight-display: 200;
+  --weight-heading: 300;
+  --weight-strong:  400;    /* 500 is the ceiling; 400 is the norm */
+  --track-display:  0.42em;
+  --track-heading:  0.05em;
+  --track-label:    0.15em;
+  --track-control:  0.12em;
+  --label-transform: uppercase;
+
+  /* ---- shape: engineered, not designed ---- */
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+}
+
+/* ============================================================
+   Supplemental voice — the moves tokens cannot express.
+   ============================================================ */
+
+/* -- headings sit a step brighter than body -- */
+[data-theme="taurid"] h1,
+[data-theme="taurid"] h2 { color: #d4d0c6; }
+
+/* -- live dot: solar marker (ring; center fills when live) -- */
+[data-theme="taurid"] .dot.live {
+  background: none;
+  border: 1px solid var(--accent);
+  position: relative;
+}
+[data-theme="taurid"] .dot.live::after {
+  content: "";
+  position: absolute; inset: 2px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease);
+}
+[data-theme="taurid"] .dot.live.on { background: none; }
+[data-theme="taurid"] .dot.live.on::after { opacity: 1; }
+
+/* -- KPI numerals: thin, like instrument readouts -- */
+[data-theme="taurid"] .kpi-num { font-weight: 300; }
+
+/* -- windows: tighter shadow, engineered edge -- */
+[data-theme="taurid"] .window {
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}

@@ -1,16 +1,18 @@
 {
   "id": "design/studio",
   "name": "Studio",
-  "summary": "The hosted studio page and its save path into the design-foundation checkout.",
+  "summary": "The studio page bundled with Vira (an optional design-foundation checkout overrides it) and its save path.",
   "owns": [
     "server/designstudio.py",
+    "static/design/**",
     "tests/test_designstudio.py"
   ],
   "routes": [
     "/api/design"
   ],
   "stores": [
-    "the design-foundation checkout (outside data/)"
+    "static/style.css (the vira target)",
+    "an optional design-foundation checkout (outside data/)"
   ],
   "reads": [
     "core/settings"

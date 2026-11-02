@@ -18411,11 +18411,11 @@ function openApp(id) {
 }
 
 // ----- Design Studio: the studio frame -----
-// The studio page lives in a separate design-system checkout, which a fresh
-// install does not have. Framing it unasked showed a JSON 404 in the window
-// and behind Open full tab, so ask first and say what is missing. Re-asked
-// on every open: the server finds the checkout per request, so one cloned
-// while Vira runs comes up here without a restart.
+// The studio ships bundled in static/design/; a configured design-system
+// checkout that holds one is served instead. Ask first anyway, so a missing
+// bundle or a dead server reads as a sentence rather than a JSON 404 in the
+// frame. Re-asked on every open: the server picks the folder per request,
+// so a checkout cloned while Vira runs comes up here without a restart.
 async function loadDesignStudio() {
   const frame = $("#design-frame"), door = $("#design-door"),
         full = $("#design-fulltab");
@@ -18437,11 +18437,11 @@ async function loadDesignStudio() {
   frame.removeAttribute("src");
   if (full) full.style.display = "none";
   door.innerHTML = "";
-  door.appendChild(el("div", "", "The studio is not set up on this install: "
-    + (st.reason || "no design-system checkout") + "."));
-  door.appendChild(el("div", "", "Clone the design-system repo there, or point "
-    + "Config > Advanced settings > System > Design system checkout at your copy. "
-    + "This window picks it up the next time it opens. The skins above work without it."));
+  door.appendChild(el("div", "", "The studio cannot open: "
+    + (st.reason || "the server did not say why") + "."));
+  door.appendChild(el("div", "", "The studio ships in static/design/ in Vira's "
+    + "checkout; restoring that folder brings it back the next time this window "
+    + "opens. The skins above work without it."));
   door.style.display = "";
 }
 

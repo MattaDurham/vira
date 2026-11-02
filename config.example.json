@@ -311,5 +311,5 @@
   "site_root": "",
   "_site_root": "Checkout of the owner's public site repo. Used by the sitedocs migration and the blog publish pipeline. Empty = both stay dormant.",
   "design_foundation_root": "~/workspace/design-foundation",
-  "_design_foundation_root": "The design-system repo the Design studio edits; missing = dormant."
+  "_design_foundation_root": "Optional external design-system repo. When it holds a studio, the Design Studio serves that copy and can save to it. Missing or empty = the studio bundled with Vira, which edits Vira's own stylesheet."
 }
