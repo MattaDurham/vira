@@ -1405,6 +1405,12 @@ async def _t_record_role_scores(args):
         _record_role_scores_text, args.get("scores_json")))
 
 
+async def _t_update_person_profile(args):
+    return _txt(await asyncio.to_thread(
+        _update_person_profile_text, args.get("person"),
+        args.get("relationship_summary"), args.get("how_we_met")))
+
+
 async def _t_data_connections(args):
     from . import dataconnections
     request = args.get("request")
@@ -1636,7 +1642,7 @@ TOOL_SPECS = [
      "refresh is stamped. Call it once, at the end, with your final text "
      "— never with a draft.",
      {"person": str, "relationship_summary": str, "how_we_met": str},
-     _update_person_profile_text),
+     _t_update_person_profile),
     ("ask_owner",
      "Ask the owner a question and WAIT for the answer. Use this the "
      "moment a decision is genuinely theirs — which of two approaches to "

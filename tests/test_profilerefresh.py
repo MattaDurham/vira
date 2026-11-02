@@ -5,6 +5,7 @@ and the agent-side write tool resolves people and refuses junk.
 
 Run: .venv/bin/python -m unittest tests.test_profilerefresh
 """
+import asyncio
 import json
 import tempfile
 import unittest
@@ -181,6 +182,27 @@ class TestWriteTool(RefreshBase):
         self.assertIn("Refused", out)
         self.assertEqual(self._profile()["relationship_summary"],
                          "Casey is an old friend [2024-01-01].")
+
+    def test_the_registered_handler_takes_one_args_dict(self):
+        # The dispatcher calls every handler with a single args dict; the
+        # three-argument text function registered raw failed every call.
+        handler = {n: h for n, _d, _s, h in viratools.TOOL_SPECS}[
+            "update_person_profile"]
+        out = asyncio.run(handler({
+            "person": "p_test00000001",
+            "relationship_summary": NEW_SUMMARY,
+            "how_we_met": "Through the climbing gym."}))
+        self.assertIn("Profile refreshed", out["content"][0]["text"])
+        prof = self._profile()
+        self.assertEqual(prof["relationship_summary"], NEW_SUMMARY)
+        self.assertEqual(prof["how_we_met"], "Through the climbing gym.")
+
+    def test_the_dispatcher_saves_a_profile(self):
+        out = asyncio.run(viratools.invoke("mcp__vira__update_person_profile", {
+            "person": "p_test00000001",
+            "relationship_summary": NEW_SUMMARY, "how_we_met": ""}))
+        self.assertIn("Profile refreshed", out["content"][-1]["text"])
+        self.assertEqual(self._profile()["relationship_summary"], NEW_SUMMARY)
 
 
 if __name__ == "__main__":
