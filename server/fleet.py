@@ -1275,18 +1275,18 @@ def label_repo(scan, live_rows, instances, t_now):
         elif w.get("dirty"):
             label = "Uncommitted changes"
         elif w.get("merged") is False and (w.get("ahead") or 0) > 0:
-            label = "Unlanded commits"
+            label = "Commits not on main"
         elif w.get("fresh"):
             label = "No commits, can remove"
         elif w.get("merged") is True or (w.get("ahead") == 0):
-            label = "Landed, can remove"
+            label = "Merged, can remove"
         else:
             label = "Unknown"
         wts.append(dict(w, sessions=[r["id"] for r in here], instance=inst, label=label))
     out["worktrees"] = wts
     out["branches"] = [dict(b, label=("No commits, can remove" if b.get("fresh")
-                                      else "Landed, can remove" if b.get("merged") or b.get("ahead") == 0
-                                      else "Unlanded commits"))
+                                      else "Merged, can remove" if b.get("merged") or b.get("ahead") == 0
+                                      else "Commits not on main"))
                        for b in scan.get("branches") or []]
     return out
 

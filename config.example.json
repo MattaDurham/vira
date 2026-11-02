@@ -44,7 +44,7 @@
   "imessage_reply_enabled": true,
   "_imessage_reply_enabled": "Vira acts on reversible in-app things immediately and confirms once before anything that leaves this machine (server/inbound.py). Dormant unless a handle is set.",
   "inbound_ignore_prefixes": [],
-  "_inbound_ignore_prefixes": "Prefixes of machine-sent texts that also land in the self-thread and must never be read as you talking. Vira's own sends are already covered by the \"Vira: \" prefix and the send ledger.",
+  "_inbound_ignore_prefixes": "Prefixes of machine-sent texts that also show up in the self-thread and must never be read as you talking. Vira's own sends are already covered by the \"Vira: \" prefix and the send ledger.",
   "sms_fallback": true,
   "_sms_fallback": "For Android or iMessage-less recipients. Needs Text Message Forwarding to the paired iPhone so Messages owns an SMS account. A contact can also be marked SMS on their person page.",
   "send_verify_seconds": 8,
@@ -203,7 +203,7 @@
   "_circle_refresh_min": "Re-matches the Visual Network's social circles to their stable identities and re-reads (one model call each, at most four per pass) only the circles whose members or shared group chats changed.",
   "_sessions": "Agent sessions: Live coding sessions Vira dispatches.",
   "session_default_mode": "bypassPermissions",
-  "_session_default_mode": "manual pauses every risky tool call for your Approve/Deny; acceptEdits lets file edits land but asks before commands; bypassPermissions runs everything. The containment is structural: a writing session is placed in its own worktree and the gate refuses any write aimed at the live checkout. Per-run override in the UI.",
+  "_session_default_mode": "manual pauses every risky tool call for your Approve/Deny; acceptEdits makes file edits without asking but asks before commands; bypassPermissions runs everything. The containment is structural: a writing session is placed in its own worktree and the gate refuses any write aimed at the live checkout. Per-run override in the UI.",
   "session_max_live": 4,
   "_session_max_live": "Each holds a CLI subprocess against the plan. Launches past the cap are refused with a clear error. Sessions parked in their reply window do not count.",
   "session_auto_allow": [

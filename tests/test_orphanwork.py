@@ -1042,12 +1042,12 @@ class NoteLanded(unittest.TestCase):
     def test_a_merge_marks_the_branch_ideas_done(self):
         [c] = self.stamps("merge")
         self.assertEqual(c.args[0], "idea_1")
-        self.assertIn("landed on main", c.args[1])
+        self.assertIn("merged into main", c.args[1])
         self.assertEqual(c.kwargs.get("status"), "done")
 
     def test_a_discard_says_nothing_landed_and_keeps_it_open(self):
         [c] = self.stamps("discard")
-        self.assertIn("nothing landed", c.args[1])
+        self.assertIn("nothing merged", c.args[1])
         self.assertNotIn("status", c.kwargs)
 
     def test_a_missing_idea_never_fails_the_landing(self):

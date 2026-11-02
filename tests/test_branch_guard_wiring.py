@@ -469,7 +469,7 @@ class TidyIsWired(unittest.TestCase):
         self.reg._poll_once()
         self.assertEqual(self.calls, [], "tidy ran under a pending landing")
         log = (self.jdir / "output.log").read_text(encoding="utf-8")
-        self.assertIn("[vira] worktree handed to the landing - Vira merges "
+        self.assertIn("[vira] worktree handed back to Vira, which merges "
                       "claude/x next, below", log)
         self.assertNotIn("worktree kept", log)
 
@@ -478,7 +478,7 @@ class TidyIsWired(unittest.TestCase):
         self.reg._poll_once()
         self.assertEqual(self.calls, [])
         log = (self.jdir / "output.log").read_text(encoding="utf-8")
-        self.assertIn("Vira discards claude/x next", log)
+        self.assertIn("Vira, which discards claude/x next", log)
 
     def test_a_ui_read_that_sees_the_end_first_does_not_swallow_it(self):
         """2026-10-08: a map session the owner finished while watching it kept

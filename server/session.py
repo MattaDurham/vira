@@ -416,7 +416,7 @@ def _mark_idea(job, ok, interrupted=False):
             # backlog said done for three branches that never reached main.
             ideas.stamp_note(job["idea_id"],
                              f"built by Vira {stamp} (job {jid}), waiting "
-                             f"to land: {job['landing_branch']}")
+                             f"to merge: {job['landing_branch']}")
         else:
             ideas.stamp_note(job["idea_id"],
                              f"implemented by Vira {stamp} (job {jid})",
@@ -1444,7 +1444,7 @@ class Sessions:
             # "worktree kept ... keeping them" over a branch merged one
             # second later read as a session that silently ended (owner,
             # 2026-10-28).
-            line = (f"\n[vira] worktree handed to the landing - Vira "
+            line = (f"\n[vira] worktree handed back to Vira, which "
                     f"{'merges' if verdict == 'merge' else 'discards'} "
                     f"{branch} next, below\n")
         else:

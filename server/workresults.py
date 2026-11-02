@@ -41,7 +41,9 @@ receipt_provider: Callable[[], list[dict]] = lambda: []
 
 # Job kinds (joblog.kind_label) whose output is code on a branch. Their end
 # state is the branch's - merged or not - never the session's own "done".
-CODE_KINDS = frozenset(("Implement", "Plan", "Resume", "Land", "Diagnose and land"))
+# "Land" and "Diagnose and land" are the names older job records carry.
+CODE_KINDS = frozenset(("Implement", "Plan", "Resume", "Merge", "Diagnose and merge",
+                        "Land", "Diagnose and land"))
 # What a finished non-code session produced, by kind; anything unnamed here
 # reads "finished".
 _DONE_BY_KIND = {"Chat": "answered", "Ask": "answered", "Routine": "ran"}
@@ -410,7 +412,7 @@ def build_inventory(showroom_data=None, orphans=(), jobs=(), flows=(),
     for row in rows.values():
         _settle(row, jobs_by_id, prs)
         if row["branch"] and row["branch"] != "main" and not row["branch"].startswith("claude/"):
-            row["action_limit"] = ("Merge, land, discard and cleanup are unavailable for this branch prefix. "
+            row["action_limit"] = ("Merge, discard and cleanup are unavailable for this branch prefix. "
                                    "The branch tooling currently targets claude/* only. Read context or resume instead.")
     return sorted(rows.values(), key=lambda r: (-r["updated_ts"], r["id"]))
 

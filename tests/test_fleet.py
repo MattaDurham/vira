@@ -764,8 +764,8 @@ class Repositories(unittest.TestCase):
                          "a branch that had commits and landed is still merged")
         self.assertEqual(scan["heads"]["claude/dirty"]["dirty"], 1)
         branches = {b["name"]: b for b in repo["branches"]}
-        self.assertEqual(branches["claude/landed"]["label"], "Landed, can remove")
-        self.assertEqual(branches["claude/pending"]["label"], "Unlanded commits")
+        self.assertEqual(branches["claude/landed"]["label"], "Merged, can remove")
+        self.assertEqual(branches["claude/pending"]["label"], "Commits not on main")
         self.assertEqual(branches["claude/pending"]["ahead"], 1)
         self.assertNotIn("heads", repo)
 

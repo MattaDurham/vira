@@ -250,7 +250,7 @@ SEP = " · "
 # ones dispatch sites have used since 2026-07; the fallthrough is a plain
 # "Session" so nothing is ever labelled by a guess.
 _KIND_BY_META = {
-    "orphan-land": "Land", "orphan-resume": "Resume", "resume": "Resume",
+    "orphan-land": "Merge", "orphan-resume": "Resume", "resume": "Resume",
     "text-reply": "Text reply", "chat": "Chat", "journal": "Journal",
     "board-score": "Score roles", "board-rescore": "Rescore roles",
     "profile-explore": "Profile explore", "map-refresh": "System map",
@@ -268,8 +268,8 @@ def kind_label(record):
         return explicit
     meta = record.get("meta") or {}
     if meta.get("kind") == "orphan-land":
-        return ("Diagnose and land" if meta.get("land_mode") == "diagnose"
-                else "Land")
+        return ("Diagnose and merge" if meta.get("land_mode") == "diagnose"
+                else "Merge")
     if meta.get("kind") == "map-refresh" or meta.get("routine_id") == "system-map":
         return "System map"
     if meta.get("judge_of"):

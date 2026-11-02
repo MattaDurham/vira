@@ -58,7 +58,7 @@
     judge: { name: "Judge", hint: "Grades the card before it and can send it back." },
     logic: { name: "Gate", hint: "Passes or stops on what the card before it did." },
     approval: { name: "Ask me", hint: "Pauses until you answer." },
-    output: { name: "Output", hint: "Where the result lands and what shape it takes." },
+    output: { name: "Output", hint: "Where the result goes and what shape it takes." },
     trigger: { name: "Schedule", hint: "Runs the Flow on a cadence." },
     program: { name: "Program", hint: "Runs a command in a folder as its own process and waits for it; the card after gets the run in words." },
     native: { name: "Loop (older card)", hint: "A card over a routine row, from before Program cards. Moving the loop into Vira turns it into a Program card." },
@@ -406,7 +406,7 @@
         : flow.kind === "trace" ? "A finished run's own cards; nothing to save"
           : flow.archived ? "Archived. Restore brings it back as it was."
             : flow.kind === "routine" ? "One of Vira's routines: its Schedule and what it runs. Save writes the routine."
-              : flow.kind === "launchd" ? "A launchd job: its Schedule and the program it runs. Save writes its job file."
+              : flow.kind === "launchd" ? "A Mac background job: its Schedule and the program it runs. Save writes its job file."
                 : flow.kind === "task" ? "A Claude task file: its Schedule and its prompt. Save writes the file."
                   : flow.builtin ? "Shipped starter. Save as makes your own copy."
                     : flow.id ? "Saved" : "Not saved yet";
@@ -506,7 +506,7 @@
 
   function fixedShape() {
     const kind = boardKind();
-    return toast(kind === "launchd" ? "A launchd job is one program on its schedule. Move it into Vira to add cards."
+    return toast(kind === "launchd" ? "A Mac background job is one program on its schedule. Move it into Vira to add cards."
       : kind === "task" ? "A Claude task file is one prompt. Give it a schedule in Vira to make it a Flow with cards."
         : "This routine is code inside Vira on a schedule; its cards are fixed.");
   }
@@ -933,7 +933,7 @@
     hours: "Every few hours", daily: "Daily", weekly: "Weekly or less often", login: "At login",
     kept: "Kept running", event: "When something happens", demand: "On demand" };
   const ORIGIN_LABEL = { starter: "Starters", mine: "My Flows", vira: "Vira's own",
-    mac: "This Mac (launchd)", claude: "Claude task files", session: "Sessions" };
+    mac: "This Mac (background jobs)", claude: "Claude task files", session: "Sessions" };
   const GROUP_ORDERS = { state: Object.keys(STATE_LABEL), cadence: Object.keys(CADENCE_LABEL),
     origin: Object.keys(ORIGIN_LABEL), who: ["Vira", "launchd", "Claude", "Codex"] };
   const ROW_ICON = { flow: "flow", routine: "loop", launchd: "launchd", task: "task", session: "session" };
@@ -2409,7 +2409,7 @@
     editor.appendChild(nameField(node));
     const rid = node.native?.routine_id || node.routine_id || "";
     editor.appendChild(make("code", "forge-path", `Routine ${rid}`));
-    editor.appendChild(make("p", "hint", "An older card: it runs a routine row and waits for it. Moving the loops into Vira (the landing step for this build) turns it into a Program card that keeps the loop's history."));
+    editor.appendChild(make("p", "hint", "An older card: it runs a routine row and waits for it. Moving the loops into Vira turns it into a Program card that keeps the loop's history."));
     return editor;
   }
 
@@ -2745,7 +2745,7 @@
         editor.appendChild(modelField(node, editor));
       } else if (node.type === "program") {
         editor.appendChild(make("code", "forge-path", node.program.command_line || ""));
-        editor.appendChild(make("p", "hint", "An older command loop. Moving the loops into Vira (the landing step for this build) makes it a Flow with a Program card that keeps this history."));
+        editor.appendChild(make("p", "hint", "An older command loop. Moving the loops into Vira makes it a Flow with a Program card that keeps this history."));
       } else {
         editor.appendChild(make("p", "hint", record.kind === "muse"
           ? "Vira writes this prompt fresh at each run from the backlog and the radar. Under the hood shows the code that writes it."
@@ -2774,7 +2774,7 @@
     add("Run now", "run", "Start it now (launchctl kickstart)");
     const off = ["disabled", "not loaded"].includes(job.state);
     add(off ? "Resume" : "Pause", off ? "resume" : "pause",
-      off ? "Allow it again and load it" : "Tell launchd not to start it, and unload it");
+      off ? "Allow it again and load it" : "Stop the Mac from starting it, and unload it");
     add("Move into Vira", "adopt", "Make it a Flow (Schedule and Program cards) and archive the job file");
     return box;
   }
@@ -2783,7 +2783,7 @@
     const job = state.current.job;
     if (action === "adopt" && !await forgeDialog({
       title: `Move ${job.label} into Vira?`,
-      message: "It becomes a Flow with a Schedule card for each time it runs and a Program card with its command, folder, environment and log. The job file then moves to ~/Library/LaunchAgents-archive, so launchd never runs it a second time. Restore from Archived puts it back.",
+      message: "It becomes a Flow with a Schedule card for each time it runs and a Program card with its command, folder, environment and log. The job file then moves to ~/Library/LaunchAgents-archive, so the Mac never runs it a second time. Restore from Archived puts it back.",
       confirm: "Move it",
     })) return;
     if (action === "pause" && state.current.note && !await forgeDialog({
@@ -2803,7 +2803,7 @@
       const rowId = action === "restore" ? `launchd:${result.path}` : state.current.rowId;
       await reopenRow(rowId);
     } catch (error) {
-      toast(`launchd: ${error.message}`);
+      toast(`Mac background jobs: ${error.message}`);
       button.disabled = false;
     }
   }
@@ -2816,7 +2816,7 @@
     const fields = state.current.fields;
     const editor = make("div", "forge-editor");
     const mark = () => { setDirty(); paintNode(node); };
-    editor.appendChild(make("p", "forge-loop-state", job.archived ? `Archived. It came from ${job.origin}.` : `launchd: ${job.state}.`));
+    editor.appendChild(make("p", "forge-loop-state", job.archived ? `Archived. It came from ${job.origin}.` : `The Mac reports it as ${job.state}.`));
     if (node.type === "trigger") {
       editor.appendChild(make("p", "forge-sentence", (job.when || []).join("; ") || "Only when something starts it."));
       if (fields.calendar_simple) {
@@ -3730,7 +3730,7 @@
     const what = {
       flow: "Every Schedule on it stops, and it moves to Archived. Restore brings each Schedule back as it was.",
       routine: "It stops running and moves to Archived. Restore turns it back on if it was on.",
-      launchd: "launchd unloads it, and its job file moves to ~/Library/LaunchAgents-archive, which launchd never reads. Restore puts it back and loads it.",
+      launchd: "The Mac unloads it, and its job file moves to ~/Library/LaunchAgents-archive, where the Mac never looks. Restore puts it back and loads it.",
       task: "Its folder moves to ~/.claude/scheduled-tasks-archive, which the Claude app does not read. Restore puts it back.",
     }[kind];
     if (!restoring && !await forgeDialog({

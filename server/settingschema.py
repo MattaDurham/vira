@@ -167,7 +167,7 @@ SCHEMA = [
       "unless a handle is set."),
     S("inbound_ignore_prefixes", "notifications", "list", [],
       "Machine sender prefixes to ignore",
-      "Prefixes of machine-sent texts that also land in the self-thread and "
+      "Prefixes of machine-sent texts that also show up in the self-thread and "
       "must never be read as you talking. Vira's own sends are already "
       "covered by the \"Vira: \" prefix and the send ledger.", advanced=True),
     S("sms_fallback", "notifications", "bool", True,
@@ -535,7 +535,7 @@ SCHEMA = [
     S("session_default_mode", "sessions", "enum", "bypassPermissions",
       "Default permission mode",
       "manual pauses every risky tool call for your Approve/Deny; "
-      "acceptEdits lets file edits land but asks before commands; "
+      "acceptEdits makes file edits without asking but asks before commands; "
       "bypassPermissions runs everything. The containment is structural: a "
       "writing session is placed in its own worktree and the gate refuses "
       "any write aimed at the live checkout. Per-run override in the UI.",
@@ -560,7 +560,7 @@ SCHEMA = [
       "finalizes on its own. Ending it with Finish is the normal path; this "
       "is only the safety reap.", advanced=True, range=(1, 168)),
     S("session_landing_card", "sessions", "bool", True,
-      "Raise the landing card when a session parks work on its branch",
+      "Raise the merge card when a session leaves work on its branch",
       "Vira itself raises the merge / try it first / keep playing / discard "
       "decision card (in the terminal, the Attention window, and on your "
       "phone) instead of leaving that question in the transcript. Try it "

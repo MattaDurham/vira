@@ -47,8 +47,8 @@ class KindLabel(unittest.TestCase):
     def test_every_dispatch_shape_has_a_kind(self):
         cases = [
             (_rec(meta={"kind": "orphan-land", "land_mode": "diagnose"}),
-             "Diagnose and land"),
-            (_rec(meta={"kind": "orphan-land", "land_mode": "finish"}), "Land"),
+             "Diagnose and merge"),
+            (_rec(meta={"kind": "orphan-land", "land_mode": "finish"}), "Merge"),
             (_rec(meta={"kind": "orphan-resume"}), "Resume"),
             (_rec(meta={"kind": "text-reply"}), "Text reply"),
             (_rec(meta={"kind": "chat"}), "Chat"),
@@ -89,7 +89,7 @@ class Subject(_Store):
                        "branch": "claude/qocha-vault-onboarding"})
         self.assertEqual(joblog.subject(r), "qocha vault onboarding")
         self.assertEqual(joblog.name(r),
-                         "qocha vault onboarding · Diagnose and land")
+                         "qocha vault onboarding · Diagnose and merge")
 
     def test_the_job_id_suffix_never_names_a_branch(self):
         self.assertEqual(joblog._humanize_branch("claude/undo-button-ab12cd"),
@@ -140,7 +140,7 @@ class Composition(_Store):
         r = _rec(subject="Qocha vault onboarding",
                  meta={"kind": "orphan-land", "land_mode": "finish"},
                  prompt="You are finishing stalled work ...")
-        self.assertEqual(joblog.command(r), "Land — Qocha vault onboarding")
+        self.assertEqual(joblog.command(r), "Merge — Qocha vault onboarding")
 
 
 class Ledger(_Store):
@@ -344,7 +344,7 @@ class Retroactive(_Store):
                     idea_id="i1", branch="claude/undo-ab12cd")
         land = self._land("claude/undo-ab12cd")
         bb = joblog.by_branch_index([impl, land])
-        self.assertEqual(joblog.name(land, None, bb), "Add undo in Flows · Land")
+        self.assertEqual(joblog.name(land, None, bb), "Add undo in Flows · Merge")
         self.assertEqual(joblog.about(land, bb), "Add undo in Flows")
         # and without the index the ledger is read once
         joblog.record_launch({"id": "k1", "prompt": impl["prompt"], "cwd": "/tmp",
@@ -352,7 +352,7 @@ class Retroactive(_Store):
         joblog.record_launch({"id": "k2", "prompt": land["prompt"], "cwd": "/tmp",
                               "meta": land["meta"], "branch": "claude/undo-ab12cd"})
         self.assertEqual(joblog.name(joblog.get_record("k2")),
-                         "Add undo in Flows · Land")
+                         "Add undo in Flows · Merge")
 
     def test_a_resumed_row_is_named_for_the_conversation_it_continues(self):
         first = _rec(id="c1", prompt='You are Vira.\n"""\nwhat is due?\n"""\n')
@@ -406,7 +406,7 @@ class Retroactive(_Store):
             rows = c.get("/api/jobs/history?limit=500").json()["jobs"]
         row = next(r for r in rows if r["id"] == "h2")
         self.assertEqual(row["title"],
-                         "Undeclared config keys fail loudly · Land")
+                         "Undeclared config keys fail loudly · Merge")
         self.assertEqual(row["subject"], "Undeclared config keys fail loudly")
 
 

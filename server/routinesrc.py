@@ -100,7 +100,7 @@ TOKENS = {
     "__orphan_sweep__": [
         ("orphanwork", "refresh", "What this loop runs", ""),
         ("orphanwork", "sweep", "The inventory itself",
-         "Every worktree and claude/* branch carrying unlanded work — "
+         "Every worktree and claude/* branch carrying work not merged into main — "
          "plain git plus a job-ledger join, no model call. A branch a "
          "live session owns is not orphan work and is excluded."),
     ],
@@ -161,7 +161,7 @@ EFFECTS = {
         "each reading room, rebuilt in place. You are pinged per room "
         "that gained items.",
     "__orphan_sweep__":
-        "data/orphan-work.json — the unlanded-work rows in The Forge · Runs. "
+        "data/orphan-work.json — the not-merged rows in The Forge · Runs. "
         "You are pinged when a genuinely new orphan appears, never on "
         "the first-ever sweep.",
     "__room_ingest__":
@@ -177,7 +177,7 @@ EFFECTS = {
 }
 KIND_EFFECTS = {
     "muse":
-        "nothing on its own. Ideas land in The Forge · Cues as proposals — "
+        "nothing on its own. Ideas show up in The Forge · Cues as proposals — "
         "nothing builds until you approve one.",
 }
 
@@ -641,7 +641,7 @@ def steps(r) -> list:
 def _mode_label(mode):
     return {
         "manual": "manual — every risky call asks you first",
-        "acceptEdits": "accept edits — file edits land unasked, commands ask",
+        "acceptEdits": "accept edits — file edits go ahead unasked, commands ask",
         "bypassPermissions": "bypass — nothing asks (the default)",
     }.get(_norm_mode(mode), "bypass — nothing asks (the default)")
 
@@ -728,7 +728,7 @@ def writable() -> dict:
     root = str(ROOT)
     kind, name = update.supervisor()
     return {"ok": True, "root": root, "restart": bool(name),
-            "reason": f"Edits land in this checkout ({root})."}
+            "reason": f"Edits are made in this checkout ({root})."}
 
 
 class EditError(ValueError):

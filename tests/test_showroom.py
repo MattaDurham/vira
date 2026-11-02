@@ -185,7 +185,7 @@ class Inventory(_RepoCase):
         self.assertEqual(it["areas"].get("interface"), 1)
         self.assertEqual(it["orphan_key"], "")
         self.assertIn("Merged into main", showroom.fallback_blurb(it))
-        self.assertIn("never torn down", showroom.fallback_blurb(it))
+        self.assertIn("never removed", showroom.fallback_blurb(it))
 
     def test_a_fast_forwarded_landing_still_dates_and_classifies(self):
         wt = self.make_worktree("ff", commits=1)

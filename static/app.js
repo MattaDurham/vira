@@ -160,7 +160,7 @@ const waitLine = (text, cls = "") => el("div", ("waiting " + cls).trim(), text);
 const MODULE_WAIT = {
   "attention:now": ["#attention-body",
     ["Reading what is running", "Checking what is waiting on you",
-     "Joining branches that never landed"]],
+     "Joining branches that never merged"]],
   "attention:day": ["#brief-body",
     ["Reading today's calendar", "Finding who is waiting on a reply",
      "Gathering open loops and renewals"]],
@@ -6963,7 +6963,7 @@ const PERM_MODES = [
   { id: "manual", label: "Manual — ask before edits and commands",
     note: "Edits and commands pause for your Approve/Deny in the session panel." },
   { id: "acceptEdits", label: "Accept edits — ask before commands",
-    note: "File edits land unasked; commands and everything else still ask." },
+    note: "File edits go ahead unasked; commands and everything else still ask." },
   { id: "bypassPermissions", label: "Bypass permissions — nothing asks",
     note: "Everything runs unasked. The session still cannot write to the live "
         + "checkout: it works in its own branch worktree, and that denial "
@@ -7764,7 +7764,7 @@ function runTs(v) {
   return isNaN(t) ? 0 : t / 1000;
 }
 
-const RUN_KINDS = { all: "All", unlanded: "Unlanded", flow: "Flows",
+const RUN_KINDS = { all: "All", unlanded: "Not merged", flow: "Flows",
                     session: "Sessions", history: "History",
                     shipped: "Shipped" };
 // Chips that SWAP the pane's list instead of filtering the chronology:
@@ -7946,7 +7946,7 @@ function renderRuns() {
     }
     // The unlanded count is stated on every view, filtered or not — it is
     // the thing that must never go quiet.
-    if (unlanded) bits.push(`${unlanded} unlanded`);
+    if (unlanded) bits.push(`${unlanded} not merged`);
     count.textContent = bits.join(" · ");
     count.classList.toggle("filtered", shown.length !== all.length);
   }
@@ -8833,7 +8833,7 @@ function openOrphanFocus(it) {
   const shell = el("section", "run-focus-shell");
   shell.setAttribute("role", "dialog");
   shell.setAttribute("aria-modal", "true");
-  shell.setAttribute("aria-label", "Full unlanded branch context");
+  shell.setAttribute("aria-label", "Full context of a branch not merged");
   const closeBtn = el("button", "run-focus-close", "Close");
   const card = runCard(orphanRunItem(it), { focused: true });
   card.classList.add("run-focus-card");
@@ -8927,7 +8927,7 @@ function orphanBody(card, it, opts = {}) {
     const foot = el("div", "run-foot orphan-foot");
     if (it.action && it.action.status === "running") {
       foot.appendChild(el("span", "hint",
-        it.action.name + "… " + (it.action.output || "").slice(0, 120)));
+        ({ land: "Merging", discard: "Discarding" }[it.action.name] || it.action.name) + "… " + (it.action.output || "").slice(0, 120)));
     } else {
       // Resume is the way to main (owner, 2026-10-09): Land merged a clean
       // branch with a bare script that could not open a PR, catch up with
@@ -9694,7 +9694,7 @@ const isChoiceCard = (p) => p.kind === "ask" || p.kind === "landing";
 const choiceCard = (sid, p) => p.kind === "landing" ? landingCard(sid, p)
                                                     : askCard(sid, p);
 const choiceKicker = (p) =>
-  p.kind === "landing" ? "Ready to land"
+  p.kind === "landing" ? "Ready to merge"
   : p.kind === "ask" ? "Vira is asking" : "Vira needs approval";
 
 // The harness's merge / try it first / keep playing / discard card
@@ -10580,7 +10580,7 @@ const alertVisible = () => alertRows.filter(
   (r) => !alertMin.has(r.card.req_id) && !activeTerms[r.job_id]);
 
 const alertKind = (c) =>
-  c.kind === "landing" ? "ready to land: " + (c.branch || "a branch")
+  c.kind === "landing" ? "ready to merge: " + (c.branch || "a branch")
   : c.kind === "ask" ? "a question" : "approval: " + (c.tool || "a tool call");
 
 // One fetch drives every attention surface — the window, the badge, the
@@ -10825,7 +10825,7 @@ function attnVerb(r) {
              run: () => traceFlowRun(r.run_id) };
   if (r.kind === "orphan")
     return { label: "review",
-             title: "Open this exact unlanded branch with its full context",
+             title: "Open this branch, not yet merged, with its full context",
              run: () => openWorkResult({ branch: r.orphan_branch }) };
   if (r.id === "health:ai")
     return { label: "recheck",
@@ -10861,7 +10861,7 @@ function attnVerb(r) {
 function attnKindLabel(r) {
   if (r.kind === "assistant") return "Personal commitment";
   if (r.kind === "flow") return "Flow run";
-  if (r.kind === "orphan") return "Branch to land";
+  if (r.kind === "orphan") return "Branch to merge";
   if (r.kind === "health") return "System health";
   if (r.kind === "review") return "Review queue";
   if (r.machine) return "Machine session";
@@ -11063,7 +11063,7 @@ function renderFiled(host) {
   const deferred = of("deferred"), dropped = of("dropped"), done = of("done");
   if (!deferred.length && !dropped.length && !done.length) {
     host.appendChild(el("div", "empty left", ideasCache.length
-      ? "Nothing filed yet — deferred, dropped and completed ideas land here."
+      ? "Nothing filed yet — deferred, dropped and completed ideas show up here."
       : "Reading the backlog…"));
     return;
   }
@@ -11679,7 +11679,7 @@ function imapAddForm(st) {
     add.disabled = true; add.textContent = "adding…";
     try {
       const r = await post("/api/mail/imap/add", body());
-      toast((r.added ? "Added " : "Updated ") + r.email + " — new mail lands within a minute");
+      toast((r.added ? "Added " : "Updated ") + r.email + " — new mail arrives within a minute");
       await refreshMail();
     } catch (e) {
       acctOut(out, { title: "Not added", fix: errText(e) });
@@ -12091,7 +12091,7 @@ async function waTick() {
     btn.style.display = "none";
     const num = String(sc.jid || "").split(":")[0].split("@")[0];
     stat.textContent = "Connected" + (num ? " as +" + num : "");
-    hint.textContent = "Inbound WhatsApp lands in the feed. Receive-only: Vira never sends.";
+    hint.textContent = "Inbound WhatsApp shows up in the feed. Receive-only: Vira never sends.";
     post("/api/whatsapp/poll", {}).catch(() => {});
   } else if (sc && sc.logged_out) {
     qrBox.style.display = "none";
@@ -12430,7 +12430,7 @@ function renderJournalList(entries) {
   jlist.innerHTML = "";
   if (!(entries || []).length) {
     jlist.appendChild(el("div", "brief-empty",
-      "Nothing yet. Tell Vira what you know from the Daily Brief and it lands here."));
+      "Nothing yet. Tell Vira what you know from the Daily Brief and it shows up here."));
     return;
   }
   entries.forEach((e) => jlist.appendChild(journalNode(e)));
@@ -12805,7 +12805,7 @@ let shrView = lsGet("vira-shr-view", "all");     // all | grouped | module:<tag>
 let shrQ = "";
 let shrHold = false;                 // an armed confirm is on the surface
 const SHR_BAND_LABEL = {
-  session: "session live", unlanded: "unlanded", landed: "landed - not cleaned up",
+  session: "session live", unlanded: "not merged", landed: "merged - not cleaned up",
 };
 // Launch runs through the designated primary, which manages shared
 // worktrees. The launch page starts the instance on its own origin.
@@ -12869,13 +12869,13 @@ function renderShowroom() {
   if (st) {
     const c = d.counts || {};
     const parts = [`${(d.items || []).length} draft branch${(d.items || []).length === 1 ? "" : "es"}`];
-    if (c.unlanded) parts.push(`${c.unlanded} unlanded`);
+    if (c.unlanded) parts.push(`${c.unlanded} not merged`);
     if (c.session) parts.push(`${c.session} in session`);
-    if (c.landed) parts.push(`${c.landed} landed but never cleaned up`);
+    if (c.landed) parts.push(`${c.landed} merged but never cleaned up`);
     if (d.running) parts.push(`${d.running} test instance${d.running === 1 ? "" : "s"} running`);
     if (d.describing) parts.push(`Vira is reading ${d.describing}…`);
     st.textContent = (d.items || []).length ? parts.join(" - ")
-      : "No draft branches on disk - every session's work has landed and been torn down.";
+      : "No draft branches on disk - every session's work is merged and its branch deleted.";
   }
   const bar = $("#shr-bar");
   if (bar) {
@@ -13248,7 +13248,7 @@ async function shrFillDetail(det, it) {
   } else if (c.merge) {
     sec("Merge", el("div", "shr-pre", c.merge));
     if (c.merge_paths && c.merge_paths.length)
-      sec(`Files landed (${c.merge_paths.length})`, el("div", "shr-pre", c.merge_paths.join("\n")));
+      sec(`Files merged (${c.merge_paths.length})`, el("div", "shr-pre", c.merge_paths.join("\n")));
   }
   if (c.job && c.job.prompt && !o) sec("The session's prompt", el("div", "shr-pre", c.job.prompt));
   if (c.job && c.job.result) sec("The session's last words", el("div", "shr-pre", c.job.result));
@@ -14818,7 +14818,7 @@ function settingsRow(id, title, sv) {
     row.pill = chosen ? "set" : "optional";
     row.sub = chosen ? "Personal calendar chosen · work hours "
       + sv.assistant_calendar_work_start + "-" + sv.assistant_calendar_work_end
-      : "Where events land, and the hours the assistant plans around";
+      : "Where events go, and the hours the assistant plans around";
   } else if (id === "workers") {
     row.state = "manage";
     row.sub = "Every sweep and watcher, its switch and its last run";
@@ -16598,7 +16598,7 @@ function cardWhatsApp(card) {
   wimg.style.width = "190px"; wimg.style.maxWidth = "100%";
   wqr.appendChild(wimg); card.appendChild(wqr);
   const wh = el("p", "hint",
-    "Inbound WhatsApp lands in the feed once a device link is scanned. " +
+    "Inbound WhatsApp shows up in the feed once a device link is scanned. " +
     "Receive-only: Vira never sends.");
   wh.id = "wa-hint";
   card.appendChild(wh);
@@ -16611,7 +16611,7 @@ function cardWhatsApp(card) {
 function cardNotifications(card) {
   const nc = (setupExtra && setupExtra.notify) || {};
   card.appendChild(el("p", "hint",
-    "When an email from an active-tier contact lands, Vira pings you over " +
+    "When an email from an active-tier contact arrives, Vira pings you over " +
     "iMessage. Throttled: one per sender per 6h, 20 a day max. Changes save " +
     "as you make them."));
   const seg = el("div", "seg"); seg.id = "notify-seg";
@@ -17029,7 +17029,7 @@ function frConnect(pid) {
   steps.appendChild(s2);
   b.appendChild(steps);
   b.appendChild(el("p", "fr-note",
-    "The key lands in your device's secure secrets store, never in a file."));
+    "The key is saved in your device's secure secrets store, never in a file."));
   frFoot(b, true);
 }
 
@@ -24591,7 +24591,7 @@ const WIN_ACTIONS = {
   applications: [{ label: "Sweep the job boards now", run: async () => {
     try {
       await post("/api/jobboards/poll-now", {});
-      toast("Sweeping the boards — rows update as results land");
+      toast("Sweeping the boards — rows update as results come in");
     } catch (e) { toast("Sweep failed: " + errText(e)); }
   } }],
   reader: [{ label: "Scan for new documents", run: () => readerBackfill() }],
@@ -27734,7 +27734,7 @@ function renderPalette() {
   list.innerHTML = "";
   if (omniRoutePending(q))
     list.appendChild(el("div", "palette-empty", omniArmed === q
-      ? "Vira is reading the request… it runs the moment the read lands"
+      ? "Vira is reading the request… it runs the moment the read is done"
         + (items[0] ? " (Enter again: " + items[0].label.split(" — ")[0]
                       + " now)" : "")
       : "Vira is reading the request…"));
@@ -29190,7 +29190,7 @@ function renderReaderDocs(opts = {}) {
       rdocRead === "read"
         ? "Nothing read yet — mark documents read and they file here."
         : "Nothing queued. Dossiers, plans, retros, walkthroughs and briefs "
-          + "land here as they are made — and drop off once you mark them "
+          + "show up here as they are made — and drop off once you mark them "
           + "read."));
     rdocLastGroups = [];
     restoreFocus();
@@ -29755,7 +29755,7 @@ const READER_METHOD =
   + "writeups, diffed against your vault so nothing you have already "
   + "consumed is re-recommended — and ranks every item against your 'why'. "
   + "It refreshes on demand and weekly (the room scout); when a refresh "
-  + "lands new items, Vira pings you.";
+  + "brings in new items, Vira pings you.";
 
 // ---- definition pills ----
 // People, sources and the standing watch are STRUCTURED, not prose: a

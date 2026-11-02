@@ -843,11 +843,11 @@ def note_landed(branch, verdict):
     for iid in idea_ids:
         try:
             if verdict == "merge":
-                ideas.stamp_note(iid, f"landed on main {stamp} ({branch})",
+                ideas.stamp_note(iid, f"merged into main {stamp} ({branch})",
                                  status="done")
             else:
                 ideas.stamp_note(iid, f"branch discarded {stamp} ({branch}), "
-                                 "nothing landed")
+                                 "nothing merged")
         except Exception:  # noqa: BLE001
             pass
     return None
@@ -1366,9 +1366,9 @@ def _landing_outcome(name, branch, ok, text):
     torn = "teardown HELD" not in text and "teardown did not run" not in text
     if name == "land":
         if not ok:
-            head = f"[vira] landing failed: {branch} was NOT merged"
+            head = f"[vira] merge failed: {branch} was NOT merged into main"
         else:
-            head = f"[vira] landed: {branch} merged into main"
+            head = f"[vira] merged: {branch} is in main"
             head += ", pushed" if pushed else ", push FAILED (main is local only)"
             if pushed and torn:
                 head += ", branch and worktree removed"
@@ -1414,7 +1414,7 @@ def land_session(jid, branch, verdict):
     the runner is still alive in that worktree when the verdict lands (it
     ends itself on the control line), and branch.sh merge/discard both tear
     the worktree down. Bookkeeping rides `_actions` so the Runs list shows
-    "land: merging..." while it works. Returns True when a thread started;
+    "Merging..." while it works. Returns True when a thread started;
     raises ValueError on the refusals a click would hit."""
     branch = branch or ""
     if not branch.startswith("claude/"):
@@ -1471,9 +1471,9 @@ def _session_end_then(jid, slug, branch, verdict):
     # minute branch.sh takes, so the transcript never sits on "closing the
     # session" with nothing after it.
     _transcript_note(jid, (
-        f"\n[vira] landing: merging {branch} into main, then the push and "
-        "the teardown..." if verdict == "merge" else
-        f"\n[vira] landing: discarding {branch} - deleting the branch, its "
+        f"\n[vira] merging {branch} into main, then pushing and deleting "
+        "the branch..." if verdict == "merge" else
+        f"\n[vira] discarding {branch} - deleting the branch, its "
         "worktree and any test instance..."))
     if verdict == "discard":
         try:
