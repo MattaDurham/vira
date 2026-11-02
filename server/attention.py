@@ -273,14 +273,22 @@ def _orphan_rows():
             bits = ["in progress outside Vira"] if moving else []
             if it.get("dirty"):
                 bits.append(f"{it['dirty']} dirty files")
-            if it.get("ahead"):
+            if it.get("ahead") and not it.get("dirty") and not moving:
+                # Committed and finished: a session whose landing card
+                # went unanswered ends here, and Merge on this row lands it.
+                bits.append(f"ready to merge: {it['ahead']} commits")
+            elif it.get("ahead"):
                 bits.append(f"{it['ahead']} unmerged commits")
             if read.get("verdict"):
                 bits.append("Vira: " + read["verdict"])
             sub = " — ".join(bits) or "unlanded"
+        # Named for the work (the idea or the dispatch's subject), not the
+        # branch slug; the branch rides orphan_branch for the actions.
+        title = " ".join(str(it.get("subject") or "").split())[:120]
         rows.append(_row(
             f"orphan:{it['key']}", "orphan", "moving" if moving else "open",
-            not moving, it.get("branch") or it.get("key"), sub, verb="review",
+            not moving, title or it.get("branch") or it.get("key"), sub,
+            verb="review",
             age_days=it.get("age_days"), orphan_key=it.get("key"),
             orphan_branch=it.get("branch"),
             orphan_kind=kind, dirty=int(it.get("dirty") or 0),

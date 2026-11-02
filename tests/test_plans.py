@@ -247,6 +247,16 @@ class MarkIdeaTests(unittest.TestCase):
             "output": ""})
         self.assertEqual(calls["status"], "done")
 
+    def test_built_work_on_a_branch_waits_to_land(self):
+        """Done means landed (2026-11-02 audit): three ideas read done for
+        branches that never reached main. orphanwork.note_landed closes
+        the idea at the merge."""
+        calls = self._capture({
+            "id": "job_x", "idea_id": "idea_9", "publish_plan": False,
+            "landing_branch": "claude/t", "output": ""})
+        self.assertNotIn("status", calls)
+        self.assertIn("waiting to land: claude/t", calls["note"])
+
     def test_failure_keeps_open_with_failure_note(self):
         calls = self._capture({
             "id": "job_x", "idea_id": "idea_9", "publish_plan": True,

@@ -107,6 +107,18 @@ def list_projects():
     return [DEFAULT_PROJECT] + rest
 
 
+def _canonical_project(s, name):
+    """`name` in the spelling the store already knows it by, matched
+    without case: "vira" is Vira. Muse once filed an idea under "vira";
+    the folder lookup missed it and the Implement session ran in the home
+    folder with no branch (2026-10-30)."""
+    name = (name or "").strip()
+    for known in [DEFAULT_PROJECT, *s["projects"]]:
+        if known and known.lower() == name.lower():
+            return known
+    return name
+
+
 def _register_project(s, name):
     """Add a project to the curated list if it is new (case-insensitive)."""
     name = (name or "").strip()
@@ -150,7 +162,10 @@ def project_paths():
 
 
 def project_path(name):
-    return project_paths().get((name or "").strip(), "")
+    """The folder connected to project `name`, matched without case."""
+    name = (name or "").strip().lower()
+    return next((v for k, v in project_paths().items()
+                 if k.lower() == name), "")
 
 
 def set_project_path(name, path):
@@ -188,6 +203,7 @@ def add(text, status="open", source="manual", note="", project=None):
     project = (project or "").strip() or DEFAULT_PROJECT
     with _lock, locked(STORE):
         s = _load()
+        project = _canonical_project(s, project)
         _register_project(s, project)
         now = _now()
         item = {
@@ -228,7 +244,7 @@ def update(idea_id, text=None, status=None, note=None, project=None,
                 if note is not None:
                     it["note"] = note.strip()
                 if project is not None:
-                    p = project.strip()
+                    p = _canonical_project(s, project)
                     if p:
                         it["project"] = p
                         _register_project(s, p)

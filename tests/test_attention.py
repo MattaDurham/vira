@@ -294,6 +294,28 @@ class Orphans(Base):
         self.assertEqual(r["ahead"], 1)
         self.assertEqual(r["verdict"], "land")
 
+    def test_a_row_is_named_for_its_work(self):
+        from server import orphanwork
+        orphanwork.compose.return_value = {"items": [{
+            "key": "k1", "branch": "claude/implement-x-1a2b3c",
+            "kind": "dirty", "dirty": 9, "ahead": 0,
+            "subject": "Bold bar on idea cards"}]}
+        [r] = self.compose()["rows"]
+        self.assertEqual(r["title"], "Bold bar on idea cards")
+        self.assertEqual(r["orphan_branch"], "claude/implement-x-1a2b3c")
+
+    def test_a_committed_finished_branch_reads_ready_to_merge(self):
+        """An unanswered landing card ends as this row; since the session
+        commits before the card, its Merge lands it."""
+        from server import orphanwork
+        orphanwork.compose.return_value = {"items": [{
+            "key": "k1", "branch": "claude/x", "kind": "unmerged",
+            "dirty": 0, "ahead": 2}]}
+        [r] = self.compose()["rows"]
+        self.assertIn("ready to merge: 2 commits", r["sub"])
+        self.assertTrue(r["needs_you"])
+        self.assertEqual(r["title"], "claude/x")      # no subject: the branch
+
 
 class Health(Base):
 

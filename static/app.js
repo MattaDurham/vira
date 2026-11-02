@@ -6890,8 +6890,12 @@ function ideaImplementPrompt(it, extra, cwd, perm, fold, plan) {
     "- Make the real code changes needed to accomplish the task.",
     "- Verify your work by actually exercising it (run the app, tests, or build",
     "  as appropriate) and fix what you find.",
-    "- Do NOT git commit or git push. Leave every change in the working tree for",
-    "  the owner to review.",
+    "- Commit only on your own claude/* branch (`git branch --show-current`;",
+    "  Vira places a session on one). Commit there with a real message, ASCII",
+    "  only. Never push main, merge, or run branch.sh merge: when your turn",
+    "  ends Vira opens the pull request and asks the owner what to do with it.",
+    "- On any other branch, do NOT git commit or git push. Leave the changes in",
+    "  the working tree for the owner to review.",
     "- CRITICAL: you are running INSIDE the Vira server as a child process.",
     "  Never restart, stop, or kill the Vira server, its launchd service, or",
     "  its process (no launchctl kickstart/bootout/kill, no pkill of uvicorn",
@@ -7146,8 +7150,17 @@ $("#idea-run-analyze").addEventListener("click", async (e) => {
 // — otherwise the owner points at a folder during setup and is still asked
 // for it on every dispatch. One ladder for the sheet and for Approve & build.
 function ideaRunCwd(it) {
-  return projectPathsCache[it.project]
+  return projectPathFor(it.project)
     || localStorage.getItem("vira-idea-cwd") || "";
+}
+
+// A project's folder, matched without case: an idea filed under "vira" is
+// Vira's, and missing it once sent an Implement session to the home folder.
+function projectPathFor(name) {
+  const want = String(name || "").trim().toLowerCase();
+  const key = Object.keys(projectPathsCache)
+    .find(k => k.toLowerCase() === want);
+  return key ? projectPathsCache[key] : "";
 }
 
 // The Vira checkout, as the server names it (Vira's own project in

@@ -246,6 +246,78 @@ class TheCard(_Placed):
         self.assertEqual(r2._branch_work(), (0, 0))
 
 
+class CommitBeforeTheCard(_Placed):
+    """2026-11-02 audit: the Implement prompt forbade commits, so every
+    card's PR failed ("No commits between main and ...") and an unanswered
+    card left only dirty files that Merge in Attention refuses. The runner
+    now commits what the agent left before the card goes up."""
+
+    def repo(self):
+        live = Path(self.tmp.name) / "repo"
+        live.mkdir()
+        g = lambda *a, cwd=live: subprocess.run(  # noqa: E731
+            ["git", "-C", str(cwd), *a], check=True, capture_output=True,
+            text=True)
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@example.com"); g("config", "user.name", "t")
+        (live / "a.txt").write_text("a", encoding="utf-8")
+        g("add", "."); g("commit", "-q", "-m", "base")
+        wt = Path(self.tmp.name) / "repo-wt"
+        g("worktree", "add", "-q", "-b", "claude/t", str(wt))
+        return live, wt, g
+
+    def offer_real(self, r):
+        with mock.patch.object(r, "_ensure_pr", lambda: ("", "no PR - x")), \
+             mock.patch.object(r, "_running_instance_url", lambda: ""):
+            return asyncio.run(r.offer_landing())
+
+    def test_uncommitted_work_is_committed_on_the_branch(self):
+        live, wt, g = self.repo()
+        (wt / "b.txt").write_text("b", encoding="utf-8")
+        (wt / "a.txt").write_text("a2", encoding="utf-8")
+        r = self.placed(worktree=str(wt), live_root=str(live),
+                        subject="Bold bar on idea cards \u2014 now")
+        self.assertTrue(self.offer_real(r))
+        c = self.card(r)
+        self.assertEqual((c["dirty"], c["ahead"]), (0, 1))
+        self.assertIn("committed 2 uncommitted path(s) on claude/t",
+                      self.output(r))
+        msg = g("log", "-1", "--format=%B", cwd=wt).stdout
+        self.assertTrue(msg.startswith("Bold bar on idea cards  now"))
+        self.assertTrue(msg.isascii())
+        self.assertIn(r.spec["id"], msg)
+        self.assertEqual(g("branch", "--show-current", cwd=wt).stdout.strip(),
+                         "claude/t")
+        self.assertEqual(g("rev-list", "--count", "main").stdout.strip(), "1")
+
+    def test_work_already_committed_is_left_alone(self):
+        live, wt, g = self.repo()
+        (wt / "b.txt").write_text("b", encoding="utf-8")
+        g("add", ".", cwd=wt); g("commit", "-q", "-m", "agent's own", cwd=wt)
+        r = self.placed(worktree=str(wt), live_root=str(live))
+        self.offer_real(r)
+        self.assertEqual((self.card(r)["dirty"], self.card(r)["ahead"]), (0, 1))
+        self.assertEqual(g("log", "-1", "--format=%s", cwd=wt).stdout.strip(),
+                         "agent's own")
+        self.assertNotIn("landing: committed", self.output(r))
+
+    def test_a_refused_commit_still_raises_the_card(self):
+        """A pre-commit hook may refuse (the PII guard): the card still
+        goes up over the dirty tree, and the reason is in the transcript."""
+        r = self.placed()
+        with mock.patch.object(r, "_commit_work",
+                               lambda: (False, "pii guard: refused")):
+            self.offer(r, work=(3, 0))
+        self.assertEqual((self.card(r)["dirty"], self.card(r)["ahead"]), (3, 0))
+        self.assertIn("could not commit the work - pii guard: refused",
+                      self.output(r))
+
+    def test_the_message_falls_back_to_the_job_id(self):
+        r = self.placed(subject="\u2014\u2014")
+        self.assertTrue(r._commit_message().startswith(
+            f"Work from Vira session {r.spec['id']}"))
+
+
 class TheVerdict(_Placed):
     def landing(self, r, verdict, work=(0, 1)):
         with mock.patch.object(r, "_branch_work", lambda: work):
