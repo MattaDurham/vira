@@ -54,7 +54,11 @@ class Api(unittest.TestCase):
         self.get("/api/history?status=Done", 400)
         self.get("/api/history?unit=thing", 400)
         events = self.get("/api/history?group=none&unit=event&limit=500")
-        self.assertEqual(events["total"], len(H.load()))
+        unstarted = sum(1 for e in H.load().values() if e["status"] == H.NOT_STARTED)
+        self.assertEqual(events["total"] + unstarted, len(H.load()))
+        self.assertEqual(events["unstarted_left_out"], unstarted)
+        everything = self.get("/api/history?group=none&unit=event&limit=500&unstarted=1")
+        self.assertEqual(everything["total"], len(H.load()))
         page = self.get("/api/history?group=none&unit=event&limit=2&offset=2")
         self.assertEqual(page["shown"], 2)
         self.assertTrue(page["more"])
@@ -101,6 +105,9 @@ class Api(unittest.TestCase):
         self.get("/api/history/timemap?lane=person", 400)
         f = self.get("/api/history/facets")
         self.assertEqual([s["key"] for s in f["statuses"]], list(H.STATUSES))
+        self.assertEqual(f["unstarted_ideas"], 1)
+        shown = self.get("/api/history/facets?unstarted=1")
+        self.assertEqual(shown["statuses"][-1]["trails"], 1)
         self.assertIn("vira", [p["key"] for p in f["projects"]])
         rev = self.get("/api/history/rev")
         self.assertEqual(rev["revision"], H.revision())
@@ -140,7 +147,7 @@ class Api(unittest.TestCase):
         self.assertEqual(spec["group"], "project")
         self.assertEqual(spec["filters"]["project"], "vira")
         self.assertEqual(spec["filters"]["module"], "", "an unknown module is dropped")
-        self.assertEqual(spec["filters"]["status"], ["Merged"], "only the eight words")
+        self.assertEqual(spec["filters"]["status"], ["Merged"], "only the status words")
         self.assertEqual(spec["filters"]["since"], "2026-11-02")
 
     def test_ask_without_a_model_says_so(self):
@@ -220,6 +227,20 @@ class TickerCase(unittest.TestCase):
                 R.time.sleep(0.01)
         self.assertEqual(t.status()["last"]["written"], 3)
         self.assertEqual(t.status()["last"]["mode"], "tick")
+
+    def test_a_pass_that_wrote_rebuilds_the_lookup_right_away(self):
+        for written, calls in ((3, 1), (0, 0)):
+            t = R.Ticker()
+            script = f"import json; print(json.dumps({{'written': {written}}}))"
+            with mock.patch.object(t, "spawn_args", lambda mode, s=script: [R.sys.executable, "-c", s]), \
+                    mock.patch.object(R.V, "index") as idx:
+                self.assertTrue(t.run_once("tick"))
+                for _ in range(500):
+                    if not t.status()["running"] and idx.call_count >= calls:
+                        break
+                    R.time.sleep(0.01)
+                R.time.sleep(0.05)  # the rebuild follows the report on the same thread
+                self.assertEqual(idx.call_count, calls, f"written={written}")
 
 
 if __name__ == "__main__":

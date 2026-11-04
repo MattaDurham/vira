@@ -170,7 +170,8 @@ const STEPS = [
 const MERGE_ACT = { action: "merge", label: "Merge", method: "POST", url: "/api/history/action", body: { id: "trail:W", action: "merge", branch: "vira:claude/w" } };
 const LIST = (group) => ({
   group, unit: "trail", total: 3, offset: 0, limit: 200, shown: 3, more: false, revision: "r1",
-  statuses: { "Running": 0, "Waiting on you": 1, "Not merged": 0, "Merged": 2, "Answered": 0, "Ran": 0, "Failed": 0, "Dropped": 0 },
+  statuses: { "Running": 0, "Waiting on you": 1, "Not merged": 0, "Merged": 2, "Answered": 0, "Ran": 0, "Failed": 0, "Dropped": 0, "Not started": 0 },
+  unstarted_left_out: 5,
   groups: [{ key: ymd(TODAY), label: "Today", count: 3, entries: [
     entry("trail:A", "Merged", "Ideas: a session started from an idea shows live on the idea card", { prs: ["vira#178"], steps: STEPS }),
     entry("trail:M", "Merged", "Moments: relay a family event's best photos", { prs: ["vira#177"], steps: STEPS.slice(0, 2) }),
@@ -368,6 +369,19 @@ const last = (p) => calls.filter((c) => c.path === p).at(-1);
   gb[1].click();
   await flush();
   assert.equal(last("/api/history").q.group, "request");
+
+  // Not started: a ninth chip, off by default, counting the ideas left out
+  const chip = (w) => host.querySelector(".hx-outcome").querySelectorAll(".hx-tog").find((b) => b.dataset.word === w);
+  assert.equal(chip("Not started").getAttribute("aria-pressed"), "false");
+  assert.equal(chip("Not started").querySelector(".hx-n").textContent, "5", "it counts the ideas left out");
+  assert.equal(chip("Merged").querySelector(".hx-n").textContent, "2", "every word counts its entries");
+  assert.match(host.querySelector(".hx-listhead").textContent, /5 ideas not started left out/);
+  assert.equal(last("/api/history").q.status, undefined, "nothing asks for them by default");
+  chip("Not started").click();
+  await flush();
+  assert.equal(last("/api/history").q.status, "Not started", "picking the chip asks for them");
+  chip("Not started").click();
+  await flush();
 
   // Layers: the shipped view is merges alone
   const tog = (label) => host.querySelector(".hx-ctl").querySelectorAll(".hx-tog").find((b) => b.textContent === label);

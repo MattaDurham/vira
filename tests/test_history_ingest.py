@@ -339,12 +339,21 @@ class Ingest(unittest.TestCase):
 
     def test_ideas_and_their_decisions(self):
         self.assertEqual(self.ev["ask:idea:idea_a"]["status"], H.MERGED)
-        self.assertEqual(self.ev["ask:idea:idea_b"]["status"], H.WAITING)
+        self.assertEqual(self.ev["ask:idea:idea_b"]["status"], H.NOT_STARTED,
+                         "no session has started on it")
         self.assertEqual(self.ev["ask:idea:idea_b"]["project"], "vira",
                          "the idea's project is the repository's lane")
         dec = [e for e in self.ev.values() if e["kind"] == "decide" and e["sub"] == "declined"]
         self.assertEqual(len(dec), 1)
         self.assertEqual(dec[0]["status"], H.DROPPED)
+
+    def test_an_idea_a_session_started_on_waits_on_you(self):
+        s = json.loads(ideas.STORE.read_text(encoding="utf-8"))
+        s["items"][0]["status"] = "open"
+        ideas.STORE.write_text(json.dumps(s), encoding="utf-8")
+        I.run(full=True)
+        self.assertEqual(H.load()["ask:idea:idea_a"]["status"], H.WAITING,
+                         "an Implement session ran on it")
 
     def test_an_approval_seen_as_a_status_change_is_recorded(self):
         s = json.loads(ideas.STORE.read_text(encoding="utf-8"))
@@ -458,6 +467,56 @@ class Trails(unittest.TestCase):
         self.assertNotIn("Notes capture: 2 new, 1 updated", all_titles,
                          "repeating runs belong to the grid")
 
+    def test_unstarted_ideas_stay_out_of_the_lists_unless_asked(self):
+        tid = self.idx.resolve("idea:idea_b")
+        self.assertEqual(self.idx.trails[tid]["status"], H.NOT_STARTED)
+
+        def titles(out):
+            return [e["title"] for g in out["groups"] for e in g["entries"]]
+        for group in ("day", "request", "project"):
+            out = V.list_entries(group, V.parse_filters())
+            self.assertNotIn("Paint the shed", titles(out), group)
+            self.assertEqual(out["unstarted_left_out"], 1, group)
+            self.assertEqual(out["statuses"][H.NOT_STARTED], 0)
+            self.assertEqual(out["statuses"][H.WAITING], 0, "nothing else waits on the owner")
+        out = V.list_entries("day", V.parse_filters(unstarted="1"))
+        self.assertIn("Paint the shed", titles(out))
+        self.assertEqual(out["unstarted_left_out"], 0)
+        self.assertNotEqual(out["groups"][0]["key"], "now", "an unstarted idea is never pinned")
+        out = V.list_entries("request", V.parse_filters(status=H.NOT_STARTED))
+        self.assertEqual(titles(out), ["Paint the shed"])
+        ev = V.list_entries("none", V.parse_filters(), unit="event", limit=500)
+        self.assertNotIn("ask:idea:idea_b", [e["id"] for g in ev["groups"] for e in g["entries"]])
+        self.assertEqual(ev["unstarted_left_out"], 1)
+        fac = {s["key"]: s for s in V.facets()["statuses"]}
+        self.assertEqual(fac[H.NOT_STARTED]["trails"], 0)
+        self.assertTrue(fac[H.NOT_STARTED]["hidden_by_default"])
+        self.assertEqual(V.facets()["unstarted_ideas"], 1)
+        self.assertEqual({s["key"]: s for s in V.facets(unstarted=True)["statuses"]}
+                         [H.NOT_STARTED]["trails"], 1)
+        self.assertEqual(V.detail("idea:idea_b")["outcome"]["status"], H.NOT_STARTED,
+                         "the idea's own history still opens")
+
+    def test_a_session_whose_pull_requests_merged_is_merged(self):
+        rec = self.sb.app / "claude-code-sessions" / "a" / "b" / "local_x.json"
+        d = json.loads(rec.read_text(encoding="utf-8"))
+        d["cwd"] = str(self.sb.repo)
+        d["lastActivityAt"] = int(time.time() * 1000)
+        d["postTurnSummary"] = {"status_category": "review_ready"}
+        d["prs"] = [{"prNumber": 7, "state": "MERGED"}]
+        rec.write_text(json.dumps(d), encoding="utf-8")
+        self.sb.ingest()
+        idx = V.index()
+        e = idx.events["session:claude:local_x"]
+        self.assertEqual(e["own_status"], H.WAITING, "its own word stays stored")
+        self.assertEqual(e["status"], H.MERGED)
+        tid = idx.resolve("session:local_x")
+        self.assertEqual(tid, idx.resolve("idea:idea_a"), "joined by the pull request")
+        self.assertEqual(idx.trails[tid]["status"], H.MERGED)
+        out = V.list_entries("day", V.parse_filters())
+        self.assertNotIn("now", [g["key"] for g in out["groups"]])
+        self.assertEqual(out["statuses"][H.WAITING], 0)
+
     def test_filters(self):
         f = V.parse_filters(status=H.MERGED)
         rows = [e for g in V.list_entries("request", f)["groups"] for e in g["entries"]]
@@ -485,6 +544,78 @@ class Trails(unittest.TestCase):
             V.list_entries("weekday")
 
 
+class _GridStore:
+    """A bare history store in a temporary folder, filled event by event."""
+
+    def __init__(self, case):
+        self.tmp = Path(tempfile.mkdtemp())
+        case.addCleanup(shutil.rmtree, self.tmp, True)
+        p = mock.patch.object(H, "DIR", self.tmp / "history")
+        p.start()
+        case.addCleanup(p.stop)
+        self.now = time.time()
+        V._cache.update(rev=None, index=None)
+        case.addCleanup(V._cache.update, rev=None, index=None)
+
+    def put(self, *events):
+        H.append(list(events))
+        V._cache.update(rev=None, index=None)
+
+
+class GridShortfall(unittest.TestCase):
+    """An hourly Program that missed one hour of a busy day: the hour cell
+    is missed, and the day cell, though it ran, says one due run never
+    started."""
+
+    def setUp(self):
+        self.st = _GridStore(self)
+        now = self.st.now
+        top = now - now % 3600
+        self.gap = top - 10 * 3600
+        runs = []
+        for k in range(30, 0, -1):
+            slot = top - k * 3600
+            if slot == self.gap:
+                continue
+            runs.append(H.event(f"run:program:p{k}", "run", slot + 44 * 60, sub="program",
+                                status=H.RAN, title="Export notes", project="vault",
+                                links={"program": "prog_x", "program_run": f"p{k}",
+                                       "flow_run": "fr1"}))
+        runs.append(H.event("run:flow:fr1", "run", top - 40 * 3600, sub="flow", status=H.RAN,
+                            title="Notes", links={"flow_run": "fr1", "schedule": "rt_h"}))
+        self.st.put(*runs)
+        sched = [{"id": "rt_h", "name": "Every hour", "every_hours": 1.0, "daily_at": "",
+                  "weekday": "", "flow": "", "kind": "circuit", "created": 0}]
+        p = mock.patch.object(V, "_schedules", return_value=sched)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def row(self, span):
+        g = V.grid(span=span)
+        return next(r for r in g["rows"] if r["id"] == "program:prog_x")
+
+    def test_the_missing_hour(self):
+        hour = self.row("hour")
+        cell = next(c for c in hour["cells"] if H.to_ts(c["start"]) == self.gap)
+        self.assertEqual(cell["outcome"], "missed")
+        self.assertEqual(cell["short"], 1)
+        nxt = next(c for c in hour["cells"] if H.to_ts(c["start"]) == self.gap + 3600)
+        self.assertEqual(nxt["outcome"], H.RAN, "a run at :44 is on time for its hour")
+        day = self.row("day")
+        self.assertGreaterEqual(day["short"], 1)
+        cell = next(c for c in day["cells"] if H.to_ts(c["start"]) <= self.gap < H.to_ts(c["end"]))
+        self.assertEqual(cell["outcome"], H.RAN)
+        self.assertEqual(cell["short"], 1)
+
+    def test_the_current_hour_is_not_missed_before_its_run(self):
+        now = time.time()
+        top = now - now % 3600
+        hour = self.row("hour")
+        cur = next((c for c in hour["cells"] if H.to_ts(c["start"]) == top - 3600), None)
+        if cur and not cur["runs"] and top + 600 > now:
+            self.assertNotEqual(cur["outcome"], "missed")
+
+
 class Grid(unittest.TestCase):
     def setUp(self):
         self.sb = Sandbox(self)
@@ -508,7 +639,12 @@ class Grid(unittest.TestCase):
         self.assertEqual(at(3), "missed")
         self.assertEqual(at(2), H.RAN)
         self.assertEqual(at(6.5), "none", "before the first stored run nothing is missed")
-        self.assertEqual(at(1), "missed", "the hour after the last run was missed too")
+        # A due slot is missed once the whole hour (and ten minutes) has
+        # passed: a run may come at :44 and still be on time.
+        slot = next(c for c in prog["cells"]
+                    if H.to_ts(c["start"]) <= self.sb.ago(1) < H.to_ts(c["end"]))
+        self.assertEqual(at(1), "missed" if H.to_ts(slot["start"]) + 4200 < time.time() else "none",
+                         "the hour after the last run was missed too, once it was over")
         self.assertGreaterEqual(prog["missed"], 2)
 
     def test_day_span_and_bad_span(self):

@@ -43,6 +43,9 @@
 .hx-tog.t-open.on { border-color: var(--hx-open); } .hx-tog.t-merged.on { border-color: var(--hx-merged); }
 .hx-tog.t-fail.on { border-color: var(--hx-fail); }
 .hx-tog.rule.on { border-color: var(--hx-fail); color: var(--text); }
+.hx-tog.t-idle { border-style: dashed; }
+.hx-n { margin-left: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.hx-st.t-idle { border-style: dashed; color: var(--text-faint); }
 .hx-select { min-width: 0; max-width: 220px; font-size: 12px; padding: 4px 8px; background: var(--bg-raised); color: var(--text);
   border: 1px solid var(--line); border-radius: var(--hx-r); }
 

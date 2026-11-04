@@ -60,7 +60,7 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   contact cards, answers, the owner's decisions and every text Vira sent.
   `python -m server.historyingest` backfills it from every existing store
   and the server keeps it current out of process every minute. Events
-  join into one trail per request, settle on one of eight status words
+  join into one trail per request, settle on one of nine status words
   and take their titles from the records. `/api/history` serves lists by
   day, request, module, project, automation or session, an entry's full
   detail, the automation status grid with missed runs, a time map, a
@@ -70,6 +70,13 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   that keep only their newest records (Flow runs past 120, texts past
   200, journal notes past 400) now archive what they trim, and Merge or
   Discard pressed on a branch is logged; no screen uses it yet.
+  An idea no session has started reads "Not started", not "Waiting on
+  you", and the lists leave it out unless asked; a session whose every
+  branch and pull request merged reads Merged whatever its last summary
+  said.
+  The automation grid counts an hourly run as missed only after its
+  hour has passed, and each day cell says how many due runs never
+  started.
 - Fleet shows what runs inside each Vira process. Every in-process pass
   registered with `runtimework` (media and mail archiving, contact and
   idea indexing, backups, the contacts sync, a flow starting) now rides

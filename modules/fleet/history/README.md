@@ -32,7 +32,7 @@ An event:
 | `at`, `end` | UTC ISO times; `end` only for things with a span |
 | `kind` | `ask` (you asked), `session` (a session ran), `code` (code moved), `run` (an automation ran), `made` (something was made), `answer` (an answer was given), `decide` (you decided), `tell` (Vira told you) |
 | `sub` | the kind's kind: `journal`, `idea`, `chat`, `ask`, `dispatch`; `vira`, `claude`, `codex`; `commit`, `merged`, `pr_opened`, `not_merged`, `merged_branch`, `discarded`; `flow`, `step`, `program`, `contacts`; `retro`, `note`, `document`, `contact`; `landing`, `answer`, `permission`, `approval`, `review`, `approved`, `deferred`, `declined`, `dropped`, `merge`, `discard`; a channel for `tell` |
-| `status` | the event's own word, one of the eight below |
+| `status` | the event's own word, one of the nine below |
 | `title` | taken from the records (rules below) |
 | `project` | the folder's lane, named the way Fleet names it (the repository's folder name, `Home folder`, `No folder`) |
 | `folder`, `repo` | where it happened; the repository root |
@@ -47,20 +47,34 @@ One set for every event and every entry. Each says where the work ended up.
 | Word | Means |
 |---|---|
 | Running | A session or run is working right now (activity in the last 10 minutes). |
-| Waiting on you | It needs your answer, approval or merge: a live session blocked on you, a session that ended asking you (kept two days), a Flow approval, a proposed or approved idea nobody has started. |
+| Waiting on you | It needs your answer, approval or merge: a live session blocked on you, a session that ended asking you (kept two days), a Flow approval, an open idea a session has already started on. |
 | Not merged | Code on a branch, or a pull request, that has not reached main. |
 | Merged | Code reached main. |
 | Answered | A question got its answer, or you made a choice. |
 | Ran | An automation finished with no errors. |
 | Failed | It stopped with an error. |
 | Dropped | You set it aside: an idea dropped or deferred, a branch discarded, a pull request closed. |
+| Not started | An idea in your Ideas queue (proposed, open or on hold) that no session or Flow run has started. It is not waiting on you: it stays in the Ideas tab, and every list leaves it out unless asked (below). |
 
 An entry's word is settled over its whole trail (`historyview.settle`):
-Running, then Waiting on you (unless a merge came after the wait), then
-Not merged while a branch or PR is open, then Merged, then Dropped, then the
-automation's Ran or Failed, then Failed when every session failed, else
-Answered. A session's own "Not merged" turns into Merged or Dropped in the
-views once its branch did; the stored line keeps the session's own word.
+Running, then Merged when every branch and pull request the trail names
+reached main (whatever a session's last summary said), then Waiting on you
+(unless a merge came after the wait), then Not merged while a branch or PR
+is open, then Merged, then Dropped, then Not started for an idea with no
+session or Flow run on its trail, then the automation's Ran or Failed, then
+Failed when every session failed, else Answered. A session's own "Not
+merged" turns into Merged or Dropped in the views once its branch did, and
+its own "Waiting on you" turns into Merged once every branch and pull
+request it names merged; the stored line keeps the session's own word
+(`own_status` in the views).
+
+**The idea rule (owner, 2026-11-04).** An idea counts as waiting on you
+only once a session has started on it. Until then its ask is stored as
+"Not started", its trail settles as "Not started", and the lists, the
+`now` pin and the facet counts leave it out. `unstarted=1` (or `status=Not
+started`) puts it back; every list answer says how many it left out in
+`unstarted_left_out`. An idea's own history (`/entry`, `/for?idea=`) always
+opens.
 
 ### Titles
 
@@ -126,7 +140,9 @@ The server runs `python -m server.historyingest tick` out of process every
 minute (a `backfill` when the store is empty), one at a time
 (`historyroutes.Ticker`). A pass reads only what changed: transcripts from
 their last byte offset, git from the last base-branch tip, gh at most every
-ten minutes. State lives in `data/history/ingest-state.json`. By hand:
+ten minutes. A pass that wrote anything rebuilds the views' lookup right
+away on the runner's thread, so the next request does not pay for it.
+State lives in `data/history/ingest-state.json`. By hand:
 
     .venv/bin/python -m server.historyingest backfill   # every source, all on disk
     .venv/bin/python -m server.historyingest tick
@@ -148,7 +164,8 @@ also take a local date (`2026-11-04`; `until` then means the end of that day).
 | `unit` | `trail` (default for day, request, module, project, none) or `event` (the finest grain) |
 | `since`, `until` | date or time bounds |
 | `project`, `module` | comma lists; a module matches its submodules (`work` matches `work/ideas`) |
-| `status` | comma list of the eight words (400 on any other) |
+| `status` | comma list of the status words (400 on any other); naming `Not started` includes unstarted ideas |
+| `unstarted` | `1` to include ideas no session has started (left out by default) |
 | `kind` | comma list of kinds or subs (`code`, `run`, `merged`, `retro`, ...) |
 | `app` | `Vira`, `Claude Code`, `Codex` (or `vira`, `claude`, `codex`) |
 | `q` | words that must all appear (titles, asks, projects, modules, branches, PRs, models) |
@@ -158,9 +175,9 @@ also take a local date (`2026-11-04`; `until` then means the end of that day).
 
 ```json
 {"group": "request", "unit": "trail", "total": 1, "offset": 0, "limit": 200, "shown": 1,
- "more": false, "revision": "56cd24ae274012f5",
+ "more": false, "revision": "56cd24ae274012f5", "unstarted_left_out": 1,
  "statuses": {"Running": 0, "Waiting on you": 0, "Not merged": 0, "Merged": 1,
-              "Answered": 0, "Ran": 0, "Failed": 0, "Dropped": 0},
+              "Answered": 0, "Ran": 0, "Failed": 0, "Dropped": 0, "Not started": 0},
  "groups": [{"key": "all", "label": "all", "count": 1, "entries": [{
    "id": "trail:ask:note:note_a", "type": "trail", "kind": "request",
    "status": "Merged", "title": "Widget: draw in half the time",
@@ -261,7 +278,12 @@ it failed, `Running` or `Waiting on you` while one is, `Ran` otherwise,
 `missed` when a Schedule expected a run there and none started, `none` when
 nothing was due. A Program inherits the Schedules of the Flow runs that ran
 it. Misses are only judged from a row's first stored run (no false misses
-before history began) and only for slots more than ten minutes past.
+before history began). A due time counts as missed only once its whole
+interval and ten minutes more have passed (an hourly run may start at :44
+and still be on time); a daily time, ten minutes after it. A cell's
+`short` counts the due runs in it that never started, so a day that ran
+23 of its 24 hourly runs reads `Ran` with `short: 1`; a row's `short` sums
+its cells.
 `tone` is a color hint: `ok`, `fail`, `live`, `wait`, `dropped`, `missed`,
 `empty`.
 
@@ -272,11 +294,12 @@ before history began) and only for slots more than ten minutes past.
            "project": "vault", "known_since": "2026-11-04T06:36:35+00:00",
            "schedules": [{"id": "rt_h", "name": "Every hour", "every_hours": 1.0,
                           "daily_at": "", "weekday": ""}],
-           "runs": 3, "failed": 1, "missed": 2, "last": "2026-11-04T09:36:35+00:00",
+           "runs": 3, "failed": 1, "missed": 2, "short": 2, "last": "2026-11-04T09:36:35+00:00",
            "cells": [{"start": "2026-11-04T08:00:00+00:00", "end": "2026-11-04T09:00:00+00:00",
-                      "outcome": "missed", "tone": "missed", "runs": [], "expected": 1, "counts": {}},
+                      "outcome": "missed", "tone": "missed", "runs": [], "expected": 1, "short": 1,
+                      "counts": {}},
                      {"start": "2026-11-04T09:00:00+00:00", "end": "2026-11-04T10:00:00+00:00",
-                      "outcome": "Ran", "tone": "ok", "expected": 1,
+                      "outcome": "Ran", "tone": "ok", "expected": 1, "short": 0,
                       "counts": {"new": 2, "updated": 1},
                       "runs": [{"id": "run:program:P2", "status": "Ran",
                                 "at": "2026-11-04T09:36:35+00:00",
@@ -307,11 +330,19 @@ lane.
 
 ### Filters: `GET /api/history/facets`
 
+Each status word carries how many trails settled on it. "Not started"
+counts 0 unless `unstarted=1`; `unstarted_ideas` says how many there are
+either way.
+
 ```json
 {"projects": [{"key": "vira", "count": 12}], "modules": [{"key": "work/ideas", "count": 5}],
  "kinds": [{"key": "ask", "label": "You asked", "count": 6}],
  "apps": [{"key": "Vira", "count": 1}],
- "statuses": [{"key": "Running", "means": "A session or run is working right now."}],
+ "statuses": [{"key": "Running", "means": "A session or run is working right now.",
+               "trails": 1, "hidden_by_default": false},
+              {"key": "Not started", "means": "An idea in your Ideas queue that no session has started. ...",
+               "trails": 0, "hidden_by_default": true}],
+ "unstarted_ideas": 1,
  "groups": ["day", "request", "module", "project", "automation", "session", "none"],
  "events": 31, "trails": 15, "since": "2026-11-02T09:36:35+00:00", "revision": "..."}
 ```

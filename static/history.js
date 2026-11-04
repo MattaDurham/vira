@@ -21,9 +21,12 @@
 "use strict";
 
 (() => {
-  const STATUSES = ["Running", "Waiting on you", "Not merged", "Merged", "Answered", "Ran", "Failed", "Dropped"];
+  // The nine status words. "Not started" (an idea no session has started)
+  // is left out of every list until its chip is picked.
+  const STATUSES = ["Running", "Waiting on you", "Not merged", "Merged", "Answered", "Ran", "Failed", "Dropped",
+                    "Not started"];
   const TONE = { "Running": "live", "Waiting on you": "wait", "Not merged": "open", "Merged": "merged",
-                 "Answered": "ok", "Ran": "ok", "Failed": "fail", "Dropped": "dropped" };
+                 "Answered": "ok", "Ran": "ok", "Failed": "fail", "Dropped": "dropped", "Not started": "idle" };
   const UNFINISHED = ["Running", "Waiting on you", "Not merged"];
   const GROUPS = [["day", "Day"], ["request", "Request"], ["module", "Module"], ["project", "Project"],
                   ["automation", "Automation"], ["session", "Session"]];
@@ -611,13 +614,21 @@
       outcome.setAttribute("role", "group");
       outcome.setAttribute("aria-label", "Outcome");
       outcome.append(el("span", "hx-lbl", "Outcome"));
+      // Each word with how many entries in the span carry it; Not started
+      // counts the ideas the list is leaving out until it is picked.
+      const counts = (st.list && st.list.statuses) || null;
       STATUSES.forEach((s) => {
         const on = st.f.status.includes(s);
         const means = ((fac.statuses || []).find((x) => x.key === s) || {}).means || "";
-        outcome.append(toggle(s, on, () => {
+        const n = !counts ? null : s === "Not started" && !on
+          ? (st.list.unstarted_left_out != null ? st.list.unstarted_left_out : counts[s]) : counts[s];
+        const t = toggle(s, on, () => {
           st.f.status = on ? st.f.status.filter((x) => x !== s) : st.f.status.concat(s);
           filtersChanged();
-        }, `t-${TONE[s]}`, means));
+        }, `t-${TONE[s]}`, means);
+        t.dataset.word = s;
+        if (n != null) t.append(el("span", "hx-n", String(n)));
+        outcome.append(t);
       });
       const pick = (label, key, items) => {
         const sel = el("select", "hx-select");
@@ -748,6 +759,7 @@
           st.list.more = out.more; st.list.shown += out.shown;
         } else st.list = out;
         drawList();
+        renderFilters();
         if (st.ask && st.ask.view === "entry" && !st.picked) {
           const first = (out.groups[0] || {}).entries && out.groups[0].entries[0];
           if (first) pick(first.id);
@@ -1128,7 +1140,8 @@
       if (st.sel) lab.append(btn("hx-lk", "Clear selection", () => selectSpan(st.sel.a, st.sel.b)));
       if (out && out.statuses) {
         const c = Object.entries(out.statuses).filter(([, n]) => n).map(([s, n]) => `${n} ${s.toLowerCase()}`);
-        lab.append(el("span", "hx-dim", `${plural(out.total, "entry", "entries")}${c.length ? ": " + c.join(", ") : ""}`));
+        lab.append(el("span", "hx-dim", `${plural(out.total, "entry", "entries")}${c.length ? ": " + c.join(", ") : ""}`
+          + (out.unstarted_left_out ? `; ${plural(out.unstarted_left_out, "idea")} not started left out` : "")));
       }
       const parts = [lab];
       if (!st.f.rules) {
