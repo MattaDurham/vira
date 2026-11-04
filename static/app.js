@@ -2347,11 +2347,6 @@ function renderSearchResults(box, list) {
 
 const FIND_TABS = [["all", "All"], ["notes", "Notes"], ["media", "Media"],
                    ["people", "People"], ["messages", "Messages"]];
-const FIND_EXAMPLES = [
-  "most recent session where we decided about the sorter",
-  "who works in insurance",
-  "photos from last March",
-];
 const FIND_PREVIEW = 4;      // rows per group on the All tab
 
 // the window's tab switch, exposed for aliases and deep links that land
@@ -3690,13 +3685,6 @@ function initFindView() {
     + "link and document ever shared, your contacts, and the text of your "
     + "messages and mail. Ask a question and the answer cites its notes; "
     + "type a name, a filename or a date and it filters."));
-  const examples = el("div", "brain-examples");
-  FIND_EXAMPLES.forEach((q) => {
-    const c = el("button", "fchip sm", q);
-    c.addEventListener("click", () => { input.value = q; run(true); });
-    examples.appendChild(c);
-  });
-  empty.appendChild(examples);
   searchPane.appendChild(bar);
   searchPane.appendChild(tabs);
   searchPane.appendChild(kinds);
