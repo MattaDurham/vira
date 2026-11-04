@@ -259,9 +259,46 @@ class StatusWords(unittest.TestCase):
     def test_failed_session(self):
         self.assertEqual(V.settle([_ev("session", "vira", H.FAILED, self.now)]), H.FAILED)
 
+    def test_an_idea_no_session_started_is_not_waiting_on_you(self):
+        idea = _ev("ask", "idea", H.NOT_STARTED, self.now - 100, links={"idea": "i1"})
+        self.assertEqual(V.settle([idea]), H.NOT_STARTED)
+        # a line stored before the rule (the idea's own word was Waiting)
+        old = _ev("ask", "idea", H.WAITING, self.now - 100, links={"idea": "i1"})
+        self.assertEqual(V.settle([old]), H.NOT_STARTED)
+        # once a session has started on it, its wait is the owner's
+        idea_w = _ev("ask", "idea", H.WAITING, self.now - 100, links={"idea": "i1"})
+        sess = _ev("session", "vira", H.WAITING, self.now - 50, links={"idea": "i1"})
+        self.assertEqual(V.settle([idea_w, sess]), H.WAITING)
+        # a Flow run started on it counts as started too
+        run = _ev("run", "flow", H.RAN, self.now - 50, links={"idea": "i1"})
+        self.assertNotEqual(V.settle([idea, run]), H.NOT_STARTED)
+
+    def test_merged_code_outranks_a_session_that_says_it_waits(self):
+        sess = _ev("session", "claude", H.WAITING, self.now,
+                   links={"pr": ["vira#1", "vira#2"]})
+        m1 = _ev("code", "merged", H.MERGED, self.now - 600, id="code:merged:1",
+                 links={"branch": "vira:claude/a", "pr": "vira#1"})
+        m2 = _ev("code", "merged", H.MERGED, self.now - 300, id="code:merged:2",
+                 links={"branch": "vira:claude/b", "pr": "vira#2"})
+        self.assertEqual(V.settle([sess, m1, m2]), H.MERGED,
+                         "the summary came after both merges and still the work is merged")
+        # one of its pull requests still open: it is not all merged
+        open_pr = _ev("code", "pr_opened", H.NOT_MERGED, self.now - 300, id="code:pr:2",
+                      links={"branch": "vira:claude/b", "pr": "vira#2"})
+        self.assertEqual(V.settle([sess, m1, open_pr]), H.WAITING)
+        # a pull request the session names that git has no record of
+        sess3 = _ev("session", "claude", H.WAITING, self.now,
+                    links={"pr": ["vira#1", "vira#3"]})
+        self.assertEqual(V.settle([sess3, m1]), H.WAITING)
+        # a live session is still Running
+        live = _ev("session", "claude", H.RUNNING, self.now, links={"pr": "vira#1"})
+        self.assertEqual(V.settle([live, m1]), H.RUNNING)
+
     def test_every_word_is_reachable_and_documented(self):
         self.assertEqual(set(H.STATUS_MEANS), set(H.STATUSES))
-        self.assertEqual(len(H.STATUSES), 8)
+        self.assertEqual(len(H.STATUSES), 9)
+        self.assertEqual(H.UNSTARTED, (H.NOT_STARTED,))
+        self.assertEqual(H.STATUSES[:2], H.OPEN_STATUSES, "the unfinished words come first")
 
 
 def _line(ts, **kw):

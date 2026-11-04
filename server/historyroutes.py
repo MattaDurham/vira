@@ -127,21 +127,25 @@ ticker = Ticker()
 
 # ---------------------------------------------------------------- reads
 
-def _filters(since, until, project, module, status, kind, q, app, automations):
+def _filters(since, until, project, module, status, kind, q, app, automations, unstarted=""):
     for word in (status or "").split(","):
         if word.strip() and word.strip() not in H.STATUSES:
             raise HTTPException(400, f"unknown status word {word.strip()!r}; "
                                 f"one of {', '.join(H.STATUSES)}")
     return V.parse_filters(since=since, until=until, project=project, module=module,
-                           status=status, kind=kind, q=q, app=app, automations=automations)
+                           status=status, kind=kind, q=q, app=app, automations=automations,
+                           unstarted=unstarted)
 
 
 @router.get("/api/history")
 def api_history(group: str = "day", since: str = "", until: str = "", project: str = "",
                 module: str = "", status: str = "", kind: str = "", q: str = "",
                 app: str = "", automations: str = "", unit: str = "",
-                limit: int = V.LIST_LIMIT, offset: int = 0):
-    f = _filters(since, until, project, module, status, kind, q, app, automations)
+                limit: int = V.LIST_LIMIT, offset: int = 0, unstarted: str = ""):
+    """Every list. Ideas no session has started ("Not started") are left
+    out unless `unstarted`=1 or the word is in `status`; the answer's
+    `unstarted_left_out` says how many were left out."""
+    f = _filters(since, until, project, module, status, kind, q, app, automations, unstarted)
     if unit and unit not in ("trail", "event"):
         raise HTTPException(400, "unit is trail or event")
     try:
@@ -208,9 +212,9 @@ def api_history_timemap(since: str = "", until: str = "", lane: str = "project",
 
 
 @router.get("/api/history/facets")
-def api_history_facets():
+def api_history_facets(unstarted: str = ""):
     with admission.cpu("history.facets"):
-        return V.facets()
+        return V.facets(unstarted=V._on(unstarted))
 
 
 @router.get("/api/history/rev")

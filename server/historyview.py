@@ -76,18 +76,28 @@ class Index:
         for e in self.events.values():
             if e["kind"] != "code":
                 continue
-            for b in (e.get("links") or {}).get("branch", []):
+            links = e.get("links") or {}
+            for b in list(links.get("branch", [])) + list(links.get("pr", [])):
                 if e["sub"] in ("merged", "merged_branch") or (
                         e["sub"] == "pr_opened" and e["status"] == H.MERGED):
                     fate[b] = H.MERGED
                 elif e["sub"] == "discarded" and fate.get(b) != H.MERGED:
                     fate[b] = H.DROPPED
         for e in self.events.values():
-            if e["kind"] == "session" and e["status"] == H.NOT_MERGED:
-                for b in (e.get("links") or {}).get("branch", []):
+            if e["kind"] != "session":
+                continue
+            links = e.get("links") or {}
+            if e["status"] == H.NOT_MERGED:
+                for b in links.get("branch", []):
                     if b in fate:
                         e["own_status"], e["status"] = e["status"], fate[b]
                         break
+            elif e["status"] == H.WAITING:
+                # A session that ended saying it waits on a review whose
+                # every branch and pull request has since merged is merged.
+                keys = list(links.get("branch", [])) + list(links.get("pr", []))
+                if keys and all(fate.get(k) == H.MERGED for k in keys):
+                    e["own_status"], e["status"] = e["status"], H.MERGED
 
     def _trails(self):
         parent = {eid: eid for eid in self.events}
@@ -181,6 +191,32 @@ def _open_code(evs):
     return out
 
 
+def _all_code_merged(evs):
+    """True when the trail has code and every branch and pull request it
+    names reached main (nothing still open, nothing discarded)."""
+    code = [e for e in evs if e["kind"] == "code"]
+    if not code or _open_code(evs):
+        return False
+    fate = {}
+    for e in code:
+        links = e.get("links") or {}
+        keys = list(links.get("branch") or []) + list(links.get("pr") or [])
+        merged = e["sub"] in ("merged", "merged_branch") or e["status"] == H.MERGED
+        for k in keys:
+            if merged:
+                fate[k] = H.MERGED
+            elif e["status"] == H.DROPPED and fate.get(k) != H.MERGED:
+                fate[k] = H.DROPPED
+            else:
+                fate.setdefault(k, e["status"])
+    named = set()
+    for e in evs:
+        links = e.get("links") or {}
+        named.update(links.get("branch") or [])
+        named.update(links.get("pr") or [])
+    return bool(named) and all(fate.get(k) == H.MERGED for k in named)
+
+
 def _automated(e):
     """A session an automation started: a Flow step or a routine run."""
     links = e.get("links") or {}
@@ -208,6 +244,10 @@ def settle(evs):
     statuses = [e["status"] for e in evs]
     if H.RUNNING in statuses:
         return H.RUNNING
+    # Every branch and pull request on the trail reached main: the work is
+    # merged, whatever a session's last summary said about waiting.
+    if _all_code_merged(evs):
+        return H.MERGED
     merged_at = max((e["ts"] for e in evs if e["kind"] == "code"
                      and e["status"] == H.MERGED), default=0)
     # A wait the code has since moved past (a merge after it) is over.
@@ -228,8 +268,11 @@ def settle(evs):
     sessions = [e for e in evs if e["kind"] == "session"]
     if ideas and all(e["status"] == H.DROPPED for e in ideas):
         return H.DROPPED
-    if ideas and not sessions and any(e["status"] == H.WAITING for e in ideas):
-        return H.WAITING
+    runs_on = [e for e in evs if e["kind"] == "run"]
+    if ideas and not sessions and not runs_on and any(
+            e["status"] in (H.WAITING, H.NOT_STARTED) for e in ideas):
+        # No session has started on it: it stays in the Ideas tab.
+        return H.NOT_STARTED
     kind = trail_kind(evs)
     runs = [e for e in evs if e["kind"] == "run"]
     if kind == "automation":
@@ -453,15 +496,21 @@ def _day_bounds(value, end=False):
     return ts or None
 
 
+def _on(v):
+    return str(v or "").lower() in ("1", "true", "yes", "on")
+
+
 def parse_filters(*, since=None, until=None, project=None, module=None, status=None,
-                  kind=None, q=None, app=None, automations=None):
+                  kind=None, q=None, app=None, automations=None, unstarted=None):
+    """`unstarted` puts ideas no session has started ("Not started") back
+    into the lists; naming the word in `status` does the same."""
     def split(v):
         return [x.strip() for x in str(v or "").split(",") if x.strip()]
     return {"since": _day_bounds(since), "until": _day_bounds(until, end=True),
             "project": split(project), "module": split(module), "status": split(status),
             "kind": split(kind), "q": [w.lower() for w in str(q or "").split() if w],
             "app": [a.lower() for a in split(app)],
-            "automations": str(automations or "").lower() in ("1", "true", "yes", "on")}
+            "automations": _on(automations), "unstarted": _on(unstarted)}
 
 
 def _text_of(e):
@@ -492,13 +541,23 @@ def _event_passes(e, f, with_status=True):
         return False
     if with_status and f["status"] and e["status"] not in f["status"]:
         return False
+    if with_status and not _unstarted_shown(e["status"], f):
+        return False
     return True
+
+
+def _unstarted_shown(status, f):
+    """Ideas no session has started stay out of the lists unless the
+    filter asks for them (`unstarted`, or the word in `status`)."""
+    return status not in H.UNSTARTED or f.get("unstarted") or status in (f.get("status") or [])
 
 
 def _trail_passes(idx, tid, f):
     t = idx.trails[tid]
     evs = idx.trail_events(tid)
     if f["status"] and t["status"] not in f["status"]:
+        return False
+    if not _unstarted_shown(t["status"], f):
         return False
     if t["kind"] != "request" and not (
             f["automations"] or f["q"] or t["status"] in (H.FAILED, H.WAITING)
@@ -560,6 +619,7 @@ def list_entries(group="day", filters=None, limit=LIST_LIMIT, offset=0, unit=Non
     else:
         tids = [tid for tid in idx.trails if _trail_passes(idx, tid, f)]
         rows = [entry_of_trail(idx, tid) for tid in tids]
+    left_out = unstarted_left_out(idx, f, unit)
     rows.sort(key=lambda r: (H.to_ts(r["at"]), r["id"]), reverse=True)
     groups, order = {}, []
 
@@ -617,7 +677,22 @@ def list_entries(group="day", filters=None, limit=LIST_LIMIT, offset=0, unit=Non
         shown += 1
     return {"group": group, "unit": unit, "total": total, "offset": offset, "limit": limit,
             "shown": shown, "more": offset + shown < len(flat), "groups": paged,
-            "statuses": _status_counts(rows), "revision": H.revision()}
+            "statuses": _status_counts(rows), "unstarted_left_out": left_out,
+            "revision": H.revision()}
+
+
+def unstarted_left_out(idx, f, unit="trail"):
+    """How many ideas no session has started the filter left out (0 when
+    it shows them), so a list can say they are in the Ideas tab."""
+    if f.get("unstarted") or set(f.get("status") or []) & set(H.UNSTARTED):
+        return 0
+    g = dict(f, unstarted=True)
+    if unit == "event":
+        return sum(1 for e in idx.events.values() if e["status"] in H.UNSTARTED
+                   and _event_passes(e, g)
+                   and not (g["q"] and not all(w in _text_of(e) for w in g["q"])))
+    return sum(1 for tid, t in idx.trails.items() if t["status"] in H.UNSTARTED
+               and _trail_passes(idx, tid, g))
 
 
 def _status_counts(rows):
@@ -1049,10 +1124,19 @@ def timemap(since=None, until=None, lane="project", filters=None):
 
 # ---------------------------------------------------------------- facets
 
-def facets():
+def facets(unstarted=False):
     """What the filters can be set to: projects, modules, kinds, apps, and
-    the status words, each with how many events carry it."""
+    the status words, each with how many trails settled on it. Ideas no
+    session has started count as 0 unless `unstarted`; `unstarted_ideas`
+    says how many there are either way."""
     idx = index()
+    by_status = {}
+    for t in idx.trails.values():
+        by_status[t["status"]] = by_status.get(t["status"], 0) + 1
+    n_unstarted = sum(by_status.get(w, 0) for w in H.UNSTARTED)
+    if not unstarted:
+        for w in H.UNSTARTED:
+            by_status[w] = 0
     projects, modules, kinds, apps = {}, {}, {}, {}
     for e in idx.events.values():
         if e.get("project"):
@@ -1067,6 +1151,8 @@ def facets():
     first = min((e["ts"] for e in idx.events.values() if e["ts"]), default=0)
     return {"projects": srt(projects), "modules": srt(modules), "kinds": [
         {"key": k, "label": H.KIND_LABELS[k], "count": kinds.get(k, 0)} for k in H.KINDS],
-        "apps": srt(apps), "statuses": [{"key": s, "means": H.STATUS_MEANS[s]} for s in H.STATUSES],
+        "apps": srt(apps), "statuses": [{"key": s, "means": H.STATUS_MEANS[s], "trails": by_status.get(s, 0),
+                      "hidden_by_default": s in H.UNSTARTED} for s in H.STATUSES],
+        "unstarted_ideas": n_unstarted,
         "groups": list(GROUPS), "events": len(idx.events), "trails": len(idx.trails),
         "since": H.iso(first), "revision": H.revision()}

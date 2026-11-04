@@ -37,9 +37,11 @@ Months before the previous one are gzipped in place
 (events-YYYY-MM.jsonl.gz) by `compress_old`; the reader reads both forms.
 data/ belongs to one checkout, so a test instance keeps its own history.
 
-STATUS WORDS. One set of eight for every event and every entry built from
+STATUS WORDS. One set of nine for every event and every entry built from
 them (STATUSES). Each says where the work ended up, never only that a
-session stopped.
+session stopped. The ninth, "Not started", is an idea in the Ideas queue
+that no session has started: it is not waiting on the owner, and the list
+views leave it out unless asked (UNSTARTED).
 
 TITLES. Taken from the records in this order: the pull request title, then
 the idea title, then the Flow or Program name with its counts, then the
@@ -71,7 +73,8 @@ KIND_LABELS = {"ask": "You asked", "session": "A session ran", "code": "Code mov
 
 RUNNING, WAITING, NOT_MERGED, MERGED = "Running", "Waiting on you", "Not merged", "Merged"
 ANSWERED, RAN, FAILED, DROPPED = "Answered", "Ran", "Failed", "Dropped"
-STATUSES = (RUNNING, WAITING, NOT_MERGED, MERGED, ANSWERED, RAN, FAILED, DROPPED)
+NOT_STARTED = "Not started"
+STATUSES = (RUNNING, WAITING, NOT_MERGED, MERGED, ANSWERED, RAN, FAILED, DROPPED, NOT_STARTED)
 STATUS_MEANS = {
     RUNNING: "A session or run is working right now.",
     WAITING: "It needs your answer, approval or merge.",
@@ -81,7 +84,11 @@ STATUS_MEANS = {
     RAN: "An automation finished with no errors. Counts say what it made.",
     FAILED: "It stopped with an error.",
     DROPPED: "You set it aside: an idea dropped or deferred, a branch discarded.",
+    NOT_STARTED: "An idea in your Ideas queue that no session has started. It stays in "
+                 "the Ideas tab; lists leave it out unless asked.",
 }
+# Words the list views leave out unless a filter asks for them.
+UNSTARTED = (NOT_STARTED,)
 # Unfinished words: pinned at the top of today in every view.
 OPEN_STATUSES = (RUNNING, WAITING)
 

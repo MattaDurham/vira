@@ -1336,6 +1336,15 @@ def from_ideas(ctx):
     lanes = {e.get("project") for e in ctx.current.values() if e.get("project")}
     lanes |= {Path(r).name for r in (H.repo_root(f) for f in ctx.folders) if r}
     lanes.add(Path(H.vira_repo()).name)
+    # An open idea waits on the owner only once a session (or a Flow run)
+    # has started on it; until then it is "Not started" and stays in the
+    # Ideas tab. The trail's own word is settled again in historyview.
+    pool = dict(ctx.current)
+    pool.update({e["id"]: e for e in ctx.collected})
+    started = set()
+    for e in pool.values():
+        if e.get("kind") in ("session", "run"):
+            started.update((e.get("links") or {}).get("idea") or [])
     out = []
     for it in items:
         iid = it.get("id")
@@ -1348,8 +1357,10 @@ def from_ideas(ctx):
             status = H.MERGED if "merged into main" in note else H.ANSWERED
         elif st in ("dropped", "deferred"):
             status = H.DROPPED
-        else:
+        elif iid in started:
             status = H.WAITING
+        else:
+            status = H.NOT_STARTED
         project = _idea_project(it.get("project"), lanes)
         title = H.pick_title(idea_title=it.get("text") or "")
         out.append(H.event(

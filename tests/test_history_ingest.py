@@ -339,12 +339,21 @@ class Ingest(unittest.TestCase):
 
     def test_ideas_and_their_decisions(self):
         self.assertEqual(self.ev["ask:idea:idea_a"]["status"], H.MERGED)
-        self.assertEqual(self.ev["ask:idea:idea_b"]["status"], H.WAITING)
+        self.assertEqual(self.ev["ask:idea:idea_b"]["status"], H.NOT_STARTED,
+                         "no session has started on it")
         self.assertEqual(self.ev["ask:idea:idea_b"]["project"], "vira",
                          "the idea's project is the repository's lane")
         dec = [e for e in self.ev.values() if e["kind"] == "decide" and e["sub"] == "declined"]
         self.assertEqual(len(dec), 1)
         self.assertEqual(dec[0]["status"], H.DROPPED)
+
+    def test_an_idea_a_session_started_on_waits_on_you(self):
+        s = json.loads(ideas.STORE.read_text(encoding="utf-8"))
+        s["items"][0]["status"] = "open"
+        ideas.STORE.write_text(json.dumps(s), encoding="utf-8")
+        I.run(full=True)
+        self.assertEqual(H.load()["ask:idea:idea_a"]["status"], H.WAITING,
+                         "an Implement session ran on it")
 
     def test_an_approval_seen_as_a_status_change_is_recorded(self):
         s = json.loads(ideas.STORE.read_text(encoding="utf-8"))
@@ -457,6 +466,56 @@ class Trails(unittest.TestCase):
         all_titles = [e["title"] for g in out["groups"] for e in g["entries"]]
         self.assertNotIn("Notes capture: 2 new, 1 updated", all_titles,
                          "repeating runs belong to the grid")
+
+    def test_unstarted_ideas_stay_out_of_the_lists_unless_asked(self):
+        tid = self.idx.resolve("idea:idea_b")
+        self.assertEqual(self.idx.trails[tid]["status"], H.NOT_STARTED)
+
+        def titles(out):
+            return [e["title"] for g in out["groups"] for e in g["entries"]]
+        for group in ("day", "request", "project"):
+            out = V.list_entries(group, V.parse_filters())
+            self.assertNotIn("Paint the shed", titles(out), group)
+            self.assertEqual(out["unstarted_left_out"], 1, group)
+            self.assertEqual(out["statuses"][H.NOT_STARTED], 0)
+            self.assertEqual(out["statuses"][H.WAITING], 0, "nothing else waits on the owner")
+        out = V.list_entries("day", V.parse_filters(unstarted="1"))
+        self.assertIn("Paint the shed", titles(out))
+        self.assertEqual(out["unstarted_left_out"], 0)
+        self.assertNotEqual(out["groups"][0]["key"], "now", "an unstarted idea is never pinned")
+        out = V.list_entries("request", V.parse_filters(status=H.NOT_STARTED))
+        self.assertEqual(titles(out), ["Paint the shed"])
+        ev = V.list_entries("none", V.parse_filters(), unit="event", limit=500)
+        self.assertNotIn("ask:idea:idea_b", [e["id"] for g in ev["groups"] for e in g["entries"]])
+        self.assertEqual(ev["unstarted_left_out"], 1)
+        fac = {s["key"]: s for s in V.facets()["statuses"]}
+        self.assertEqual(fac[H.NOT_STARTED]["trails"], 0)
+        self.assertTrue(fac[H.NOT_STARTED]["hidden_by_default"])
+        self.assertEqual(V.facets()["unstarted_ideas"], 1)
+        self.assertEqual({s["key"]: s for s in V.facets(unstarted=True)["statuses"]}
+                         [H.NOT_STARTED]["trails"], 1)
+        self.assertEqual(V.detail("idea:idea_b")["outcome"]["status"], H.NOT_STARTED,
+                         "the idea's own history still opens")
+
+    def test_a_session_whose_pull_requests_merged_is_merged(self):
+        rec = self.sb.app / "claude-code-sessions" / "a" / "b" / "local_x.json"
+        d = json.loads(rec.read_text(encoding="utf-8"))
+        d["cwd"] = str(self.sb.repo)
+        d["lastActivityAt"] = int(time.time() * 1000)
+        d["postTurnSummary"] = {"status_category": "review_ready"}
+        d["prs"] = [{"prNumber": 7, "state": "MERGED"}]
+        rec.write_text(json.dumps(d), encoding="utf-8")
+        self.sb.ingest()
+        idx = V.index()
+        e = idx.events["session:claude:local_x"]
+        self.assertEqual(e["own_status"], H.WAITING, "its own word stays stored")
+        self.assertEqual(e["status"], H.MERGED)
+        tid = idx.resolve("session:local_x")
+        self.assertEqual(tid, idx.resolve("idea:idea_a"), "joined by the pull request")
+        self.assertEqual(idx.trails[tid]["status"], H.MERGED)
+        out = V.list_entries("day", V.parse_filters())
+        self.assertNotIn("now", [g["key"] for g in out["groups"]])
+        self.assertEqual(out["statuses"][H.WAITING], 0)
 
     def test_filters(self):
         f = V.parse_filters(status=H.MERGED)
