@@ -158,7 +158,7 @@ def clean_title(text, cap=TITLE_CAP):
         s = rx.sub("", s)
     s = re.sub(r"\(\s*\)|\[\s*\]", "", s)
     s = _SPACE.sub(" ", s).strip(" -:;,·—")
-    s = re.sub(r"\s+([,.;:])", r"\1", s)
+    s = re.sub(r"\s+([,.;:])(?=\s|$)", r"\1", s)
     if len(s) > cap:
         cut = s[:cap].rsplit(" ", 1)[0].rstrip(" ,;:-")
         s = (cut or s[:cap]) + "..."

@@ -125,6 +125,11 @@ class Titles(unittest.TestCase):
         self.assertEqual(H.clean_title("deadbeef cafe"), "deadbeef cafe",
                          "a word of hex letters with no digit is not a hash")
 
+    def test_a_dot_folder_keeps_its_space(self):
+        self.assertEqual(H.clean_title("Anatomy of a .claude/ folder"),
+                         "Anatomy of a .claude/ folder")
+        self.assertEqual(H.clean_title("Merge claude/x-1 , done"), "Merge, done")
+
     def test_clean_title_caps_on_a_word(self):
         t = H.clean_title("word " * 60)
         self.assertLessEqual(len(t), H.TITLE_CAP + 3)

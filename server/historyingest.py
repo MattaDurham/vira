@@ -1573,7 +1573,7 @@ def from_contacts(ctx):
             title=H.automation_title("Contacts sync", counts, len(errs)),
             project=Path(H.vira_repo()).name,
             source="contacts-sync", links={"program": "contacts-sync", "program_run": rid},
-            data={"reason": r.get("reason") or "", "counts": counts,
+            data={"name": "Contacts sync", "reason": r.get("reason") or "", "counts": counts,
                   "errors": len(errs), "error_lines": [str(x)[:300] for x in errs[:5]]}))
     runs.sort()
     for c in s.get("created") or []:
