@@ -370,7 +370,7 @@ const last = (p) => calls.filter((c) => c.path === p).at(-1);
   assert.equal(last("/api/history").q.group, "request");
 
   // Layers: the shipped view is merges alone
-  const tog = (label) => host.querySelector(".hx-bar").querySelectorAll(".hx-tog").find((b) => b.textContent === label);
+  const tog = (label) => host.querySelector(".hx-ctl").querySelectorAll(".hx-tog").find((b) => b.textContent === label);
   tog("Shipped view").click();
   let s2 = host.querySelector(".hx-svg");
   assert.equal(s2.querySelectorAll(".hx-bar").length, 0);
@@ -460,7 +460,7 @@ const last = (p) => calls.filter((c) => c.path === p).at(-1);
   assert.equal(host.querySelector(".hx-listhead").textContent.includes("Sessions that broke a rule"), true);
   const codexBar = host.querySelector(".hx-svg").querySelectorAll(".hx-bar").find((b) => b.getAttribute("data-id") === "session:codex:c");
   // the rule's session is outside the one-day period now, so widen first
-  host.querySelector(".hx-bar").querySelectorAll(".hx-seg")[0].querySelectorAll("button")[1].click();
+  host.querySelector(".hx-ctl").querySelectorAll(".hx-seg")[0].querySelectorAll("button")[1].click();
   await flush();
   const rb = host.querySelector(".hx-svg").querySelectorAll(".hx-bar");
   assert.match(rb.find((b) => b.getAttribute("data-id") === "session:codex:c").getAttribute("class"), /\bhit\b/);
@@ -475,12 +475,19 @@ const last = (p) => calls.filter((c) => c.path === p).at(-1);
   assert.equal(host.querySelector(".hx-list").querySelector(".hx-rule"), null, "turning the filter off brings the list back");
 
   // ---------- module lanes, and the open helper other screens call ----------
-  host.querySelector(".hx-bar").querySelectorAll(".hx-seg")[1].querySelectorAll("button")[1].click();
+  host.querySelector(".hx-ctl").querySelectorAll(".hx-seg")[1].querySelectorAll("button")[1].click();
   await flush();
   assert.equal(last("/api/history/timemap").q.lane, "module");
   map.open({ entry: "pr:vira#178" });
   await flush();
   assert.equal(last("/api/history/entry").q.id, "pr:vira#178");
+  // a module window's "Open in Fleet History" lands on that module's lanes
+  map.open({ module: "work" });
+  await flush();
+  assert.equal(last("/api/history/timemap").q.module, "work");
+  assert.equal(last("/api/history/timemap").q.lane, "module");
+  assert.equal(last("/api/history").q.module, "work");
+  map.state.f.module = "";
 
   // ---------- narrow screens: a day strip over the list ----------
   host.clientWidth = 400;

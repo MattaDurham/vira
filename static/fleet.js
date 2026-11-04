@@ -1514,6 +1514,10 @@
     renderTop(q1(root, "fl-counts"), d);
     renderControls(q1(root, "fl-controls"), d);
     renderBottom(q1(root, "fl-bottom"), d);
+    // The bottom strip is today's live picture (what runs inside Vira, the
+    // instances and servers left running): Now's, not History's, which
+    // needs the height for its map and list.
+    q1(root, "fl-bottom").hidden = S.tab === "history" && !S.view;
     const v = S.view, kind = viewKind(v);
     if (v) {
       lanes.hidden = true;

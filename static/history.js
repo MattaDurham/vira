@@ -39,10 +39,12 @@
                      landing: "Merge choice", approval: "Approval", review: "Review", quiet: "Quiet" };
   const STORE = "vira-history";
   const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
-  const NARROW = 720;            // under this width the map falls back to a day strip and the list
+  const NARROW = 560;            // under this width (a phone) the map falls back to a day strip and the list
   const ROW_H = 8, ROW_GAP = 2, MAX_ROWS = 6;
   const LBL_W = 138;
-  const PINNED_LIMIT = 60;       // unfinished entries pinned above the map; the rest are one click away
+  const PINNED_LIMIT = 60;       // unfinished entries read for the pin; the rest are one click away
+  const WIDE = 1000;             // from this width the detail sits beside the map
+  const PIN_SHOWN = 4;          // pinned rows shown before "Show all"
 
   // ---------- small helpers ----------
   const el = (tag, cls, text) => {
@@ -269,7 +271,7 @@
     const title = btn("hx-row-title", e.title || "Untitled", () => ctx.pick(e.id), "Open its detail");
     head.append(title);
     row.append(head, el("div", "hx-row-meta", metaLine(e)));
-    if (e.steps && e.steps.length) row.append(stepsStrip(e.steps));
+    if (e.steps && e.steps.length && !ctx.noSteps) row.append(stepsStrip(e.steps));
     if ((e.actions || []).length && ctx.actions !== false) {
       const acts = el("div", "hx-row-acts");
       e.actions.forEach((a) => acts.append(btn(`hx-btn${a.action === "merge" ? " pri" : ""}`, a.label,
@@ -388,7 +390,11 @@
       const key = o2.job_id || o2.url || o2.path || o2.label;
       if (seenOpen.has(key)) return;
       seenOpen.add(key);
-      actBox.append(btn("hx-btn", openLabel(o2), () => openThing(o2), o2.url || o2.label));
+      // several sessions each open their own transcript: say whose by its start
+      const many = (d.open || []).filter((x) => x.what === "session").length > 1;
+      const at = many && o2.what === "session" ? (d.trail || []).find((s) => s.id === o2.event) : null;
+      actBox.append(btn("hx-btn", at && at.at ? `${openLabel(o2)}, ${fmtWhen(ts(at.at))}` : openLabel(o2),
+        () => openThing(o2), (at && at.title) || o2.url || o2.label));
     });
     if (actBox.childNodes.length) box.append(actBox);
     // The whole trail.
@@ -519,7 +525,7 @@
 
     root.classList.add("hx-root");
     root.replaceChildren();
-    const bar = el("div", "hx-bar");
+    const bar = el("div", "hx-ctl");
     const askRow = el("form", "hx-ask");
     const filt = el("div", "hx-filters");
     const body = el("div", "hx-body");
@@ -714,7 +720,7 @@
     }
     async function loadPinned() {
       try {
-        st.pinned = await getJSON(`/api/history?${qs({ group: "none", status: UNFINISHED, limit: PINNED_LIMIT, steps: 1 })}`);
+        st.pinned = await getJSON(`/api/history?${qs({ group: "none", status: UNFINISHED, limit: PINNED_LIMIT })}`);
       } catch (err) { st.pinned = { error: err.message || String(err) }; }
       drawPinned();
     }
@@ -776,7 +782,15 @@
         btn("hx-lk", fold ? "Show" : "Hide", () => { saved.pinFold = !fold; persist({ pinFold: !fold }); drawPinned(); }));
       const box = el("div", "hx-pin-rows");
       box.hidden = fold;
-      rows.forEach((e) => box.append(entryRow(e, ctx)));
+      // Compact: no inline trail, and the first few until asked for all,
+      // so the map stays in view; Running sorts first.
+      const pinCtx = Object.create(ctx);
+      pinCtx.noSteps = true;
+      const shown = st.pinAll ? rows : rows.slice(0, PIN_SHOWN);
+      shown.forEach((e) => box.append(entryRow(e, pinCtx)));
+      if (rows.length > PIN_SHOWN) box.append(btn("hx-lk", st.pinAll ? "Show fewer" : `Show all ${rows.length}`, () => {
+        st.pinAll = !st.pinAll; drawPinned();
+      }));
       if (p.more) box.append(btn("hx-lk", `${p.total - p.shown} more unfinished: list them`, () => {
         st.f.status = UNFINISHED.slice(); st.sel = null; filtersChanged();
       }));
@@ -790,7 +804,7 @@
       const map = st.map;
       if (!map) { mapBox.replaceChildren(el("p", st.error ? "hx-err" : "hx-dim", st.error || "Reading the time map...")); return; }
       const [T0, T1] = period(st.zoom, st.anchor);
-      const W = Math.max(640, mapBox.clientWidth || 960);
+      const W = Math.max(NARROW, mapBox.clientWidth || 960);
       const X0 = LBL_W, X1 = W - 14;
       const x = (t) => X0 + (Math.min(Math.max(t, T0), T1) - T0) / (T1 - T0) * (X1 - X0);
       const tAt = (px) => T0 + (Math.min(Math.max(px, X0), X1) - X0) / (X1 - X0) * (T1 - T0);
@@ -842,8 +856,9 @@
         const lab = sv("g", { class: "hx-lanelab", "data-lanekey": ln.key });
         lab.append(svTitle(sv("text", { x: 6, y: top + 11, class: "hx-ln" }, ln.label.length > 18 ? ln.label.slice(0, 17) + "..." : ln.label),
           `${ln.label}: click to filter to this ${st.lane}`));
-        lab.append(sv("text", { x: 6, y: top + 24, class: "hx-lnsub" },
-          [spans.length ? plural(spans.length, "session") : "", points.length ? plural(points.length, "merge") : ""].filter(Boolean).join(", ")));
+        // counts one per line, so they stay inside the label column
+        if (spans.length) lab.append(sv("text", { x: 6, y: top + 24, class: "hx-lnsub" }, plural(spans.length, "session")));
+        if (points.length) lab.append(sv("text", { x: 6, y: top + (spans.length ? 36 : 24), class: "hx-lnsub" }, plural(points.length, "merge")));
         g.append(lab);
         let laneH;
         if (st.zoom === "month") {
@@ -902,7 +917,7 @@
           });
           if (packed.hidden) g.append(sv("text", { x: X1, y: rowsTop + rows * (ROW_H + ROW_GAP) - 1, "text-anchor": "end", class: "hx-cnt" },
             `+${packed.hidden} more`));
-          laneH = Math.max(30, (points.length ? my + 8 : my - 4) - top);
+          laneH = Math.max(spans.length && points.length ? 42 : 30, (points.length ? my + 8 : my - 4) - top);
         }
         // Running and waiting work marked at the right edge.
         if (live.length && now >= T0) {
@@ -1151,7 +1166,12 @@
 
     // ----- the detail
     async function loadDetail(id, quiet) {
-      if (!quiet) { aside.hidden = false; aside.replaceChildren(el("p", "hx-dim", "Reading...")); }
+      if (!quiet) {
+        aside.hidden = false;
+        aside.replaceChildren(el("p", "hx-dim", "Reading..."));
+        // above the map in a narrow window: bring it into view
+        if (!root.classList.contains("hx-wide") && aside.scrollIntoView) aside.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
       try {
         const d = await getJSON(`/api/history/entry?${qs({ id })}`);
         if (st.picked !== id) return;
@@ -1243,14 +1263,21 @@
     }
 
     // ----- startup and resize
+    // The detail sits beside the map only when there is room for both;
+    // in a narrower window it sits above the list. The map follows its own
+    // box, which the detail opening or closing resizes.
+    const fitWidth = () => root.classList.toggle("hx-wide", (root.clientWidth || 0) >= WIDE);
+    fitWidth();
     if (typeof ResizeObserver === "function") {
       let lastW = 0;
       new ResizeObserver(() => {
-        const w = root.clientWidth;
+        fitWidth();
+        const w = mapBox.clientWidth;
         if (Math.abs(w - lastW) < 8) return;
         lastW = w;
         drawMap();
-      }).observe(root);
+      }).observe(mapBox);
+      new ResizeObserver(fitWidth).observe(root);
     }
     renderBar();
     renderFilters();
@@ -1267,6 +1294,13 @@
         o = o || {};
         if (o.day) { const a = fromYmd(o.day); if (a) { st.anchor = Math.max(st.anchor, a); selectSpan(a, addDays(a, 1)); } }
         if (o.q) { askIn.value = o.q; ask(o.q); }
+        if (o.module || o.project) {
+          // a module window's "Open in Fleet History": its lanes, filtered to it
+          if (o.module) { st.f.module = o.module; st.lane = "module"; }
+          if (o.project) st.f.project = o.project;
+          filtersChanged();
+          reload();
+        }
         if (o.rules) { st.f.rules = true; filtersChanged(); }
         if (o.status) { st.f.status = [].concat(o.status).filter((s) => STATUSES.includes(s)); filtersChanged(); }
         if (o.entry) pick(o.entry);

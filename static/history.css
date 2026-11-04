@@ -27,7 +27,7 @@
   padding: 2px 8px; font-size: 12px; color: var(--text-dim); }
 
 /* ---- controls */
-.hx-bar, .hx-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; font-size: 12px; color: var(--text-dim); }
+.hx-ctl, .hx-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; font-size: 12px; color: var(--text-dim); }
 .hx-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--hx-r); overflow: hidden;
   background: var(--bg-raised); max-width: 100%; }
 .hx-seg button { background: none; border: 0; cursor: pointer; padding: 4px 10px; font-size: 12px; color: var(--text-dim); }
@@ -59,10 +59,13 @@
 
 /* ---- layout: the map and list beside the detail */
 .hx-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
-.hx-root.has-detail .hx-body { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
 .hx-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* a narrow window (the root, not the screen, decides: hx-wide is set from
+   its width) shows the detail first, above the map and list */
 .hx-detail { border: 1px solid var(--line); background: var(--bg-raised); border-radius: var(--hx-r); padding: 12px 14px;
-  align-self: start; position: sticky; top: 0; max-height: calc(100vh - 210px); overflow: auto; min-width: 0; }
+  min-width: 0; order: -1; }
+.hx-root.has-detail.hx-wide .hx-body { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
+.hx-root.hx-wide .hx-detail { order: 0; align-self: start; position: sticky; top: 0; max-height: calc(100vh - 210px); overflow: auto; }
 
 /* ---- pinned unfinished work */
 .hx-pinned:empty { display: none; }
@@ -131,7 +134,7 @@
 .hx-hitn { margin-left: auto; color: var(--text); }
 
 /* ---- the day strip (narrow screens) */
-.hx-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; padding: 6px; }
+.hx-strip { display: grid; grid-template-columns: repeat(7, minmax(78px, 1fr)); gap: 4px; padding: 6px; overflow-x: auto; }
 .hx-sday { cursor: pointer; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 6px 5px;
   border: 1px solid var(--line); border-radius: var(--hx-r); background: none; text-align: left; overflow: hidden; }
 .hx-sday b { font-size: 11px; color: var(--text-faint); font-weight: 500; }
@@ -280,11 +283,7 @@ button.hx-chip:hover { border-color: var(--text-faint); color: var(--text); }
 .hx-panel { padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--bg-window, var(--bg)); max-height: 60vh; overflow: auto; }
 .idea .hx-for { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 
-/* ---- narrow screens: list with a day strip, detail over the list */
-@media (max-width: 900px) {
-  .hx-root.has-detail .hx-body { grid-template-columns: minmax(0, 1fr); }
-  .hx-detail { position: static; max-height: none; order: -1; }
-}
+/* ---- phone width: list with a day strip */
 @media (max-width: 720px) {
   .hx-select { font-size: 16px; max-width: 100%; flex: 1 1 140px; }
   .hx-period { flex-basis: 100%; }
