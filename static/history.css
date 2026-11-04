@@ -72,10 +72,16 @@
 
 /* ---- pinned unfinished work */
 .hx-pinned:empty { display: none; }
-.hx-pinned { border: 1px solid var(--line); border-left: 3px solid var(--hx-wait); border-radius: var(--hx-r); padding: 8px 10px; min-width: 0; }
+.hx-pinned { border: 1px solid var(--line); border-left: 3px solid var(--hx-wait); border-radius: var(--hx-r); padding: 6px 10px; min-width: 0; }
 .hx-pin-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .hx-pin-head b { color: var(--text-head); font-weight: 600; }
-.hx-pin-rows { display: flex; flex-direction: column; margin-top: 6px; max-height: 260px; overflow: auto; }
+.hx-pin-rows { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; max-height: 260px; overflow: auto; }
+.hx-pin-rows > .hx-row { align-self: stretch; }
+.hx-pinchips { display: flex; flex-wrap: wrap; gap: 4px 6px; max-height: 52px; overflow: hidden; min-width: 0; }
+.hx-pinchip { display: inline-flex; align-items: baseline; gap: 6px; max-width: min(320px, 100%); min-width: 0; cursor: pointer;
+  padding: 2px 8px 2px 3px; border: 1px solid var(--line); border-radius: 999px; background: none; font-size: 12px; text-align: left; }
+.hx-pinchip:hover { border-color: var(--text-faint); }
+.hx-pinchip-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- the map */
 .hx-map { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--hx-r); background: var(--bg-raised); }

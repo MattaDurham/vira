@@ -794,13 +794,23 @@
         btn("hx-lk", fold ? "Show" : "Hide", () => { saved.pinFold = !fold; persist({ pinFold: !fold }); drawPinned(); }));
       const box = el("div", "hx-pin-rows");
       box.hidden = fold;
-      // Compact: no inline trail, and the first few until asked for all,
-      // so the map stays in view; Running sorts first.
-      const pinCtx = Object.create(ctx);
-      pinCtx.noSteps = true;
-      const shown = st.pinAll ? rows : rows.slice(0, PIN_SHOWN);
-      shown.forEach((e) => box.append(entryRow(e, pinCtx)));
-      if (rows.length > PIN_SHOWN) box.append(btn("hx-lk", st.pinAll ? "Show fewer" : `Show all ${rows.length}`, () => {
+      // Compact, so the map stays in view: one line of chips (status word
+      // and title, Running first; a chip opens its detail) until "Show all"
+      // lists them as full rows.
+      if (st.pinAll) {
+        const pinCtx = Object.create(ctx);
+        pinCtx.noSteps = true;
+        rows.forEach((e) => box.append(entryRow(e, pinCtx)));
+      } else {
+        const strip = el("div", "hx-pinchips");
+        rows.slice(0, PIN_SHOWN).forEach((e) => {
+          const c = btn(`hx-pinchip t-${TONE[e.status] || "none"}`, null, () => pick(e.id), `${e.status}: ${e.title}`);
+          c.append(pill(e.status), el("span", "hx-pinchip-t", e.title || "Untitled"));
+          strip.append(c);
+        });
+        box.append(strip);
+      }
+      if (rows.length > PIN_SHOWN || st.pinAll) box.append(btn("hx-lk", st.pinAll ? "Show fewer" : `Show all ${rows.length}`, () => {
         st.pinAll = !st.pinAll; drawPinned();
       }));
       if (p.more) box.append(btn("hx-lk", `${p.total - p.shown} more unfinished: list them`, () => {

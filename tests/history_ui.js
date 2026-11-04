@@ -326,6 +326,13 @@ const last = (p) => calls.filter((c) => c.path === p).at(-1);
   assert.match(pin.textContent, /Unfinished, pinned/);
   assert.match(pin.textContent, /History store: shared base/);
   assert.equal(calls.find((c) => c.path === "/api/history" && c.q.status).q.status, "Running,Waiting on you,Not merged");
+  // one compact line of chips, so the map stays in view; a chip opens its detail
+  const pinChip = pin.querySelector(".hx-pinchip");
+  assert.ok(pinChip, "the pin is a line of chips");
+  assert.equal(pin.querySelectorAll(".hx-row").length, 0, "full rows only after Show all");
+  pinChip.click();
+  await flush();
+  assert.equal(last("/api/history/entry").q.id, "trail:B");
 
   // the list below: the whole week until a span is picked, with trails inline
   let lq = last("/api/history");
