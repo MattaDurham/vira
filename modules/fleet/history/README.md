@@ -6,7 +6,11 @@ One append-only store of every event on the Mac, and the API every history view 
 
 This is the shared base for every history screen: Fleet's history, the
 history inside a module's window, an idea card's trail. It holds no screens
-of its own. Every view is a query against one store of events, at the finest
+of its own; they are `static/history.js` in [Fleet / Window](../window/README.md)
+(the Time map in Fleet's History tab, and the History view every module
+window and idea card opens). The right-click "What is this?" timeline
+(`server/modulestory.py`) and the Evidence Ledger (`server/evidence.py`)
+read their change lines from this store too. Every view is a query against one store of events, at the finest
 grain the sources record, kept forever.
 
 ## The store
@@ -150,6 +154,7 @@ also take a local date (`2026-11-04`; `until` then means the end of that day).
 | `q` | words that must all appear (titles, asks, projects, modules, branches, PRs, models) |
 | `automations` | `1` to list automation and record trails too |
 | `limit`, `offset` | paging over entries in group order (limit up to 1000, default 200) |
+| `steps` | `1`: each trail entry on the page carries its trail as compact `steps` (type, kind, sub, status, title, at, end), so a list draws every request's trail inline; trails past 40 steps keep their first and last 20 and say how many were left out |
 
 ```json
 {"group": "request", "unit": "trail", "total": 1, "offset": 0, "limit": 200, "shown": 1,
@@ -178,7 +183,8 @@ same fields plus `sub`, `counts` and `trail` (the trail it belongs to).
 ### One entry in full: `GET /api/history/entry?id=`
 
 `id` is a trail id, an event id, or a link key: `idea:<id>`, `job:<id>`,
-`session:<id>`, `branch:<project>:<branch>`, `pr:<project>#<n>`,
+`session:<id>`, `branch:<project>:<branch>` (or `branch:<branch>`, the
+newest branch of that name in any project), `pr:<project>#<n>`,
 `flow_run:<id>`, `program_run:<id>`, `note:<id>`. 404 when nothing matches.
 The answer leads with what matters right after a session ends: the outcome
 and diff, the whole trail, what it touched, cost and time, then the
@@ -241,8 +247,9 @@ pull request, a Program run's log folder.
 
 `?idea=`, `?branch=`, `?pr=`, `?session=`, `?job=`, `?flow_run=` or
 `?ref=<kind>:<value>` answer like `/entry` plus `"for": "<key>"`.
-`?module=` or `?project=` (with optional `since`, `until`) answer
-`{"for": {...}, "list": <the day list for it>}`.
+`?module=` or `?project=` (with optional `since`, `until`, `kind`, and
+`steps=1`) answer `{"for": {...}, "list": <the day list for it>}`;
+`kind=merged` is a module window's merges-only switch.
 
 ### Automation grid: `GET /api/history/grid`
 
@@ -308,6 +315,36 @@ lane.
  "groups": ["day", "request", "module", "project", "automation", "session", "none"],
  "events": 31, "trails": 15, "since": "2026-11-02T09:36:35+00:00", "revision": "..."}
 ```
+
+### Sessions that broke a rule: `GET /api/history/rules`
+
+The lesson-recurrence counter's broken rules (`lessonwatch.report`), each
+joined to the history store: a break's evidence names the retro it was read
+from (event `made:retro:<file stem>`) and the session it describes; the one
+the store holds is the entry to open. Rules with no break are left out.
+
+```json
+{"items": [{"id": "lr_a", "rule": "Run the tests before calling it done", "tier": 2,
+            "count": 2, "when": "2026-11-03", "project": "vira", "evidence": "skipped the suite",
+            "dismissed": false, "history_ids": ["session:vira:j1"], "trail": "trail:...",
+            "sessions": [{"id": "session:vira:j1", "title": "...", "at": "...", "trail": "...",
+                          "actions": [{"action": "not_a_break", "label": "Not a break",
+                                       "url": "/api/lessons/break",
+                                       "body": {"rule_id": "lr_a", "evidence_id": "e1", "breaks": false}}]}],
+            "actions": [{"action": "guard", "label": "Propose a guard", "url": "/api/lessons/lr_a/propose", "body": {}},
+                        {"action": "dismiss", "label": "Dismiss", "url": "/api/lessons/lr_a/dismiss",
+                         "body": {"dismissed": true}}]}],
+ "note": "Counts describe what each session's own retrospective said ...", "revision": "..."}
+```
+
+A tier-1 rule (its mechanism exists) has no Propose a guard; a dismissed
+rule's second action is Resume proposing.
+
+### Which module a window shows: `GET /api/history/windows`
+
+`{"windows": {"work": {"module": "work", "name": "Work"}, "journal": {"module": "attention", ...}}}`,
+from the module manifests' `windows`. A window's History view lists
+`/api/history/for?module=<module>`.
 
 ### Ask in plain words: `POST /api/history/ask`
 
@@ -377,7 +414,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Fleet / Window](../window/README.md)
 
-### Files (7)
+### Files (8)
 
 **Server**
 
@@ -395,8 +432,9 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_history.py` | The history store: appends, newest line wins, compression, times, titles, cost, the status words, and the transcript reader. |
 | `tests/test_history_api.py` | Every /api/history route, on the synthetic machine of test_history_ingest.Sandbox. |
 | `tests/test_history_ingest.py` | The history ingest and its joins, on a synthetic machine. |
+| `tests/test_history_timemap_api.py` | What the Time map front end added to the history API, and the two older screens that now read the history store: list rows that carry their trail (steps), a... |
 
-### Routes (11)
+### Routes (13)
 
 Prefixes: `/api/history`
 
@@ -408,6 +446,8 @@ Prefixes: `/api/history`
 - `GET /api/history/facets` (server/historyroutes.py)
 - `GET /api/history/rev` (server/historyroutes.py)
 - `GET /api/history/stream` (server/historyroutes.py)
+- `GET /api/history/rules` (server/historyroutes.py)
+- `GET /api/history/windows` (server/historyroutes.py)
 - `POST /api/history/ingest` (server/historyroutes.py)
 - `POST /api/history/ask` (server/historyroutes.py)
 - `POST /api/history/action` (server/historyroutes.py)

@@ -11,12 +11,18 @@ that narrates each day, the cards it produced, and every shipped line.
 
 Everything is DERIVED at read time — the blurb from modulemap, the documents
 from readinglist + doctags, the film thumbs from walkthroughs, the changes
-from changelog — so the story cannot drift from the stores it reads (the
-onboard.steps discipline). The one curated thing here is WINDOWS: which
+from the history store (server/history.py: every merge into main, Vira
+session and finished or dropped idea, since 2026-11-04) with the day's
+retros from changelog — so the story cannot drift from the stores it reads
+(the onboard.steps discipline). A store with no events yet (a fresh
+install before its first ingest) falls back to changelog's own lines. The one curated thing here is WINDOWS: which
 doc-tag spellings, which registry entry and which key phrases each window
 id means.
 
 HOW A CHANGE JOINS A MODULE, strongest first:
+  0. A history-store entry carries the module paths of the files it
+     touched (`modules`); one under the window's module (from the module
+     manifests' `windows`) is a STRONG hit, `why: module:<path>`.
   1. A retro-source entry inherits the module tags of the retro document
      it came from (`entry.retro` stem == the library row's title). Ideas
      inherit their own ideatags module axis; a job inherits its idea's tags
@@ -298,6 +304,7 @@ def _inputs():
         groups = changelog.groups()
     except Exception:
         groups = []
+    groups = _with_store_entries(groups)
     idea_tags = {}
     try:
         from . import ideas, ideatags
@@ -325,7 +332,81 @@ def _inputs():
                 retro_tags[d.get("title") or ""] = set(mods)
     return {"docs": docs, "films": films, "groups": groups,
             "idea_tags": idea_tags, "retro_tags": retro_tags,
-            "retro_docs": retro_docs}
+            "retro_docs": retro_docs, "win_modules": _window_modules()}
+
+
+def _window_modules():
+    """{window id: module id} from the module manifests."""
+    try:
+        from . import moduletree
+        return {w: m["id"] for m in moduletree.load()["modules"]
+                for w in m.get("windows") or []}
+    except Exception:
+        return {}
+
+
+def store_entries():
+    """The change lines the history store holds, by local day: every merge
+    into main ("ship"), every Vira session ("job"), every idea that ended
+    done or dropped, in the repository whose files map to modules (Vira's
+    own; module paths are empty outside it). Empty when the store has no
+    events yet."""
+    from . import history as H, historyview as V
+    try:
+        idx = V.index()
+    except Exception:
+        return {}
+    if not idx.events:
+        return {}
+    lanes = {e.get("project") for e in idx.events.values() if e.get("modules")}
+    days = {}
+    for e in idx.events.values():
+        if e.get("project") not in lanes or not e["ts"]:
+            continue
+        links = e.get("links") or {}
+        if e["kind"] == "code" and e["sub"] == "merged":
+            prs = links.get("pr") or []
+            kind = "ship"
+            text = e["title"] + (f" (PR #{prs[0].split('#')[-1]})" if prs else "")
+        elif e["kind"] == "session" and e["sub"] == "vira":
+            kind, text = "job", e["title"]
+        elif e["kind"] == "ask" and e["sub"] == "idea" and e["status"] in (H.MERGED, H.DROPPED):
+            kind, text = ("done" if e["status"] == H.MERGED else "dropped"), e["title"]
+        else:
+            continue
+        row = {"kind": kind, "ts": e.get("at") or "", "text": text, "source": "history",
+               "history_id": e["id"],
+               "modules": sorted(set((e.get("modules") or {}).keys())
+                                 | ({e["module"]} if e.get("module") else set()))}
+        if links.get("job"):
+            row["job_id"] = links["job"][0]
+        if links.get("idea"):
+            row["idea_id"] = links["idea"][0]
+        days.setdefault(H.local_day(e["ts"]), []).append(row)
+    for rows in days.values():
+        rows.sort(key=lambda r: r["ts"])
+    return days
+
+
+def _with_store_entries(groups):
+    """changelog's day groups (their retros narrate each day) with the
+    change lines replaced by the history store's, and a group for every
+    day the store saw that changelog did not. Unchanged when the store is
+    empty."""
+    days = store_entries()
+    if not days:
+        return groups
+    out, seen = [], set()
+    for g in groups:
+        g = dict(g, entries=days.get(g["date"], []))
+        seen.add(g["date"])
+        out.append(g)
+    for day, rows in days.items():
+        if day not in seen:
+            out.append({"date": day, "time": "", "goal": "", "no_retro": True,
+                        "retros": [], "entries": rows})
+    out.sort(key=lambda g: g["date"], reverse=True)
+    return out
 
 
 def story(win_id, inputs=None):
@@ -353,6 +434,7 @@ def story(win_id, inputs=None):
     retro_docs = inp["retro_docs"]
 
     tags = set(row.get("tags") or []) | {win_id}
+    module = (inp.get("win_modules") or {}).get(win_id) or ""
     hits = [d for d in docs
             if tags & set((d.get("tags") or {}).get("module") or [])]
     for d in hits:
@@ -397,6 +479,9 @@ def story(win_id, inputs=None):
         day = g["date"]
         for e in g.get("entries") or []:
             why = []
+            if module:
+                why += ["module:" + m for m in e.get("modules") or []
+                        if m == module or m.startswith(module + "/")]
             stem = e.get("retro") or ""
             if stem and stem in retro_tags:
                 why += ["tag:" + t for t in sorted(tags & retro_tags[stem])]
@@ -412,7 +497,7 @@ def story(win_id, inputs=None):
                   "text": e.get("text") or "", "source": e.get("source"),
                   "hit": hit, "strong": strong, "why": why,
                   "weight": ENTRY_WEIGHT.get((e.get("kind"), strong), 0.3)}
-            for k in ("job_id", "idea_id", "session_id"):
+            for k in ("job_id", "idea_id", "session_id", "history_id"):
                 if e.get(k):
                     ev[k] = e[k]
             if stem:

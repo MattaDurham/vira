@@ -137,6 +137,15 @@ class Index:
         ids = self.by_key.get(ident)
         if ids:
             return self.trail_of[ids[0]]
+        # "branch:<name>" without its project (older screens hold only the
+        # branch name): the newest branch of that name in any project.
+        if ident.startswith("branch:") and ident.count(":") == 1:
+            name = ident[len("branch:"):]
+            hits = [k for k in self.by_key if k.startswith("branch:") and k.endswith(":" + name)]
+            if hits:
+                newest = max((i for k in hits for i in self.by_key[k]),
+                             key=lambda i: self.events[i]["ts"])
+                return self.trail_of[newest]
         return None
 
 
@@ -532,10 +541,13 @@ def _group_label(group, key):
     return key or {"module": "No module", "project": "No folder"}.get(group, "Other")
 
 
-def list_entries(group="day", filters=None, limit=LIST_LIMIT, offset=0, unit=None):
+def list_entries(group="day", filters=None, limit=LIST_LIMIT, offset=0, unit=None,
+                 steps=False):
     """Entries for one question. group: day, request, module, project,
     automation, session or none. unit "event" lists events instead of
-    trails (the finest grain), grouped the same way."""
+    trails (the finest grain), grouped the same way. With `steps`, each
+    trail entry on the page carries its trail as compact `steps`, so a list
+    can draw every request's trail inline without one request per row."""
     if group not in GROUPS:
         raise ValueError(f"unknown group {group!r}; one of {', '.join(GROUPS)}")
     f = filters or parse_filters()
@@ -613,6 +625,8 @@ def list_entries(group="day", filters=None, limit=LIST_LIMIT, offset=0, unit=Non
             seen[g["key"]] = {"key": g["key"], "label": g["label"], "count": g["count"],
                               "entries": []}
             paged.append(seen[g["key"]])
+        if steps and e.get("type") == "trail":
+            e = dict(e, steps=steps_of(idx, e["id"]))
         seen[g["key"]]["entries"].append(e)
         shown += 1
     return {"group": group, "unit": unit, "total": total, "offset": offset, "limit": limit,
@@ -727,6 +741,24 @@ def _trail_items(evs):
         out.append(x)
         prev = x
     return out
+
+
+STEPS_CAP = 40  # a list row's inline trail; the detail panel has the whole trail
+
+
+def steps_of(idx, tid, cap=STEPS_CAP):
+    """A trail's items in the compact form a list row draws inline: what
+    happened, its word and its time, nothing else. The longest trails keep
+    their first and last steps and say how many were left out."""
+    items = [{"type": x["type"], "kind": x["kind"], "sub": x["sub"], "status": x["status"],
+              "title": x["title"], "at": x["at"], "end": x.get("end") or ""}
+             for x in _trail_items(idx.trail_events(tid))]
+    if len(items) <= cap:
+        return items
+    head, tail = items[:cap // 2], items[-(cap // 2):]
+    skipped = len(items) - len(head) - len(tail)
+    return head + [{"type": "more", "kind": "more", "sub": "", "status": "",
+                    "title": f"{skipped} more steps", "at": tail[0]["at"], "end": ""}] + tail
 
 
 def _touched(evs):

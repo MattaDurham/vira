@@ -9,7 +9,8 @@
     "server/historyview.py",
     "tests/test_history.py",
     "tests/test_history_ingest.py",
-    "tests/test_history_api.py"
+    "tests/test_history_api.py",
+    "tests/test_history_timemap_api.py"
   ],
   "routes": [
     "/api/history"

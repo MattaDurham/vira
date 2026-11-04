@@ -8,6 +8,9 @@
     GET  /api/history/grid       the automation status grid
     GET  /api/history/timemap    lanes of sessions, merges and runs over a span
     GET  /api/history/facets     what the filters can be set to
+    GET  /api/history/rules      sessions that broke a rule, with dismiss and
+                                 propose-a-guard (the lesson-recurrence counter)
+    GET  /api/history/windows    which module each app window belongs to
     POST /api/history/ask        a plain-words question -> a view spec (no prose)
     POST /api/history/action     Merge, Discard, Resume, Rerun, Judge
     GET  /api/history/rev        the store's revision (the poll hook)
@@ -30,6 +33,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -140,14 +144,15 @@ def _filters(since, until, project, module, status, kind, q, app, automations):
 def api_history(group: str = "day", since: str = "", until: str = "", project: str = "",
                 module: str = "", status: str = "", kind: str = "", q: str = "",
                 app: str = "", automations: str = "", unit: str = "",
-                limit: int = V.LIST_LIMIT, offset: int = 0):
+                limit: int = V.LIST_LIMIT, offset: int = 0, steps: str = ""):
     f = _filters(since, until, project, module, status, kind, q, app, automations)
     if unit and unit not in ("trail", "event"):
         raise HTTPException(400, "unit is trail or event")
     try:
         with admission.cpu("history.list"):
             return V.list_entries(group, f, limit=max(1, min(limit, 1000)),
-                                  offset=max(0, offset), unit=unit or None)
+                                  offset=max(0, offset), unit=unit or None,
+                                  steps=steps in ("1", "true", "yes"))
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 
@@ -164,16 +169,17 @@ def api_history_entry(id: str):
 @router.get("/api/history/for")
 def api_history_for(idea: str = "", module: str = "", branch: str = "", pr: str = "",
                     session: str = "", job: str = "", flow_run: str = "", ref: str = "",
-                    project: str = "", since: str = "", until: str = ""):
+                    project: str = "", since: str = "", until: str = "", kind: str = "",
+                    steps: str = ""):
     """History opened from the thing itself. A module or project answers
     with its entries by day; anything that names one piece of work (an idea,
     a branch, a PR, a session, a job, a Flow run, or `ref`=<kind>:<value>)
     answers with that work's entry in full."""
     if module or (project and not any((idea, branch, pr, session, job, flow_run, ref))):
-        f = _filters(since, until, project, module, "", "", "", "", "")
+        f = _filters(since, until, project, module, "", kind, "", "", "")
         with admission.cpu("history.for"):
             return {"for": {"module": module, "project": project},
-                    "list": V.list_entries("day", f)}
+                    "list": V.list_entries("day", f, steps=steps in ("1", "true", "yes"))}
     key = (ref or (f"idea:{idea}" if idea else f"branch:{branch}" if branch
                    else f"pr:{pr}" if pr else f"session:{session}" if session
                    else f"job:{job}" if job else f"flow_run:{flow_run}" if flow_run else ""))
@@ -239,6 +245,87 @@ async def api_history_stream(request: Request):
                 yield ": keepalive\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- rules
+
+def rules_payload():
+    """Sessions that broke a rule: every rule the lesson-recurrence counter
+    found broken, joined to the history store. A break's evidence names the
+    retro it was read from (an event `made:retro:<file stem>`) and the
+    session that retro describes; whichever the store holds is the entry a
+    front end opens. Dismissed rules stay listed, marked, so they can be
+    resumed. The actions are the counter's own routes."""
+    from . import lessonwatch
+    rep = lessonwatch.report()
+    idx = V.index()
+    items = []
+    for r in rep.get("rules") or []:
+        breaks = r.get("breaks") or []
+        if not breaks:
+            continue
+        sessions, ids, seen = [], [], set()
+        for b in breaks:
+            cands = []
+            if b.get("retro"):
+                cands.append("made:retro:" + Path(b["retro"]).stem)
+            sid = str(b.get("session_id") or "")
+            if sid:
+                cands += [f"session:claude:{sid}", f"session:vira:{sid}", f"session:codex:{sid}",
+                          f"session:{sid}"]
+            hit = next((c for c in cands if c in idx.events or idx.by_key.get(c)), None)
+            if not hit:
+                continue
+            eid = hit if hit in idx.events else idx.by_key[hit][0]
+            if eid in seen:
+                continue
+            seen.add(eid)
+            e = idx.events[eid]
+            ids.append(eid)
+            sessions.append({"id": eid, "title": e.get("title") or "", "at": e.get("at"),
+                             "trail": idx.trail_of.get(eid), "quote": b.get("quote") or "",
+                             "actions": [{"action": "not_a_break", "label": "Not a break",
+                                          "url": "/api/lessons/break",
+                                          "body": {"rule_id": r["id"], "evidence_id": b.get("id"),
+                                                   "breaks": False}}]})
+        rid = r["id"]
+        actions = []
+        if r.get("tier") == 2 and not r.get("retired"):
+            actions.append({"action": "guard", "label": "Propose a guard",
+                            "url": f"/api/lessons/{rid}/propose", "body": {}})
+        actions.append({"action": "dismiss", "label": "Resume proposing" if r.get("dismissed") else "Dismiss",
+                        "url": f"/api/lessons/{rid}/dismiss", "body": {"dismissed": not r.get("dismissed")}})
+        first = breaks[0]
+        items.append({
+            "id": rid, "rule": r.get("text") or "", "tier": r.get("tier"),
+            "count": r.get("count") or len(breaks), "when": first.get("day") or "",
+            "project": first.get("project") or "", "evidence": first.get("quote") or first.get("text") or "",
+            "dismissed": bool(r.get("dismissed")), "guard_did_not_hold": bool(r.get("guard_did_not_hold")),
+            "proposal": r.get("proposal"), "sessions": sessions, "history_ids": ids,
+            "trail": sessions[0]["trail"] if sessions else None, "actions": actions,
+        })
+    return {"items": items, "note": (rep.get("status") or {}).get("note", ""),
+            "revision": H.revision()}
+
+
+@router.get("/api/history/rules")
+def api_history_rules():
+    with admission.cpu("history.rules"):
+        return rules_payload()
+
+
+# ---------------------------------------------------------------- windows
+
+@router.get("/api/history/windows")
+def api_history_windows():
+    """{window id: module id}: which module's history a window's History
+    view shows, from the module manifests (modules/<m>/module.json)."""
+    from . import moduletree
+    out = {}
+    for mod in moduletree.load()["modules"]:
+        for w in mod.get("windows") or []:
+            out[w] = {"module": mod["id"], "name": mod.get("name") or mod["id"]}
+    return {"windows": out}
 
 
 @router.post("/api/history/ingest")

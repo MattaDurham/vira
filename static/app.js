@@ -5055,11 +5055,22 @@ let projectPathsCache = {};
 let ideaSort = localStorage.getItem("vira-idea-sort") || "grouped";
 let ideaProject = localStorage.getItem("vira-idea-project") || "";  // "" = all
 let ideaAddProject = localStorage.getItem("vira-idea-add-project") || "";
-// The Done fold inside Record > Deferred & Dropped, collapsed by default:
-// completed work is chronicled under Shipped, so it sits behind one click
-// there. Keeps the old localStorage key — same choice, moved surface.
+// The Done fold inside the Ideas tab's Filed view, collapsed by default:
+// completed work is chronicled in Fleet > History, so it sits behind one
+// click here. Keeps the old localStorage key — same choice, moved surface.
 let ideaShowFiledDone =
   localStorage.getItem("vira-idea-show-parked") === "1";
+// The Ideas tab's Filed filter: the list shows the deferred, dropped and
+// done ideas instead of the queue (moved from Work > Results' folded list,
+// retired 2026-11-04).
+let ideaFiledView = lsGet("vira-idea-filed", false) === true;
+function setIdeaFiled(on) {
+  ideaFiledView = !!on;
+  lsSet("vira-idea-filed", ideaFiledView);
+  const b = $("#idea-filed");
+  if (b) { b.classList.toggle("on", ideaFiledView); b.setAttribute("aria-pressed", String(ideaFiledView)); }
+  renderIdeas();
+}
 const ADD_PROJECT = "__add_project__";   // sentinel option value
 const IDEA_STATUSES = [["proposed", "Proposed"],
                        ["open", "Open"], ["on-hold", "On-hold"],
@@ -5466,6 +5477,10 @@ function ideaRow(it) {
   sim.title = "Ideas that look like this one";
   sim.addEventListener("click", () => toggleSimilar(box, it, sim));
   tagRow.appendChild(sim);
+  const hist = el("button", "idea-sim-btn idea-hist-btn", "History");
+  hist.title = "Everything that happened to this idea: its sessions, merges and choices";
+  hist.addEventListener("click", () => toggleIdeaHistory(box, it, hist));
+  tagRow.appendChild(hist);
   box.appendChild(tagRow);
 
   // Vira-proposed ideas carry the approval bar — nothing runs unapproved
@@ -5654,15 +5669,27 @@ function revealIdea(id) {
       ideaShowFiledDone = true;
       localStorage.setItem("vira-idea-show-parked", "1");
     }
-    setWorkTab("live");
-    setRunsFilter("filed");
+    setWorkTab("queue");
+    setIdeaFiled(true);
   } else {
-    renderIdeas();
+    if (ideaFiledView) setIdeaFiled(false); else renderIdeas();
   }
   const node = document.querySelector(`.idea[data-idea-id="${id}"]`);
   if (!node) { toast("That idea is no longer in the queue"); return; }
   node.scrollIntoView({ block: "center", behavior: "smooth" });
   revealHighlight(node);
+}
+
+// An idea card's History: the idea's own lane over a month and its whole
+// trail oldest-first, with a merges-only switch (static/history.js).
+function toggleIdeaHistory(box, it, btn) {
+  const open = box.querySelector(".idea-history");
+  if (open) { open.remove(); btn.classList.remove("on"); return; }
+  if (!window.ViraHistory) { toast("History did not load"); return; }
+  btn.classList.add("on");
+  const panel = el("div", "idea-history");
+  box.appendChild(panel);
+  window.ViraHistory.mountFor(panel, { idea: it.id, title: "History of this idea" });
 }
 
 async function toggleSimilar(box, it, btn) {
@@ -5940,14 +5967,10 @@ async function runReindex(btn, pending) {
   }
 }
 
-// Filing an idea moves it between two lists that can both be on screen:
-// the queue loses it, Record > Deferred & Dropped gains it. Every caller
-// already re-renders the queue, so the archive rides along here rather
-// than each mutation site having to remember it.
+// Filing an idea moves it between the queue and the Filed filter of the
+// same list; renderQueue draws whichever is on.
 function renderIdeas() {
   renderQueue();
-  if (runsFilter === "filed"
-      && $("#work-filed-list")?.offsetParent != null) renderRunsFiled();
 }
 
 function renderQueue() {
@@ -5958,16 +5981,25 @@ function renderQueue() {
   // sort WITH the ideas under whatever ordering is active, instead of
   // squatting above the list in their own pinned lane.
   const notes = queueNotes();
-  // The queue is ACTIVE WORK ONLY. Deferred, done and dropped ideas are
-  // filed in the Record window's Deferred & Dropped tab — they are not
-  // folded in at the bottom here any more (owner's call, 2026-07-31): a
-  // completed-work fold under the live queue is a second place completed
-  // work lives, and the Record tab was already the first. What stays is a
-  // POINTER, so the queue says where they went rather than losing them.
+  // The queue is ACTIVE WORK ONLY. Deferred, done and dropped ideas sit
+  // behind the Filed filter of this same list (owner's call, 2026-07-31,
+  // re-homed 2026-11-04 when Work > Results retired); the queue keeps a
+  // POINTER that says how many and opens them.
   const all = filteredIdeas();
   const filed = all.filter(isFiledIdea);
   const scoped = all.filter((i) => !isFiledIdea(i));
   renderTagButton();
+  if (ideaFiledView) {
+    renderIdeaCount(filed.length, 0);
+    const head = el("div", "ideas-filed");
+    head.appendChild(el("span", "", "Filed: deferred, dropped and done ideas. "));
+    const back = el("button", "btn small", "Back to the queue");
+    back.addEventListener("click", () => setIdeaFiled(false));
+    head.appendChild(back);
+    list.appendChild(head);
+    renderFiled(list, filed);
+    return;
+  }
   renderIdeaCount(scoped.length, notes.length);
   if (!scoped.length && !notes.length) {
     const why = ideaQuery.trim() || ideaTagFilter.length
@@ -6118,9 +6150,8 @@ function appendFiledPointer(list, filed) {
   foot.appendChild(el("span", "",
     `${bits.join(" · ")} — filed, not in the queue. `));
   const go = el("button", "btn small", "Deferred & Dropped");
-  go.title = "Browse and reopen filed ideas — Record's Filed view";
-  go.addEventListener("click", () => { setWorkTab("live");
-                                       setRunsFilter("filed"); });
+  go.title = "Browse and reopen filed ideas — the Filed filter";
+  go.addEventListener("click", () => setIdeaFiled(true));
   foot.appendChild(go);
   list.appendChild(foot);
 }
@@ -6541,6 +6572,13 @@ function initIdeas() {
   if (tagBtn && !tagBtn.dataset.wired) {
     tagBtn.dataset.wired = "1";
     tagBtn.addEventListener("click", () => openTagPicker(tagBtn));
+  }
+  const filedBtn = $("#idea-filed");
+  if (filedBtn && !filedBtn.dataset.wired) {
+    filedBtn.dataset.wired = "1";
+    filedBtn.classList.toggle("on", ideaFiledView);
+    filedBtn.setAttribute("aria-pressed", String(ideaFiledView));
+    filedBtn.addEventListener("click", () => setIdeaFiled(!ideaFiledView));
   }
 
   const search = $("#idea-search");
@@ -7734,7 +7772,7 @@ $("#free-run").addEventListener("click", () => {
     post(`/api/circuits/${cid}/run`, { input: v, cwd: null })
       .then(() => {
         $("#free-prompt").value = "";
-        toast("Flow running — see Work · Results");
+        toast("Flow running — see Fleet · History");
         setWorkSub("recipes");
         setCircuitsTab("runs");
       })
@@ -11151,9 +11189,9 @@ function jobHistRow(r) {
 // rereading — nothing shipped from them. Done work is chronicled under
 // Shipped and folds away here, named, so it is clear it is filed elsewhere
 // rather than missing.
-function renderFiled(host) {
+function renderFiled(host, pool = ideasCache) {
   const byUpdated = (a, b) => ideaTs(b.updated) - ideaTs(a.updated);
-  const of = (s) => ideasCache.filter((i) => i.status === s).sort(byUpdated);
+  const of = (s) => pool.filter((i) => i.status === s).sort(byUpdated);
   const deferred = of("deferred"), dropped = of("dropped"), done = of("done");
   if (!deferred.length && !dropped.length && !done.length) {
     host.appendChild(el("div", "empty left", ideasCache.length
@@ -11176,13 +11214,13 @@ function renderFiled(host) {
   section("Deferred — set aside for later", deferred);
   section("Dropped", dropped);
 
-  // Done work has a home already (Record > Shipped), so it folds — the
+  // Done work has a home already (Fleet > History), so it folds — the
   // label says where it is chronicled, and opening it is the escape hatch
   // for an idea marked done by mistake.
   if (!done.length) return;
   const openFold = ideaShowFiledDone;
   const foldHead = el("div", "ideas-sub ideas-toggle" + (openFold ? " open" : ""),
-    `Done (${done.length}) — chronicled under Shipped`);
+    `Done (${done.length}) — chronicled in Fleet · History`);
   foldHead.setAttribute("role", "button");
   foldHead.tabIndex = 0;
   foldHead.setAttribute("aria-expanded", openFold ? "true" : "false");
@@ -11190,7 +11228,7 @@ function renderFiled(host) {
     ideaShowFiledDone = !ideaShowFiledDone;
     localStorage.setItem("vira-idea-show-parked",
                          ideaShowFiledDone ? "1" : "0");
-    renderRunsFiled();
+    renderIdeas();
   };
   foldHead.addEventListener("click", toggle);
   foldHead.addEventListener("keydown", (e) => {
@@ -12904,8 +12942,24 @@ const SHR_BAND_LABEL = {
 // Launch runs through the designated primary, which manages shared
 // worktrees. The launch page starts the instance on its own origin.
 
+// The live instance's origin as this browser can reach it. A branch
+// instance names its primary's URL; a loopback name is this computer, so
+// in a remote browser the reachable hostname is kept with the primary's port.
+// (Moved here from work-results.js when Work > Results retired.)
+function primaryOrigin(metadata) {
+  if (metadata?.kind !== "branch") return location.origin;
+  try {
+    const url = new URL(metadata.primary_url);
+    if (!["http:", "https:"].includes(url.protocol)) return location.origin;
+    if (url.hostname === "localhost" && location.hostname !== "localhost") {
+      url.hostname = location.hostname;
+      url.protocol = location.protocol;
+    }
+    return url.origin;
+  } catch (_) { return location.origin; }
+}
 function shrLaunchOrigin() {
-  return window.ViraWorkResults?.primaryOrigin(shrData?.instance) || location.origin;
+  return primaryOrigin(shrData?.instance) || location.origin;
 }
 
 async function loadShowroom() {
@@ -17891,24 +17945,36 @@ function refreshGates(flow) {
 // WORK_TAB_ALIAS below), which is what keeps #work/record, saved values
 // and every right-click jump landing.
 
-let workTab = "queue";        // queue | dispatch | live (record aliases in)
+let workTab = "queue";        // queue | dispatch (live, record, results open Fleet > History)
 let workSub = "library";      // dispatch sub-panel: library | recipes | schedules
 
-// Runs + Record merged 2026-08-27: `live` is the surviving pane, retitled
-// "Record". The retired tab id normalizes here so no stored value — a deep
-// link, a palette entry, a caller written before the merge — can dead-end.
-const WORK_TAB_ALIAS = { record: "live", results: "live", ideas: "queue", automations: "dispatch" };
+// Work > Results (the `live` pane, with Record folded into it) is retired:
+// every history question is answered by Fleet > History (static/history.js)
+// since 2026-11-04. The retired tab ids still normalize here so no stored
+// value (a deep link, a palette entry, an old caller) can dead-end; they
+// all open History.
+const WORK_TAB_ALIAS = { record: "history", results: "history", live: "history",
+                         ideas: "queue", automations: "dispatch" };
 
 // Anything that still opens a folded window by id (context menus, saved
 // links, cross-module jumps) lands on the right Work tab.
 const WORK_ALIAS = {
   ideas: { tab: "queue" },
-  showroom: { tab: "live", view: "gallery" },
   actions: { tab: "dispatch", sub: "library" },
-  jobs: { tab: "live" },
   circuits: { tab: "dispatch", sub: "recipes" },
   routines: { tab: "dispatch", sub: "schedules" },
 };
+// Retired history screens: Work > Results and its gallery (Showroom), the
+// jobs list, and Fleet's Timeline and Last 7 days. Each old id opens
+// Fleet > History.
+const HISTORY_ALIAS = new Set(["showroom", "jobs", "results", "record", "timeline", "history"]);
+// Set when a deferred setWorkTab asked for History; the openApp("work") that
+// follows opens Fleet > History instead.
+let pendingHistoryOpen = false;
+function openHistoryView(o) {
+  if (typeof window.openHistory === "function") window.openHistory(o || {});
+  else openApp("fleet");
+}
 
 // Search and Brain folded into Find (2026-07-22). Old deep links,
 // palette entries, saved dock slots and right-click integrations all
@@ -18403,12 +18469,18 @@ $("#csync-refresh")?.addEventListener("click", () =>
 
 function setWorkTab(tab, opts = {}) {
   tab = WORK_TAB_ALIAS[tab] || tab;
+  if (tab === "history") {
+    // A deferred caller opens Work next; History is a Fleet tab, so the
+    // open goes there instead and Work keeps the tab it had.
+    if (!opts.defer) openHistoryView();
+    else pendingHistoryOpen = true;
+    return;
+  }
   const previous = workTab;
   workTab = tab;
   $("#work-tabs")?.querySelectorAll(".seg-btn")
     .forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
-  const panes = { queue: "#work-queue-pane", dispatch: "#work-dispatch-pane",
-                  live: "#work-live-pane" };
+  const panes = { queue: "#work-queue-pane", dispatch: "#work-dispatch-pane" };
   Object.entries(panes).forEach(([t, sel]) => {
     const p = $(sel);
     if (p) p.style.display = t === tab ? "" : "none";
@@ -18457,30 +18529,21 @@ function setWorkSub(sub, opts = {}) {
   window.loadForge?.().catch(() => {});
 }
 
-let workResultsController = null;
-function ensureWorkResults() {
-  if (!workResultsController && window.ViraWorkResults && $("#work-results-root"))
-    workResultsController = window.ViraWorkResults.mount($("#work-results-root"), {
-      view: "gallery", startPoll: (fn, ms) => startPoll(fn, ms),
-      onOpenReceipt: (id) => window.ViraIntake?.open(id),
-      onOpenNote: (path, title) => openNote(path, title),
-      onOpenSession: (id) => openSession(id),
-      onOpenFlow: (id) => traceFlowRun(id),
-      onOpenAttention: () => { setAttentionTab("now", { defer: true }); openApp("attention"); },
-      onReviewBranch: (item) => item?.key ? openOrphanFocus(item)
-        : revealOrphan(item?.orphan_key || "", item?.branch || ""),
-    });
-  return workResultsController;
+// A reference from an older screen (a branch, a job, a result id) as the
+// history key /api/history/entry resolves: job:<id>, branch:<name>.
+function historyKey(ref) {
+  if (typeof ref === "string") return ref;
+  if (ref?.branch) return "branch:" + ref.branch;
+  if (ref?.job_id) return "job:" + ref.job_id;
+  if (ref?.idea_id) return "idea:" + ref.idea_id;
+  return ref?.id || "";
 }
-// The inspector is a page-level overlay, so it opens over the window that
-// asked. Attention opens its branches and sessions here without raising
-// Work: work that waits on the owner lives in Attention only.
+// Attention opens a branch or a session it lists in History, on that
+// entry's detail: outcome and diff, trail, what it touched, cost and time.
 function openWorkResult(ref) {
-  ensureWorkResults()?.open(ref);
+  const entry = historyKey(ref);
+  openHistoryView(entry ? { entry } : {});
 }
-$("#work-advanced")?.addEventListener("toggle", () => {
-  if ($("#work-advanced").open) { applyRunsView(); loadRuns().catch(() => {}); }
-});
 
 function workTabLoad(tab) {
   if (tab === "queue") {
@@ -18489,10 +18552,6 @@ function workTabLoad(tab) {
   }
   if (tab === "dispatch") {
     window.loadForge?.().catch(() => {});
-  }
-  if (tab === "live") {
-    ensureWorkResults()?.refresh();
-    if ($("#work-advanced")?.open) { applyRunsView(); loadRuns().catch(() => {}); }
   }
 }
 
@@ -18783,12 +18842,17 @@ function openApp(id) {
     else loadTriage().catch(() => {});
     id = "people";
   }
+  if (HISTORY_ALIAS.has(id)) { openHistoryView(); return; }
   const alias = WORK_ALIAS[id];
   if (alias) {
     setWorkTab(alias.tab, { defer: true });
     if (alias.sub) setWorkSub(alias.sub, { defer: true });
-    if (alias.view) ensureWorkResults()?.setView(alias.view);
     id = "work";
+  }
+  if (id === "work" && pendingHistoryOpen) {
+    pendingHistoryOpen = false;
+    openHistoryView();
+    return;
   }
   if (FIND_ALIAS[id]) {
     setFindTab(FIND_ALIAS[id]);
@@ -20692,7 +20756,7 @@ function circuitCard(c, models) {
       await post(`/api/circuits/${c.id}/run`, {
         input, cwd: cwd.value.trim() || null, stages: edits });
       inp.value = "";
-      toast("Flow running — see Work · Results");
+      toast("Flow running — see Fleet · History");
       setCircuitsTab("runs");
     } catch (e) { alert("Run failed: " + e.message); }
     go.disabled = false;
@@ -25545,10 +25609,12 @@ function bsChange(e, dim) {
   li.appendChild(txt);
   if (e.kind !== "ship") li.appendChild(el("span", "bs-ckind", BS_KIND_LABEL[e.kind] || e.kind));
   const why = (e.why || []).map((w) =>
-    w.replace(/^tag:/, "tag ").replace(/^word:/, "wording “") + (w.startsWith("word:") ? "”" : ""));
+    w.replace(/^module:/, "files in ").replace(/^tag:/, "tag ").replace(/^word:/, "wording “") + (w.startsWith("word:") ? "”" : ""));
   if (why.length) li.title = "joins this module by " + why.join(", ");
   else if (dim) li.title = "not about this module — shown because the depth is Everything";
   cardAction(li, () => {
+    // A merge into main opens its History entry: outcome and diff, trail.
+    if (e.kind === "ship" && e.history_id) { openHistoryView({ entry: e.history_id }); return; }
     if (e.job_id) { openSession(e.job_id); return; }
     if (e.idea_id) { openApp("work"); revealIdea(e.idea_id); return; }
     if (e.retro) openNote("Sessions/" + e.retro + ".md", e.retro);
@@ -26333,6 +26399,59 @@ function refitDeskWindows() {
 
 window.addEventListener("resize", refitDeskWindows);
 
+// ---------- History inside every module window ----------
+// A window's History shows its module's own lane over a month and its list
+// oldest-first with a merges-only switch (static/history.js). Which module a
+// window belongs to comes from the module manifests (/api/history/windows).
+// Fleet's own button opens its History tab.
+let historyWindowsMap = null;
+async function historyModuleFor(winId) {
+  if (!historyWindowsMap) {
+    try { historyWindowsMap = (await api("/api/history/windows")).windows || {}; }
+    catch (e) { return null; }
+  }
+  return historyWindowsMap[winId] || null;
+}
+function toggleModuleHistory(host, before, winId, title, btn) {
+  if (winId === "fleet") { openHistoryView(); return; }
+  const open = [...host.children].find((n) => n.classList.contains("hx-panel"));
+  if (open) { open.remove(); btn.classList.remove("on"); return; }
+  if (!window.ViraHistory) { toast("History did not load"); return; }
+  const panel = el("div", "hx-panel");
+  host.insertBefore(panel, before);
+  btn.classList.add("on");
+  panel.appendChild(el("p", "hx-dim", "Reading..."));
+  historyModuleFor(winId).then((mod) => {
+    if (!panel.isConnected) return;
+    if (!mod) {
+      panel.replaceChildren(el("p", "hx-dim", `${title} is not one module's window, so it has no history of its own.`));
+      return;
+    }
+    window.ViraHistory.mountFor(panel, { module: mod.module, title: `${mod.name}: history` });
+  });
+}
+function addHistoryButton(bar, body, spec) {
+  const b = el("button", "fwin-hist", "History");
+  b.type = "button";
+  b.title = `${spec.title}: every session, merge and run that touched it`;
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleModuleHistory(body, body.firstChild, spec.id, spec.title, b);
+  });
+  bar.appendChild(b);
+}
+// On a phone there are no window bars: each screen's heading carries it.
+function addMobileHistoryButtons() {
+  WINDOWS.forEach((spec) => {
+    const head = $(`#view-${spec.id} > .section-head`);
+    if (!head || head.querySelector(".fwin-hist")) return;
+    const b = el("button", "fwin-hist", "History");
+    b.type = "button";
+    b.addEventListener("click", () => toggleModuleHistory(head.parentNode, head.nextSibling, spec.id, spec.title, b));
+    head.appendChild(b);
+  });
+}
+
 function buildWindow(spec, st, ci) {
   const section = $("#view-" + spec.id);
   const win = el("div", "fwin");
@@ -26352,6 +26471,7 @@ function buildWindow(spec, st, ci) {
   // position writes respect — so a zoom set while a card was open followed it
   // back to its parked tile, and an edit-mode zoom persisted before Save.
   // persistZoom routes it the same way persistGeom routes geometry.
+  addHistoryButton(bar, body, spec);
   const fits = DESK_FIT_WINDOWS.has(spec.id);
   win._zoom = addZoomControls(bar, () => body, st.z,
     (z) => persistZoom(spec.id, z), !fits);
@@ -28044,10 +28164,13 @@ function paletteMatches(q) {
     },
   });
   cmds.push(
-    { label: "Showroom — Work · Results gallery", kind: "work", run: () => openApp("showroom") },
+    { label: "History — Fleet · History (time map of every session, merge and run)", kind: "work",
+      run: () => openHistoryView() },
+    { label: "Showroom, Jobs, Results — Fleet · History", kind: "work", run: () => openHistoryView() },
+    { label: "Sessions that broke a rule — Fleet · History", kind: "work",
+      run: () => openHistoryView({ rules: true }) },
     workCmd("Ideas & proposals — Work · Ideas", "queue"),
     workCmd("Kit — Work · Automations", "dispatch", "library"),
-    workCmd("Jobs — Work · Results", "live"),
     workCmd("Circuits — Work · Automations", "dispatch", "recipes"),
     workCmd("Agent Loops — Work · Automations", "dispatch", "schedules"),
     // the two folded retrieval windows stay findable by their old names
@@ -28495,7 +28618,12 @@ const HASH_ROUTES = {
   "childcare": "coverage",
   "moments": "moments",
   "attention": (rest) => { setAttentionTab(rest[0] || "now", { defer: true }); openApp("attention"); },
-  "showroom": "showroom",
+  // Retired history screens open Fleet > History (2026-11-04):
+  // #showroom, #jobs, #results, #history, #history/<YYYY-MM-DD>.
+  "showroom": () => openHistoryView(),
+  "jobs": () => openHistoryView(),
+  "results": () => openHistoryView(),
+  "history": (rest) => openHistoryView(/^\d{4}-\d{2}-\d{2}$/.test(rest[0] || "") ? { day: rest[0] } : {}),
   "triage": (rest) => revealTriage(decodeURIComponent(rest.join("/"))),
   "subscriptions": (rest) => {
     if (rest[0]) revealSubscription(decodeURIComponent(rest.join("/"))).catch(() => {});
@@ -28520,9 +28648,11 @@ const HASH_ROUTES = {
   "world": "atlas",
   "imageatlas": "imageatlas",
   "galaxy": "imageatlas",
-  // #fleet, #fleet/<project> - the Fleet window, opened on that project
+  // #fleet, #fleet/<project> - the Fleet window, opened on that project;
+  // #fleet/history (and the retired #fleet/timeline, #fleet/week) open History
   "fleet": (rest) => {
     const project = rest[0] ? decodeURIComponent(rest.join("/")) : "";
+    if (["history", "timeline", "week"].includes(project)) { openHistoryView(); return; }
     if (window.openFleet) window.openFleet(project ? `proj:${project}` : null);
     else openApp("fleet");
   },
@@ -28539,17 +28669,16 @@ const HASH_ROUTES = {
     openApp("maps");
   },
   "work": (rest) => {           // #work, #work/queue|dispatch|live|record
-    // "record" stays accepted: setWorkTab's WORK_TAB_ALIAS lands it on
-    // the merged Record pane (tab id `live`).
+    // The retired Results ids (live, record, results) open Fleet > History.
     const t = rest[0];
-    if (["queue", "dispatch", "live", "record", "ideas", "results", "automations"].includes(t))
+    if (["live", "record", "results"].includes(t)) { openHistoryView(); return; }
+    if (["queue", "dispatch", "ideas", "automations"].includes(t))
       setWorkTab(t, { defer: true });
     openApp("work");
   },
   "forge": (rest) => {
-    const names = { cues: "queue", flows: "dispatch", runs: "live",
-                    record: "record", queue: "queue", dispatch: "dispatch",
-                    live: "live" };
+    const names = { cues: "queue", flows: "dispatch", queue: "queue", dispatch: "dispatch" };
+    if (["runs", "record", "live"].includes(rest[0])) { openHistoryView(); return; }
     setWorkTab(names[rest[0]] || "queue", { defer: true });
     openApp("work");
   },
@@ -32858,6 +32987,7 @@ async function boot() {
   // applied after, because it needs the windows initDesktop creates.
   const seeded = isDesktop ? await seedDefaultLayout() : null;
   if (isDesktop) initDesktop();
+  else addMobileHistoryButtons();
   if (seeded) {
     // The arrangement IS the backdrop the welcome sits over — a complete,
     // deliberate perimeter with the data-dependent modules greyed, rather

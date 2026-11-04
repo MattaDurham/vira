@@ -4,9 +4,9 @@
    the #view-fleet surface. The layout follows the Session Fleet page it
    replaced: a status strip, the questions waiting on the owner, then one
    lane per project with live sessions as tiles and closed ones as chips,
-   families drawn as small trees. Beside the sessions: the timeline of
-   what landed, the last 7 days, the background model calls, and the dev
-   servers and Vira instances left running.
+   families drawn as small trees. Beside Now: History (the Time map in
+   static/history.js, every event on the Mac), the background model calls,
+   and the dev servers and Vira instances left running.
 
    Live: while the window is on screen it holds /api/fleet/stream open
    and the server pushes a snapshot when anything changes (a tick when
@@ -44,7 +44,7 @@
   const S = {
     data: null, repos: null, es: null, receivedAt: 0, skew: 0, error: null,
     tool: "all", project: "", mode: "24h", tab: "sessions",
-    view: null, stack: [], tl: { mode: "all", q: "", day: null },
+    view: null, stack: [],
     seenFeed: new Set(), mounted: false, root: null, ticker: null, watch: null,
     // The Analyze read: the last saved result, and a run in flight.
     ai: { read: null, running: false, startedAt: null, error: null },
@@ -113,14 +113,6 @@
   const pct = (c) => c && c.used && c.limit ? Math.min(1, c.used / c.limit) : 0;
   const fuelClass = (p) => p >= 0.85 ? "crit" : p >= 0.7 ? "warn" : "";
   const prLabel = (p) => `#${p.n} ${p.state === "MERGED" ? "merged" : p.state === "OPEN" ? "open" : "closed"}`;
-  const dayKey = (ms) => {
-    const d = new Date(ms);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  };
-  const dayLabel = (key) => {
-    const [y, m, d] = key.split("-").map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-  };
   const since = (node, t) => {
     delete node.dataset.ago;
     if (t) { node.dataset.since = t; node.textContent = clock(now() - t); }
@@ -216,69 +208,6 @@
       t.shells += (s.shells || []).length;
     });
     return t;
-  }
-
-  // The timeline's rows: landings and change-log entries for the shown
-  // repositories, newest first, filtered by mode, search and day.
-  function timelineRows(repos, f, tl) {
-    const rows = [];
-    (repos && repos.repos || []).forEach((r) => {
-      if (f.project && r.name !== f.project) return;
-      (r.landings || []).forEach((l) => rows.push({ kind: "landing", at: l.at, repo: r.name, l }));
-      (r.changelog || []).forEach((c) => rows.push({ kind: "change", at: c.at, repo: r.name, c }));
-      if (repos.viraRepo && r.root === repos.viraRepo) {
-        (repos.viraLog || []).forEach((g) => g.entries.forEach((e) => {
-          const at = Date.parse(e.ts || g.date);
-          if (at) rows.push({ kind: "log", at, repo: r.name, e });
-        }));
-      }
-    });
-    const q = (tl.q || "").trim().toLowerCase();
-    return rows.filter((x) => {
-      if (tl.mode === "landed" && x.kind !== "landing") return false;
-      if (tl.mode === "log" && x.kind === "landing") return false;
-      if (tl.day && dayKey(x.at) !== tl.day) return false;
-      if (!q) return true;
-      const text = x.kind === "landing"
-        ? `${x.l.subject} ${x.l.branch || ""} ${x.l.pr ? `#${x.l.pr.n} ${x.l.pr.title || ""}` : ""}`
-        : x.kind === "change" ? `${x.c.section} ${x.c.headline} ${x.c.detail}` : `${x.e.kind} ${x.e.text}`;
-      return text.toLowerCase().includes(q);
-    }).sort((a, b) => b.at - a.at);
-  }
-
-  // Landings per local day for the stacked bars: {day, claude, codex, other, direct, titles}.
-  function landingDays(repos, f, days, t) {
-    const out = new Map();
-    for (let i = days - 1; i >= 0; i--) {
-      const k = dayKey(t - i * DAY);
-      out.set(k, { day: k, claude: 0, codex: 0, other: 0, direct: 0, titles: [] });
-    }
-    (repos && repos.repos || []).forEach((r) => {
-      if (f.project && r.name !== f.project) return;
-      (r.landings || []).forEach((l) => {
-        const d = out.get(dayKey(l.at));
-        if (!d) return;
-        d[l.tool in d ? l.tool : "direct"] += 1;
-        d.titles.push(l.pr && l.pr.title ? `#${l.pr.n} ${l.pr.title}` : (l.subject || ""));
-      });
-    });
-    return [...out.values()];
-  }
-
-  // The local midnight that starts the 7-day view: six days back, so the
-  // seven columns are seven calendar days and today is the last.
-  function weekStart(t) {
-    const d = new Date(t - 6 * DAY);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  }
-
-  // The 7-day view: one bar per session, x as fractions of the week.
-  function weekBars(week, f, t) {
-    const start = weekStart(t);
-    return (week || []).filter((w) => passes(w, f) && (w.end || w.start) > start).map((w) => {
-      const a = Math.max(start, w.start || w.end), b = Math.min(t, Math.max(w.end || a, a + 60e3));
-      return { ...w, x: (a - start) / (7 * DAY), w: Math.max(0.004, (b - a) / (7 * DAY)) };
-    });
   }
 
   // Background calls on one scale.
@@ -696,9 +625,10 @@
     if (box.dataset.sig === sig) return;
     box.dataset.sig = sig;
     box.replaceChildren(
-      seg("Show", [["sessions", "Sessions"], ["timeline", "Timeline"], ["week", "Last 7 days"], ["calls", "Background calls"]], S.tab, pick("tab")),
-      seg("Tool", [["all", "All"], ["claude", "Claude"], ["codex", "Codex"], ["vira", "Vira jobs"]], S.tool, pick("tool")),
-      sel,
+      seg("Show", [["sessions", "Now"], ["history", "History"], ["calls", "Background calls"]], S.tab, pick("tab")),
+      ...(S.tab === "history" ? [] : [
+        seg("Tool", [["all", "All"], ["claude", "Claude"], ["codex", "Codex"], ["vira", "Vira jobs"]], S.tool, pick("tool")),
+        sel]),
       ...(S.tab === "sessions" ? [el("span", "fl-lbl", "Closed"),
         seg("Closed sessions", [["linked", "Linked only"], ["24h", "Last 24 h"], ["3d", "Last 3 days"]], S.mode, pick("mode"))] : []));
   }
@@ -868,7 +798,7 @@
     meta.append(document.createTextNode(" / "));
     meta.append(btn(`fl-lk${needsWork ? " warn" : ""}`,
       needsWork ? `${plural(needsWork, "branch", "branches")} not merged` : "worktrees and branches",
-      () => go(`proj:${p}`), "Open this project: worktrees, branches and its timeline"));
+      () => go(`proj:${p}`), "Open this project: worktrees, branches and its history"));
     return meta;
   }
   function renderLanes(box, d, idx, shown) {
@@ -1253,7 +1183,7 @@
       block("Branches", f.branches.length ? branchList(f.branches, idx, f.id) : el("p", "fl-empty", "No branches recorded for this feature."))].filter(Boolean));
   }
 
-  // ----- project: worktrees, branches, instances, its timeline
+  // ----- project: worktrees, branches, instances, its history
   const LABEL_CLS = { "Live": "live", "In use": "use", "Uncommitted changes": "dirty",
                       "Commits not on main": "unlanded", "Merged, can remove": "landed",
                       "No commits, can remove": "fresh" };
@@ -1359,10 +1289,13 @@
       });
       parts.push(block("Branches, by feature", box));
     }
-    if (repo) {
-      const tl = el("div", "fl-col");
-      renderTimeline(tl, { ...S, project: name }, true);
-      parts.push(block("Timeline", tl));
+    // The project's own history: its lane over a month and its list.
+    if (window.ViraHistory) {
+      const hb = el("div", "fl-col");
+      parts.push(block("History", hb));
+      sheet.replaceChildren(...parts);
+      window.ViraHistory.mountFor(hb, { project: name, title: `${name}: history` });
+      return;
     }
     sheet.replaceChildren(...parts);
   }
@@ -1426,136 +1359,27 @@
         "A branch instance. Stop it with scripts/branch.sh stop <slug> once the branch is decided."));
   }
 
-  // ---------- the timeline ----------
-  function renderTimeline(box, f, compact) {
-    const days = landingDays(S.repos, f, compact ? 30 : 60, now());
-    const max = Math.max(1, ...days.map((d) => d.claude + d.codex + d.other + d.direct));
-    const chart = el("div", "fl-bars");
-    chart.setAttribute("role", "img");
-    chart.setAttribute("aria-label", "Landings per day");
-    const tip = el("div", "fl-tip");
-    tip.hidden = true;
-    days.forEach((d) => {
-      const col = btn(`fl-bar${S.tl.day === d.day ? " on" : ""}`, null, () => {
-        S.tl.day = S.tl.day === d.day ? null : d.day;
-        render();
-      });
-      ["direct", "other", "codex", "claude"].forEach((k) => {
-        if (!d[k]) return;
-        const s = el("i", `k-${k}`);
-        s.style.height = `${(d[k] / max) * 100}%`;
-        col.append(s);
-      });
-      const total = d.claude + d.codex + d.other + d.direct;
-      col.setAttribute("aria-label", `${dayLabel(d.day)}: ${plural(total, "landing")}`);
-      col.addEventListener("mouseenter", () => {
-        tip.hidden = !total;
-        tip.replaceChildren(el("b", null, `${dayLabel(d.day)} / ${plural(total, "landing")}`),
-          ...d.titles.slice(0, 12).map((t) => el("div", null, t)),
-          ...(d.titles.length > 12 ? [el("div", "fl-dim", `and ${d.titles.length - 12} more`)] : []));
-      });
-      col.addEventListener("mouseleave", () => { tip.hidden = true; });
-      chart.append(col);
-    });
-    const legend = el("div", "fl-legend");
-    [["claude", "Claude"], ["codex", "Codex"], ["other", "Other branch"], ["direct", "Direct commit"]]
-      .forEach(([k, label]) => { const s = el("span"); s.append(el("i", `k-${k}`), document.createTextNode(label)); legend.append(s); });
-    const tools = el("div", "fl-tl-tools");
-    const q = el("input", "fl-search");
-    q.type = "search";
-    q.placeholder = "Search landings and the change log";
-    q.value = S.tl.q;
-    q.addEventListener("input", () => { S.tl.q = q.value; renderTimelineList(list, f); });
-    tools.append(seg("Timeline shows", [["all", "Everything"], ["landed", "Merged"], ["log", "Change log"]], S.tl.mode,
-      (v) => { S.tl.mode = v; render(); }), q);
-    if (S.tl.day) tools.append(btn("fl-navbtn quiet", `${dayLabel(S.tl.day)} only - show all days`, () => { S.tl.day = null; render(); }));
-    const list = el("div", "fl-tl-list");
-    renderTimelineList(list, f);
-    if (!S.repos) { box.replaceChildren(el("p", "fl-empty", "Reading git history...")); return; }
-    box.replaceChildren(el("div", "fl-chartwrap"), legend, tools, list);
-    box.children[0].append(chart, tip);
-  }
-  function renderTimelineList(list, f) {
-    const rows = timelineRows(S.repos, f, S.tl).slice(0, 400);
-    const groups = new Map();
-    rows.forEach((r) => { const k = dayKey(r.at); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
-    const out = [];
-    for (const [k, rs] of groups) {
-      const g = el("div", "fl-tl-day");
-      g.append(el("h4", null, `${dayLabel(k)} / ${plural(rs.filter((r) => r.kind === "landing").length, "landing")}`));
-      rs.forEach((r) => {
-        const it = el("div", `fl-tl-row k-${r.kind}`);
-        if (r.kind === "landing") {
-          const l = r.l;
-          const a = el("div", "a");
-          a.append(el("i", `fl-sq k-${l.tool}`));
-          if (l.pr && l.pr.n) a.append(l.pr.url && safeUrl(l.pr.url) ? ext("fl-ext fl-mono", `#${l.pr.n}`, l.pr.url) : el("span", "fl-mono", `#${l.pr.n}`), document.createTextNode(" "));
-          a.append(document.createTextNode((l.pr && l.pr.title) || l.subject));
-          const b = el("div", "b fl-num");
-          b.append(el("span", "fl-plus", `+${l.insertions}`), document.createTextNode(" "), el("span", "fl-minus", `-${l.deletions}`));
-          it.append(a, b, el("div", "c fl-mono", `${r.repo}${l.branch ? ` / ${l.branch}` : ""} / ${plural(l.files, "file")}`));
-        } else if (r.kind === "change") {
-          const a = el("div", "a");
-          if (r.c.section) a.append(el("span", "fl-tag", r.c.section));
-          a.append(el("b", null, r.c.headline));
-          it.append(a, el("div", "b fl-dim", "CHANGELOG"));
-          if (r.c.detail) it.append(el("div", "c", r.c.detail));
-        } else {
-          const a = el("div", "a");
-          a.append(el("span", "fl-tag", r.e.kind || "log"), document.createTextNode(r.e.text));
-          it.append(a, el("div", "b fl-dim", r.e.source || ""));
-        }
-        g.append(it);
-      });
-      out.push(g);
+  // ---------- History: the Time map (static/history.js) ----------
+  // Mounted once and kept, so its selection, filters and detail survive
+  // Fleet's frames; Fleet's own stream does not re-render it.
+  function renderHistory(box) {
+    if (!window.ViraHistory) { box.replaceChildren(el("p", "fl-empty", "History did not load.")); return; }
+    if (!S.hist) {
+      S.histRoot = el("div", "fl-history");
+      S.hist = window.ViraHistory.mountMap(S.histRoot, {});
     }
-    if (!out.length) out.push(el("p", "fl-empty", "Nothing in this range."));
-    list.replaceChildren(...out);
+    if (S.histRoot.parentNode !== box || box.childNodes.length !== 1) box.replaceChildren(S.histRoot);
+    if (S.histPending) { const o = S.histPending; S.histPending = null; S.hist.open(o); }
+  }
+  // Open Fleet on History, optionally at a day, an entry, a question or a filter.
+  function openHistory(o) {
+    S.tab = "history";
+    S.view = null;
+    save();
+    if (S.hist) S.hist.open(o || {}); else S.histPending = o || null;
+    render();
   }
 
-  // ---------- the last 7 days ----------
-  function renderWeek(box, d) {
-    if (!S.repos) { box.replaceChildren(el("p", "fl-empty", "Reading the week...")); return; }
-    const t = now();
-    const bars = weekBars(S.repos.week, S, t);
-    const axis = el("div", "fl-week-axis");
-    const start = weekStart(t);
-    for (let i = 0; i < 7; i++) {
-      const k = dayKey(start + i * DAY + 3600e3);
-      const s = el("span", null, dayLabel(k));
-      axis.append(s);
-    }
-    const byProject = new Map();
-    bars.forEach((b) => { if (!byProject.has(b.project)) byProject.set(b.project, []); byProject.get(b.project).push(b); });
-    const idx = index(d);
-    const groups = [...byProject.entries()].sort((a, b) => b[1].length - a[1].length).map(([p, rows]) => {
-      const g = el("div", "fl-week-group");
-      const h = el("h4", null, p);
-      h.style.color = pc(p);
-      g.append(h);
-      rows.forEach((w) => {
-        const r = el("div", "fl-week-row");
-        const label = idx.byId.has(w.id) ? btn("fl-lk fl-week-name", w.title, () => go(w.id)) : el("span", "fl-week-name", w.title);
-        const track = el("div", "fl-week-track");
-        const bar = el("i", `t-${w.tool}${w.live ? " live" : ""}`);
-        bar.style.left = `${(w.x * 100).toFixed(2)}%`;
-        bar.style.width = `${(w.w * 100).toFixed(2)}%`;
-        bar.title = `${TOOL[w.tool]}: ${w.title}\n${new Date(w.start).toLocaleString()} to ${w.live ? "now" : new Date(w.end).toLocaleString()}`;
-        track.append(bar);
-        r.append(label, track);
-        g.append(r);
-      });
-      return g;
-    });
-    if (!groups.length) groups.push(el("p", "fl-empty", "No sessions in the last 7 days."));
-    const legend = el("div", "fl-legend");
-    Object.entries(TOOL).forEach(([k, label]) => { const s = el("span"); s.append(el("i", `t-${k}`), document.createTextNode(label)); legend.append(s); });
-    const head2 = el("div", "fl-week-head");
-    head2.append(el("span"), axis);
-    box.replaceChildren(legend, head2, ...groups);
-  }
-
-  // ---------- background calls ----------
   function renderCalls(box) {
     if (!S.repos) { box.replaceChildren(el("p", "fl-empty", "Counting background calls...")); return; }
     const rows = callRows(S.repos.calls, S);
@@ -1665,7 +1489,7 @@
   }
 
   // A frame re-renders the view under the cursor; whoever was typing in
-  // the timeline's search keeps the box, the text and the caret.
+  // a search box keeps the box, the text and the caret.
   function render() {
     const root = S.root;
     if (!root) return;
@@ -1712,8 +1536,7 @@
     sheet.hidden = true;
     lanes.hidden = false;
     lanes.dataset.tab = S.tab;
-    if (S.tab === "timeline") renderTimeline(lanes, S, false);
-    else if (S.tab === "week") renderWeek(lanes, d);
+    if (S.tab === "history") renderHistory(lanes);
     else if (S.tab === "calls") renderCalls(lanes);
     else renderLanes(lanes, d, idx, visibleNodes(d, idx, S, now()));
   }
@@ -1768,7 +1591,9 @@
       S.tool = saved.tool || "all";
       S.project = saved.project || "";
       S.mode = saved.mode || "24h";
-      S.tab = saved.tab || "sessions";
+      // Timeline and Last 7 days are retired: a saved one opens History.
+      S.tab = ["timeline", "week"].includes(saved.tab) ? "history"
+        : ["sessions", "history", "calls"].includes(saved.tab) ? saved.tab : "sessions";
     }
     connect();
     if (!S.aiLoaded) { S.aiLoaded = true; loadAi(); }
@@ -1787,13 +1612,20 @@
   window.loadFleet = load;
   window.openFleet = (view) => {
     if (typeof openApp === "function") openApp("fleet");
-    load().then(() => { if (view) go(view); });
+    load().then(() => {
+      if (view === "history" || view === "timeline" || view === "week") openHistory({});
+      else if (view) go(view);
+    });
+  };
+  window.openHistory = (o) => {
+    if (typeof openApp === "function") openApp("fleet");
+    load().then(() => openHistory(o));
   };
   if (window.__VIRA_TEST__) {
     window.__VIRA_FLEET_TESTS__ = {
-      S, realWaiting, index, visibleNodes, laneGroups, counts, timelineRows, landingDays,
-      weekBars, weekStart, callRows, liveLabel, viewKind, questionText, onFrame, render, mount,
-      renderTop, renderLanes, askStrip, renderCalls, renderWeek, renderTimeline, renderBottom,
+      S, realWaiting, index, visibleNodes, laneGroups, counts,
+      callRows, liveLabel, viewKind, questionText, onFrame, render, mount, openHistory, renderHistory,
+      renderTop, renderLanes, askStrip, renderCalls, renderBottom,
       tiles, chips, go, back, home, renderAi, famStateChip, branchLabel, doingStrip,
     };
   }

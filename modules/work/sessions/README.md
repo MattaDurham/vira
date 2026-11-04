@@ -22,7 +22,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Work / Branches](../branches/README.md), [Fleet / Window](../../fleet/window/README.md), [Attention / Now](../../attention/now/README.md), [Evidence / Ledger](../../evidence/ledger/README.md), [Work / Automations](../automations/README.md)
 
-### Files (23)
+### Files (21)
 
 **Server**
 
@@ -36,13 +36,6 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `server/sessiondiag.py` | Why did that session stop? |
 | `server/workresults.py` | One read-only inventory for Work's timeline, gallery and detail inspector. |
 
-**Frontend**
-
-| File | What it is |
-|---|---|
-| `static/work-results.css` |  |
-| `static/work-results.js` | Work results: one inventory, two views and one stable detail inspector. |
-
 **Tests**
 
 | File | What it is |
@@ -52,7 +45,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_durable.py` | Durability tests: boot re-attach vs orphan finalization, the joblog's cross-process semantics (no cache, external writes visible), and the history / disk-fal... |
 | `tests/test_jobfiles.py` | Process liveness probes never terminate the runner being inspected. |
 | `tests/test_joblog.py` | Job naming (joblog.command/default_title/name — formerly joblog.py). |
-| `tests/test_record_merge.py` | Source contracts for the Runs + Record merge (2026-08-27). |
+| `tests/test_record_merge.py` | Source contracts for the Runs + Record merge (2026-08-27) and its retirement (2026-11-04). |
 | `tests/test_resume_evidence.py` | Why a session stopped, and the Resume prompt that carries it. |
 | `tests/test_runner.py` | Detached-runner tests: the permission gate's decision logic (now living in server/runner.py) and the control.jsonl protocol (say / permission / interrupt / c... |
 | `tests/test_runner_agents.py` | Subagents in a live session, and the turns the CLI starts by itself. |

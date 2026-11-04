@@ -4,10 +4,12 @@ case studies (problem -> how the owner directed the agent -> what shipped).
 Two rungs, the find.py split:
 
   - mine() is RUNG 1: pure, deterministic, no model call. It parses session
-    retros (~/TC-IL/Sessions/* vira.md and <repo>/retros/*.md), reads this
-    checkout's git log, and reads the durable job ledger
-    (data/jobs-log.json), then joins everything sharing a session's date
-    into an EPISODE — raw material, not an audit. A missing retro source is
+    retros (~/TC-IL/Sessions/* vira.md and <repo>/retros/*.md), and reads
+    this checkout's merges into main and its Vira sessions from the history
+    store (server/history.py, since 2026-11-04; git's log and the job
+    ledger, data/jobs-log.json, when the store has no events yet), then
+    joins everything sharing a session's date into an EPISODE — raw
+    material, not an audit. A missing retro source is
     dormant, with the reason named in status() (the frontdoor.py honesty
     rule), never an exception.
 
@@ -139,11 +141,42 @@ def _retro_files():
     return out
 
 
+def _store_index():
+    """The history store's index, or None while it holds no events (a
+    fresh install before its first ingest) or cannot be read."""
+    try:
+        from . import historyview
+        idx = historyview.index()
+    except Exception:
+        return None
+    return idx if idx.events else None
+
+
+def _store_commits(idx):
+    """Every first-parent commit on this checkout's base branch, as the
+    history store records it (one `code:merged` event each)."""
+    from . import history as H
+    rows = [e for e in idx.events.values()
+            if e["kind"] == "code" and e["sub"] == "merged" and e["ts"]
+            and _is_project_cwd(e.get("repo") or e.get("folder"))]
+    rows.sort(key=lambda e: e["ts"], reverse=True)
+    return [{"sha": ((e.get("links") or {}).get("commit") or [e["id"].rsplit(":", 1)[-1]])[0],
+             "date": H.local_day(e["ts"]),
+             "subject": (e.get("data") or {}).get("subject") or e.get("title") or ""}
+            for e in rows]
+
+
 def _git_log():
-    """[{sha, date, subject}], newest first on this checkout's main branch.
-    Empty list on any failure (bad returncode, timeout, missing git) —
-    mining never raises over a git problem. Tests patch this function
+    """[{sha, date, subject}], newest first on this checkout's main branch:
+    from the history store when it holds this checkout's merges, else from
+    git itself. Empty list on any failure (bad returncode, timeout, missing
+    git) — mining never raises over a git problem. Tests patch this function
     directly rather than the subprocess call underneath it."""
+    idx = _store_index()
+    if idx:
+        rows = _store_commits(idx)
+        if rows:
+            return rows
     try:
         res = git(ROOT, "log", "--first-parent", "main",
                   "--pretty=%H%x09%ad%x09%s", "--date=format:%Y-%m-%d",
@@ -201,10 +234,38 @@ def _jobs(prompt_cap):
 
     `prompt_cap` is required rather than defaulted: the payload and the
     compose prompt want different amounts of it, and a default here is what
-    let one number quietly answer both questions."""
+    let one number quietly answer both questions.
+
+    Which sessions ran comes from the history store when it has events
+    (its titles and status words); each one's prompt is read from its own
+    ledger record, because the store keeps only the ask's first 600
+    characters."""
     from . import joblog
     out = []
-    for r in joblog.list_records():
+    records = joblog.list_records()
+    idx = _store_index()
+    if idx:
+        from datetime import datetime as _dt
+        by_id = {r.get("id"): r for r in records}
+        for e in sorted(idx.events.values(), key=lambda e: e["ts"]):
+            if e["kind"] != "session" or e["sub"] != "vira" or not e["ts"]:
+                continue
+            # launched in this checkout: its own folder, or a worktree of it
+            if not (_is_project_cwd(e.get("folder")) or _is_project_cwd(e.get("repo"))):
+                continue
+            jid = ((e.get("links") or {}).get("job") or [""])[0]
+            r = by_id.get(jid) or {}
+            out.append({
+                "id": jid or e["id"],
+                "title": e.get("title") or (joblog.name(r) if r else ""),
+                "status": e.get("status") or "",
+                "prompt": (r.get("prompt") or (e.get("data") or {}).get("text") or "")[:prompt_cap],
+                # local time, so the day test below reads the owner's day
+                "started": _dt.fromtimestamp(e["ts"]).isoformat(timespec="seconds"),
+            })
+        if out:
+            return out
+    for r in records:
         if not _is_project_cwd(r.get("cwd")):
             continue
         out.append({

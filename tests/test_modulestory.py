@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import (changelog, doctags, ideas, ideatags, joblog, modulemap,
+from server import (changelog, doctags, history, ideas, ideatags, joblog, modulemap,
                     modulestory, readinglist, settings)
 
 
@@ -34,6 +34,10 @@ class Base(unittest.TestCase):
             # every store either one touches is rooted here — a story that
             # read the live ledger would pass or fail with the machine.
             mock.patch.object(changelog, "SESSIONS", self.sessions),
+            # The change lines come from the history store when it has
+            # events; this fixture's story is the change log's alone
+            # (test_history_timemap_api covers the store's lines).
+            mock.patch.object(history, "DIR", root / "history"),
             mock.patch.object(ideas, "STORE", root / "ideas.json"),
             mock.patch.object(ideatags, "STORE", root / "idea-index.json"),
             mock.patch.object(joblog, "STORE", root / "jobs-log.json"),

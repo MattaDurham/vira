@@ -8,6 +8,48 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Fleet > History, the Time map: Fleet's tabs are now Now, History and
+  Background calls. History opens on a map of the week with one lane per
+  project (or per module): sessions are bars colored by app, solid for the
+  time they were active inside the time they were open; merges into main
+  are diamonds; automation runs are ticks on one Automations lane, failed
+  runs red and missed scheduled runs drawn as gaps; running and waiting work
+  is marked at the right edge and pinned above the map. Zoom by day, week
+  or month (a calendar of days) and pan; layers turn sessions, merges and
+  automations on and off, and merges alone is the shipped view. Click a
+  day or drag any range to list it below, grouped by day, request, module,
+  project, automation or session, each request with its trail drawn
+  inline; the Automations lane opens the full status grid for the span.
+  Filters: the eight outcome words, project, module and "Sessions that
+  broke a rule" (the lesson-recurrence counter, with Propose a guard,
+  Dismiss and Not a break). A plain-words question lights its matches on
+  the map, fits the span to them and lists them, with what it read as
+  removable chips. The detail leads with the outcome and diff, then the
+  whole trail, what it touched, cost and time, and the actions (Merge,
+  Discard, Resume, Rerun, Judge with the server's confirmations, Open
+  transcript). Every window's title bar (and each screen's heading on a
+  phone) and every idea card gets a History view: its own lane over a
+  month and its list oldest first, with a merges-only switch. On a phone
+  the map falls back to a day strip over the list. It updates live from
+  the history stream. New routes: `/api/history/rules`,
+  `/api/history/windows`; `/api/history` and `/api/history/for` take
+  `steps=1`, and `branch:<name>` resolves without its project.
+
+### Changed
+
+- Retired into Fleet > History: Work > Results and its folded list (the
+  runs, Rules and Filed chips), Fleet's Timeline and Last 7 days tabs, and
+  the System Map's recent list (its page now says where the list went).
+  Every old link opens History: `#showroom`, `#jobs`, `#results`,
+  `#work/live`, `#work/record`, `#fleet/timeline`, `#fleet/week`, the
+  palette's Showroom and Jobs entries, Attention's branch and session
+  links (on that entry's detail) and a saved Fleet tab. Filed ideas
+  (deferred, dropped, done) are the Ideas tab's Filed filter. The
+  right-click "What is this?" timeline takes its change lines from the
+  history store (merges into main, Vira sessions, finished and dropped
+  ideas, joined to the window's module by the files they touched), and
+  the Evidence Ledger reads this checkout's merges and sessions from it.
+
 - History store: one append-only record of every event on the Mac
   (`data/history/`, `server/history.py`), at the finest grain the sources
   keep: each ask (journal note, idea, chat, direct dispatch), each session
