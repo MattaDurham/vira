@@ -84,8 +84,16 @@ class DetachedSnapshotTests(unittest.TestCase):
         make_detached(reg, self.tmp.name)
         (row,) = reg.recent()
         for k in ("id", "prompt", "status", "started", "finished",
-                  "mode", "awaiting"):
+                  "mode", "awaiting", "idea_id"):
             self.assertIn(k, row)
+
+    def test_recent_names_the_idea_it_was_started_from(self):
+        # The idea card's live-session banner reads this from /api/jobs.
+        reg = make_registry()
+        h = make_detached(reg, self.tmp.name)
+        h.spec["idea_id"] = "idea_x"
+        (row,) = reg.recent()
+        self.assertEqual(row["idea_id"], "idea_x")
 
 
 class PendingAllTests(unittest.TestCase):

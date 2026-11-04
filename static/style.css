@@ -565,6 +565,44 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
 }
 .idea-del:hover { color: var(--red); border-color: var(--line); }
 .idea-meta { font-size: 11px; color: var(--text-faint); margin-top: 6px; }
+/* A session started from this idea is live (app.js ideaSessionBanner). It
+   has to read at a glance from across the queue: a full-width bar under the
+   idea text, a thick live edge on the card, and a pulsing dot. */
+.idea.idea-live { border-left-width: 5px; border-left-color: var(--green); background: var(--green-soft); }
+.idea.idea-live-waiting { border-left-color: var(--red); background: var(--red-soft); }
+.idea.idea-live-complete, .idea.idea-live-paused { border-left-color: var(--accent-bright); background: var(--accent-soft); }
+.idea-live-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  margin-top: 9px; padding: 8px 10px; border-radius: 2px;
+  border: 1px solid var(--green-line); background: rgba(104, 255, 0, 0.07);
+}
+.idea-live-bar[data-phase="waiting"] { border-color: var(--red-line); background: var(--red-soft); }
+.idea-live-bar[data-phase="complete"], .idea-live-bar[data-phase="paused"] {
+  border-color: var(--accent-line); background: var(--accent-soft);
+}
+.idea-live-dot {
+  flex: none; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 8px var(--green-glow);
+  animation: idea-live-pulse 1.4s ease-in-out infinite;
+}
+.idea-live-bar[data-phase="waiting"] .idea-live-dot { background: var(--red); box-shadow: 0 0 8px var(--red-glow); }
+.idea-live-bar[data-phase="complete"] .idea-live-dot,
+.idea-live-bar[data-phase="paused"] .idea-live-dot {
+  background: var(--accent-bright); box-shadow: none; animation: none;
+}
+.idea-live-label {
+  font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-bright);
+}
+.idea-live-sub { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-dim); }
+.idea-live-open {
+  flex: none; padding: 4px 12px; font-size: 12px; border-radius: 2px; cursor: pointer;
+  border: 1px solid var(--green-line); background: var(--bg-card); color: var(--text-bright);
+}
+.idea-live-bar[data-phase="waiting"] .idea-live-open { border-color: var(--red-line); }
+.idea-live-open:hover { background: var(--bg-raised); }
+@keyframes idea-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .idea-live-dot { animation: none; } }
 .idea-meta a, .term-note a { color: var(--accent); text-decoration: underline; word-break: break-all; }
 
 /* ---- images attached to an idea (server/ideaimages.py) ---- */

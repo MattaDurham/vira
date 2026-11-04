@@ -78,7 +78,7 @@ branch; the suite and `check` say when it is whole.
 - [Image Atlas](imageatlas/README.md) - The vault's images as a navigable 3D galaxy, and the Genre Studio that composes new genres.  
   Galaxy, Genres (13 files)
 - [Evidence](evidence/README.md) - Vira's own build provenance: the ledger, the change log, and the walkthrough films.  
-  Ledger, Change log, Walkthroughs (27 files)
+  Ledger, Change log, Walkthroughs (29 files)
 - [Maps](maps/README.md) - The System Map (this registry, live) and layered diagrams any request can fill.  
   System, Diagrams (8 files)
 
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-817 of 817 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+819 of 819 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->
