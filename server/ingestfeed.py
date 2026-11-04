@@ -382,7 +382,7 @@ def feed(sources=None, force=False):
 def status():
     cards, counts = scan()
     return {"vault": bool(vault_root()), "summaries": len(cards),
-            "by_source": counts, "list": DONE_LIST}
+            "by_source": counts}
 
 
 # ------------------------------------------------------------------- assets --

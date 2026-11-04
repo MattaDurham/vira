@@ -25494,7 +25494,7 @@ function bsNarr(r, quiet) {
 
 function bsCard(e) {
   const d = e.doc || {};
-  const card = el("div", "bs-card k-" + e.kind + (d.read ? " read" : ""));
+  const card = el("div", "bs-card k-" + e.kind);
   const frame = el("div", "bs-frame");
   const film = d.film || {};
   if (e.kind === "walkthrough" && film.thumb) {

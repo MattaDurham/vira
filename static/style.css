@@ -8313,7 +8313,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 .bs-card.k-plan .bs-ck { color: var(--steel); }
 .bs-cn { font-size: 13px; color: var(--text); line-height: 1.35; margin-top: 3px; }
 .bs-card:hover .bs-cn { color: var(--accent-bright); }
-.bs-card.read .bs-cn { color: var(--text-dim); }
 .bs-cs {
   font-size: 11px; color: var(--text-faint); margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
