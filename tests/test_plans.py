@@ -70,7 +70,7 @@ class ReaderQueueTests(_VaultCase):
 
     def test_a_saved_plan_lands_in_the_reading_queue(self):
         e = plans.save_plan("# Cool Plan\n\nDo the thing.")
-        q = readinglist.queue()
+        q = readinglist.library()
         self.assertEqual([i["title"] for i in q], ["Cool Plan"])
         self.assertEqual(q[0]["kind"], "plan")
         self.assertEqual(q[0]["locator_kind"], "plan")

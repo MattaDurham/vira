@@ -479,10 +479,8 @@ def _write_tags(tagmap, items, rung=""):
 # ---------------------------------------------------------------- read side --
 
 def _all_docs():
-    """Every document the Reader tracks — queued AND completed. Grouping a
-    library by feature is worthless if it only covers what is unread; 425 of
-    the 519 entries here are filed read."""
-    return readinglist.queue() + readinglist.completed(limit=10000)
+    """Every document the Reader tracks."""
+    return readinglist.library()
 
 
 def _overlay(derived, item):

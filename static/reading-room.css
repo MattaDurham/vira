@@ -78,14 +78,6 @@ select{background:var(--panel);border:1px solid var(--line);color:var(--text);
 main{max-width:980px;margin:0 auto;padding:14px 16px 80px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
   padding:13px 15px;margin-bottom:9px;display:flex;gap:12px;align-items:flex-start}
-.card.done{opacity:.45}
-.card.done .title a{text-decoration:line-through}
-.check{flex:0 0 auto;margin-top:3px;width:19px;height:19px;border:1.5px solid var(--faint);
-  border-radius:6px;cursor:pointer;display:grid;place-items:center;background:none;padding:0}
-.check svg{width:12px;height:12px;stroke:var(--have);stroke-width:3;fill:none;
-  stroke-linecap:round;stroke-linejoin:round;display:none}
-.card.done .check{border-color:var(--have)}
-.card.done .check svg{display:block}
 .body{flex:1;min-width:0}
 .title{font-size:15.5px;font-weight:600;line-height:1.35;margin:0 0 3px}
 .title a{color:var(--text)}

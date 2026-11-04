@@ -1586,8 +1586,8 @@ TOOL_SPECS = [
      "venue, note, why, status MISSING|PARTIAL, vault, pay. The server "
      "validates, dedupes on a stable id and writes the room's data store — "
      "never write reading-room files yourself. Rebuilding an existing slug "
-     "is a repass: the owner's done-marks are preserved and they are "
-     "notified of any items the rebuild added.",
+     "is a repass: item ids stay stable and the owner is notified of any "
+     "items the rebuild added.",
      {"slug": str, "title": str, "subtitle": str, "items_json": str, "destination": str},
      _t_create_reading_room),
     ("add_reading_room_items",
@@ -1596,7 +1596,7 @@ TOOL_SPECS = [
      "as items_json (a JSON array, same item shape as create_reading_room). "
      "The server validates, merges by stable URL-derived id (a duplicate "
      "of an existing item is dropped, so over-including is safe), keeps "
-     "every existing item and the owner's done-marks untouched, and "
+     "every existing item untouched, and "
      "notifies the owner of what arrived. Never rebuild a whole room just "
      "to add to it.",
      {"slug": str, "items_json": str, "destination": str}, _t_add_reading_room_items),

@@ -19,7 +19,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 ### Submodules
 
-- [Queue](queue/README.md) - The Reader's queue, done-marks, and saved plans. (9 files)
+- [Queue](queue/README.md) - The Reader's documents list, room page listing, and saved plans. (9 files)
 - [Rooms](rooms/README.md) - Reading rooms, full ingest into the vault, and the nightly inflow shelf. (12 files)
 
 ### Neighbours

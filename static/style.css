@@ -6046,28 +6046,6 @@ h2 { font-weight: 300; letter-spacing: 0.05em; color: var(--text-head); }
    truncates, per the documented rule — clipping an ancestor would hide the
    kind/date line, which is the part worth keeping. */
 .reader-acts { display: flex; gap: 6px; flex: none; align-items: center; }
-/* The read fold under the docs list is gone (2026-08-05) — the Show filter
-   carries Read / Everything now, so the fold's rules went with it. */
-.reader-mini, .reader-done-btn {
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em;
-  text-transform: uppercase; padding: 4px 9px; border-radius: 2px;
-  border: 1px solid var(--line); background: var(--bg-card);
-  color: var(--text-dim); cursor: pointer; flex: none;
-}
-.reader-mini:hover, .reader-done-btn:hover {
-  border-color: var(--accent-line); color: var(--accent-bright);
-}
-.reader-mini.on { border-color: var(--sel-line); color: var(--sel-text); background: var(--sel-bg); }
-.reader-secs {
-  margin: 9px 0 2px; padding: 8px 10px; border: 1px solid var(--line);
-  border-radius: 2px; background: var(--bg-frame);
-}
-.reader-sec {
-  display: flex; gap: 8px; align-items: flex-start; padding: 3px 0;
-  font-size: 12.5px; cursor: pointer;
-}
-.reader-sec input { margin-top: 2px; flex: none; }
-.reader-sec-t { color: var(--text-dim); min-width: 0; }
 .reader-stage { margin-top: 6px; }
 .section-head.sub { margin-bottom: 6px; }
 /* The header: kicker, switcher title, subline, Details reveal. One surface —
@@ -6228,22 +6206,6 @@ h2 { font-weight: 300; letter-spacing: 0.05em; color: var(--text-head); }
   border-radius: var(--radius); background: var(--bg-card);
   margin-bottom: 6px; min-width: 0;
 }
-.rm-item.done { opacity: 0.5; }
-.rm-item.done .rm-name { text-decoration: line-through; }
-.rm-check {
-  flex: none; width: 20px; height: 20px; margin-top: 1px;
-  /* --line vanishes against the card bg — the outline must read at rest,
-     not only on hover (owner's report, 2026-07-27). */
-  border: 1.5px solid var(--line-warm-bright); border-radius: 50%;
-  background: var(--bg-raised); cursor: pointer; position: relative;
-}
-.rm-check::after {
-  content: ""; position: absolute; inset: 4px;
-  border-radius: 50%; background: transparent;
-}
-.rm-item.done .rm-check { border-color: var(--green-line); }
-.rm-item.done .rm-check::after { background: var(--green); }
-.rm-check:hover { border-color: var(--accent-line); }
 .rm-body { min-width: 0; flex: 1 1 auto; }
 .rm-name { color: var(--text); font-size: 13.5px; text-decoration: none; }
 a.rm-name:hover { color: var(--accent); }
@@ -7834,7 +7796,7 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
    stack — Finder's, in Vira's type. */
 .rdoc-head {
   display: grid; align-items: center;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 190px) 84px 92px 108px;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 190px) 84px 92px;
   gap: 10px; padding: 0 8px 5px;
   border-bottom: 1px solid var(--line);
   font-size: 10px; text-transform: uppercase; letter-spacing: .09em;
@@ -7877,7 +7839,7 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 
 .rdoc-row {
   display: grid; align-items: center;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 190px) 84px 92px 108px;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 190px) 84px 92px;
   gap: 10px; padding: 6px 8px; cursor: pointer;
   border-top: 1px solid transparent;
   transition: background .14s ease;
@@ -7927,11 +7889,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 .rdoc-chip.module { border-color: var(--accent-line); color: var(--accent-bright); }
 .rdoc-chip.theme { border-color: var(--steel-line); color: var(--steel); }
 .rdoc-kind, .rdoc-date { font-size: 11px; color: var(--text-faint); }
-.rdoc-acts {
-  display: flex; gap: 5px; justify-content: flex-end;
-  opacity: 0; transition: opacity .14s ease;
-}
-.rdoc-row:hover .rdoc-acts, .rdoc-row:focus-within .rdoc-acts { opacity: 1; }
 
 /* Tag picker popup */
 .rdoc-pop { min-width: 230px; max-width: 300px; padding: 8px; }
@@ -7968,11 +7925,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 .rdoc-vbtn.on {
   color: var(--sel-text); background: var(--sel-bg);
 }
-
-/* A read row keeps its place in Everything view, dimmed; hover restores it
-   so it stays readable. State is the dimming — the button stays a verb. */
-.rdoc-row.read { opacity: 0.55; }
-.rdoc-row.read:hover { opacity: 1; }
 
 /* ==================== The grid view — the gallery =========================
    The lab treatment turned inward: editorial sections, mono kickers with
@@ -8113,23 +8065,7 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 }
 .rdg-more:hover { border-color: var(--accent-line); color: var(--text); }
 
-/* The mark control surfaces on hover; read items dim and wear a small
-   STATUS tag (mono, no border — nothing button-like about it). */
-.rdg-mark { position: absolute; top: 8px; right: 8px; opacity: 0; z-index: 2; }
-.rdg-item:hover .rdg-mark, .rdg-item:focus-within .rdg-mark { opacity: 1; }
-.rdg-item.read { opacity: 0.5; }
-.rdg-item.read:hover { opacity: 1; }
 .rdg-item.missing { opacity: 0.45; }
-.rdg-readtag {
-  position: absolute; left: 8px; bottom: 8px; z-index: 2;
-  font-family: var(--mono); font-size: 9px; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--text-bright);
-  background: var(--scrim-strong); border-radius: 2px; padding: 1px 6px;
-  pointer-events: none;
-}
-.rdg-tile > .rdg-readtag { position: static; margin-top: 8px;
-  display: inline-block; background: var(--bg-raised);
-  color: var(--text-faint); }
 
 /* The entrance: sections and items rise in with a stagger, the hairline
    draws, the name shimmers once, the count counts up (JS). Only under
@@ -8142,12 +8078,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 }
 .rdoc-grid.anim .rdg-sec.rv,
 .rdoc-grid.anim .rdg-item.rv { opacity: 1; transform: none; }
-.rdoc-grid.anim .rdg-sec.read, .rdoc-grid.anim .rdg-item.read {
-  transform: none;
-}
-.rdoc-grid.anim .rdg-item.read { opacity: 0; }
-.rdoc-grid.anim .rdg-item.read.rv { opacity: 0.5; }
-.rdoc-grid.anim .rdg-item.read.rv:hover { opacity: 1; }
 .rdoc-grid.anim .rdg-rule { transform: scaleX(0); transition: transform
   0.9s cubic-bezier(0.22, 0.61, 0.36, 1) 0.15s; }
 .rdoc-grid.anim .rdg-sec.rv .rdg-rule { transform: scaleX(1); }
@@ -8165,27 +8095,20 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 @media (max-width: 1099px) {
   .rdoc-head { display: none; }
   .rdoc-row {
-    grid-template-columns: 44px minmax(0, 1fr) auto;
-    grid-template-areas: "thumb main acts";
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-areas: "thumb main";
     row-gap: 2px;
   }
   .rdoc-thumb { grid-area: thumb; }
   .rdoc-main { grid-area: main; }
-  .rdoc-acts { grid-area: acts; opacity: 1; }
   .rdoc-tags, .rdoc-kind, .rdoc-date { display: none; }
   .rdoc-q { flex: 1 1 100%; }
   /* Grid on a phone: narrower film tiles (the shelf still scrolls inside
-     itself), tighter boxes, always-visible mark buttons (no hover), and
-     the date column gives way on lines — the title is what must survive. */
+     itself), tighter boxes, and the date column gives way on lines — the
+     title is what must survive. */
   .rdg-film { flex-basis: 230px; width: 230px; }
   .rdg-tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .rdg-name { font-size: 21px; }
-  /* Always visible on touch — and therefore in the FLOW: an absolute
-     button that never hides would sit on the tile's kicker forever. */
-  .rdg-mark { opacity: 1; }
-  .rdg-tile .rdg-mark, .rdg-film .rdg-mark {
-    position: static; margin-top: 8px; display: inline-block;
-  }
 }
 
 /* ---------- The build story ("What is this?") — an animated timeline ----------
@@ -8555,8 +8478,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 .inf-card:hover {
   border-color: var(--accent-line); transform: translateY(-2px);
 }
-.inf-card.read { opacity: .62; }
-.inf-card.read:hover { opacity: 1; }
 .inf-wrap.anim .inf-sec.rv .inf-card {
   animation: infRise .45s ease backwards;
   animation-delay: calc(var(--i, 0) * 45ms);
@@ -8590,10 +8511,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
   letter-spacing: 0.12em; color: var(--text-faint);
 }
 .inf-src { color: var(--accent-bright); }
-.inf-donetag {
-  color: var(--text-faint); border: 1px solid var(--line);
-  border-radius: 999px; padding: 0 6px;
-}
 .inf-title {
   font-size: 15px; line-height: 1.3; margin: 0; color: var(--text-head);
   font-weight: 500;

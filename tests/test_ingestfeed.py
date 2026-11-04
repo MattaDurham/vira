@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from server import ingestfeed, reading
+from server import ingestfeed
 
 
 def note(fm, body=""):
@@ -26,12 +26,9 @@ class Base(unittest.TestCase):
         self.wiki = self.root / "wiki"
         self.wiki.mkdir(parents=True)
         (self.root / "raw").mkdir()
-        self.store = self.root / "marks"
-        self.store.mkdir()
         patches = [
             mock.patch.object(ingestfeed, "vault_root", lambda: self.root),
             mock.patch.object(ingestfeed, "THUMB_DIR", self.root / "thumbs"),
-            mock.patch.object(reading, "STORE_DIR", self.store),
         ]
         for p in patches:
             p.start()
@@ -181,13 +178,11 @@ class CardFields(Base):
         self.assertEqual(imgs[1]["label"], "Reactor vessel cutaway")
         self.assertEqual(imgs[1]["link"], "")
 
-    def test_the_id_is_hashed_and_fits_the_done_key_cap(self):
-        # reading._clean_id caps a key at 64 characters, and 102 of this
-        # vault's note names are longer than that — a stem id would be
-        # stored truncated and read back whole, so the mark would never
-        # show. The id must survive that function unchanged.
+    def test_the_id_is_a_short_stable_hash(self):
+        # 102 of this vault's note names are longer than 64 characters, so
+        # the id is a digest of the path rather than the stem.
         c = self.only()
-        self.assertEqual(reading._clean_id(c["id"]), c["id"])
+        self.assertLessEqual(len(c["id"]), 64)
         self.assertEqual(
             c["id"],
             "if" + hashlib.sha1(b"wiki/radiant.md").hexdigest()[:14])
@@ -197,7 +192,7 @@ class CardFields(Base):
         self.assertGreater(len(name), 64)
         self.write(name, "title: Long\ntype: source-summary\ntags: [notes-app]")
         card = [c for c in self.cards() if c["path"].endswith(name + ".md")][0]
-        self.assertEqual(reading._clean_id(card["id"]), card["id"])
+        self.assertEqual(len(card["id"]), 16)
 
 
 class Visuals(Base):
@@ -288,20 +283,12 @@ class Feed(Base):
         dates = [i["date"] for i in ingestfeed.feed(force=True)["items"]]
         self.assertEqual(dates, sorted(dates, reverse=True))
 
-    def test_a_read_mark_rides_the_card(self):
+    def test_no_read_state_rides_the_feed(self):
+        # Read marks were removed (owner's call, 2026-11-04): nothing on a
+        # card or in the totals says whether it was read.
         f = ingestfeed.feed(force=True)
-        target = f["items"][0]
-        self.assertFalse(target["done"])
-        reading.set_done(ingestfeed.DONE_LIST, target["id"], True)
-        again = ingestfeed.feed(force=True)
-        marked = [i for i in again["items"] if i["id"] == target["id"]][0]
-        self.assertTrue(marked["done"])
-        self.assertEqual(again["done"], 1)
-
-    def test_read_state_is_never_written_onto_the_shared_cache(self):
-        f = ingestfeed.feed(force=True)
-        reading.set_done(ingestfeed.DONE_LIST, f["items"][0]["id"], True)
-        ingestfeed.feed()                     # marks one, from the cache
+        self.assertNotIn("done", f)
+        self.assertTrue(all("done" not in i for i in f["items"]))
         cards, _ = ingestfeed.scan()
         self.assertTrue(all("done" not in c for c in cards))
 
@@ -357,9 +344,6 @@ class Table(unittest.TestCase):
         for s in ingestfeed.SOURCES:
             for key in ("id", "label", "on", "glyph", "paths", "tags", "hosts"):
                 self.assertIn(key, s, s.get("id"))
-
-    def test_the_done_list_name_is_a_legal_store_name(self):
-        self.assertRegex(ingestfeed.DONE_LIST, reading.NAME_RE)
 
     def test_the_five_named_routines_are_the_default(self):
         self.assertEqual(

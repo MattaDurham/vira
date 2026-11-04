@@ -2503,12 +2503,6 @@ def api_brief_admin_mark(req: AdminMarkReq):
     return {"ok": True}
 
 
-class ReadingDoneReq(BaseModel):
-    id: str | None = None
-    done: bool = True
-    merge: list[str] | None = None
-
-
 # ---------- module front doors (server/frontdoor.py: the path from a
 # dormant module to a live one — what a module IS, a demo clip, and the
 # interview that sets it up, dispatched as a live session) ----------
@@ -2592,7 +2586,7 @@ def api_frontdoor_dismiss(module_id: str, req: DismissReq):
 @app.get("/api/reading/pages")
 def api_reading_pages():
     """Personal reading-room pages on disk, with what a Reader card needs:
-    subtitle, item count, done count, built date (all best-effort)."""
+    subtitle, item count, built date (all best-effort)."""
     pages = reading.page_details()
     try:
         by_room = {row.get("room"): row for row in research.catalog()
@@ -2716,22 +2710,18 @@ def api_research_overview(graph_id: str):
 
 @app.get("/api/reading/rooms/{name}")
 def api_reading_room(name: str):
-    """A native room's full store — meta + items — plus its done-marks, for
-    the Reader's in-app renderer."""
+    """A native room's full store — meta + items — for the Reader's in-app
+    renderer."""
     room = readingroom.load_room(name)
     if room is None:
         raise HTTPException(404, "no such reading room")
-    try:
-        done = reading.get_done(name)
-    except ValueError:
-        done = []
     # where each item's note actually is — DERIVED here rather than stored on
     # the item, so a renamed or deleted note can never leave a stale pointer
     try:
         roomvault.resolve(name, room.get("items") or [])
     except Exception:                                   # noqa: BLE001
         pass                                            # a room is worth more than its links
-    return {"room": room, "done": done}
+    return {"room": room}
 
 
 class RoomLinkReq(BaseModel):
@@ -2892,7 +2882,7 @@ def api_reading_room_update_prompt(name: str):
 @app.post("/api/reading/rooms/{name}/update")
 def api_reading_room_update(name: str):
     """Dispatch a session that re-researches the room's subject and rebuilds
-    the same slug — item ids are URL-stable, so done-marks survive. This is
+    the same slug — item ids are URL-stable, so vault links survive. This is
     what makes a room a live tracker rather than a frozen sweep."""
     try:
         prompt = readingroom.update_prompt(name)
@@ -2907,28 +2897,17 @@ def api_reading_room_update(name: str):
     return {"job_id": jid}
 
 
-class ReadingCompleteReq(BaseModel):
-    done: bool = True
-
-
 @app.get("/api/reading/list")
 def api_reading_list():
-    """The Reader's queue: everything worth reading that is not read yet.
-
-    Completed entries are deliberately absent from `queue` — marking a document
-    read takes it off the list, because the document still lives wherever its
-    producer put it. `completed` is the FULL read list, uncapped: it feeds the
-    docs view's Read filter, and a filter that silently truncated 425 read
-    documents to a tail would violate the no-silent-truncation rule (the old
-    limit=400 was already under the live count).
+    """Vira's Documents: every registered document, newest first. There is
+    no read state (owner's call, 2026-11-04) - nothing is ever filed away as
+    read, so every document stays available to read again.
 
     Tags and film metadata are joined HERE rather than stored on the entry:
     both are derived (a re-tag pass rewrites tags; recapturing a film changes
     its thumb), and a copy on the row would be a copy that goes stale. Same
     reason roomvault.resolve annotates at this layer."""
-    q = docthumbs.annotate(doctags.annotate(readinglist.queue()))
-    done = docthumbs.annotate(doctags.annotate(
-        readinglist.completed(limit=None)))
+    docs = docthumbs.annotate(doctags.annotate(readinglist.library()))
     films = {f["url"]: f for f in walkthroughs.films()}
 
     def join(rows):
@@ -2940,10 +2919,10 @@ def api_reading_list():
                              "description": f["description"]}
         return rows
 
-    return {"queue": join(q), "completed": join(done),
+    return {"items": join(docs),
             "counts": readinglist.counts(),
-            "vocab": doctags.vocabulary(q + done),
-            "tagging": doctags.status(q + done)}
+            "vocab": doctags.vocabulary(docs),
+            "tagging": doctags.status(docs)}
 
 
 @app.post("/api/reading/list/tag")
@@ -2959,14 +2938,6 @@ def api_reading_list_backfill():
     return readinglist.backfill()
 
 
-@app.post("/api/reading/list/{item_id}/complete")
-def api_reading_list_complete(item_id: str, req: ReadingCompleteReq):
-    try:
-        return {"item": readinglist.complete(item_id, req.done)}
-    except KeyError:
-        raise HTTPException(404, "no such reading-list entry")
-
-
 @app.delete("/api/reading/list/{item_id}")
 def api_reading_list_forget(item_id: str):
     """Drop the pointer. The document itself is never touched."""
@@ -2975,20 +2946,6 @@ def api_reading_list_forget(item_id: str):
     except KeyError:
         raise HTTPException(404, "no such reading-list entry")
     return {"ok": True}
-
-
-@app.get("/api/reading/list/{item_id}")
-def api_reading_list_item(item_id: str):
-    """One entry plus its sections, so the client knows how to open it and
-    whether to show section progress."""
-    it = readinglist.get(item_id)
-    if not it:
-        raise HTTPException(404, "no such reading-list entry")
-    out = dict(it)
-    out["missing"] = readinglist._missing(it)
-    out["sections"] = readinglist.sections(it)
-    out["progress"] = readinglist.progress(it)
-    return out
 
 
 @app.get("/api/reading/file/{item_id}")
@@ -3074,26 +3031,6 @@ def _guess_media(p: Path) -> str:
             ".webp": "image/webp", ".gif": "image/gif", ".avif": "image/avif",
             ".heic": "image/heic"}.get(p.suffix.lower(),
                                        "application/octet-stream")
-
-
-@app.get("/api/reading/{name}/done")
-def api_reading_done_get(name: str):
-    try:
-        return {"done": reading.get_done(name)}
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-
-
-@app.post("/api/reading/{name}/done")
-def api_reading_done_set(name: str, req: ReadingDoneReq):
-    """Toggle one done-mark ({id, done}) or union-merge a legacy
-    localStorage set ({merge: [ids]}). Returns the authoritative list."""
-    try:
-        if req.merge is not None:
-            return {"done": reading.merge_done(name, req.merge)}
-        return {"done": reading.set_done(name, req.id, req.done)}
-    except ValueError as e:
-        raise HTTPException(422, str(e))
 
 
 class BriefNoteReq(BaseModel):

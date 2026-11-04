@@ -61,7 +61,7 @@ _lock = threading.Lock()
 # world (files on disk, keys in config), never from a stored flag.
 
 def _reader_state():
-    """The Reader is live when it has ANYTHING to show — a queued document or a
+    """The Reader is live when it has ANYTHING to show — a document or a
     reading room.
 
     Widened 2026-07-27 with the queue. Counting only rooms made a Reader
@@ -71,18 +71,18 @@ def _reader_state():
     from . import readinglist
     pages = reading.list_pages()
     try:
-        queued = readinglist.counts()["queued"]
-    except Exception:  # noqa: BLE001 — a dormant queue is a state, not a failure
-        queued = 0
+        docs = readinglist.counts()["total"]
+    except Exception:  # noqa: BLE001 — a dormant library is a state, not a failure
+        docs = 0
     bits = []
-    if queued:
-        bits.append(f"{queued} to read")
+    if docs:
+        bits.append(f"{docs} document{'s' if docs != 1 else ''}")
     if pages:
         bits.append(f"{len(pages)} reading room{'s' if len(pages) != 1 else ''}")
     return {
-        "ready": bool(pages or queued),
+        "ready": bool(pages or docs),
         "detail": " · ".join(bits) or "Nothing to read yet.",
-        "count": len(pages) + queued,
+        "count": len(pages) + docs,
     }
 
 
@@ -336,7 +336,7 @@ def _reader_prompt(answers):
     subject = _s(answers.get("subject"))
     slug = slugify(subject, "reading-room")
     # A rebuild of the same subject is a repass, not a collision: the page
-    # is replaced and item ids stay stable, so done-marks carry over.
+    # is replaced and item ids stay stable, so vault links carry over.
     title = f"{subject} reading room" if len(subject) < 60 else subject
     modes = answers.get("modes") or ["read", "listen", "watch"]
     if isinstance(modes, str):

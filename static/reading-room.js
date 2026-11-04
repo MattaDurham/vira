@@ -3,7 +3,7 @@
  * A generated room (static/reading/<slug>.html) ships two globals and
  * nothing else:
  *
- *   window.ROOM = {slug, legacyKey?}   — slug keys the done-mark store
+ *   window.ROOM = {slug}               — which room this is
  *   window.DATA = [ {…item}, … ]       — the queue itself
  *
  * Everything below is generic. Filters that would be dead on arrival hide
@@ -12,18 +12,14 @@
  * in shows no people select. A first room therefore looks built for its
  * subject rather than like a template with empty controls.
  *
- * Done-marks live server-side (data/reading/<slug>.json) so they follow
- * the owner across devices. Every mark is optimistic and reverts if the
- * POST fails; with the server unreachable the room still browses, marks
- * simply go read-only. */
+ * Nothing is ever marked read or done (owner's call, 2026-11-04): every
+ * item stays as available as the day the room was built. */
 
 (function () {
   "use strict";
 
   var ROOM = window.ROOM || {};
   var DATA = window.DATA || [];
-  var API = "/api/reading/" + ROOM.slug + "/done";
-  var done = new Set();
 
   // Items are authored server-side, but be forgiving about optional
   // fields so a sparse room never throws on render.
@@ -36,7 +32,7 @@
 
   var state = {
     q: "", prio: new Set(), status: new Set(), mode: new Set(),
-    person: "", year: "", sort: "prio", hideDone: false,
+    person: "", year: "", sort: "prio",
   };
   var PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
   // HAVE renders no badge and no chip (owner's call, 2026-07-27): everything
@@ -49,45 +45,6 @@
     var d = document.createElement("div");
     d.textContent = s == null ? "" : s;
     return d.innerHTML;
-  }
-
-  /* ---------- done-marks ---------- */
-
-  async function syncDone() {
-    try {
-      var legacy = [];
-      if (ROOM.legacyKey) {
-        try { legacy = JSON.parse(localStorage.getItem(ROOM.legacyKey) || "[]"); }
-        catch (e) { legacy = []; }
-      }
-      var resp;
-      if (legacy.length) {
-        resp = await fetch(API, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ merge: legacy }),
-        });
-      } else {
-        resp = await fetch(API);
-      }
-      if (!resp.ok) throw new Error(resp.status);
-      done = new Set((await resp.json()).done);
-      if (ROOM.legacyKey) localStorage.removeItem(ROOM.legacyKey);
-      render();
-    } catch (e) { /* offline: the room browses, marks stay read-only */ }
-  }
-
-  async function pushDone(id, isDone) {
-    try {
-      var resp = await fetch(API, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: id, done: isDone }),
-      });
-      if (!resp.ok) throw new Error(resp.status);
-      done = new Set((await resp.json()).done);
-    } catch (e) {
-      if (isDone) done.delete(id); else done.add(id);   // revert the flip
-    }
-    render();
   }
 
   /* ---------- controls that earn their place ---------- */
@@ -137,7 +94,6 @@
   /* ---------- filter, sort, render ---------- */
 
   function matches(it) {
-    if (state.hideDone && done.has(it.id)) return false;
     if (state.prio.size && !state.prio.has(it.prio)) return false;
     if (state.status.size && !state.status.has(it.status)) return false;
     if (state.mode.size && !state.mode.has(it.mode)) return false;
@@ -169,15 +125,12 @@
   function render() {
     var list = $("list");
     var rows = sorted(DATA.filter(matches));
-    var doneShown = rows.filter(function (it) { return done.has(it.id); }).length;
-    $("count").textContent = rows.length + " of " + DATA.length
-      + (doneShown ? " - " + doneShown + " done" : "");
+    $("count").textContent = rows.length + " of " + DATA.length;
     if (!rows.length) {
       list.innerHTML = '<div class="empty">Nothing matches. Loosen a filter.</div>';
       return;
     }
     list.innerHTML = rows.map(function (it) {
-      var isDone = done.has(it.id);
       var badges = [
         '<span class="badge ' + it.prio + '">' + it.prio + "</span>",
         STATUS_LABEL[it.status]
@@ -198,9 +151,7 @@
       var note = it.note ? '<p class="note">' + esc(it.note) + "</p>" : "";
       var vault = (it.status !== "MISSING" && it.vault)
         ? '<div class="vault">vault: ' + esc(it.vault) + "</div>" : "";
-      return '<div class="card' + (isDone ? " done" : "") + '" data-id="' + esc(it.id) + '">'
-        + '<button class="check" title="Mark done" aria-label="Mark done">'
-        + '<svg viewBox="0 0 16 16"><polyline points="2.5 8.5 6.5 12.5 13.5 3.5"/></svg></button>'
+      return '<div class="card" data-id="' + esc(it.id) + '">'
         + '<div class="body"><p class="title">' + title + "</p>"
         + '<div class="meta">' + badges + (meta ? " <span>" + meta + "</span>" : "") + "</div>"
         + note + (ppl ? '<div class="people">' + ppl + "</div>" : "") + vault
@@ -211,15 +162,6 @@
   /* ---------- wiring ---------- */
 
   $("list").addEventListener("click", function (e) {
-    var check = e.target.closest(".check");
-    if (check) {
-      var id = check.closest(".card").dataset.id;
-      var nowDone = !done.has(id);
-      if (nowDone) done.add(id); else done.delete(id);   // optimistic
-      render();
-      pushDone(id, nowDone);
-      return;
-    }
     var person = e.target.closest(".person");
     if (person) {
       state.person = person.dataset.p;
@@ -261,14 +203,9 @@
   $("sort").addEventListener("change", function (e) {
     state.sort = e.target.value; render();
   });
-  $("hideDone").addEventListener("click", function (e) {
-    state.hideDone = !state.hideDone;
-    e.target.setAttribute("aria-pressed", String(state.hideDone));
-    render();
-  });
   $("clear").addEventListener("click", function () {
     state.q = ""; state.prio.clear(); state.status.clear(); state.mode.clear();
-    state.person = ""; state.year = ""; state.sort = "prio"; state.hideDone = false;
+    state.person = ""; state.year = ""; state.sort = "prio";
     $("q").value = ""; $("person").value = ""; $("year").value = "";
     $("sort").value = "prio";
     document.querySelectorAll(".chip[aria-pressed]").forEach(function (c) {
@@ -276,11 +213,7 @@
     });
     render();
   });
-  document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible") syncDone();
-  });
 
   buildControls();
   render();
-  syncDone();
 })();

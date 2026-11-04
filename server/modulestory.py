@@ -251,7 +251,7 @@ def _slim(d):
     """What the timeline needs of a library row — enough to open it, draw
     its face and say which tags joined it, nothing the panel never reads."""
     keep = ("id", "title", "kind", "locator", "locator_kind", "ref",
-            "created", "read", "missing", "thumb", "film")
+            "created", "missing", "thumb", "film")
     out = {k: d.get(k) for k in keep if d.get(k) is not None}
     out["module_tags"] = list((d.get("tags") or {}).get("module") or [])
     return out
@@ -334,8 +334,7 @@ def story(win_id, inputs=None):
     {id, title, what, tags, keywords, docs, counts, pending,
      events, days, eras, stats}
 
-    `docs` is every library entry (read and unread — the build story is
-    mostly read documents) whose module-axis tags intersect the window's
+    `docs` is every library entry whose module-axis tags intersect the window's
     tag set, film metadata joined the same way /api/reading/list joins it.
     `events` is the timeline: every non-retro document hit plus EVERY
     change-log entry, each flagged `hit` (this module's) and `strong` (a
