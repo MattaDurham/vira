@@ -10940,9 +10940,14 @@ function attnVerb(r) {
   if (r.kind === "review")
     return { label: "open", title: "Open Needs Review",
              run: () => openApp("review") };
+  // A session row has two destinations (owner, 2026-11-04): the button
+  // opens the session window, and the rest of the card opens the full
+  // detail in the inspector.
   if (r.job_id)
-    return { label: r.verb || "open", title: "Open this session's terminal",
-             run: () => openWorkResult({ job_id: r.job_id }) };
+    return { label: r.verb || "open", title: "Open this session's window",
+             run: () => openSession(r.job_id),
+             detail: { title: "Open the full detail of this session",
+                       run: () => openWorkResult({ job_id: r.job_id }) } };
   return null;
 }
 
@@ -10994,10 +10999,11 @@ function attnRow(sec, r) {
       verb.run(btn, row);
     });
     foot.appendChild(btn);
-    // Every Now card has one canonical verb. The visible button names it;
-    // the full card is the generous hit target, including for non-session
-    // rows such as Review, Forge traces, health, and unlanded branches.
-    cardAction(row, () => verb.run(btn, row), { hint: verb.title });
+    // The card opens the row's detail when it has one (a session); a row
+    // with one destination (Review, Forge traces, health, unlanded
+    // branches) makes the whole card a second hit target for its button.
+    const card = verb.detail || verb;
+    cardAction(row, () => card.run(btn, row), { hint: card.title });
   }
   if (foot.childElementCount) main.appendChild(foot);
   row.appendChild(main);
