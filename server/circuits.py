@@ -63,6 +63,13 @@ RUNS = ROOT / "data" / "circuit-runs.json"
 TICK_S = 2.0
 RUNS_KEEP = 120
 
+
+def RUNS_ARCHIVE():
+    """Every run evicted from RUNS, one JSON line each, beside it (read by
+    server/historyingest.py). A function so a test that pins RUNS moves
+    the archive with it."""
+    return RUNS.with_name("circuit-runs-archive.jsonl")
+
 # The stage-to-stage handoff cap for the NON-model readers of a stage's
 # output: the logic gate that matches text against it, the Output part that
 # stores it as its own result, and the finished-run row. It bounds what goes
@@ -1032,7 +1039,12 @@ def start_run(cid, input_text, cwd=None, notify=False, source="manual",
         s["runs"].append(run)
         if len(s["runs"]) > RUNS_KEEP:
             done = [r for r in s["runs"] if r["status"] != "running"]
-            for r in done[:len(s["runs"]) - RUNS_KEEP]:
+            evicted = done[:len(s["runs"]) - RUNS_KEEP]
+            # The store keeps the newest RUNS_KEEP; the history keeps every
+            # run, so each one leaves through the archive, never just gone.
+            from . import history
+            history.archive_lines(RUNS_ARCHIVE(), evicted)
+            for r in evicted:
                 s["runs"].remove(r)
         return True
     _mutate_runs(fn)

@@ -94,6 +94,11 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # The programs' own log files keep their lines, but the record of
          # which run did what exists only here.
          "routine-runs.json",
+         # Records the stores above trim (Flow runs past the newest 120,
+         # texts past 200, journal notes past 400) and the owner's Merge and
+         # Discard presses: each exists only in its archive once trimmed.
+         "circuit-runs-archive.jsonl", "notify-log-archive.jsonl",
+         "brief-journal-archive.jsonl", "branch-actions.jsonl",
          "pii-patterns.txt")     # anonymization scanner's learned patterns
 # Sole-copy DIRECTORIES: one dated tree copy per day, same 14-day window.
 DIRS = (
@@ -107,6 +112,9 @@ DIRS = (
     "genres",            # genre definitions + poster/specimen assets
     "idea-images",       # images attached to ideas — referenced nowhere else
     "walkthrough-anon",  # anonymized walkthrough output + scanner state
+    # The history store: every event kept forever, including runs and texts
+    # their own stores have since trimmed.
+    "history",
 )
 KEEP = 14
 

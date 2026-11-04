@@ -20,6 +20,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 ### Submodules
 
 - [Window](window/README.md) - The live Fleet window and the stream that feeds it. (5 files)
+- [History](history/README.md) - One append-only store of every event on the Mac, and the API every history view reads. (7 files)
 - [Readers](readers/README.md) - The Claude Code, Codex and git readers, and the one-call Analyze. (4 files)
 
 ### Neighbours
@@ -32,6 +33,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `fleet` (ids from `WINDOWS` in `static/app.js`).
 
-9 tracked files across 2 submodules. `python -m server.moduletree brief fleet` prints every submodule's page in one go.
+16 tracked files across 3 submodules. `python -m server.moduletree brief fleet` prints every submodule's page in one go.
 
 <!-- moduletree:end -->
