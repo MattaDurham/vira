@@ -2217,6 +2217,91 @@ def api_coverage_answer(gap_id: str, req: CoverageAnswerReq):
         raise HTTPException(400, str(exc))
 
 
+@app.get("/api/moments")
+def api_moments(date: str | None = None):
+    """The Moments window: the setup, and each recent day's family moments
+    with their ranked shots and the people who would want them."""
+    from . import moments
+    try:
+        day = datetime.fromisoformat(date).date() if date else None
+        return moments.status(day)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.put("/api/moments/setup")
+def api_moments_setup(req: dict):
+    from . import moments
+    try:
+        moments.save_setup(req)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return moments.status()
+
+
+class MomentAddReq(BaseModel):
+    title: str
+    date: str
+
+
+@app.post("/api/moments")
+def api_moments_add(req: MomentAddReq):
+    from . import moments
+    try:
+        moments.add_moment(req.title, req.date)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return moments.status(datetime.fromisoformat(req.date).date())
+
+
+class MomentRecipientReq(BaseModel):
+    date: str
+    key: str
+    text: str | None = None
+    picks: list[int] | None = None
+    skipped: bool | None = None
+
+
+@app.put("/api/moments/{moment_id}/recipient")
+def api_moments_recipient(moment_id: str, req: MomentRecipientReq):
+    from . import moments
+    try:
+        return moments.update_recipient(moment_id, req.date, req.key, text=req.text,
+                                        picks=req.picks, skipped=req.skipped)
+    except KeyError:
+        raise HTTPException(404, "That moment or person is not here any more")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/moments/{moment_id}/send")
+def api_moments_send(moment_id: str, req: MomentRecipientReq):
+    """Send one person their message and picked shots through Messages."""
+    from . import moments
+    try:
+        return moments.send(moment_id, req.date, req.key, text=req.text, picks=req.picks)
+    except KeyError:
+        raise HTTPException(404, "That moment or person is not here any more")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001 — surface Messages/permission errors
+        raise HTTPException(502, str(exc)[:500])
+
+
+class MomentDismissReq(BaseModel):
+    date: str
+    restore: bool = False
+
+
+@app.post("/api/moments/{moment_id}/dismiss")
+def api_moments_dismiss(moment_id: str, req: MomentDismissReq):
+    from . import moments
+    try:
+        return moments.dismiss(moment_id, req.date, restore=req.restore)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/assistant/calendar/{draft_id}.ics")
 def api_assistant_calendar_ics(draft_id: str):
     from . import calendarplan

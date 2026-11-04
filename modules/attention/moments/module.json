@@ -1,0 +1,25 @@
+{
+  "id": "attention/moments",
+  "name": "Moments",
+  "summary": "Family moments: a family event's best shots, relayed to the people who would want them.",
+  "owns": [
+    "server/moments.py",
+    "tests/test_moments.py"
+  ],
+  "routes": [
+    "/api/moments"
+  ],
+  "stores": [
+    "data/moments.json"
+  ],
+  "reads": [
+    "core/settings",
+    "find/media",
+    "incoming/feed"
+  ],
+  "feeds": [
+    "attention/review",
+    "incoming/feed"
+  ],
+  "registry": []
+}

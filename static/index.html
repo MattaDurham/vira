@@ -202,6 +202,28 @@
     </details>
   </section>
 
+  <!-- MOMENTS (a family event's best shots, relayed to who would want them; server/moments.py) -->
+  <section id="view-moments" class="view">
+    <div class="section-head"><h2>Moments</h2>
+      <button class="fchip sm" id="mom-refresh" style="margin-left:auto">Refresh</button>
+    </div>
+    <div class="radar-sub"><span>Share the day's photos</span>
+      <span class="hint" id="mom-status">Loading...</span></div>
+    <div id="mom-list" class="mom-list"></div>
+    <details id="mom-add-box" class="cov-routine">
+      <summary>Add a moment the calendar missed</summary>
+      <div class="cov-row">
+        <input id="mom-add-title" class="cov-input" placeholder="What happened (e.g. School play)" aria-label="What happened">
+        <input id="mom-add-date" class="cov-input" type="date" aria-label="Date">
+        <button class="btn small" id="mom-add">Add</button>
+      </div>
+    </details>
+    <details id="mom-setup-box" class="cov-routine">
+      <summary>Setup: whose photos, who wants them</summary>
+      <div id="mom-setup"></div>
+    </details>
+  </section>
+
   <!-- JOURNAL (the record of everything told to Vira, moved out of the brief) -->
   <section id="view-journal" class="view">
     <div class="section-head"><h2>Journal</h2>

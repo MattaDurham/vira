@@ -56,6 +56,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # The childcare routine is owner-entered and exists nowhere else;
          # its gap ledger is what keeps a question from being asked twice.
          "coverage.json",
+         # Family moments: the owner's photo sources and relay list, and the
+         # sends already made (so a person is never sent a moment twice).
+         "moments.json",
          "mail-accounts.json", "circuits.json", "evidence.json",
          # Duplicate decisions (Not the same) and the merge/fold log: owner
          # judgement that nothing can recompute.

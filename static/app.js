@@ -13586,6 +13586,304 @@ $("#cov-check")?.addEventListener("click", async () => {
   }
 });
 
+// ---------- moments: a family event's best shots, relayed ----------
+// server/moments.py finds the day's moments, ranks the shots and suggests
+// who would want them; this window edits each message and its picks, and
+// sends one person (or everyone) with one tap. The setup is the owner's.
+const MOM_ORIGIN = { calendar: "On the calendar", added: "Added by you", photos: "Photo burst" };
+let momState = null;
+// The day the window looks back from: today, or the day of a moment the
+// owner just added by hand.
+let momDay = "";
+
+async function loadMoments() {
+  const host = $("#mom-list");
+  if (!host) return;
+  try {
+    renderMoments(await api("/api/moments" + (momDay ? "?date=" + encodeURIComponent(momDay) : "")));
+  } catch (e) {
+    host.innerHTML = "";
+    briefEmpty(host, "Moments unavailable: " + errText(e));
+  }
+}
+
+function renderMoments(s) {
+  momState = s;
+  const all = s.days.flatMap((d) => d.moments);
+  const waiting = all.filter((m) => !m.dismissed).reduce((n, m) => n + m.waiting, 0);
+  const status = $("#mom-status");
+  const bits = [];
+  if (!s.media_index) bits.push("the media index is not built yet, so no photos show");
+  (s.errors || []).forEach((msg) => bits.push(msg));
+  if (!s.setup.sources.length) bits.push("add whose photos to use in Setup");
+  bits.push(waiting ? waiting + " message" + (waiting === 1 ? "" : "s") + " ready" : "nothing waiting");
+  if (status) status.textContent = bits.join(" - ");
+  const add = $("#mom-add-date");
+  if (add && !add.value) add.value = s.date;
+  renderMomList($("#mom-list"), s);
+  const box = $("#mom-setup-box");
+  if (box && !s.setup.sources.length && !s.setup.relay.length) box.open = true;
+  renderMomSetupForm($("#mom-setup"), JSON.parse(JSON.stringify(s.setup)));
+}
+
+function renderMomList(host, s) {
+  if (!host) return;
+  host.innerHTML = "";
+  let shown = 0;
+  s.days.forEach((d) => d.moments.forEach((m) => {
+    // A calendar moment with no photos yet is noise until they arrive;
+    // one the owner added always shows.
+    if (m.dismissed || (!m.shots.length && m.origin !== "added")) return;
+    shown += 1;
+    host.appendChild(momCard(m));
+  }));
+  if (!shown) {
+    briefEmpty(host, "No family moments in the last few days. A calendar event like a parade or "
+      + "a recital, or a burst of photos from your sources, shows up here.");
+  }
+}
+
+function momThumb(id, cls) {
+  const img = el("img", cls);
+  img.loading = "lazy";
+  img.src = "/api/media/thumb/" + encodeURIComponent(id);
+  img.alt = "Shared photo " + id;
+  return img;
+}
+
+function momCard(m) {
+  const card = el("article", "mom-card");
+  const date = new Date(m.date + "T12:00:00");
+  card.appendChild(el("div", "cov-gap-kicker mom-kicker",
+    (MOM_ORIGIN[m.origin] || "Moment") + " - "
+    + date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })));
+  card.appendChild(el("h3", "mom-title", m.title));
+  card.appendChild(el("p", "mom-sub", m.total_shots
+    ? `${m.total_shots} photo${m.total_shots === 1 ? "" : "s"} and videos shared that day; the best ${Math.min(m.best.length, m.shots.length)} are picked for everyone.`
+    : "No photos from your sources that day yet."));
+  if (m.shots.length) {
+    const strip = el("div", "mom-strip");
+    m.shots.slice(0, 12).forEach((sh) => {
+      const t = momThumb(sh.id, "mom-shot" + (m.best.includes(sh.id) ? " best" : ""));
+      t.title = sh.kind === "video" ? "Video" : (sh.faces ? sh.faces + " face" + (sh.faces === 1 ? "" : "s") : "Photo");
+      strip.appendChild(t);
+    });
+    card.appendChild(strip);
+  }
+  const list = el("div", "mom-people");
+  if (!m.recipients.length) {
+    list.appendChild(el("p", "mom-sub", "Nobody suggested yet: add people to the relay list in Setup."));
+  }
+  m.recipients.forEach((r) => list.appendChild(momPerson(m, r)));
+  card.appendChild(list);
+  const acts = el("div", "brief-acts cov-gap-acts");
+  const ready = m.recipients.filter((r) => !r.sent_at && !r.skipped);
+  if (ready.length > 1 && m.shots.length) {
+    const all = el("button", "brief-act", "Send to all " + ready.length);
+    all.addEventListener("click", async () => {
+      all.disabled = true;
+      let ok = 0;
+      for (const r of ready) {
+        try {
+          await post("/api/moments/" + encodeURIComponent(m.id) + "/send", momBody(m, r));
+          ok += 1;
+        } catch (e) {
+          toast("Not sent to " + r.name + ": " + errText(e));
+        }
+      }
+      toast("Sent to " + ok + " of " + ready.length);
+      loadMoments().catch(() => {});
+    });
+    acts.appendChild(all);
+  }
+  const dis = el("button", "brief-act x", "Not this one");
+  dis.addEventListener("click", async () => {
+    try {
+      await post("/api/moments/" + encodeURIComponent(m.id) + "/dismiss", { date: m.date });
+      loadMoments().catch(() => {});
+    } catch (e) {
+      toast("Could not dismiss: " + errText(e));
+    }
+  });
+  acts.appendChild(dis);
+  card.appendChild(acts);
+  return card;
+}
+
+function momBody(m, r) {
+  return { date: m.date, key: r.key, text: r.text, picks: r.picks };
+}
+
+function momPerson(m, r) {
+  const row = el("div", "mom-person" + (r.sent_at ? " sent" : r.skipped ? " skipped" : ""));
+  const head = el("div", "mom-person-head");
+  head.appendChild(el("strong", "", r.name));
+  head.appendChild(el("span", "mom-why", r.why));
+  if (r.sent_at) {
+    head.appendChild(el("span", "mom-done", "Sent "
+      + new Date(r.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })));
+  }
+  row.appendChild(head);
+  if (r.quote) row.appendChild(el("p", "cov-gap-src", "“" + r.quote + "”"));
+  if (r.result?.note) row.appendChild(el("p", "cov-gap-cal", r.result.note));
+  if (r.sent_at) return row;
+  const save = (fields) => put("/api/moments/" + encodeURIComponent(m.id) + "/recipient",
+    Object.assign({ date: m.date, key: r.key }, fields)).catch((e) => toast("Not saved: " + errText(e)));
+  const text = el("textarea", "mom-text");
+  text.value = r.text;
+  text.rows = 3;
+  text.setAttribute("aria-label", "Message to " + r.name);
+  text.addEventListener("change", () => { r.text = text.value; save({ text: text.value }); });
+  row.appendChild(text);
+  if (m.shots.length) {
+    const picks = el("div", "mom-picks");
+    m.shots.slice(0, 12).forEach((sh) => {
+      const t = momThumb(sh.id, "mom-pick" + (r.picks.includes(sh.id) ? " on" : ""));
+      t.tabIndex = 0;
+      t.setAttribute("role", "checkbox");
+      t.setAttribute("aria-checked", r.picks.includes(sh.id) ? "true" : "false");
+      const flip = () => {
+        r.picks = r.picks.includes(sh.id) ? r.picks.filter((p) => p !== sh.id) : [...r.picks, sh.id];
+        t.classList.toggle("on", r.picks.includes(sh.id));
+        t.setAttribute("aria-checked", r.picks.includes(sh.id) ? "true" : "false");
+        count.textContent = r.picks.length + " attached";
+        save({ picks: r.picks });
+      };
+      t.addEventListener("click", flip);
+      t.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); flip(); } });
+      picks.appendChild(t);
+    });
+    const count = el("span", "mom-count", r.picks.length + " attached");
+    picks.appendChild(count);
+    row.appendChild(picks);
+  }
+  const acts = el("div", "brief-acts");
+  const send = el("button", "brief-act", r.skipped ? "Send anyway" : "Send");
+  send.addEventListener("click", async () => {
+    send.disabled = true;
+    try {
+      const done = await post("/api/moments/" + encodeURIComponent(m.id) + "/send",
+        Object.assign(momBody(m, r), { text: text.value }));
+      toast(done.note || `Sent to ${r.name} with ${done.files} photo${done.files === 1 ? "" : "s"}`);
+      loadMoments().catch(() => {});
+    } catch (e) {
+      send.disabled = false;
+      toast("Not sent: " + errText(e));
+    }
+  });
+  acts.appendChild(send);
+  if (!r.skipped) {
+    const skip = el("button", "brief-act x", "Skip");
+    skip.addEventListener("click", async () => {
+      await save({ skipped: true });
+      loadMoments().catch(() => {});
+    });
+    acts.appendChild(skip);
+  }
+  row.appendChild(acts);
+  return row;
+}
+
+// One person row in the setup: a name typed or picked from the CRM. Picking
+// fills the CRM id, which is how Vira finds the person's thread and handle.
+function momPersonRow(p, extra, onRemove) {
+  const row = el("div", "cov-row mom-setup-row");
+  const name = covInput(p.name, "Name");
+  const found = el("div", "mom-found");
+  let timer = null;
+  name.addEventListener("input", () => {
+    p.name = name.value.trim();
+    p.person_id = "";
+    clearTimeout(timer);
+    const q = name.value.trim();
+    if (q.length < 2) { found.innerHTML = ""; return; }
+    timer = setTimeout(async () => {
+      try {
+        const res = await api("/api/people?limit=5&q=" + encodeURIComponent(q));
+        found.innerHTML = "";
+        (res.people || []).slice(0, 5).forEach((hit) => {
+          const chip = el("button", "fchip sm", hit.name);
+          chip.addEventListener("click", () => {
+            p.name = hit.name;
+            p.person_id = hit.id;
+            name.value = hit.name;
+            found.innerHTML = "";
+            linked.textContent = "in your contacts";
+          });
+          found.appendChild(chip);
+        });
+      } catch (e) { found.innerHTML = ""; }
+    }, 250);
+  });
+  const handle = covInput(p.handle, "Phone or iMessage address (if not in contacts)");
+  handle.addEventListener("change", () => { p.handle = handle.value.trim(); });
+  const linked = el("span", "mom-linked", p.person_id ? "in your contacts" : "");
+  const rm = el("button", "fchip sm", "Remove");
+  rm.addEventListener("click", onRemove);
+  row.append(name, handle, ...extra, linked, rm, found);
+  return row;
+}
+
+function renderMomSetupForm(host, draft) {
+  if (!host) return;
+  host.innerHTML = "";
+  const repaint = () => renderMomSetupForm(host, draft);
+  host.appendChild(el("h4", "cov-h", "Whose photos"));
+  host.appendChild(el("p", "mom-sub", "The people whose shared photos are the family's photos. "
+    + "Photos in your thread with them, and photos they post in groups, are used."));
+  draft.sources.forEach((p, i) => host.appendChild(
+    momPersonRow(p, [], () => { draft.sources.splice(i, 1); repaint(); })));
+  const addSrc = el("button", "fchip sm", "Add a photo source");
+  addSrc.addEventListener("click", () => { draft.sources.push({ name: "", person_id: "", handle: "" }); repaint(); });
+  host.appendChild(addSrc);
+
+  host.appendChild(el("h4", "cov-h", "Who wants them"));
+  host.appendChild(el("p", "mom-sub", "Suggested for every moment unless you name the occasions. "
+    + "Anyone who sent a gift for the occasion is suggested too."));
+  draft.relay.forEach((p, i) => {
+    const rel = covInput(p.relation, "Relation (e.g. Grandparent)");
+    rel.addEventListener("change", () => { p.relation = rel.value.trim(); });
+    const occ = covInput((p.occasions || []).join(", "), "Only for (e.g. birthday, recital); blank = all");
+    occ.addEventListener("change", () => { p.occasions = occ.value.split(/[,\s]+/).filter(Boolean); });
+    host.appendChild(momPersonRow(p, [rel, occ], () => { draft.relay.splice(i, 1); repaint(); }));
+  });
+  const addRel = el("button", "fchip sm", "Add a person");
+  addRel.addEventListener("click", () => {
+    draft.relay.push({ name: "", person_id: "", handle: "", relation: "", occasions: [] });
+    repaint();
+  });
+  host.appendChild(addRel);
+
+  const foot = el("div", "cov-row cov-foot");
+  const save = el("button", "btn small", "Save setup");
+  save.addEventListener("click", async () => {
+    try {
+      renderMoments(await put("/api/moments/setup", draft));
+      toast("Setup saved");
+    } catch (e) {
+      toast("Setup not saved: " + errText(e));
+    }
+  });
+  foot.append(save);
+  host.appendChild(foot);
+}
+
+$("#mom-refresh")?.addEventListener("click", () => loadMoments());
+$("#mom-add")?.addEventListener("click", async () => {
+  const title = $("#mom-add-title").value.trim();
+  const date = $("#mom-add-date").value;
+  if (!title || !date) { toast("Name the moment and pick its day"); return; }
+  try {
+    await post("/api/moments", { title, date });
+    momDay = date;
+    $("#mom-add-title").value = "";
+    loadMoments().catch(() => {});
+    toast("Moment added");
+  } catch (e) {
+    toast("Not added: " + errText(e));
+  }
+});
+
 function renderSourceHealth(host, sick) {
   if (!sick.length) return;
   const box = el("div", "brief-health");
@@ -18123,6 +18421,7 @@ function viewLoad(id) {
   if (id === "journal") loadJournal().catch(() => {});
   if (id === "admin") loadAdmin().catch(() => {});
   if (id === "coverage") loadCoverage().catch(() => {});
+  if (id === "moments") loadMoments().catch(() => {});
   if (id === "showroom") loadShowroom().catch(() => {});
   if (id === "attention") attentionTabLoad(attentionTab);
   if (id === "subs") loadSubs().catch(() => {});
@@ -23876,6 +24175,8 @@ const WINDOWS = [
     icon: "M4 6h16v12H4zM4 7l8 6 8-6M15 17l1.5 1.5L20 15" },
   { id: "coverage", title: "Childcare", w: 640,
     icon: "M8 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM16.5 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM3.5 20c.4-4 2.2-6.5 4.5-6.5s4.1 2.5 4.5 6.5M13.5 20c.3-3 1.4-5 3-5s2.7 2 3 5M8 10v3.5" },
+  { id: "moments", title: "Moments", w: 680,
+    icon: "M4 7h3l1.5-2h7L17 7h3v12H4zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM17.5 10h.5" },
   { id: "journal", title: "Journal", w: 520,
     icon: "M6 3h9l3 3v15H6zM15 3v3h3M9 11h6M9 14.5h4" },
   { id: "applications", title: "Applications", w: 780,
@@ -28100,6 +28401,7 @@ const HASH_ROUTES = {
   "review": "review",
   "coverage": "coverage",
   "childcare": "coverage",
+  "moments": "moments",
   "attention": (rest) => { setAttentionTab(rest[0] || "now", { defer: true }); openApp("attention"); },
   "showroom": "showroom",
   "triage": (rest) => revealTriage(decodeURIComponent(rest.join("/"))),

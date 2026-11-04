@@ -39,6 +39,20 @@ end run
 
 _SERVICES = {"imessage": "iMessage", "sms": "SMS"}
 
+# A file send: the same participant lookup, with the file as the payload.
+# The POSIX file reference is made outside the Messages tell block, where
+# AppleScript resolves it as a file rather than as Messages' own class.
+FILE_SCRIPT = '''
+on run {targetHandle, filePath}
+    set theFile to POSIX file filePath
+    tell application "Messages"
+        set targetService to 1st account whose service type = %s
+        set targetBuddy to participant targetHandle of targetService
+        send theFile to targetBuddy
+    end tell
+end run
+'''
+
 # A group send is addressed by the chat's own guid ("iMessage;+;chat..."),
 # never a participant: the guid pins BOTH the thread and the service it
 # rides, so there is no iMessage-vs-SMS ladder here — Messages routes on
@@ -307,6 +321,32 @@ def send_to_group(chat_guid, text, chat_ids=None, timeout=20):
                 "check the thread in Messages.app.")
     channel = "sms" if chat_guid.lower().startswith("sms") else "imessage"
     return {"guid": chat_guid, "channel": channel, "note": note}
+
+
+def send_file(path, person_id=None, handle=None, channel=None, timeout=60):
+    """Send one file (a photo or a video) to a person. `channel` is the
+    service the accompanying text already went out on, so a text that fell
+    back to SMS carries its pictures the same way. Messages copies the file
+    when it sends, so `path` must be readable by Messages (a user folder).
+    Returns {handle, channel}; raises like send_message."""
+    if not settings.IS_MAC:
+        raise RuntimeError(
+            "iMessage sending needs macOS (Messages.app) — not available "
+            "on this platform")
+    target = handle or (best_handle(person_id) if person_id else None)
+    if not target:
+        raise ValueError("no iMessage handle for this person")
+    if not path:
+        raise ValueError("no file to send")
+    chosen = resolve_channel(person_id, target,
+                             override=channel if channel in _SERVICES else None)
+    res = subprocess.run(
+        ["osascript", "-", target, str(path)],
+        input=FILE_SCRIPT % _SERVICES[chosen],
+        capture_output=True, text=True, timeout=timeout)
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip()[-400:] or "osascript failed")
+    return {"handle": target, "channel": chosen}
 
 
 def send_imessage(text, person_id=None, handle=None, timeout=20):
