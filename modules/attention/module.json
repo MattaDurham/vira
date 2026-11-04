@@ -7,13 +7,15 @@
   "windows": [
     "attention",
     "journal",
-    "coverage"
+    "coverage",
+    "moments"
   ],
   "submodules": [
     "now",
     "brief",
     "review",
     "assistant",
-    "childcare"
+    "childcare",
+    "moments"
   ]
 }

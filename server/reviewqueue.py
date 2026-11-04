@@ -12,10 +12,11 @@ Vira's own `proposed` ideas.
 So this is an AGGREGATOR, not a lessons panel. Each contributing store is a
 SOURCE registered here with one reader and (optionally) one actor; the queue
 knows nothing about any store's file format beyond what its reader returns.
-Adding a source is adding a `register(Source(...))` call. Eight today:
+Adding a source is adding a `register(Source(...))` call. Nine today:
 lesson proposals, the self-record inbox, open adjudication flags, proposed
 ideas, un-staged journal instructions, contact-worthy unknown senders, a
-pending Morning Picker batch, and childcare pickups nobody is covering.
+pending Morning Picker batch, childcare pickups nobody is covering, and
+family moments whose photos are waiting to be relayed.
 
 FOUR RULES THIS MODULE IS BENT AROUND:
 
@@ -153,6 +154,13 @@ def coverage_store():
     return coverage.STORE
 
 
+def moments_store():
+    """The family-moments store - read through moments.pending(), so the
+    root is moments.STORE (a module attribute; tests repoint it)."""
+    from . import moments
+    return moments.STORE
+
+
 def roots():
     """Every filesystem root this module reads. Tests iterate this to assert
     the whole set points into the fixture.
@@ -172,6 +180,7 @@ def roots():
         "journal_store": journal_store(),
         "picker_state": picker_state(),
         "coverage_store": coverage_store(),
+        "moments_store": moments_store(),
     }
 
 
@@ -924,6 +933,37 @@ register(Source(
     "coverage", "Childcare",
     "a pickup nobody is covering - say who is taking it",
     _coverage_read, _coverage_act, dynamic=True))
+
+
+# --------------------------------------------- source: family moments
+
+def _moments_read():
+    """One pointer row per recent family moment whose shots have not gone
+    to the people who would want them. The send happens in the Moments
+    window, where the pictures and each message are in view."""
+    from . import moments
+    rows = []
+    for m in moments.pending():
+        names = [r["name"] for r in m["recipients"] if not r["sent_at"] and not r["skipped"]]
+        who = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        why = (f"{m['total_shots']} photo{'s' if m['total_shots'] != 1 else ''} "
+               f"from {m['date']}; would go to {who}")
+        rows.append(item("moments", f"{m['date']}:{m['id']}", m["title"] + ": send the photos",
+                         why=why, stamp=m["date"], actions=["dismiss"],
+                         ref="Moments", open="#moments", labels={"dismiss": "Not this one"}))
+    return rows
+
+
+def _moments_act(raw_id, action):
+    from . import moments
+    date, _, moment_id = raw_id.partition(":")
+    return dict(moments.dismiss(moment_id, date), action=action, id=raw_id)
+
+
+register(Source(
+    "moments", "Family moments",
+    "a family event's photos are ready to share - open Moments to send them",
+    _moments_read, _moments_act, actions=("dismiss",)))
 
 
 # --------------------------------------------- source: Morning Picker

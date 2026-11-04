@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from server import coverage, ideas, journal, reviewqueue, subs_visuals, triage
+from server import coverage, ideas, journal, moments, reviewqueue, subs_visuals, triage
 
 
 PROPOSAL_A = "Never merge a branch without running the suite in the live tree."
@@ -128,6 +128,10 @@ class _Case(unittest.TestCase):
         p9 = mock.patch.object(coverage, "STORE", self.root / "coverage.json")
         p9.start()
         self.addCleanup(p9.stop)
+        p10 = mock.patch.object(moments, "STORE", self.root / "moments.json")
+        p10.start()
+        self.addCleanup(p10.stop)
+        moments._pending_cache.clear()
 
     # ---------------------------------------------------------- helpers
 
@@ -196,10 +200,10 @@ def cand(handle, name="", worthy="yes", business=False, evidence="",
 
 class RegistryTests(_Case):
 
-    def test_the_eight_sources_are_registered(self):
+    def test_the_nine_sources_are_registered(self):
         self.assertEqual(set(reviewqueue.SOURCES),
-                         {"lessons", "inbox", "flags", "ideas",
-                          "journal", "senders", "picker", "coverage"})
+                         {"lessons", "inbox", "flags", "ideas", "journal",
+                          "senders", "picker", "coverage", "moments"})
 
     def test_every_root_points_into_the_fixture(self):
         for name, path in reviewqueue.roots().items():

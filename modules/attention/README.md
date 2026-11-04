@@ -9,8 +9,9 @@ is waiting; the Daily Brief is the morning answer to "who and what deserves
 my attention", with the Journal as the knowledge the owner types into it;
 Review is every decision waiting on the owner in one queue; the assistant
 is the standing executive - commitments, quiet reminders, calendar
-suggestions, event prep - and Childcare is the coverage routine. The Journal
-and Childcare have windows of their own.
+suggestions, event prep - Childcare is the coverage routine, and Moments
+relays a family event's best photos to the people who would want them. The
+Journal, Childcare and Moments have windows of their own.
 
 ## Where to go next
 
@@ -25,6 +26,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 - [Review](review/README.md) - One queue for every decision waiting on the owner, and how often each standing rule breaks. (4 files)
 - [Assistant](assistant/README.md) - The standing executive: commitments, quiet reminders, desktop pins, calendar suggestions, appointments from reminders, event prep. (28 files)
 - [Childcare](childcare/README.md) - Childcare coverage: notice a pickup nobody is covering, block it, ask once. (2 files)
+- [Moments](moments/README.md) - Family moments: a family event's best shots, relayed to the people who would want them. (2 files)
 
 ### Neighbours
 
@@ -34,8 +36,8 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 ### In the app
 
-Windows: `attention`, `journal`, `coverage` (ids from `WINDOWS` in `static/app.js`).
+Windows: `attention`, `journal`, `coverage`, `moments` (ids from `WINDOWS` in `static/app.js`).
 
-44 tracked files across 5 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
+46 tracked files across 6 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
 
 <!-- moduletree:end -->
