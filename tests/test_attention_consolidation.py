@@ -64,9 +64,8 @@ class AttentionConsolidationContracts(unittest.TestCase):
         self.assertIn('column-width: 255px', self.css)
 
     def test_attention_cards_activate_their_one_safe_primary_destination(self):
-        self.assertIn(
-            'cardAction(row, () => verb.run(btn, row), { hint: verb.title });',
-            self.app)
+        # A Now card's own click (session window on the button, full detail
+        # on the card) is run for real in tests/attention_inspect_ui.js.
         self.assertIn(
             'cardAction(row, () => openReviewTarget(it), {', self.app)
         self.assertIn('if (!it.open) {\n    openReviewContext(it);', self.app)
