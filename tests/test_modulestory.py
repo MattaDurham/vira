@@ -1,8 +1,7 @@
 """The module story: right-click a window, "What is this?".
 
 What is worth pinning, because each is a decision:
-  1. The corpus is the LIBRARY — read and unread alike. A module's build
-     story is mostly documents already marked read, which queue() excludes.
+  1. The corpus is the LIBRARY — every registered document.
   2. The window id itself always counts as a tag, so a vocabulary that
      converges on the id needs no table edit.
   3. Companions alias to their host; ids with no row answer None (the route
@@ -58,11 +57,9 @@ class Base(unittest.TestCase):
             f"---\n\n## Goal\n\n{goal}\n\n## Shipped\n\n{body}\n",
             encoding="utf-8")
 
-    def reg(self, title, kind="plan", locator=None, tags=None, read=False):
+    def reg(self, title, kind="plan", locator=None, tags=None):
         locator = locator or "/docs/" + title.replace(" ", "-") + ".html"
         rid = readinglist.register(title, kind, locator)["id"]
-        if read:
-            readinglist.complete(rid, True)
         if tags is not None:
             s = {"entries": {}, "last_pass": ""}
             if doctags.STORE.exists():
@@ -103,11 +100,11 @@ class StoryTests(Base):
         self.assertEqual([d["title"] for d in s["docs"]], ["Brief plan"])
         self.assertEqual(s["counts"], {"plan": 1})
 
-    def test_read_documents_are_the_story_too(self):
-        self.reg("Old brief plan", tags=["brief"], read=True)
+    def test_a_document_carries_no_read_state_into_the_story(self):
+        self.reg("Old brief plan", tags=["brief"])
         s = modulestory.story("brief")
         self.assertEqual(len(s["docs"]), 1)
-        self.assertTrue(s["docs"][0]["read"])
+        self.assertNotIn("read", s["docs"][0])
 
     def test_the_window_id_itself_counts_as_a_tag(self):
         # "feed" is not in its own tags list; the implicit {win_id} is what

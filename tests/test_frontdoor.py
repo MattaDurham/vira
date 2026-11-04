@@ -60,7 +60,7 @@ class ReadingRoomBuildTest(unittest.TestCase):
         return readingroom.load_room(slug)["items"]
 
     def test_ids_are_stable_across_rebuilds(self):
-        """A repass must not orphan the owner's done-marks — the whole
+        """A repass must not orphan an item's vault link — the whole
         reason ids are derived server-side instead of by the model."""
         first = readingroom.build("w", "W", "", [item()])
         ids1 = [i["id"] for i in self.data_of()]
@@ -204,14 +204,14 @@ class FrontDoorStateTest(unittest.TestCase):
             self.assertIn("ready", m)
             json.dumps(m)          # the payload must be serializable
 
-    def _reader(self, pages=(), queued=0):
+    def _reader(self, pages=(), docs=0):
         """The probe reads two sources since the 2026-07-27 widening, so both
         have to be pinned or the machine's real store decides the answer."""
         from server import readinglist
         with mock.patch.object(frontdoor.reading, "list_pages",
                                return_value=list(pages)), \
              mock.patch.object(readinglist, "counts",
-                               return_value={"queued": queued}):
+                               return_value={"total": docs}):
             return frontdoor._reader_state()
 
     def test_reader_is_dormant_with_neither_rooms_nor_a_queue(self):
@@ -223,17 +223,18 @@ class FrontDoorStateTest(unittest.TestCase):
         self.assertTrue(st["ready"])
         self.assertIn("1 reading room", st["detail"])
 
-    def test_a_queue_alone_makes_the_reader_live(self):
+    def test_documents_alone_make_the_reader_live(self):
         # a Reader holding dossiers but no rooms is set up, and must not mount
         # its front door over a full list
-        st = self._reader(queued=20)
+        st = self._reader(docs=20)
         self.assertTrue(st["ready"])
-        self.assertIn("20 to read", st["detail"])
+        self.assertIn("20 documents", st["detail"])
+        self.assertNotIn("to read", st["detail"])
         self.assertNotIn("reading room", st["detail"])
 
     def test_both_sources_are_named(self):
-        st = self._reader(pages=[{"name": "a"}], queued=3)
-        self.assertIn("3 to read", st["detail"])
+        st = self._reader(pages=[{"name": "a"}], docs=3)
+        self.assertIn("3 documents", st["detail"])
         self.assertIn("1 reading room", st["detail"])
         self.assertEqual(st["count"], 4)
 

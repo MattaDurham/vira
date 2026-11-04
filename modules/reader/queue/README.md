@@ -2,10 +2,11 @@
 
 Vira > [Modules](../../README.md) > [Reader](../README.md) > Queue
 
-The Reader's queue, done-marks, and saved plans.
+The Reader's documents list, room page listing, and saved plans.
 
-`readinglist` is the queue itself; `reading` keeps done-marks for
-reading-room pages; `plans` is the durable vault home and registry for Plan-
+`readinglist` is Vira's Documents (every document stays listed; there is no
+read state since 2026-11-04); `reading` lists the reading-room pages;
+`plans` is the durable vault home and registry for Plan-
 mode output (Plans folded into the Reader on 2026-07-27, reached through
 READER_ALIAS so every old link still lands).
 
@@ -26,7 +27,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | File | What it is |
 |---|---|
 | `server/plans.py` | Saved plans — the durable vault home + registry for Plan-mode output. |
-| `server/reading.py` | Done-marks for reading-room pages (static/reading/*). |
+| `server/reading.py` | Reading-room pages: which rooms exist and what a Reader tab shows for one. |
 | `server/readinglist.py` | The Reader's queue: everything worth reading, wherever it actually lives. |
 
 **Tests**
@@ -37,12 +38,12 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_plan_output.py` | A plan is an OUTPUT SHAPE, not a permission mode. |
 | `tests/test_plans.py` | Saved plans — the vault home + registry for Plan-mode output. |
 | `tests/test_reader_grid_reveal.py` | Regression contract for the Reader grid's scroll reveal. |
-| `tests/test_reading.py` | Reading-room done-marks: per-list JSON stores under data/reading/, toggle idempotence, legacy-set merge, and list-name validation. |
-| `tests/test_readinglist.py` | The Reader's queue: soft pointers, completion that removes, graceful sections. |
+| `tests/test_reading.py` | Reading-room pages: what the Reader lists and what a room's tab shows. |
+| `tests/test_readinglist.py` | Vira's Documents: soft pointers, and no read state at all. |
 
-### Routes (15)
+### Routes (11)
 
-Prefixes: `/api/reading/list`, `/api/reading/pages`, `/api/reading/file`, `/api/reading/thumb`, `/api/reading/source-resolve`, `/api/reading/{name}/done`, `/api/plans`
+Prefixes: `/api/reading/list`, `/api/reading/pages`, `/api/reading/file`, `/api/reading/thumb`, `/api/reading/source-resolve`, `/api/plans`
 
 - `GET /api/plans`
 - `GET /api/plans/{pid}`
@@ -52,20 +53,15 @@ Prefixes: `/api/reading/list`, `/api/reading/pages`, `/api/reading/file`, `/api/
 - `GET /api/reading/list`
 - `POST /api/reading/list/tag`
 - `POST /api/reading/list/backfill`
-- `POST /api/reading/list/{item_id}/complete`
 - `DELETE /api/reading/list/{item_id}`
-- `GET /api/reading/list/{item_id}`
 - `GET /api/reading/file/{item_id}`
 - `GET /api/reading/thumb/{item_id}`
-- `GET /api/reading/{name}/done`
-- `POST /api/reading/{name}/done`
 
-### Stores (3)
+### Stores (2)
 
 Instance state under git-ignored `data/`; never hand-edit (see `AGENTS.local.md`, section 5).
 
 - `data/reading-list.json`
-- `data/reading-done.json`
 - `data/plans.json`
 
 ### System map

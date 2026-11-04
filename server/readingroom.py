@@ -23,9 +23,9 @@ source of truth.
 
 Stable ids are the other reason to centralize this. An item's id is
 derived from its URL (or its title when it has none), so REBUILDING a
-room — a wider repass, a fresh sweep months later — keeps every done-mark
-the owner has earned (done-marks stay in reading.py's per-slug store,
-keyed by the same slug). Ids the model invents would not survive that.
+room — a wider repass, a fresh sweep months later — keeps every item's
+identity, so its vault note and any owner-attached link stay joined to it.
+Ids the model invents would not survive that.
 
 THE SKILL THAT BUILDS A ROOM is fully specified and topic-agnostic:
 frontdoor's reader module carries the interview (subject / why / modes /
@@ -85,7 +85,7 @@ def _text(v, field, cap=MAX_TEXT, required=False):
 
 def item_id(it):
     """Stable across rebuilds: the URL identifies the thing, and a room
-    re-run months later must not orphan the owner's done-marks. Falls
+    re-run months later must not orphan an item's vault link. Falls
     back to the title for items with no link."""
     basis = (it.get("url") or "").strip().lower() or _text(
         it.get("title"), "title").lower()
@@ -220,13 +220,11 @@ def _shell(slug, title, subtitle, items, legacy_key="", built=""):
     <option value="new">Newest</option>
     <option value="old">Oldest</option>
   </select>
-  <button class="chip" id="hideDone" aria-pressed="false">Hide done</button>
   <button class="clear" id="clear">Reset</button>
   <span class="count" id="count"></span>
 </div></div>
 <main id="list"></main>
-<footer>Built {built} by Vira. Personal layer - served locally, never committed.
-Done-marks sync through Vira (data/reading/), shared across all your devices.</footer>
+<footer>Built {built} by Vira. Personal layer - served locally, never committed.</footer>
 <script>window.ROOM={room_json};window.DATA={data};</script>
 <script src="/reading-room.js"></script>
 </body>
@@ -392,7 +390,7 @@ def clean_definition(raw):
 
 def set_meta(slug, title=None, subtitle=None):
     """Rename a room's title and/or the line under it. Safe by
-    construction: the SLUG keys the done-mark store and the item ids, so a
+    construction: the SLUG keys the store and the item ids, so a
     retitle orphans nothing — it flows to the switcher, the export page and
     the list on the next read. None keeps the existing value; an empty
     title is refused (a room must be nameable)."""
@@ -460,9 +458,8 @@ def build(slug, title, subtitle, items, legacy_key="", notify_owner=True):
     """Validate a proposed room and write THE STORE. Returns a summary dict.
 
     Rebuilding an existing slug is deliberate and supported — a repass
-    replaces the item list while the done-mark store (keyed by the same
-    slug, with ids stable across rebuilds) carries the owner's progress
-    forward untouched. A rebuild that lands new items pings the owner."""
+    replaces the item list, with ids stable across rebuilds. A rebuild
+    that lands new items pings the owner."""
     slug = (slug or "").strip().lower()
     if not SLUG_RE.match(slug):
         raise BuildError(
@@ -702,7 +699,7 @@ def merge_items(slug, new_items, notify_owner=True):
 
     Existing items ride through clean_items' own dedupe, so an incoming
     duplicate either vanishes or wins only by being the richer record;
-    ids stay URL-derived so done-marks survive; the additions ping fires
+    ids stay URL-derived so vault links survive; the additions ping fires
     through the same path a rebuild uses. Raises KeyError on an unknown
     room, BuildError on a bad payload."""
     if not isinstance(new_items, list):
@@ -745,7 +742,7 @@ def update_prompt(slug):
 
     A room is a durable tracker over a standing subject, so 'update' means:
     carry every existing item forward (their ids are stable by URL — dropping
-    one orphans the owner's done-marks), sweep for what is NEW since the room
+    one orphans its vault link), sweep for what is NEW since the room
     was last refreshed, and rebuild the same slug. The session reads the
     current items off the store file rather than having them inlined here — a
     real room can hold hundreds of items and the store is the truth anyway.
@@ -840,7 +837,7 @@ def update_prompt(slug):
         "stop; do not pad.",
         f"3. Add what belongs via the mcp__vira__add_reading_room_items "
         f"tool with slug \"{slug}\" — pass ONLY the new items; the server "
-        "merges by stable id, keeps every existing item and its done-marks, "
+        "merges by stable id, keeps every existing item, "
         "and notifies the owner of what arrived. NEVER re-emit the whole "
         "room (create_reading_room is for restructuring, not refreshes).",
         "4. Report what you added, in one short list.",
@@ -872,13 +869,9 @@ _LEGACY_KEY_RE = re.compile(r'LS_KEY\s*=\s*"([^"]+)"')
 
 
 def migrate(slug):
-    """Fold a legacy page-based room into the store, remapping done-marks.
+    """Fold a legacy page-based room into the store.
 
-    Pre-generator pages carry their own item ids (a different hash scheme),
-    so a naive rebuild would orphan every mark the owner has earned —
-    measured on the Anthropic room: 345 of 345 ids differ. Each marked old
-    id is translated to the generator id of the SAME item before the store
-    is written. The page file is renamed to .html.migrated (kept as a
+    The page file is renamed to .html.migrated (kept as a
     backup, invisible to globs) — the export route re-renders the same URL
     from the store."""
     from . import reading
@@ -900,21 +893,9 @@ def migrate(slug):
     m = _LEGACY_KEY_RE.search(text)
     legacy_key = m.group(1) if m else ""
 
-    # Old id -> the item, so marks translate by identity of the THING.
-    by_old = {str(it.get("id")): it for it in items if isinstance(it, dict)}
-    old_done = [i for i in reading.get_done(slug) if i in by_old]
-
     res = build(slug, title, subtitle, items, legacy_key=legacy_key)
-
-    remapped = 0
-    for old_id in old_done:
-        new_id = item_id(by_old[old_id])
-        if new_id != old_id:
-            reading.set_done(slug, new_id, True)
-            remapped += 1
     page.rename(page.with_suffix(".html.migrated"))
-    return {**res, "remapped_marks": remapped,
-            "legacy_key": legacy_key, "backup": page.name + ".migrated"}
+    return {**res, "legacy_key": legacy_key, "backup": page.name + ".migrated"}
 
 
 def summary_line(res):

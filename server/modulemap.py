@@ -190,13 +190,13 @@ DEFAULT_MODULES = [
              "non-regenerable files. Secrets only in the Keychain.",
      "links": [], "keywords": ["config", "watermark", "backup"],
      "updated": TODAY},
-    {"id": "reading-store", "name": "Reading progress", "layer": "store",
-     "group": "know", "kind": "JSON files (data/reading/)",
-     "what": "What the owner has finished in each reading room, one store "
-             "per room. Server-side rather than per-browser on purpose: "
-             "progress made on the phone has to be there at the desk.",
-     "links": [], "keywords": ["reading", "done marks", "progress"],
-     "updated": TODAY},
+    {"id": "reading-store", "name": "Reader documents", "layer": "store",
+     "group": "know", "kind": "JSON file (data/reading-list.json)",
+     "what": "Soft pointers to every document Vira made for the owner: "
+             "title, kind and where it lives. No read state - every "
+             "document stays available to read again.",
+     "links": [], "keywords": ["reading", "documents", "library"],
+     "updated": "2026-11-04"},
 
     # ---------- engines: the server subsystems ----------
     {"id": "watcher", "name": "iMessage watcher", "layer": "engine",
@@ -787,12 +787,11 @@ DEFAULT_MODULES = [
      "what": "Reading rooms: researched consumption queues on one subject "
              "each — the talks, papers, posts and episodes worth the "
              "time, ranked and deduplicated, filtered by watch/listen/"
-             "read. Done-marks live server-side, so a room reads the same "
-             "on the phone as at the desk. Any number of rooms; each is "
-             "its own queue.",
-     "links": [{"to": "reading-store", "how": "tracks progress in"},
+             "read. Any number of rooms; each is its own queue, and "
+             "nothing in one is ever marked read or hidden as done.",
+     "links": [{"to": "reading-store", "how": "lists documents from"},
                {"to": "front-doors", "how": "is set up by"}],
-     "endpoints": ["/api/reading/pages", "/api/reading/{name}/done"],
+     "endpoints": ["/api/reading/pages", "/api/reading/list"],
      "keywords": ["reader", "reading room", "queue", "watch listen read"],
      "updated": TODAY},
     # Surfaces the live registry grew after the seed was written; copied in

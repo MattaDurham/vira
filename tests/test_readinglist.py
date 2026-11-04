@@ -1,15 +1,16 @@
-"""The Reader's queue: soft pointers, completion that removes, graceful sections.
+"""Vira's Documents: soft pointers, and no read state at all.
 
-The three behaviours worth pinning, because each is a decision rather than an
+The behaviours worth pinning, because each is a decision rather than an
 implementation detail:
-  1. register() is idempotent on the locator AND never resurrects a read item -
-     both the producers and the backfill sweep call it repeatedly.
-  2. Completion REMOVES from the queue. The entry survives so the sweep cannot
-     re-add it and so the mark can be undone.
-  3. Section progress degrades to whole-document silently when a document has
-     no anchors, because most documents will not have them.
+  1. register() is idempotent on the locator - both the producers and the
+     backfill sweep call it repeatedly.
+  2. Nothing is ever filed away as read (owner's call, 2026-11-04): an old
+     document, a per-session retro and an entry carrying a pre-2026-11-04
+     `completed` stamp are all listed exactly like a fresh one, and the
+     routes that marked documents read are gone.
 """
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -35,7 +36,6 @@ class Base(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
         self.store = root / "reading-list.json"
-        self.readdir = root / "reading"
         self.static = root / "static"
         self.docs = self.static / "docs"
         self.vault = root / "vault"
@@ -56,7 +56,6 @@ class Base(unittest.TestCase):
                   mock.patch.object(readinglist, "DOCS_DIR", self.docs),
                   mock.patch.object(readinglist, "WALKTHROUGH_DIR", self.films),
                   mock.patch.object(plans, "REG_PATH", root / "plans.json"),
-                  mock.patch.object(reading, "STORE_DIR", self.readdir),
                   # the only setting these paths read is vault_root; anything
                   # else answers empty, which every reader treats as dormant
                   mock.patch.object(settings, "get", side_effect=self._setting)):
@@ -90,28 +89,20 @@ class RegisterTests(Base):
         it = readinglist.register("Where we stand", "dossier", "/explainer/audit/")
         self.assertTrue(it["id"].startswith("rl_"))
         self.assertEqual(it["kind"], "dossier")
-        self.assertIsNone(it["completed"])
-        # the slug is used as a reading.py list name, which validates hard
+        self.assertNotIn("completed", it)       # no read state is ever written
+        # the slug keys the dedupe and must stay a reading.py-legal name
         self.assertRegex(it["slug"], reading.NAME_RE)
 
     def test_register_is_idempotent_on_the_locator(self):
         a = readinglist.register("Audit", "dossier", "/explainer/audit/")
         b = readinglist.register("Audit", "dossier", "/explainer/audit/")
         self.assertEqual(a["id"], b["id"])
-        self.assertEqual(len(readinglist.queue()), 1)
+        self.assertEqual(len(readinglist.library()), 1)
 
     def test_reregistering_refreshes_the_title(self):
         readinglist.register("Old name", "dossier", "/explainer/audit/")
         readinglist.register("New name", "dossier", "/explainer/audit/")
-        self.assertEqual(readinglist.queue()[0]["title"], "New name")
-
-    def test_reregistering_never_un_reads(self):
-        # the sweep re-walks the same directories; a read document must stay read
-        it = readinglist.register("Audit", "dossier", "/explainer/audit/")
-        readinglist.complete(it["id"])
-        readinglist.register("Audit", "dossier", "/explainer/audit/")
-        self.assertEqual(readinglist.queue(), [])
-        self.assertEqual(len(readinglist.completed()), 1)
+        self.assertEqual(readinglist.library()[0]["title"], "New name")
 
     def test_same_locator_different_kind_is_a_different_entry(self):
         # The REGISTRY fact this test has always named: register() is
@@ -125,10 +116,10 @@ class RegisterTests(Base):
     def test_the_queue_shows_one_row_for_a_document_registered_twice(self):
         """A plan is registered by BOTH producers — plans.save_plan as
         `plan:pl_...` and the sitedocs sweep as `url:/docs/plans/....html`.
-        Eleven of them on the live store. Same slug, so the queue shows one."""
+        Eleven of them on the live store. Same slug, so the list shows one."""
         readinglist.register("A", "dossier", "x", "url")
         readinglist.register("A", "plan", "x", "plan")
-        rows = readinglist.queue()
+        rows = readinglist.library()
         self.assertEqual(len(rows), 1)
         # The plan locator wins: plans.py resolves it and knows whether the
         # file is still there, where a url row for a deleted plan reads live.
@@ -140,15 +131,7 @@ class RegisterTests(Base):
         locators, never two genuinely different ones."""
         readinglist.register("A", "dossier", "x", "url")
         readinglist.register("B", "plan", "x", "plan")
-        self.assertEqual(len(readinglist.queue()), 2)
-
-    def test_reading_one_copy_reads_the_document(self):
-        """Per-list de-duplication left a twin pair split across queue and
-        completed — mark one read and the other was still queued."""
-        a = readinglist.register("A", "dossier", "x", "url")
-        readinglist.register("A", "plan", "x", "plan")
-        readinglist.complete(a["id"])
-        self.assertEqual(readinglist.queue(), [])
+        self.assertEqual(len(readinglist.library()), 2)
 
     def test_bad_kind_and_bad_locator_kind_are_refused(self):
         with self.assertRaises(ValueError):
@@ -160,130 +143,59 @@ class RegisterTests(Base):
         with self.assertRaises(ValueError):
             readinglist.register("A", "dossier", "   ")
 
-    def test_new_documents_preserve_more_than_2000_pointers_and_read_marks(self):
+    def test_new_documents_preserve_more_than_2000_pointers(self):
         first = readinglist.register("Doc 0", "dossier", "/d0/")
-        readinglist.complete(first["id"])
-        first = readinglist.get(first["id"])
-        # Seed an existing full registry without 2000 unrelated rewrites.
+        # Seed an existing full registry without 2000 unrelated rewrites. Half
+        # carry a legacy read stamp from before read state was removed.
         rows = [dict(first, id=first["id"] if i == 0 else f"rl_fixture{i}",
                      title=f"Doc {i}", slug=f"doc-{i}", locator=f"/d{i}/",
-                     completed=first["completed"] if i % 2 == 0 else None)
+                     **({"completed": "2026-08-01T00:00:00"} if i % 2 else {}))
                 for i in range(2000)]
         self.store.write_text(json.dumps({"items": rows}), encoding="utf-8")
 
         readinglist.register("Doc 2000", "dossier", "/d2000/")
 
         self.assertEqual(readinglist.get(first["id"]), first)
-        self.assertEqual(readinglist.counts(),
-                         {"queued": 1001, "completed": 1000, "total": 2001})
-        self.assertEqual(len(readinglist.queue()), 1001)
-        self.assertEqual(len(readinglist.completed()), 50)
-        self.assertEqual(len(readinglist.completed(limit=None)), 1000)
+        self.assertEqual(readinglist.counts(), {"total": 2001})
         self.assertEqual(len(readinglist.library()), 2001)
-        # A sweep must find the original row, never recreate it as unread.
+        # A sweep must find the original row, never recreate it.
         again = readinglist.register("Doc 0", "dossier", "/d0/")
         self.assertEqual(again["id"], first["id"])
-        self.assertEqual(again["completed"], first["completed"])
-        readinglist.complete(first["id"], done=False)
-        self.assertIsNone(readinglist.get(first["id"])["completed"])
 
     def test_title_falls_back_to_the_locator(self):
         it = readinglist.register("", "dossier", "/explainer/audit/")
         self.assertEqual(it["title"], "/explainer/audit/")
 
 
-class CompletionTests(Base):
-    def test_completing_removes_it_from_the_queue(self):
+class NoReadStateTests(Base):
+    def test_a_legacy_read_stamp_never_hides_a_document(self):
+        """Entries written before 2026-11-04 may still carry `completed`. The
+        list must show them, and must not hand the stamp to the client."""
         it = readinglist.register("Audit", "dossier", "/explainer/audit/")
-        self.assertEqual(len(readinglist.queue()), 1)
-        readinglist.complete(it["id"])
-        self.assertEqual(readinglist.queue(), [])
+        data = json.loads(self.store.read_text(encoding="utf-8"))
+        data["items"][0]["completed"] = "2026-08-05T10:00:00-04:00"
+        self.store.write_text(json.dumps(data), encoding="utf-8")
+        rows = readinglist.library()
+        self.assertEqual([r["id"] for r in rows], [it["id"]])
+        self.assertNotIn("completed", rows[0])
+        self.assertNotIn("read", rows[0])
 
-    def test_the_entry_survives_completion(self):
-        it = readinglist.register("Audit", "dossier", "/explainer/audit/")
-        readinglist.complete(it["id"])
-        kept = readinglist.get(it["id"])
-        self.assertIsNotNone(kept)
-        self.assertTrue(kept["completed"])
-        self.assertEqual(readinglist.completed()[0]["id"], it["id"])
-
-    def test_completion_is_undoable(self):
-        it = readinglist.register("Audit", "dossier", "/explainer/audit/")
-        readinglist.complete(it["id"])
-        readinglist.complete(it["id"], done=False)
-        self.assertEqual(len(readinglist.queue()), 1)
-        self.assertEqual(readinglist.completed(), [])
-
-    def test_completing_an_unknown_id_raises(self):
-        with self.assertRaises(KeyError):
-            readinglist.complete("rl_nope")
+    def test_the_read_api_is_gone(self):
+        for name in ("complete", "completed", "progress", "sections",
+                     "queue", "_is_stale", "FRESH_DAYS"):
+            self.assertFalse(hasattr(readinglist, name), name)
 
     def test_forget_drops_the_pointer_and_leaves_the_file(self):
         loc = self.dossier("audit", "Audit")
         it = readinglist.register("Audit", "dossier", loc)
         readinglist.forget(it["id"])
-        self.assertEqual(readinglist.queue(), [])
+        self.assertEqual(readinglist.library(), [])
         self.assertTrue((self.static / "explainer" / "audit" / "index.html").is_file())
 
-    def test_counts_split_queued_from_completed(self):
-        a = readinglist.register("A", "dossier", "/a/")
+    def test_counts_is_the_whole_library(self):
+        readinglist.register("A", "dossier", "/a/")
         readinglist.register("B", "dossier", "/b/")
-        readinglist.complete(a["id"])
-        self.assertEqual(readinglist.counts(),
-                         {"queued": 1, "completed": 1, "total": 2})
-
-
-class SectionTests(Base):
-    def test_html_h2_anchors_become_sections(self):
-        loc = self.dossier("audit", "Audit",
-                           [("now", "Broken right now"), ("sec", "Security"),
-                            ("data", "Data integrity")])
-        it = readinglist.register("Audit", "dossier", loc)
-        secs = readinglist.sections(it)
-        self.assertEqual([s["id"] for s in secs], ["now", "sec", "data"])
-        self.assertEqual(secs[0]["title"], "Broken right now")
-
-    def test_markup_inside_a_heading_is_stripped(self):
-        d = self.static / "explainer" / "m"
-        d.mkdir(parents=True)
-        (d / "index.html").write_text(
-            "<title>M</title><h2 id='a'><span class='k'>01</span>Numbers</h2>"
-            "<h2 id='b'>Two</h2>", encoding="utf-8")
-        it = readinglist.register("M", "dossier", "/explainer/m/")
-        self.assertEqual(readinglist.sections(it)[0]["title"], "01 Numbers")
-
-    def test_a_document_without_anchors_reports_no_sections(self):
-        loc = self.dossier("plain", "Plain")          # no h2s at all
-        it = readinglist.register("Plain", "dossier", loc)
-        self.assertEqual(readinglist.sections(it), [])
-        self.assertEqual(readinglist.progress(it), {"done": 0, "total": 0})
-
-    def test_a_single_heading_is_not_progress(self):
-        loc = self.dossier("one", "One", [("only", "Only section")])
-        it = readinglist.register("One", "dossier", loc)
-        self.assertEqual(readinglist.sections(it), [])
-
-    def test_a_missing_file_degrades_rather_than_raising(self):
-        it = readinglist.register("Gone", "dossier", "/explainer/gone/")
-        self.assertEqual(readinglist.sections(it), [])
-        self.assertTrue(readinglist.queue()[0]["missing"])
-
-    def test_markdown_headings_become_sections(self):
-        (self.vault / "Sessions").mkdir(parents=True)
-        (self.vault / "Sessions" / "r.md").write_text(
-            "# Title\n\n## Shipped\ntext\n\n## Drift\ntext\n", encoding="utf-8")
-        it = readinglist.register("r", "retro", "Sessions/r.md", "vault")
-        self.assertEqual([s["id"] for s in readinglist.sections(it)],
-                         ["shipped", "drift"])
-
-    def test_progress_counts_marks_against_the_sections(self):
-        loc = self.dossier("audit", "Audit",
-                           [("a", "A"), ("b", "B"), ("c", "C")])
-        it = readinglist.register("Audit", "dossier", loc)
-        reading.set_done(it["slug"], "a")
-        reading.set_done(it["slug"], "c")
-        reading.set_done(it["slug"], "not-a-section")   # ignored
-        self.assertEqual(readinglist.progress(it), {"done": 2, "total": 3})
+        self.assertEqual(readinglist.counts(), {"total": 2})
 
 
 class VaultContainmentTests(Base):
@@ -293,8 +205,7 @@ class VaultContainmentTests(Base):
         secret.write_text("## a\n## b\n", encoding="utf-8")
         it = readinglist.register("esc", "retro", "../secret.md", "vault")
         self.assertIsNone(readinglist.source_path(it))
-        self.assertEqual(readinglist.sections(it), [])
-        self.assertTrue(readinglist.queue()[0]["missing"])
+        self.assertTrue(readinglist.library()[0]["missing"])
 
     def test_no_vault_configured_is_dormant_not_broken(self):
         with mock.patch.object(settings, "get", return_value=""):
@@ -310,16 +221,14 @@ class BackfillTests(Base):
         — in a fresh worktree, in CI, and in the live checkout whose real
         static/docs/ holds dozens of documents. A source that reads the
         checkout instead of the fixture fails here first, and fails loudly."""
-        self.assertEqual(readinglist.backfill(),
-                         {"added": 0, "queued_new": 0,
-                          "queued": 0, "completed": 0, "total": 0})
+        self.assertEqual(readinglist.backfill(), {"added": 0, "total": 0})
 
     def test_backfill_finds_dossiers_and_reads_their_titles(self):
         self.dossier("audit", "Where we stand - end-of-week audit")
         self.dossier("other", "Another dossier")
         out = readinglist.backfill()
         self.assertEqual(out["added"], 2)
-        titles = sorted(i["title"] for i in readinglist.queue())
+        titles = sorted(i["title"] for i in readinglist.library())
         self.assertEqual(titles,
                          ["Another dossier", "Where we stand - end-of-week audit"])
 
@@ -328,14 +237,7 @@ class BackfillTests(Base):
         readinglist.backfill()
         second = readinglist.backfill()
         self.assertEqual(second["added"], 0)
-        self.assertEqual(len(readinglist.queue()), 1)
-
-    def test_backfill_does_not_resurrect_a_read_dossier(self):
-        self.dossier("audit", "Audit")
-        readinglist.backfill()
-        readinglist.complete(readinglist.queue()[0]["id"])
-        readinglist.backfill()
-        self.assertEqual(readinglist.queue(), [])
+        self.assertEqual(len(readinglist.library()), 1)
 
     def test_a_directory_without_an_index_is_skipped(self):
         (self.static / "explainer" / "assets").mkdir()
@@ -348,39 +250,31 @@ class BackfillTests(Base):
         self.assertEqual(readinglist.backfill()["added"], 0)
 
 
-class FreshnessTests(Base):
-    """A first sweep over months of history must not hand back a 186-item
-    "focused attention" list. Anything older than the window is filed as read."""
+class AgeTests(Base):
+    """The sweep used to file anything older than 14 days, and every
+    per-session retro, as already read. Both now list like anything else."""
 
     def _aged(self, name, days):
         loc = self.dossier(name, name.title())
         old = datetime.now(timezone.utc) - timedelta(days=days)
         f = self.static / "explainer" / name / "index.html"
-        import os
         os.utime(f, (old.timestamp(), old.timestamp()))
         return loc
 
-    def test_an_old_document_is_filed_as_read_not_queued(self):
+    def test_an_old_document_is_listed_like_a_fresh_one(self):
         self._aged("ancient", 90)
-        out = readinglist.backfill()
-        self.assertEqual(out["added"], 1)
-        self.assertEqual(out["queued_new"], 0)
-        self.assertEqual(readinglist.queue(), [])
-        self.assertEqual(len(readinglist.completed()), 1)
-
-    def test_a_fresh_document_queues(self):
         self._aged("today", 0)
         out = readinglist.backfill()
-        self.assertEqual(out["queued_new"], 1)
-        self.assertEqual(len(readinglist.queue()), 1)
+        self.assertEqual(out, {"added": 2, "total": 2})
+        self.assertEqual(sorted(i["title"] for i in readinglist.library()),
+                         ["Ancient", "Today"])
 
-    def test_the_sweep_never_refiles_something_put_back(self):
-        self._aged("ancient", 90)
-        readinglist.backfill()
-        it = readinglist.completed()[0]
-        readinglist.complete(it["id"], done=False)      # owner puts it back
-        readinglist.backfill()                          # sweep runs again
-        self.assertEqual(len(readinglist.queue()), 1)
+    def test_every_per_session_retro_is_listed(self):
+        names = [f"2026-07-25 020{n} vira" for n in range(5)]
+        names += ["2026-07-25 day vira", "2026-07-25 cross-project"]
+        self.session_note(*names)
+        self.assertEqual(readinglist.backfill()["added"], 7)
+        self.assertEqual(len(readinglist.library()), 7)
 
     def test_a_filename_date_prefix_beats_the_mtime(self):
         # retros are rsynced, so mtime is when the copy landed, not when it
@@ -390,59 +284,17 @@ class FreshnessTests(Base):
         self.assertTrue(readinglist._file_created(f, f.stem)
                         .startswith("2026-05-17"))
 
-    def test_unknown_age_counts_as_fresh(self):
-        self.assertFalse(readinglist._is_stale(None))
-        self.assertFalse(readinglist._is_stale("not a date"))
-
-
-class PerSessionRetroTests(Base):
-    """The provenance system writes a retro PER SESSION, so one busy night can
-    produce fifty. Those are the raw material; the aggregates are the read."""
-
-    def test_a_timestamped_retro_is_raw_material(self):
-        for name in ("2026-07-25 0205 vira", "2026-07-25 0205 vira (3)",
-                     "2026-07-16 1124 vira — journal-pid-verification"):
-            self.assertTrue(readinglist._PER_SESSION_RE.match(name), name)
-
-    def test_the_aggregates_are_the_read(self):
-        for name in ("2026-07-25 day vira", "2026-07-25 cross-project",
-                     "2026-07-25 morning-dossier"):
-            self.assertIsNone(readinglist._PER_SESSION_RE.match(name), name)
-
-    def test_a_busy_night_does_not_flood_the_queue(self):
-        names = [f"2026-07-25 020{n} vira" for n in range(5)]
-        names += ["2026-07-25 day vira", "2026-07-25 cross-project"]
-        self.session_note(*names)
-        with mock.patch.object(readinglist, "_is_stale", return_value=False):
-            out = readinglist.backfill()
-        self.assertEqual(out["added"], 7)
-        self.assertEqual(out["queued_new"], 2)      # only the two aggregates
-        self.assertEqual(sorted(i["title"] for i in readinglist.queue()),
-                         ["2026-07-25 cross-project", "2026-07-25 day vira"])
-
-    def test_a_per_session_retro_stays_findable_and_restorable(self):
-        self.session_note("2026-07-25 0205 vira")
-        with mock.patch.object(readinglist, "_is_stale", return_value=False):
-            readinglist.backfill()
-        done = readinglist.completed()
-        self.assertEqual(len(done), 1)
-        readinglist.complete(done[0]["id"], done=False)
-        self.assertEqual(len(readinglist.queue()), 1)
-
 
 class RoomShelfTests(Base):
-    """Rooms are cards in the Reader's home, not queue rows (owner's call,
+    """Rooms are tabs in the Reader, not document rows (owner's call,
     2026-07-27). Legacy room rows stay registered but leave every view."""
 
     def test_a_room_row_is_excluded_from_every_view(self):
         readinglist.register("Anthropic reading room", "room",
                              "/reading/anthropic-universe.html", "url")
-        it = readinglist.register("A dossier", "dossier", "/explainer/x/", "url")
-        self.assertEqual([i["kind"] for i in readinglist.queue()], ["dossier"])
-        readinglist.complete(it["id"])
-        self.assertEqual([i["kind"] for i in readinglist.completed()], ["dossier"])
-        c = readinglist.counts()
-        self.assertEqual((c["queued"], c["completed"], c["total"]), (0, 1, 1))
+        readinglist.register("A dossier", "dossier", "/explainer/x/", "url")
+        self.assertEqual([i["kind"] for i in readinglist.library()], ["dossier"])
+        self.assertEqual(readinglist.counts(), {"total": 1})
 
     def test_backfill_no_longer_sweeps_rooms_in(self):
         with mock.patch.object(readinglist, "_rooms",
@@ -455,16 +307,16 @@ class StoreTests(Base):
     def test_a_corrupt_store_does_not_take_the_queue_down(self):
         self.store.parent.mkdir(parents=True, exist_ok=True)
         self.store.write_text("{{{ not json", encoding="utf-8")
-        self.assertEqual(readinglist.queue(), [])
+        self.assertEqual(readinglist.library(), [])
         it = readinglist.register("A", "dossier", "/a/")
-        self.assertEqual(len(readinglist.queue()), 1)
+        self.assertEqual(len(readinglist.library()), 1)
         written = json.loads(self.store.read_text(encoding="utf-8"))
         self.assertEqual(written["items"][0]["id"], it["id"])
 
-    def test_queue_is_newest_first(self):
+    def test_library_is_newest_first(self):
         readinglist.register("old", "dossier", "/a/", created="2026-01-01T00:00:00")
         readinglist.register("new", "dossier", "/b/", created="2026-07-27T00:00:00")
-        self.assertEqual([i["title"] for i in readinglist.queue()], ["new", "old"])
+        self.assertEqual([i["title"] for i in readinglist.library()], ["new", "old"])
 
     def test_same_day_documents_are_newest_landed_first(self):
         with mock.patch.object(
@@ -475,7 +327,7 @@ class StoreTests(Base):
                                  created="2026-09-02T08:00:00-04:00")
             readinglist.register("afternoon", "dossier", "/afternoon/",
                                  created="2026-09-02")
-        self.assertEqual([i["title"] for i in readinglist.queue()],
+        self.assertEqual([i["title"] for i in readinglist.library()],
                          ["afternoon", "morning"])
 
 
@@ -519,34 +371,58 @@ class WalkthroughLocatorTests(Base):
 
 
 class LibraryTests(Base):
-    def test_the_library_holds_read_and_unread_alike(self):
-        readinglist.register("A", "plan", "/docs/a.html")
-        b = readinglist.register("B", "plan", "/docs/b.html")
-        readinglist.complete(b["id"], True)
-        rows = readinglist.library()
-        self.assertEqual({r["title"]: r["read"] for r in rows},
-                         {"A": False, "B": True})
-
-    def test_the_library_dedupes_twins_split_across_read_states(self):
+    def test_the_library_dedupes_twins(self):
         # A plan registered both ways (plans.save_plan + the sitedocs sweep);
-        # reading one copy is reading the document, and the library must not
-        # hand the story panel the same build twice.
+        # the library must not hand the story panel the same build twice.
         readinglist.register("Same Title", "plan", "pl_1", "plan")
-        url = readinglist.register("Same Title", "plan", "/docs/same-title.html")
-        readinglist.complete(url["id"], True)
+        readinglist.register("Same Title", "plan", "/docs/same-title.html")
         self.assertEqual(len(readinglist.library()), 1)
 
 
-class CompletedUncappedTests(Base):
-    """limit=None serves the WHOLE read list — the docs view's Read filter
-    shows it grouped, and a capped tail there is a silent truncation."""
+class RouteTests(Base):
+    """The join: what the Reader's client actually gets over HTTP."""
 
-    def test_limit_none_returns_every_completed_entry(self):
-        for i in range(60):
-            it = readinglist.register(f"Doc {i}", "dossier", f"/d{i}/")
-            readinglist.complete(it["id"])
-        self.assertEqual(len(readinglist.completed()), 50)   # the default tail
-        self.assertEqual(len(readinglist.completed(limit=None)), 60)
+    def setUp(self):
+        # Import the app BEFORE Base pins settings.get: main's import reads
+        # real defaults (CPU slots and the like) that the pin would blank.
+        from fastapi.testclient import TestClient
+        from server import docthumbs, doctags, main, walkthroughs
+        super().setUp()
+        self.client = TestClient(main.app)
+        for p in (mock.patch.object(doctags, "annotate", side_effect=lambda r: r),
+                  mock.patch.object(docthumbs, "annotate", side_effect=lambda r: r),
+                  mock.patch.object(doctags, "vocabulary", return_value={}),
+                  mock.patch.object(doctags, "status", return_value={}),
+                  mock.patch.object(walkthroughs, "films", return_value=[])):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_the_list_serves_every_document_and_no_read_state(self):
+        a = readinglist.register("A", "dossier", "/a/")
+        readinglist.register("B", "dossier", "/b/")
+        data = json.loads(self.store.read_text(encoding="utf-8"))
+        data["items"][0]["completed"] = "2026-08-05T10:00:00-04:00"
+        self.store.write_text(json.dumps(data), encoding="utf-8")
+        body = self.client.get("/api/reading/list").json()
+        self.assertEqual(sorted(r["title"] for r in body["items"]), ["A", "B"])
+        self.assertNotIn("completed", body)
+        self.assertNotIn("queue", body)
+        self.assertEqual(body["counts"], {"total": 2})
+        row = next(r for r in body["items"] if r["id"] == a["id"])
+        self.assertNotIn("completed", row)
+
+    def test_the_mark_read_routes_are_gone(self):
+        it = readinglist.register("A", "dossier", "/a/")
+        r = self.client.post(f"/api/reading/list/{it['id']}/complete",
+                             json={"done": True})
+        self.assertIn(r.status_code, (404, 405))
+        for room in ("inflow", "some-room"):
+            self.assertIn(self.client.get(f"/api/reading/{room}/done").status_code,
+                          (404, 405))
+            self.assertIn(self.client.post(f"/api/reading/{room}/done",
+                                           json={"id": "x", "done": True}).status_code,
+                          (404, 405))
+        self.assertNotIn("completed", readinglist.get(it["id"]))
 
 
 class WalkthroughResolutionTests(Base):
@@ -565,7 +441,7 @@ class WalkthroughResolutionTests(Base):
     def test_a_film_on_disk_is_not_missing(self):
         loc = self.film("vira-2026-07-30-onboarding")
         readinglist.register("Film", "walkthrough", loc)
-        self.assertFalse(readinglist.queue()[0]["missing"])
+        self.assertFalse(readinglist.library()[0]["missing"])
 
     def test_source_path_resolves_into_the_walkthrough_root(self):
         loc = self.film("vira-2026-07-30-onboarding")
@@ -577,20 +453,20 @@ class WalkthroughResolutionTests(Base):
 
     def test_a_film_that_left_the_disk_reads_missing(self):
         readinglist.register("Film", "walkthrough", "/walkthroughs/gone/")
-        self.assertTrue(readinglist.queue()[0]["missing"])
+        self.assertTrue(readinglist.library()[0]["missing"])
 
     def test_escape_from_the_walkthrough_root_is_refused(self):
         (Path(self.tmp.name) / "secret.html").write_text("x", encoding="utf-8")
         it = readinglist.register("Sneak", "walkthrough",
                                   "/walkthroughs/../secret.html")
         self.assertIsNone(readinglist.source_path(it))
-        self.assertTrue(readinglist.queue()[0]["missing"])
+        self.assertTrue(readinglist.library()[0]["missing"])
 
     def test_a_dormant_install_reads_missing_rather_than_raising(self):
         with mock.patch.object(readinglist, "WALKTHROUGH_DIR",
                                Path(self.tmp.name) / "absent"):
             readinglist.register("Film", "walkthrough", "/walkthroughs/x/")
-            self.assertTrue(readinglist.queue()[0]["missing"])
+            self.assertTrue(readinglist.library()[0]["missing"])
 
 
 if __name__ == "__main__":
@@ -626,7 +502,7 @@ class ConnectedFolderTests(Base):
     def test_a_connected_file_is_swept_in_under_its_own_title(self):
         p = self.html("why-anthropic.html", "Why Anthropic")
         readinglist.backfill()
-        rows = [r for r in readinglist.queue() if r["locator_kind"] == "file"]
+        rows = [r for r in readinglist.library() if r["locator_kind"] == "file"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["title"], "Why Anthropic")
         self.assertEqual(rows[0]["kind"], "dossier")
@@ -638,7 +514,7 @@ class ConnectedFolderTests(Base):
         (d / "index.html").write_text("<html><body>no title</body></html>",
                                       encoding="utf-8")
         readinglist.backfill()
-        rows = [r for r in readinglist.queue() if r["locator_kind"] == "file"]
+        rows = [r for r in readinglist.library() if r["locator_kind"] == "file"]
         self.assertEqual([r["title"] for r in rows], ["dossier-with-assets"])
 
     def test_nothing_configured_sweeps_nothing(self):
@@ -646,12 +522,12 @@ class ConnectedFolderTests(Base):
         self.sources = []
         readinglist.backfill()
         self.assertEqual(
-            [r for r in readinglist.queue() if r["locator_kind"] == "file"], [])
+            [r for r in readinglist.library() if r["locator_kind"] == "file"], [])
 
     def test_disconnecting_the_folder_makes_its_documents_missing(self):
         self.html("doc.html", "Doc")
         readinglist.backfill()
-        row = [r for r in readinglist.queue() if r["locator_kind"] == "file"][0]
+        row = [r for r in readinglist.library() if r["locator_kind"] == "file"][0]
         self.sources = []
         self.assertIsNone(readinglist.source_path(row))
         self.assertTrue(readinglist._missing(row))
@@ -663,7 +539,7 @@ class ConnectedFolderTests(Base):
         self.html("kept.html", "Kept")
         self.sources = [{"path": str(self.connected), "glob": "../outside/*.html"}]
         readinglist.backfill()
-        rows = [r for r in readinglist.queue() if r["locator_kind"] == "file"]
+        rows = [r for r in readinglist.library() if r["locator_kind"] == "file"]
         self.assertEqual([r["title"] for r in rows], ["Kept"])
 
     def test_source_path_refuses_a_locator_outside_every_root(self):
@@ -677,5 +553,5 @@ class ConnectedFolderTests(Base):
         self.sources = ["not a dict", {"kind": "dossier"}, {"path": ""},
                         {"path": str(self.connected)}]
         readinglist.backfill()
-        rows = [r for r in readinglist.queue() if r["locator_kind"] == "file"]
+        rows = [r for r in readinglist.library() if r["locator_kind"] == "file"]
         self.assertEqual([r["title"] for r in rows], ["Good"])

@@ -114,28 +114,24 @@ class MigrateTests(Base):
         self.assertIn("(Claude Code session — commit abc1234)", entry["sources"])
         self.assertIn("audit sweep", prov["/docs/vira-audit/"]["sources"])
 
-    def test_stale_filed_read_fresh_queued(self):
+    def test_old_and_fresh_documents_are_registered_alike(self):
         self.build_site()
         out = self.migrate()
-        self.assertEqual(out["registered"], 3)
-        # The 30-day-old plan files as read; the fresh plan queues; the
-        # dossier's created date is its index.html mtime — today in this
-        # fixture — so it queues too.
-        self.assertEqual(out["filed_read"], 1)
-        self.assertEqual(out["queued"], 2)
+        self.assertEqual(out, {**out, "registered": 3, "errors": 0})
+        self.assertNotIn("filed_read", out)
+        # The 30-day-old plan is listed exactly like the fresh one: no
+        # read state is ever written for it.
         old = readinglist.find_by_locator(f"/docs/plans/{self.old_plan}", "url")
-        self.assertIsNotNone(old["completed"])
+        self.assertNotIn("completed", old)
+        titles = {r["locator"] for r in readinglist.library()}
+        self.assertIn(f"/docs/plans/{self.old_plan}", titles)
 
-    def test_rerun_is_idempotent_and_never_resurrects(self):
+    def test_rerun_is_idempotent(self):
         self.build_site()
         self.migrate()
-        row = readinglist.find_by_locator(f"/docs/plans/{self.new_plan}", "url")
-        readinglist.complete(row["id"])
         out = self.migrate()
         self.assertEqual(out["registered"], 0)
         self.assertEqual(out["new_in_registry"], 0)
-        row = readinglist.find_by_locator(f"/docs/plans/{self.new_plan}", "url")
-        self.assertIsNotNone(row["completed"])
 
     def test_vault_md_copied(self):
         self.build_site()
@@ -180,9 +176,8 @@ class SweepTests(Base):
         with mock.patch.object(sitedocs, "DOCS_DIR", self.docs):
             out = sitedocs.sweep()
         self.assertEqual(out["registered"], 1)
-        self.assertEqual(out["queued"], 1)
         row = readinglist.find_by_locator(f"/docs/plans/{fn}", "url")
-        self.assertIsNone(row["completed"])
+        self.assertNotIn("completed", row)
 
     def test_manifest_entry_without_file_is_ignored(self):
         (self.docs / "plans").mkdir(parents=True)
@@ -234,8 +229,7 @@ class BackfillIntegrationTests(Base):
         # Populate registry WITHOUT registering (simulate a machine where
         # migrate ran but the reading list was wiped/rebuilt).
         with mock.patch.object(sitedocs, "_register_direct",
-                               return_value={"registered": 0, "queued": 0,
-                                             "filed_read": 0, "errors": 0}):
+                               return_value={"registered": 0, "errors": 0}):
             self.migrate()
         self.assertIsNone(
             readinglist.find_by_locator(f"/docs/plans/{self.new_plan}", "url"))
@@ -247,9 +241,11 @@ class BackfillIntegrationTests(Base):
         self.assertGreaterEqual(out["added"], 3)
         row = readinglist.find_by_locator(f"/docs/plans/{self.new_plan}", "url")
         self.assertIsNotNone(row)
-        self.assertIsNone(row["completed"])          # fresh → queued
         old = readinglist.find_by_locator(f"/docs/plans/{self.old_plan}", "url")
-        self.assertIsNotNone(old["completed"])       # stale → filed read
+        self.assertIsNotNone(old)
+        # Old and fresh alike: neither is ever filed away as read.
+        self.assertNotIn("completed", row)
+        self.assertNotIn("completed", old)
 
 
 if __name__ == "__main__":

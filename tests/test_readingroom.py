@@ -3,9 +3,8 @@
 update_prompt turns a built room into a live tracker (carry every item
 forward, research since the last refresh, rebuild the SAME slug);
 refresh_all_prompt is the weekly room-scout's composition; migrate folds a
-legacy page-based room into the store WITHOUT orphaning done-marks (the
-old pages carry a different id scheme — measured on the real Anthropic
-room: 345/345 ids differ).
+legacy page-based room into the store, re-keying its items with the
+generator's URL-derived ids.
 
 Run: .venv/bin/python -m unittest tests.test_readingroom
 """
@@ -32,7 +31,6 @@ class Base(unittest.TestCase):
                                                 return_value=True))
         for target, attr, val in (
                 (reading, "PAGES_DIR", self.pages),
-                (reading, "STORE_DIR", base / "data" / "reading"),
                 (readingroom, "PAGES_DIR", self.pages),
                 (readingroom, "ROOMS_DIR", base / "data" / "reading" / "rooms"),
                 (readingroom, "ROOT", base)):
@@ -381,12 +379,13 @@ class ResolveSourceTest(Base):
 class MetaTest(Base):
     def test_retitle_flows_and_orphans_nothing(self):
         self.build()
-        reading.set_done("test-room", "someid", True)
+        ids = [it["id"] for it in readingroom.load_room("test-room")["items"]]
         out = readingroom.set_meta("test-room", title="Anthropic")
         self.assertEqual(out["title"], "Anthropic")
-        # Subtitle untouched, marks untouched, list shows the new name.
+        # Subtitle untouched, item ids untouched, list shows the new name.
         self.assertEqual(out["subtitle"], "Everything on one subject.")
-        self.assertEqual(reading.get_done("test-room"), ["someid"])
+        self.assertEqual(
+            [it["id"] for it in readingroom.load_room("test-room")["items"]], ids)
         self.assertEqual(reading.list_pages()[0]["title"], "Anthropic")
         self.assertIn("<title>Anthropic</title>",
                       readingroom.export_html("test-room"))
@@ -439,19 +438,18 @@ class MigrateTest(Base):
     def page(self, slug="old-room", text=LEGACY_PAGE):
         (self.pages / f"{slug}.html").write_text(text, encoding="utf-8")
 
-    def test_migration_moves_the_room_and_remaps_marks(self):
+    def test_migration_moves_the_room_into_the_store(self):
         self.page()
-        reading.set_done("old-room", "oldid00001", True)   # earned on the page
         res = readingroom.migrate("old-room")
         room = readingroom.load_room("old-room")
         self.assertEqual(room["title"], "Old Room")
         self.assertEqual(len(room["items"]), 2)
         self.assertEqual(room["legacy_key"], "old-room-done")
-        self.assertEqual(res["remapped_marks"], 1)
-        # The mark now lives under the generator id of the SAME item.
+        self.assertNotIn("remapped_marks", res)
+        # Items carry the generator's URL-derived ids, not the page's.
         new_id = readingroom.item_id({"title": "A talk",
                                       "url": "https://example.com/a"})
-        self.assertIn(new_id, reading.get_done("old-room"))
+        self.assertIn(new_id, [it["id"] for it in room["items"]])
         # The page is kept as a backup, invisible to the .html glob.
         self.assertFalse((self.pages / "old-room.html").exists())
         self.assertTrue((self.pages / "old-room.html.migrated").exists())
@@ -492,11 +490,9 @@ class ListPagesUnionTest(Base):
 
     def test_native_details_come_from_the_store_not_a_parser(self):
         self.build("native-room")
-        reading.set_done("native-room", readingroom.item_id(
-            {"title": "A talk", "url": "https://example.com/a"}), True)
         row = next(r for r in reading.page_details()
                    if r["name"] == "native-room")
         self.assertEqual(row["items"], 2)
-        self.assertEqual(row["done"], 1)
+        self.assertNotIn("done", row)       # no read state, so no done count
         self.assertEqual(row["subtitle"], "Everything on one subject.")
         self.assertEqual(row["built"], date.today().isoformat())

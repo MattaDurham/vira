@@ -49,11 +49,6 @@ ROOT = Path(__file__).resolve().parent.parent
 THUMB_DIR = ROOT / "data" / "vault-thumbs"
 THUMB_PX = 520
 
-# The done-mark list name. reading.py owns the store, so a read here is the
-# same cross-device mark the room pages use — one implementation of "what have
-# I read", not a second one keyed differently.
-DONE_LIST = "inflow"
-
 # One table drives the bucketing, the chips, the labels and the defaults, so a
 # sixth ingest routine is a row rather than an edit in four places.
 #   paths  — fragments of the `source:` raw pointer (rung 1)
@@ -285,12 +280,9 @@ def _card(path, text, root):
               if t.lower() not in PLATFORM_TAGS and not t.startswith("cat/")]
     rel = "wiki/" + path.name
     return {
-        # HASHED, NOT THE STEM. `reading._clean_id` caps a done-key at 64
-        # characters, and 102 of this vault's 8,239 note names are longer than
-        # that — those marks would have been STORED under a truncated key and
-        # read back under the full one, so the item would never show as read
-        # and nothing would say why. A digest is stable across rebuilds and
-        # cannot collide with the cap.
+        # HASHED, NOT THE STEM: 102 of this vault's 8,239 note names are
+        # longer than 64 characters, and a digest is a short id that is
+        # stable across rebuilds.
         "id": "if" + hashlib.sha1(rel.encode("utf-8")).hexdigest()[:14],
         "path": rel,
         "title": _plain(_fm_field(fm, "title")) or path.stem.replace("-", " "),
@@ -366,16 +358,8 @@ def feed(sources=None, force=False):
     """The shelf: cards for the selected sources, plus what was left out."""
     cards, counts = scan(force=force)
     want = set(sources) if sources else set(DEFAULT_ON)
-    shown = [c for c in cards if c["source"] in want]
-    from . import reading
-    try:
-        done = set(reading.get_done(DONE_LIST))
-    except (OSError, ValueError):
-        done = set()
-    # Copies, never the cached dicts: `scan()` hands back the cache itself, so
-    # stamping read-state onto those rows would leak one caller's marks into
-    # every later reader of the cache.
-    shown = [dict(c, done=c["id"] in done) for c in shown]
+    # Copies, never the cached dicts: `scan()` hands back the cache itself.
+    shown = [dict(c) for c in cards if c["source"] in want]
     known = {s["id"] for s in SOURCES}
     chips = [{"id": s["id"], "label": s["label"], "glyph": s["glyph"],
               "count": counts.get(s["id"], 0), "on": s["id"] in want}
@@ -391,7 +375,6 @@ def feed(sources=None, force=False):
         "total": len(cards),
         "shown": len(shown),
         "images": sum(c["image_count"] for c in shown),
-        "done": sum(1 for c in shown if c["done"]),
         "vault": bool(vault_root()),
     }
 

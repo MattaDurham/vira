@@ -17,9 +17,7 @@ Vira's side of that split.
   (which also folds in manifest.json — the file the repointed plan-mode hook
   appends to for every NEW plan), so hook-written plans keep flowing into the
   Reader with no server-side worker.
-- migrate() ALSO registers directly (the plans.save_plan producer pattern),
-  mirroring backfill's rule: an entry seen for the first time that is older
-  than the freshness window is filed as already read, never queued.
+- migrate() ALSO registers directly (the plans.save_plan producer pattern).
 - index.html under static/docs/ is a generated plain listing so /docs/ is
   browsable on any of the owner's devices even outside the Reader.
 
@@ -195,9 +193,8 @@ def _invert_provenance(site: Path) -> dict[str, list[str]]:
 
 def _register_direct(entries: list[dict]) -> dict:
     """Producer registration into the reading list (the plans.save_plan
-    pattern), mirroring backfill's freshness rule: a first-sight entry older
-    than FRESH_DAYS files as already read. Never raises."""
-    stats = {"registered": 0, "queued": 0, "filed_read": 0, "errors": 0}
+    pattern). Never raises."""
+    stats = {"registered": 0, "errors": 0}
     try:
         from . import readinglist
     except ImportError:
@@ -206,17 +203,11 @@ def _register_direct(entries: list[dict]) -> dict:
     for e in entries:
         try:
             before = readinglist.find_by_locator(e["locator"], "url")
-            it = readinglist.register(
+            readinglist.register(
                 e["title"], e["kind"], e["locator"], "url",
                 source=e.get("source", "sitedocs"), created=e.get("created"))
-            if before:
-                continue
-            stats["registered"] += 1
-            if readinglist._is_stale(it.get("created")):
-                readinglist.complete(it["id"])
-                stats["filed_read"] += 1
-            else:
-                stats["queued"] += 1
+            if not before:
+                stats["registered"] += 1
         except Exception:
             stats["errors"] += 1
     return stats

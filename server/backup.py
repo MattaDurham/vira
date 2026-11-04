@@ -63,9 +63,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # Duplicate decisions (Not the same) and the merge/fold log: owner
          # judgement that nothing can recompute.
          "crm-merge.json",
-         # The Reader's queue: which documents are worth reading and which are
-         # read. The documents themselves live at their sources, but the
-         # curation and the read-state are only here.
+         # The Reader's documents list: which documents are worth reading.
+         # The documents themselves live at their sources, but the curation
+         # is only here.
          "reading-list.json",
          # Lesson recurrence: rules/verdicts/evidence are regenerable from
          # the ledger + retros, but owner verdict overrides, dismissals and

@@ -176,7 +176,7 @@ const MODULE_WAIT = {
     ["Asking git what is on the branches", "Reading what each one was for"]],
   evidence: ["#ev-list", ["Mining the build record", "Reading the case studies"]],
   journal: ["#journal-list", ["Reading what you have told Vira"]],
-  reader: ["#reader-list", ["Opening the library", "Reading what is unread"]],
+  reader: ["#reader-list", ["Opening the library", "Gathering the documents"]],
   people: ["#people-list", ["Reading the registry", "Sorting by recent contact"]],
 };
 const MODULE_WAIT_ROTATE_MS = 2200;
@@ -24604,8 +24604,8 @@ function ctxDescribe(target) {
                      block: block.dataset.block };
   } else if (target.closest(".rm-item")?.dataset.itemId) {
     // A reading-room card is the most specific thing under the cursor and
-    // it carries everything the menu needs: a source URL, a vault path, a
-    // done-mark. Naming the ROOM (not "Reader") follows the same convention
+    // it carries everything the menu needs: a source URL and a vault path.
+    // Naming the ROOM (not "Reader") follows the same convention
     // as "Profile: <name>" — the component is the subject, not the frame.
     const it = rmItemById(target.closest(".rm-item").dataset.itemId);
     if (it) {
@@ -25801,9 +25801,9 @@ document.addEventListener("contextmenu", (e) => {
     items.push({ sep: true });
   }
 
-  // A reading-room item: the source, the vault note, the done-mark. The two
-  // that matter lead, and where there is no vault note the row SAYS SO and
-  // hands over the query instead — a dead menu row is worse than an absent
+  // A reading-room item: the source and the vault note. Both lead, and
+  // where there is no vault note the row SAYS SO and hands over the query
+  // instead — a dead menu row is worse than an absent
   // one, and a silent absence reads as a broken menu.
   if (ctx.item) {
     const it = ctx.item;
@@ -25829,8 +25829,6 @@ document.addEventListener("contextmenu", (e) => {
                    run: () => linkVaultNote(e.clientX, e.clientY, it) });
     }
     items.push({ sep: true });
-    items.push({ label: rmDone.has(it.id) ? "Mark as not done" : "Mark as done",
-                 run: () => rmToggleDone(it) });
     if (it.url) items.push({
       label: "Copy link",
       run: () => copyText(it.url).then(() => toast("Link copied"),
@@ -28937,16 +28935,16 @@ function fdWatch() {
 // editable standing instructions (Save), and Fork (start a new room from
 // this one's definition, e.g. swap the company name).
 //
-// Inside Vira's Documents, THE QUEUE IS ACTIVE WORK. Marking something read takes
-// it OFF the list rather than greying it out, because the document is still
-// saved at its source. "Recently read" is a fold underneath, for undo.
+// NOTHING IN THE READER IS EVER MARKED READ (owner's call, 2026-11-04):
+// having read something does not mean you do not want to read it again, so
+// every document and every room item stays exactly as available as the day
+// it arrived. No read filter, no read count, no done-marks.
 //
 // Native rooms render in-app (see the rm* renderer). Dossiers and legacy
 // room pages open in the frame; plans and vault documents open in the note
-// panel. Section progress appears only where a document has anchors.
+// panel.
 let readerPages = null;
-let readerQueue = [];
-let readerCounts = {};
+let readerDocs = [];
 // What is SELECTED (persists): "room:<name>" | "docs".
 // What is SHOWING: room | docs | stage (stage = a document opened on top).
 let readerSel = lsGet("vira-reader-sel", "");
@@ -28958,12 +28956,6 @@ const READER_KIND = {
   dossier: "dossier", plan: "plan", retro: "retro",
   brief: "brief", room: "reading room", walkthrough: "walkthrough",
 };
-
-// The read side of the library — the FULL list, uncapped (425 of 519
-// documents here are filed read). It backs the Show filter's Read and
-// Everything views and the tag picker's counts; a capped tail would be a
-// silent truncation the moment either filter showed it.
-let readerDone = [];
 
 async function fetchReaderPages() {
   if (readerPages) return readerPages;
@@ -28990,9 +28982,9 @@ function readerShow(view) {
   if (scan) scan.style.display = view === "docs" ? "" : "none";
   const meta = $("#reader-meta");
   if (meta) {
-    const n = readerQueue.length;
-    meta.textContent = view === "docs"
-      ? (n ? n + " to read" : "all read") : "";
+    const n = readerDocs.length;
+    meta.textContent = view === "docs" && n
+      ? n + " document" + (n === 1 ? "" : "s") : "";
   }
 }
 
@@ -29027,55 +29019,6 @@ function openReaderItem(it) {
   openViewer(it.locator);
 }
 
-async function completeReaderItem(it, done = true) {
-  try {
-    await post("/api/reading/list/" + encodeURIComponent(it.id) + "/complete",
-               { done });
-  } catch (e) { toast("Couldn't update that: " + (e.message || e)); return; }
-  await loadReader({ force: true });
-  if (done) {
-    toast("Marked read — still saved where it lives",
-          [["Undo", () => completeReaderItem(it, false)]]);
-  } else {
-    toast("Back on the to-read list");
-  }
-}
-
-// A row expands into its own sections. The marks reuse the per-list done
-// store the reading rooms already use, keyed by the entry's slug, so
-// progress follows the owner across devices like everything else.
-async function toggleReaderSections(it, row, btn) {
-  const open = row.querySelector(".reader-secs");
-  if (open) { open.remove(); btn.classList.remove("on"); return; }
-  btn.classList.add("on");
-  const box = el("div", "reader-secs");
-  box.appendChild(el("div", "spin", "Loading sections…"));
-  row.appendChild(box);
-  let full;
-  try { full = await api("/api/reading/list/" + encodeURIComponent(it.id)); }
-  catch { box.innerHTML = ""; box.appendChild(el("div", "hint", "Unavailable.")); return; }
-  let marked = [];
-  try { marked = (await api("/api/reading/" + full.slug + "/done")).done || []; }
-  catch { marked = []; }
-  box.innerHTML = "";
-  (full.sections || []).forEach((s) => {
-    const line = el("label", "reader-sec");
-    const cb = el("input");
-    cb.type = "checkbox";
-    cb.checked = marked.includes(s.id);
-    cb.addEventListener("change", async () => {
-      try {
-        await post("/api/reading/" + full.slug + "/done",
-                   { id: s.id, done: cb.checked });
-        loadReader({ force: true });
-      } catch { cb.checked = !cb.checked; toast("Couldn't save that mark"); }
-    });
-    line.appendChild(cb);
-    line.appendChild(el("span", "reader-sec-t", s.title));
-    box.appendChild(line);
-  });
-}
-
 // ==================== The documents list — grouped by feature ==============
 //
 // A library ordered by date is a pile. The plan that proposed the Reader, the
@@ -29106,38 +29049,16 @@ let rdocGroup = lsGet("vira-rdoc-group", "module");
 let rdocQ = lsGet("vira-rdoc-q", "");
 let rdocTags = new Set(lsGet("vira-rdoc-tags", []));
 let rdocKinds = new Set(lsGet("vira-rdoc-kinds", []));
-// Read state is a FILTER, not a second list: To read (default) / Read /
-// Everything all flow through the same grouped renderer. The old read fold
-// under the list is gone — the Queue's rule: completed work must not live in
-// two places under the live list.
-// The library OPENS on everything (owner's call, 2026-08-05, on seeing 9 of
-// his 32 session films): the first sweep auto-filed everything older than 14
-// days as read, so a to-read default hid 23 films and 449 documents behind
-// the Show filter — a library missing its read books is not a library. "To
-// read" survives as the filter's first option, one click away.
-// ONE-TIME REPAIR: the filter shipped defaulting to "unread" for a few hours
-// the same day, and any browser that touched the dropdown that afternoon
-// holds that value forever — a changed DEFAULT cannot reach a saved key. A
-// stored "unread" without the stamp is that afternoon's debris, not a
-// choice; picking To read after this sticks like any other choice.
-if (!localStorage.getItem("vira-rdoc-read-v2")) {
-  localStorage.setItem("vira-rdoc-read-v2", "1");
-  if (lsGet("vira-rdoc-read", "") === "unread") lsSet("vira-rdoc-read", "all");
-}
-let rdocRead = lsGet("vira-rdoc-read", "all");
 // list = Finder's rows; grid = the gallery (sections, motion tiles, bands).
 let rdocView = lsGet("vira-rdoc-view", "list");
 let rdocOpen = {};
 let rdocVocab = {};
 let rdocTagStatus = {};
 
-// The base set the current Show filter selects — every downstream count,
-// facet and render reads THIS, so the picker can never offer a tag that
-// yields nothing on screen.
+// The whole library — every downstream count, facet and render reads THIS,
+// so the picker can never offer a tag that yields nothing on screen.
 function rdocBase() {
-  if (rdocRead === "read") return readerDone || [];
-  if (rdocRead === "all") return (readerQueue || []).concat(readerDone || []);
-  return readerQueue || [];
+  return readerDocs || [];
 }
 
 function rdocOpenSet() {
@@ -29239,28 +29160,8 @@ function rdocThumb(it) {
   return box;
 }
 
-// The read/unread controls are VERBS, never state adjectives — a button
-// reading "Read" looks like a label saying "this is read" while actually
-// marking it, and "unread" reads as a status while actually un-reading it
-// (the owner's exact complaint, 2026-08-05). "Mark read" / "Mark unread"
-// can only be read one way; state itself shows as row/tile dimming.
-function rdocMarkBtn(it, cls) {
-  const read = !!it.completed;
-  const b = el("button", cls || "reader-done-btn",
-    read ? "Mark unread" : "Mark read");
-  b.title = read
-    ? "Put it back on the to-read list"
-    : "Mark read — it leaves the to-read list and stays where it is saved";
-  b.addEventListener("click", (e) => {
-    e.stopPropagation();
-    completeReaderItem(it, !read);
-  });
-  return b;
-}
-
 function rdocRow(it) {
   const row = el("div", "rdoc-row" + (it.missing ? " missing" : "")
-    + (it.completed ? " read" : "")
     + (it.kind === "walkthrough" ? " film" : ""));
   row.appendChild(rdocThumb(it));
 
@@ -29290,20 +29191,6 @@ function rdocRow(it) {
   row.appendChild(el("div", "rdoc-kind", READER_KIND[it.kind] || it.kind));
   row.appendChild(el("div", "rdoc-date",
     it.created ? fmtTime(it.created) : (it.missing ? "missing" : "")));
-
-  const acts = el("div", "rdoc-acts");
-  const p = it.progress || {};
-  if (p.total > 1) {
-    const secBtn = el("button", "reader-mini", p.done + " of " + p.total);
-    secBtn.title = "Sections";
-    secBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleReaderSections(it, row, secBtn);
-    });
-    acts.appendChild(secBtn);
-  }
-  acts.appendChild(rdocMarkBtn(it));
-  row.appendChild(acts);
 
   // Whole-card activation, the Vira-wide rule (cardAction skips buttons,
   // links and form controls, and leaves right-click alone).
@@ -29376,33 +29263,6 @@ function rdocBar() {
   });
   bar.appendChild(kindWrap);
 
-  // Read state is the LEAST important axis (owner's call), so it is one
-  // small labeled select, not a seg — but it is the door to the 400+ read
-  // documents, so its options carry counts. Counted from the SERVED lists
-  // (post-dedupe), not the store's raw counts, so the option label always
-  // matches the count line it produces.
-  const cQ = (readerQueue || []).length;
-  const cD = (readerDone || []).length;
-  const rd = el("select", "rdoc-sel");
-  [["unread", "To read (" + cQ + ")"],
-   ["read", "Read (" + cD + ")"],
-   ["all", "Everything (" + (cQ + cD) + ")"]].forEach(([v, lab]) => {
-    const o = el("option", "", lab);
-    o.value = v;
-    if (v === rdocRead) o.selected = true;
-    rd.appendChild(o);
-  });
-  rd.title = "Which side of the library to show";
-  rd.addEventListener("change", () => {
-    rdocRead = rd.value;
-    lsSet("vira-rdoc-read", rdocRead);
-    renderReaderDocs();
-  });
-  const rdPair = el("label", "rdoc-pair");
-  rdPair.appendChild(el("span", "rdoc-lab", "Show"));
-  rdPair.appendChild(rd);
-  bar.appendChild(rdPair);
-
   const q = el("input", "rdoc-q");
   q.type = "search";
   q.placeholder = "Search the library";
@@ -29451,9 +29311,8 @@ let rdocLastGroups = [];
 function rdocTagPicker(anchor) {
   const rows = [];
   const counts = {};
-  // Counts run over the CURRENT base (the Show filter included), the
-  // Queue picker's rule: the picker must never offer a tag that yields
-  // nothing on the screen it filters.
+  // Counts run over the CURRENT base, the Queue picker's rule: the picker
+  // must never offer a tag that yields nothing on the screen it filters.
   rdocBase().forEach((it) => {
     if (!rdocMatchesExceptTags(it)) return;
     Object.values(it.tags || {}).forEach((v) => (v || []).forEach((t) => {
@@ -29577,20 +29436,14 @@ function renderReaderDocs(opts = {}) {
 
   if (!all.length) {
     list.appendChild(el("div", "empty left",
-      rdocRead === "read"
-        ? "Nothing read yet — mark documents read and they file here."
-        : "Nothing queued. Dossiers, plans, retros, walkthroughs and briefs "
-          + "show up here as they are made — and drop off once you mark them "
-          + "read."));
+      "No documents yet. Dossiers, plans, retros, walkthroughs and briefs "
+      + "show up here as they are made, and stay here."));
     rdocLastGroups = [];
     restoreFocus();
     return;
   }
 
-  // The count line names the AXIS the Show filter selected — "92 to read"
-  // can never read as the whole library while 425 read sit behind it.
-  const noun = rdocRead === "unread" ? "to read"
-    : rdocRead === "read" ? "read" : "documents";
+  const noun = "documents";
   const count = el("div", "rdoc-count",
     rows.length === all.length
       ? all.length + " " + noun
@@ -29634,7 +29487,7 @@ function renderReaderDocs(opts = {}) {
   // list rather than a stack of rows. List view only; the grid has its own
   // section anatomy.
   const head = el("div", "rdoc-head");
-  ["", "Name", "Tags", "Kind", "Added", ""].forEach((h, i) => {
+  ["", "Name", "Tags", "Kind", "Added"].forEach((h, i) => {
     head.appendChild(el("div", "rdoc-h h" + i, h));
   });
   list.appendChild(head);
@@ -29833,7 +29686,7 @@ function rdgSection(g) {
 
 function rdgFilm(it, i) {
   const fig = el("figure", "rdg-film rdg-item"
-    + (it.completed ? " read" : "") + (it.missing ? " missing" : ""));
+    + (it.missing ? " missing" : ""));
   fig.style.setProperty("--i", Math.min(i, 12));
   const frame = el("div", "rdg-filmframe");
   const film = it.film || {};
@@ -29850,7 +29703,6 @@ function rdgFilm(it, i) {
     frame.dataset.motion = it.locator + "motion.mp4";
     rdgVidObs.observe(frame);
   }
-  if (it.completed) frame.appendChild(el("span", "rdg-readtag", "read"));
   fig.appendChild(frame);
   const cap = el("figcaption", "rdg-filmcap");
   cap.appendChild(el("div", "rdg-ikicker", "session film · "
@@ -29868,7 +29720,6 @@ function rdgFilm(it, i) {
     cap.appendChild(tr);
   }
   fig.appendChild(cap);
-  fig.appendChild(rdocMarkBtn(it, "reader-done-btn rdg-mark"));
   cardAction(fig, () => openReaderItem(it));
   rdgWatch(fig);
   return fig;
@@ -29884,7 +29735,7 @@ function rdgItemTags(it) {
 
 function rdgTile(it, i) {
   const box = el("article", "rdg-tile rdg-item"
-    + (it.completed ? " read" : "") + (it.missing ? " missing" : ""));
+    + (it.missing ? " missing" : ""));
   box.style.setProperty("--i", Math.min(i, 16));
   // The document's rendered face, where the thumbnailer has captured one
   // (HTML plans and dossiers) — joined at the route layer like film thumbs.
@@ -29907,8 +29758,6 @@ function rdgTile(it, i) {
     tags.forEach((t) => tr.appendChild(el("span", "rdoc-chip", t)));
     box.appendChild(tr);
   }
-  if (it.completed) box.appendChild(el("span", "rdg-readtag", "read"));
-  box.appendChild(rdocMarkBtn(it, "reader-done-btn rdg-mark"));
   cardAction(box, () => openReaderItem(it));
   rdgWatch(box);
   return box;
@@ -29959,7 +29808,7 @@ function rdgMinorBand(items, bandKey) {
 }
 
 // Update = dispatch a session that re-researches the subject and rebuilds
-// the same slug (ids are URL-stable, so done-marks survive). If dispatch
+// the same slug (ids are URL-stable, so vault links survive). If dispatch
 // fails, preserve the request by copying the prompt.
 async function updateRoom(page, btn) {
   if (btn) btn.disabled = true;
@@ -30102,30 +29951,18 @@ function renderReaderHead() {
   if (sub) host.appendChild(el("div", "rdr-sub", sub));
 
   const bits = el("div", "rdr-bits");
-  if (isInflow) {
-    // Read progress ONLY. The count of what is on screen belongs next to the
-    // filters that decide it (.inf-count), and two lines saying nearly the
-    // same number read as a bug — the library's one-description-slot lesson.
-    // Counted off the ITEMS, never the payload's own `done` — an optimistic
-    // mark updates the item and cannot update a total the server computed,
-    // so reading the aggregate left the header saying "none read yet" beside
-    // a card that had just flipped.
-    const items = (infFeed && infFeed.items) || [];
-    const done = items.filter((i) => i.done).length;
-    if (infFeed) {
-      bits.appendChild(el("span", "rdr-bit",
-        done ? done + " of " + items.length + " read" : "none read yet"));
-    }
-  } else if (page) {
-    const prog = (page.items != null)
-      ? (page.done || 0) + " of " + page.items + " done" : "";
-    [prog, page.built ? "refreshed " + page.built : "",
+  // The Inflow's count of what is on screen sits next to the filters that
+  // decide it (.inf-count), so its header carries no second number.
+  if (!isInflow && page) {
+    const size = (page.items != null)
+      ? page.items + " item" + (page.items === 1 ? "" : "s") : "";
+    [size, page.built ? "refreshed " + page.built : "",
      page.native ? "" : "legacy page"].filter(Boolean)
       .forEach((b) => bits.appendChild(el("span", "rdr-bit", b)));
-  } else {
-    const n = readerCounts.queued || 0;
+  } else if (!isInflow) {
+    const n = readerDocs.length;
     bits.appendChild(el("span", "rdr-bit",
-      n ? n + " to read" : "all read"));
+      n ? n + " document" + (n === 1 ? "" : "s") : "no documents yet"));
   }
   host.appendChild(bits);
 }
@@ -30346,10 +30183,6 @@ const INF_PAGE = 60;
 
 let infFeed = null;
 let infSrc = lsGet("vira-inflow-src", null);      // null = the server default
-// The old three-way Show dropdown collapsed to one pill (owner's call,
-// 2026-09-01): the stored key keeps its historical values — "unread" means
-// the pill is on, anything else off — so a saved choice survives the change.
-let infUnread = lsGet("vira-inflow-read", "all") === "unread";
 let infGroup = lsGet("vira-inflow-group", "month");
 let infQ = lsGet("vira-inflow-q", "");
 let infObs = null;
@@ -30386,7 +30219,6 @@ function infFiltered() {
   const terms = (infQ.match(/"[^"]+"|\S+/g) || [])
     .map((x) => searchFold(x.replace(/^"|"$/g, ""))).filter(Boolean);
   return items.filter((it) => {
-    if (infUnread && it.done) return false;
     if (!terms.length) return true;
     const hay = searchFold([it.title, it.blurb, it.kind, it.date,
       (it.topics || []).join(" "), (it.images || [])
@@ -30449,18 +30281,6 @@ function renderInflow() {
   });
   srcPair.appendChild(srcBtn);
   row.appendChild(srcPair);
-
-  const unread = el("button", "fchip sm" + (infUnread ? " on" : ""),
-    "Unread only");
-  unread.title = infUnread ? "Showing unread — click to show everything"
-    : "Show only what you have not read yet";
-  unread.addEventListener("click", () => {
-    infUnread = !infUnread;
-    lsSet("vira-inflow-read", infUnread ? "unread" : "all");
-    renderInflow();
-    renderReaderHead();
-  });
-  row.appendChild(unread);
 
   row.appendChild(infSelect("Group by", INF_GROUPS, infGroup, (v) => {
     infGroup = v; lsSet("vira-inflow-group", v); renderInflow();
@@ -30690,7 +30510,7 @@ function infSection(g) {
 }
 
 function infCard(it, i) {
-  const card = el("article", "inf-card" + (it.done ? " read" : ""));
+  const card = el("article", "inf-card");
   card.style.setProperty("--i", Math.min(i, 10));
   card.dataset.infId = it.id;
   card.dataset.notePath = it.path;
@@ -30724,7 +30544,6 @@ function infCard(it, i) {
   if (it.date) meta.appendChild(el("span", "inf-date", it.date));
   meta.appendChild(el("span", "inf-read",
     it.duration || (it.minutes + " min read")));
-  if (it.done) meta.appendChild(el("span", "inf-donetag", "read"));
   body.appendChild(meta);
   body.appendChild(el("h4", "inf-title", it.title));
   if (it.blurb) body.appendChild(el("p", "inf-blurb", it.blurb));
@@ -30794,9 +30613,6 @@ function infCard(it, i) {
     });
     acts.appendChild(raw);
   }
-  const mark = el("button", "fchip sm", it.done ? "Mark unread" : "Mark read");
-  mark.addEventListener("click", (e) => { e.stopPropagation(); infMark(it); });
-  acts.appendChild(mark);
   body.appendChild(acts);
 
   card.appendChild(body);
@@ -30819,35 +30635,6 @@ function infOpen(it) {
 // a list, so it peeks).
 function spawnOrPeek(path, title) {
   openNote(path, title);
-}
-
-async function infMark(it) {
-  const want = !it.done;
-  it.done = want;                                  // optimistic
-  infRefreshCard(it);
-  renderReaderHead();
-  try {
-    await post("/api/reading/inflow/done", { id: it.id, done: want });
-  } catch (e) {
-    it.done = !want;
-    infRefreshCard(it);
-    toast(errText(e));
-  }
-}
-
-// A mark repaints ONE card, never the shelf — a full render would tear down
-// every rendered page and throw the scroll position away mid-triage. Under
-// the unread pill a card just marked read leaves instead (that is what the
-// filter means); the group header's count describes the group in the data
-// and is refreshed on the next full render.
-function infRefreshCard(it) {
-  const list = $("#inf-list");
-  const old = list && list.querySelector(
-    '[data-inf-id="' + (window.CSS && CSS.escape ? CSS.escape(it.id) : it.id)
-    + '"]');
-  if (!old) return;
-  if (infUnread && it.done) { old.remove(); return; }
-  old.replaceWith(infCard(it, 0));
 }
 
 // ---- the lightbox: an extracted chart, whole ----
@@ -30960,8 +30747,8 @@ function renderReaderDefs() {
       "This queue registers every document Vira produces for you — audit "
       + "dossiers, saved plans, session retros, morning briefs — as soft "
       + "pointers. Nothing is copied: each entry opens the document where "
-      + "it actually lives, and marking it read only takes it off this "
-      + "list. Scan sweeps for documents made since the last look."));
+      + "it actually lives, and every document stays here to read again. "
+      + "Scan sweeps for documents made since the last look."));
     return;
   }
   const page = readerCurPage();
@@ -31094,13 +30881,12 @@ function renderReaderDefs() {
 // reading-room.js (which still renders the standalone EXPORT); the "In
 // the vault" status is deliberately absent from chips and badges.
 let rmRoom = null;
-let rmDone = new Set();
 let rmState = null;
 
 const RM_PRIO_RANK = { P1: 0, P2: 1, P3: 2 };
 // PARTIAL stays a data value (the builder's honest "met secondhand"), but
-// it no longer renders a badge or a filter — Unseen + hide-done cover the
-// workflow (owner's call, 2026-08-05).
+// it no longer renders a badge or a filter — Unseen covers the workflow
+// (owner's call, 2026-08-05).
 const RM_STATUS_LABEL = { MISSING: "unseen" };
 // Labels say what the item IS (video/audio/text), not what to do with it —
 // "Watch"/"Read" on a card read like buttons that open the thing (owner's
@@ -31116,9 +30902,8 @@ async function openRoomNative(page) {
     return;
   }
   rmRoom = data.room;
-  rmDone = new Set(data.done || []);
   rmState = { q: "", prio: new Set(), status: new Set(), mode: new Set(),
-              person: "", year: "", sort: "prio", hideDone: false };
+              person: "", year: "", sort: "prio" };
   rmBuild();
   readerShow("room");
   renderReaderDefs();          // the definition arrived with the room
@@ -31137,7 +30922,7 @@ const RM_EXPLAIN = {
     "How much of this has already reached you, derived by diffing the "
     + "research against your vault when the room was built. Unseen = "
     + "never crossed your radar. Click to narrow to what you have never "
-    + "seen at all; pair with hide-done for what is left."],
+    + "seen at all."],
   mode: ["Format",
     "What the item IS — video, audio, or text — mapped from its type. "
     + "A filter, not a link: click to narrow to what fits the moment."],
@@ -31148,15 +30933,9 @@ const RM_EXPLAIN = {
   sort: ["Sort",
     "Priority (default) ranks P1 first, oldest first within a tier — "
     + "the working order. Newest/Oldest sort purely by publication date."],
-  hide: ["Hide done",
-    "Hides what you have marked done. Marks are stored by Vira and "
-    + "synced, so they are the same on every device."],
   q: ["Search",
     "Matches titles, notes, why-lines, venues, people and dates — type "
     + "a year to filter by it. This room only."],
-  check: ["Mark done",
-    "Marks the item consumed — it stays in the room, struck through, "
-    + "and the mark syncs across your devices. Click again to undo."],
 };
 
 function rmExplain(x, y, key) {
@@ -31257,14 +31036,6 @@ function rmBuild() {
   const sort = rmSelect([["new", "Newest"], ["old", "Oldest"]], "Priority",
     (v) => { rmState.sort = v || "prio"; rmRender(); }, "sort");
   bar.appendChild(sort);
-  const hide = el("button", "fchip sm rm-chip", "Hide done");
-  hide.dataset.exp = "hide";
-  hide.addEventListener("click", () => {
-    rmState.hideDone = !rmState.hideDone;
-    hide.classList.toggle("on", rmState.hideDone);
-    rmRender();
-  });
-  bar.appendChild(hide);
   const count = el("span", "hint rm-count", "");
   bar.appendChild(count);
   host.appendChild(bar);
@@ -31281,7 +31052,6 @@ function rmBuild() {
 
 function rmMatches(it) {
   const s = rmState;
-  if (s.hideDone && rmDone.has(it.id)) return false;
   if (s.prio.size && !s.prio.has(it.prio)) return false;
   if (s.status.size && !s.status.has(it.status)) return false;
   if (s.mode.size && !s.mode.has(it.mode)) return false;
@@ -31296,22 +31066,6 @@ function rmMatches(it) {
   return true;
 }
 
-// The done-mark, factored out of the check button so the right-click menu
-// toggles it through the same optimistic-write-then-rollback path. Two
-// implementations of "mark this read" would be two chances to drift.
-async function rmToggleDone(it) {
-  const now = !rmDone.has(it.id);
-  now ? rmDone.add(it.id) : rmDone.delete(it.id);   // optimistic
-  rmRender();
-  try {
-    await post("/api/reading/" + rmRoom.slug + "/done", { id: it.id, done: now });
-  } catch {
-    now ? rmDone.delete(it.id) : rmDone.add(it.id);
-    rmRender();
-    toast("Couldn't save that mark");
-  }
-}
-
 // The item under the cursor, for ctxDescribe. Rows carry their id rather
 // than the record, so a repaint can never hand the menu a stale object.
 function rmItemById(id) {
@@ -31319,14 +31073,8 @@ function rmItemById(id) {
 }
 
 function rmRow(it) {
-  const row = el("div", "rm-item" + (rmDone.has(it.id) ? " done" : ""));
+  const row = el("div", "rm-item");
   row.dataset.itemId = it.id;
-  const check = el("button", "rm-check");
-  check.title = "Mark done";
-  check.setAttribute("aria-label", "Mark done");
-  check.dataset.exp = "check";
-  check.addEventListener("click", () => rmToggleDone(it));
-  row.appendChild(check);
 
   const body = el("div", "rm-body");
   let name;
@@ -31425,10 +31173,8 @@ function rmRender() {
     rows.sort((x, y) => (RM_PRIO_RANK[x.prio] - RM_PRIO_RANK[y.prio])
       || (x.date || "9999").localeCompare(y.date || "9999"));
   }
-  const doneShown = rows.filter((it) => rmDone.has(it.id)).length;
   const count = host.querySelector(".rm-count");
-  if (count) count.textContent = rows.length + " of " + items.length
-    + (doneShown ? " · " + doneShown + " done" : "");
+  if (count) count.textContent = rows.length + " of " + items.length;
   list.innerHTML = "";
   if (!rows.length) {
     list.appendChild(el("div", "empty left", "Nothing matches. Loosen a filter."));
@@ -31443,10 +31189,8 @@ async function loadReader(opts = {}) {
 
   let data;
   try { data = await api("/api/reading/list"); }
-  catch { data = { queue: [], completed: [], counts: {} }; }
-  readerQueue = data.queue || [];
-  readerDone = data.completed || [];
-  readerCounts = data.counts || {};
+  catch { data = { items: [], counts: {} }; }
+  readerDocs = data.items || [];
   rdocVocab = data.vocab || {};
   rdocTagStatus = data.tagging || {};
 
@@ -31468,17 +31212,12 @@ async function loadReader(opts = {}) {
 $("#reader-back")?.addEventListener("click", () =>
   readerShow(readerStageFrom));
 
-// The read fold that used to sit under the list is GONE (2026-08-05): with
-// the Show filter carrying Read / Everything, a fold was a second place
-// completed work lived — the Queue's rule. Undo is the toast plus the Read
-// view's "Mark unread" buttons.
-
 async function readerBackfill() {
   const btn = $("#reader-scan");
   if (btn) btn.disabled = true;
   try {
     const r = await post("/api/reading/list/backfill", {});
-    toast(r.added ? "Found " + r.added + " to read" : "Nothing new");
+    toast(r.added ? "Found " + r.added + " new" : "Nothing new");
     await loadReader({ force: true });
   } catch (e) {
     toast("Scan failed: " + (e.message || e));

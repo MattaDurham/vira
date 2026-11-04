@@ -385,7 +385,7 @@ def ingest_all(dry_run=False):
 # own store and is applied at read time (the contactcard.py pattern), so it
 # survives every room rebuild instead of being overwritten by the next one.
 
-# beside the done-marks, not beside the rooms: this is owner state about a
+# beside the rooms folder, not inside it: this is owner state about a
 # room, not part of the room's own regenerable store
 LINKS_PATH = readingroom.ROOMS_DIR.parent / "room-links.json"
 

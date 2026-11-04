@@ -31,8 +31,8 @@ Four traps this script already handles; all four cost real time to find:
   3. Geometry written in the same tick as the open lands mid-layout and
      does the same thing. Open, settle, THEN place.
   4. A capture that clicks a real control WRITES. An early run of this
-     harness toggled a done-mark in the owner's real reading room, once
-     per run. seal_writes() makes that impossible.
+     harness changed the owner's real reading room once per run.
+     seal_writes() makes that impossible.
 
 Run:
   ~/.venvs/playwright-fit/bin/python scripts/walkthrough-capture.py \
@@ -64,31 +64,13 @@ def seal_writes(page, base):
     plausible success the page can render, and never reaches the server.
     Default-deny on METHOD rather than a list of known-bad URLs, so a
     beat added later cannot quietly reintroduce a write."""
-    state = {"done": []}
-
     def handler(route, request):
         if request.method == "GET":
             return route.continue_()
-        try:
-            body = request.post_data_json or {}
-        except Exception:  # noqa: BLE001 — a non-JSON write is still blocked
-            body = {}
-        if "/api/reading/" in request.url and request.url.endswith("/done"):
-            ident = body.get("id")
-            if ident:
-                if body.get("done", True):
-                    if ident not in state["done"]:
-                        state["done"].append(ident)
-                else:
-                    state["done"] = [d for d in state["done"] if d != ident]
-            return route.fulfill(status=200,
-                                 content_type="application/json",
-                                 body=json.dumps({"done": state["done"]}))
         return route.fulfill(status=200, content_type="application/json",
                              body=json.dumps({"ok": True}))
 
     page.route("**/api/**", handler)
-    return state
 
 
 # ------------------------------------------------------------- the plate
@@ -220,7 +202,7 @@ def dormant_pass(page, sh, base, module):
 
 
 def reader_live_pass(page, sh, base):
-    """The populated Reader: a real room, filtered, and marked off."""
+    """The populated Reader: a real room, filtered."""
     goto(page, base)
     page.goto(f"{base}/reading/anthropic-universe.html",
               wait_until="domcontentloaded")
@@ -236,9 +218,6 @@ def reader_live_pass(page, sh, base):
     page.click('[data-k="mode"][data-v="listen"]')
     page.wait_for_timeout(600)
     sh.shot(page, "mode", {"chips": "#modeChips", "count": "#count"})
-    page.click(".card .check")
-    page.wait_for_timeout(700)
-    sh.shot(page, "done", {"card": ".card", "check": ".card .check"})
 
 
 def applications_live_pass(page, sh, base):

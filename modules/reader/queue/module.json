@@ -1,7 +1,7 @@
 {
   "id": "reader/queue",
   "name": "Queue",
-  "summary": "The Reader's queue, done-marks, and saved plans.",
+  "summary": "The Reader's documents list, room page listing, and saved plans.",
   "owns": [
     "server/readinglist.py",
     "server/reading.py",
@@ -19,12 +19,10 @@
     "/api/reading/file",
     "/api/reading/thumb",
     "/api/reading/source-resolve",
-    "/api/reading/{name}/done",
     "/api/plans"
   ],
   "stores": [
     "data/reading-list.json",
-    "data/reading-done.json",
     "data/plans.json"
   ],
   "reads": [
