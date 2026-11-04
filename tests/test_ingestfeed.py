@@ -1,8 +1,8 @@
 """The Inflow scan.
 
 Every case is rooted at ONE tmp vault. This module reads the vault's wiki
-directory AND (through feed) the done-mark store, so both are pinned inside
-the fixture — `test_an_empty_fixture_root_reads_nothing` is the guard: a
+directory, so it is pinned inside the fixture —
+`test_an_empty_fixture_root_reads_nothing` is the guard: a
 source added later that reaches the real machine instead of the fixture
 fails it on sight.
 """
