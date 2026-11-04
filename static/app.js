@@ -5280,6 +5280,71 @@ function renderProjectControls() {
   }
 }
 
+// A session started from an idea shows ON the idea, from the moment the
+// button is pressed (owner's ask, 2026-11-01). The only sign used to be the
+// "dispatched implement ..." stamp in the faint meta line, written after the
+// launch POST returned, so it arrived late and read as metadata. Two
+// sources feed the banner: `ideaLaunching` covers the seconds between the
+// click and the server answering with a job id, and the live session
+// registry (`runsState.session`, which carries idea_id) is the truth after
+// that, so the banner tracks the session's phase until it ends.
+const ideaLaunching = new Map();   // idea id -> { mode, jid, at }
+
+function ideaLiveJob(id) {
+  return (runsState.session || []).find((j) =>
+    j.idea_id === id && j.status === "running") || null;
+}
+
+const IDEA_LIVE_LABEL = {
+  starting: "Starting session",
+  running: "Session working",
+  waiting: "Session needs you",
+  complete: "Session finished its turn",
+  paused: "Session paused",
+};
+
+function ideaSessionBanner(it) {
+  const job = ideaLiveJob(it.id);
+  const launch = ideaLaunching.get(it.id);
+  if (!job && !launch) return null;
+  const phase = job ? jobPhase(job) : launch.jid ? "running" : "starting";
+  const jid = job ? job.id : launch.jid;
+  const bar = el("div", "idea-live-bar");
+  bar.dataset.phase = phase;
+  bar.setAttribute("role", "status");
+  bar.appendChild(el("span", "idea-live-dot"));
+  bar.appendChild(el("span", "idea-live-label", IDEA_LIVE_LABEL[phase]));
+  const startedMs = job && job.started ? job.started * 1000 : launch?.at;
+  const mins = startedMs ? Math.max(0, Math.round((Date.now() - startedMs) / 60000)) : 0;
+  const bits = [mins ? "started " + mins + " min ago" : "started just now"];
+  if (jid) bits.push("job " + String(jid).slice(0, 8));
+  bar.appendChild(el("span", "idea-live-sub", bits.join(" · ")));
+  if (jid) {
+    const open = el("button", "idea-live-open",
+      phase === "waiting" ? "Answer it" : "Open session");
+    open.addEventListener("click", () => openSession(jid));
+    bar.appendChild(open);
+  }
+  return bar;
+}
+
+// Re-render the queue only when the set of idea sessions (or a phase) moves,
+// so the 15 s jobs poll does not rebuild every card for nothing.
+let ideaLiveKey = "";
+function syncIdeaLive() {
+  for (const [id, l] of ideaLaunching) {
+    if (l.jid && (runsState.session || []).some((j) => j.id === l.jid))
+      ideaLaunching.delete(id);
+  }
+  const key = (runsState.session || [])
+    .filter((j) => j.idea_id && j.status === "running")
+    .map((j) => j.idea_id + ":" + jobPhase(j)).sort().join(",")
+    + "|" + [...ideaLaunching.keys()].sort().join(",");
+  if (key === ideaLiveKey) return;
+  ideaLiveKey = key;
+  renderIdeas();
+}
+
 function ideaRow(it) {
   const box = el("div", "idea idea-" + it.status);
   box.dataset.ideaId = it.id;   // the right-click menu resolves the item by id
@@ -5321,6 +5386,12 @@ function ideaRow(it) {
   });
   top.appendChild(del2);
   box.appendChild(top);
+
+  const live = ideaSessionBanner(it);
+  if (live) {
+    box.classList.add("idea-live", "idea-live-" + live.dataset.phase);
+    box.appendChild(live);
+  }
 
   // Labeled Project + Status dropdowns
   const ctl = el("div", "idea-ctl");
@@ -7285,28 +7356,44 @@ $("#idea-run-go").addEventListener("click", async () => {
 // sheet's remembered settings, no sheet). Composes the prompt — a build
 // carries the idea's saved plan — launches, and stamps the idea and any
 // folded rows. Two copies of this would be two chances for the doors to
-// drift on what a build receives. Returns {jid, plan}.
+// drift on what a build receives. Returns {jid, plan}. The idea card shows
+// its live-session banner from the first line, before any await.
 async function dispatchIdeaRun(it, mode, o) {
   const { cwd, model, extra, perm } = o;
   const provider = o.provider || null;
   const fold = o.fold || [];
-  const plan = mode === "plan" ? null : await ideaPlanFor(it);
-  const prompt = mode === "plan"
-    ? ideaPlanPrompt(it, extra, cwd, fold)
-    : ideaImplementPrompt(it, extra, cwd, perm, fold, plan);
-  // Plan asks for two separate things and now says both: publish_plan
-  // finalizes the output as a plan note (rendering is opt-in), read_only
-  // denies writes. They were one flag until 2026-08-04, which is why a
-  // planning run could not search the web or spawn a subagent.
-  const permission_mode = perm === "bypassPermissions" ? "bypassPermissions" : null;
-  const publish_plan = mode === "plan";
-  const read_only = mode === "plan";
-  const jid = await launchJob(prompt, cwd,
-    { reviewed: true, permission_mode, model, provider, publish_plan, read_only,
-      idea_id: it.id, mode: perm, subject: it.text,
-      vault_destination: o.vault_destination || plan?.source_id || null,
-      about: ideaAbout(it, mode, extra, fold, plan) });
-  // stamp the idea so the dispatch is visible next time it's opened
+  ideaLaunching.set(it.id, { mode, jid: null, at: Date.now() });
+  renderIdeas();
+  let plan = null, jid = null;
+  try {
+    plan = mode === "plan" ? null : await ideaPlanFor(it);
+    const prompt = mode === "plan"
+      ? ideaPlanPrompt(it, extra, cwd, fold)
+      : ideaImplementPrompt(it, extra, cwd, perm, fold, plan);
+    // Plan asks for two separate things and now says both: publish_plan
+    // finalizes the output as a plan note (rendering is opt-in), read_only
+    // denies writes. They were one flag until 2026-08-04, which is why a
+    // planning run could not search the web or spawn a subagent.
+    const permission_mode = perm === "bypassPermissions" ? "bypassPermissions" : null;
+    const publish_plan = mode === "plan";
+    const read_only = mode === "plan";
+    jid = await launchJob(prompt, cwd,
+      { reviewed: true, permission_mode, model, provider, publish_plan, read_only,
+        idea_id: it.id, mode: perm, subject: it.text,
+        vault_destination: o.vault_destination || plan?.source_id || null,
+        about: ideaAbout(it, mode, extra, fold, plan) });
+  } finally {
+    // Still starting only while the launch is in flight: a failed or
+    // cancelled launch clears the banner; a launched one names its job
+    // until the jobs registry lists it (syncIdeaLive).
+    const at = ideaLaunching.get(it.id)?.at || Date.now();
+    if (jid) ideaLaunching.set(it.id, { mode, jid, at });
+    else ideaLaunching.delete(it.id);
+    renderIdeas();
+  }
+  if (!jid) return { jid, plan };
+  // stamp the idea so the dispatch is visible next time it's opened; the
+  // live banner says it now, this note keeps saying it after the session
   const day = new Date().toISOString().slice(0, 10);
   const job = " (job " + String(jid || "?").slice(0, 8) + ")";
   try {
@@ -8981,6 +9068,7 @@ async function refreshJobs() {
   const { jobs } = await api("/api/jobs");
   runsState.session = jobs || [];
   renderRuns();
+  syncIdeaLive();
 }
 
 async function refreshFlowRuns() {

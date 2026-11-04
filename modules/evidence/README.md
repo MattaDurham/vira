@@ -21,7 +21,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 - [Ledger](ledger/README.md) - Build provenance mined into case studies. (3 files)
 - [Change log](changelog/README.md) - Every shipped change, keyed by the day it actually happened. (3 files)
-- [Walkthroughs](walkthroughs/README.md) - The films of how each feature was built, and the anonymizer that lets them be public. (21 files)
+- [Walkthroughs](walkthroughs/README.md) - The films of how each feature was built, and the anonymizer that lets them be public. (23 files)
 
 ### Neighbours
 
@@ -33,6 +33,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `evidence` (ids from `WINDOWS` in `static/app.js`).
 
-27 tracked files across 3 submodules. `python -m server.moduletree brief evidence` prints every submodule's page in one go.
+29 tracked files across 3 submodules. `python -m server.moduletree brief evidence` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

@@ -1104,14 +1104,16 @@ class Sessions:
                         "started": obj.spec.get("started"),
                         "finished": st.get("finished"),
                         "mode": obj.spec.get("mode"),
-                        "awaiting": st.get("awaiting")})
+                        "awaiting": st.get("awaiting"),
+                        "idea_id": obj.spec.get("idea_id")})
                 else:
                     d = obj.data
                     rows.append({
                         "id": d["id"], "prompt": d["prompt"],
                         "status": d["status"], "started": d["started"],
                         "finished": d["finished"], "mode": d["mode"],
-                        "awaiting": d["awaiting"]})
+                        "awaiting": d["awaiting"],
+                        "idea_id": d.get("idea_id")})
             return sorted(rows, key=lambda j: j["started"], reverse=True)
 
     def restart_activity(self):

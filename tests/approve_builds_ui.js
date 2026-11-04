@@ -19,12 +19,13 @@ class Element {
   set value(v) { this._value = v; }
   get selectedOptions() { return this.children.filter((c) => c.value === this.value); }
   addEventListener(event, callback) { (this.listeners[event] ||= []).push(callback); }
+  setAttribute(k, v) { this[k] = v; }
   focus() { this.focused = true; }
 }
 const nodes = new Map();
 const $ = (key) => { if (!nodes.has(key)) nodes.set(key, new Element()); return nodes.get(key); };
 const el = (tag, cls, text) => new Element(tag, text);
-let requests = [], posts = [], puts = [], opened = [];
+let requests = [], posts = [], puts = [], opened = [], banners = [];
 const plans = {
   pl_bbb: { id: 'pl_bbb', title: 'Plan B', path: '/vault/plans/plan-b.md',
             markdown: '# Plan B\n\n1. Edit server/x.py\n2. Run the tests' },
@@ -41,17 +42,26 @@ const context = vm.createContext({
     if (m) { if (!plans[m[1]]) throw new Error('404'); return plans[m[1]]; }
     return {};
   },
-  post: async (url, payload) => { posts.push({ url, payload }); return { job_id: 'job-1234abcd' }; },
+  post: async (url, payload) => {
+    // What the card showed at the moment the launch request went out.
+    if (url === '/api/actions/run') launchBanner = context.ideaSessionBanner({ id: payload.idea_id });
+    posts.push({ url, payload }); return { job_id: 'job-1234abcd' };
+  },
   put: async (url, payload) => { puts.push({ url, payload }); return { note: payload.note }; },
   openSession: (id) => opened.push(id), refreshJobs() {}, toast() {}, copyText() {},
-  sessionQualityNote: () => '', projectPathsCache: {}, ideasCache: [], renderIdeas() {},
+  sessionQualityNote: () => '', projectPathsCache: {}, ideasCache: [],
+  runsState: { session: [] },
+  renderIdeas() { banners.push(context.ideaSessionBanner({ id: 'idea_1' })?.dataset.phase || null); },
   bindSheet: () => ({ open() {}, close() {} }),
   reviewSessionLaunch: async () => {
     throw new Error('the review sheet must not open for a dispatch its own surface reviewed');
   },
 });
+let launchBanner = null;
 function section(start, end) { return app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start))); }
 vm.runInContext(section('const IDEA_PLAN_LINK', 'function ideaMatchesTags'), context);
+vm.runInContext(section('function jobPhase(', 'const JOB_PHASE_LABEL'), context);
+vm.runInContext(section('// A session started from an idea shows ON', 'function ideaRow('), context);
 vm.runInContext(section('function ideaExtraBlock(', '// ---------- actions ----------'), context);
 vm.runInContext(section('function ideaAbout(', '// Preparing a session is local UI state.'), context);
 vm.runInContext(section('async function launchJob(', 'let runAction = null;'), context);
@@ -108,6 +118,31 @@ const settings = (perm) => ({ cwd: '~/workspace/vira', model: '', provider: null
   assert.deepEqual(opened, ['job-1234abcd']);
   assert.equal(puts.length, 1);
   assert.match(puts[0].payload.note, /dispatched implement \d{4}-\d{2}-\d{2} from its plan \(job job-1234\)/);
+
+  // The card says a session is starting BEFORE the launch request goes out
+  // (the note stamp used to be the only sign, written after it returned),
+  // then names the job once the server answers.
+  assert.equal(launchBanner?.dataset.phase, 'starting');
+  assert.equal(banners[0], 'starting');
+  assert(banners.includes('running'));
+  // The live registry takes over: its phase wins, and the launch marker
+  // retires once the job is listed.
+  c.runsState.session = [{ id: 'job-1234abcd', idea_id: 'idea_1', status: 'running',
+                           awaiting: 'permission', started: Date.now() / 1000 }];
+  banners = [];
+  c.syncIdeaLive();
+  assert.deepEqual(banners, ['waiting']);
+  assert.equal(vm.runInContext("ideaLaunching.has('idea_1')", context), false);
+  c.syncIdeaLive();
+  assert.deepEqual(banners, ['waiting'], 'an unchanged poll does not re-render');
+  const bar = c.ideaSessionBanner({ id: 'idea_1' });
+  const btn = bar.children.find((x) => x.textContent === 'Answer it');
+  btn.listeners.click[0]();
+  assert.equal(opened.at(-1), 'job-1234abcd');
+  c.runsState.session[0].status = 'done';
+  c.syncIdeaLive();
+  assert.equal(c.ideaSessionBanner({ id: 'idea_1' }), null, 'no banner once the session ends');
+  c.runsState.session = [];
 
   // A plan whose file is gone: the build proceeds from the idea alone, and
   // neither the prompt nor the stamp claims a plan it did not carry.
