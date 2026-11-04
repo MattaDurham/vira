@@ -12,7 +12,7 @@ from unittest import mock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from server import evidence, lessonwatch, modulestory
+from server import evidence, lessonwatch, modulemap, modulestory
 from server import history as H
 from server import historyroutes as R
 from server import historyview as V
@@ -144,6 +144,10 @@ class StoreReaders(unittest.TestCase):
         self.sb = Sandbox(self)
         self.sb.build_all()
         self.sb.ingest()
+        # a story reads the module registry, which seeds its store on first read
+        p = mock.patch.object(modulemap, "STORE", self.sb.data / "modules.json")
+        p.start()
+        self.addCleanup(p.stop)
 
     def test_the_story_change_lines_come_from_the_store_joined_by_module(self):
         days = modulestory.store_entries()
