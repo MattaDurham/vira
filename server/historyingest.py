@@ -17,6 +17,8 @@ Sources (every one read-only; nothing here writes a byte to them):
     git              every repository a session worked in: each merge into
                      the base branch, each commit, each branch left not merged
                      or discarded; pull requests from gh
+    branch_state     data/orphan-work.json and data/showroom.json: uncommitted
+                     changes sitting in a worktree
     flows            data/circuit-runs.json and the runs captured before the
                      store evicted them (data/circuit-runs-archive.jsonl):
                      each run, each step, each approval
@@ -1113,6 +1115,65 @@ def _branch_events(ctx, repo, project, base):
     return out
 
 
+def from_branch_state(ctx):
+    """Uncommitted work: a worktree with changes no commit holds yet, as
+    the branch sweeper (data/orphan-work.json) and the branch inventory
+    (data/showroom.json) last saw it. git knows nothing of these until they
+    are committed. A row that is gone later ended one of three ways: its
+    branch merged (Merged), it is still on a branch not merged (Not
+    merged), or neither (Dropped)."""
+    from . import orphanwork, showroom
+    vira = Path(H.vira_repo()).name
+    seen, out = {}, []
+    for it in (_read_json(orphanwork.STORE, {}) or {}).get("items") or []:
+        if isinstance(it, dict) and it.get("branch") and int(it.get("dirty") or 0) > 0:
+            seen[it["branch"]] = {"dirty": int(it["dirty"]), "worktree": it.get("worktree") or "",
+                                  "at": it.get("last_activity_iso") or it.get("last_activity"),
+                                  "running": bool(it.get("in_motion")),
+                                  "files": it.get("files") or [], "source": "orphan-work"}
+    for it in (_read_json(showroom.STORE, {}) or {}).get("items") or []:
+        if isinstance(it, dict) and it.get("branch") and int(it.get("dirty") or 0) > 0 \
+                and it.get("band") != "landed" and it["branch"] not in seen:
+            seen[it["branch"]] = {"dirty": int(it["dirty"]), "worktree": it.get("worktree") or "",
+                                  "at": it.get("last_activity"), "running": it.get("band") == "session",
+                                  "files": [], "source": "showroom"}
+    for branch, s in seen.items():
+        bkey = _branch_key(vira, branch)
+        files = [f if isinstance(f, str) else (f.get("path") if isinstance(f, dict) else "")
+                 for f in s["files"]]
+        files = [f for f in files if f]
+        modules, module = H.modules_of(files, H.vira_repo()) if files else ({}, "")
+        out.append(H.event(
+            f"code:worktree:{bkey}", "code", s["at"], sub="worktree",
+            status=H.RUNNING if s["running"] else H.NOT_MERGED,
+            title=H.clean_title(f"Uncommitted changes: {branch.split('/', 1)[-1].replace('-', ' ')}"),
+            project=vira, folder=s["worktree"], repo=H.vira_repo(), module=module, modules=modules,
+            source=s["source"], links={"branch": bkey, "files": files[:FILES_KEEP]},
+            data={"branch_name": branch, "dirty": s["dirty"], "worktree": s["worktree"]}))
+    pool = dict(ctx.current)
+    pool.update({e["id"]: e for e in ctx.collected})
+    for eid, ev in ctx.current.items():
+        if ev.get("sub") != "worktree" or ev.get("status") not in (H.NOT_MERGED, H.RUNNING):
+            continue
+        name = (ev.get("data") or {}).get("branch_name") or ""
+        if name in seen:
+            continue
+        bkey = _branch_key(vira, name)
+        fates = [e for e in pool.values() if e.get("kind") == "code"
+                 and bkey in (e.get("links") or {}).get("branch", []) and e["id"] != eid]
+        if any(e.get("sub") in ("merged", "merged_branch") for e in fates):
+            word = H.MERGED
+        elif any(e.get("sub") == "not_merged" and e.get("status") == H.NOT_MERGED for e in fates):
+            word = H.NOT_MERGED
+        else:
+            word = H.DROPPED
+        new = json.loads(json.dumps(ev))
+        new.pop("logged", None)
+        new.update(sub="worktree_cleared", status=word, end=H.iso(ctx.now))
+        out.append(new)
+    return out
+
+
 # ---------------------------------------------------------------- Flows
 
 _FLOW_STATUS = {"running": H.RUNNING, "pending": H.RUNNING, "waiting": H.WAITING,
@@ -1654,7 +1715,7 @@ def from_inflow(ctx):
 SOURCES = (
     ("vira_jobs", from_vira_jobs), ("claude_app", from_claude_app),
     ("claude_cli", from_claude_cli), ("codex", from_codex), ("git", from_git),
-    ("ideas", from_ideas),
+    ("branch_state", from_branch_state), ("ideas", from_ideas),
     ("flows", from_flows), ("programs", from_programs), ("journal", from_journal),
     ("chat", from_chat), ("notify", from_notify), ("review", from_review),
     ("branch_actions", from_branch_actions), ("contacts", from_contacts),
@@ -1687,7 +1748,7 @@ def run(full=False, only=None):
     d = H.store_dir()
     d.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
-    with locked(d / "ingest.lock"):
+    with locked(d / "ingest"):
         ctx = Ctx(full=full)
         events = collect(ctx, only)
         written = H.put(events, current=ctx.current)

@@ -507,7 +507,7 @@ def append(events, d=None):
     stamp = now_iso()
     text = "".join(json.dumps(dict(e, logged=stamp), ensure_ascii=False,
                               default=str) + "\n" for e in events)
-    with locked(d / "events.lock"):
+    with locked(d / "events"):
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()
@@ -568,7 +568,7 @@ def compress_old(d=None, keep_months=2):
     for p in plain[:-keep_months] if len(plain) > keep_months else []:
         gz = p.with_name(p.name + ".gz")
         tmp = p.with_name(p.name + ".gz.tmp")
-        with locked(d / "events.lock"):
+        with locked(d / "events"):
             raw = p.read_bytes()
             with gzip.open(tmp, "wb") as fh:
                 fh.write(raw)

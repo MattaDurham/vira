@@ -367,6 +367,27 @@ class Ingest(unittest.TestCase):
             self.assertIn(e["status"], H.STATUSES, e["id"])
 
 
+class BranchState(unittest.TestCase):
+    def test_uncommitted_work_is_not_merged_until_it_is_gone(self):
+        sb = Sandbox(self)
+        sb.repo.mkdir()
+        sb.write(orphanwork.STORE, {"items": [{
+            "branch": "claude/wip", "dirty": 3, "worktree": str(sb.repo) + "/.worktrees/wip",
+            "last_activity_iso": iso(sb.ago(1)), "in_motion": False,
+            "files": ["server/ideas.py"]}]})
+        sb.ingest()
+        e = H.load()["code:worktree:vira:claude/wip"]
+        self.assertEqual((e["status"], e["data"]["dirty"], e["module"]),
+                         (H.NOT_MERGED, 3, "work/ideas"))
+        self.assertNotIn("claude/", e["title"])
+        tid = V.index().resolve("branch:vira:claude/wip")
+        self.assertEqual(V.index().trails[tid]["status"], H.NOT_MERGED)
+        sb.write(orphanwork.STORE, {"items": []})
+        sb.ingest()
+        e = H.load()["code:worktree:vira:claude/wip"]
+        self.assertEqual((e["sub"], e["status"]), ("worktree_cleared", H.DROPPED))
+
+
 class Trails(unittest.TestCase):
     def setUp(self):
         self.sb = Sandbox(self)

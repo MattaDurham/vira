@@ -8,6 +8,26 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- History store: one append-only record of every event on the Mac
+  (`data/history/`, `server/history.py`), at the finest grain the sources
+  keep: each ask (journal note, idea, chat, direct dispatch), each session
+  from Vira, Claude Code and Codex with tokens, API-list-price cost and
+  active time, each commit, pull request, merge into main and branch left
+  not merged or discarded in every repository a session worked in, each
+  Flow run and step, each Program run, captured notes, retros, documents,
+  contact cards, answers, the owner's decisions and every text Vira sent.
+  `python -m server.historyingest` backfills it from every existing store
+  and the server keeps it current out of process every minute. Events
+  join into one trail per request, settle on one of eight status words
+  and take their titles from the records. `/api/history` serves lists by
+  day, request, module, project, automation or session, an entry's full
+  detail, the automation status grid with missed runs, a time map, a
+  plain-words ask that returns a view spec, actions that route to the
+  existing Merge, Discard, Resume, Rerun and Judge code, and a live
+  stream (documented in `modules/fleet/history/README.md`). The stores
+  that keep only their newest records (Flow runs past 120, texts past
+  200, journal notes past 400) now archive what they trim, and Merge or
+  Discard pressed on a branch is logged; no screen uses it yet.
 - Fleet shows what runs inside each Vira process. Every in-process pass
   registered with `runtimework` (media and mail archiving, contact and
   idea indexing, backups, the contacts sync, a flow starting) now rides

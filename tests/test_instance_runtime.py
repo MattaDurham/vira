@@ -199,6 +199,9 @@ class OwnershipTests(unittest.TestCase):
                   mock.patch.object(main.backup, "start"),
                   mock.patch.object(circuits.driver, "start"),
                   mock.patch.object(routines.scheduler, "start"),
+                  # the history ingest runs as a child process that writes
+                  # data/history; started for real it would write this checkout
+                  mock.patch.object(main.historyroutes.ticker, "start"),
                   mock.patch.object(main.atlas, "GRAPH"),
                   # in a plain clone with no AGENTS.local.md, startup seeds
                   # one into the checkout root and its baseline into data/
@@ -217,6 +220,7 @@ class OwnershipTests(unittest.TestCase):
             session.sessions.start_supervisor.assert_called_once()
             circuits.driver.start.assert_called_once()
             routines.scheduler.start.assert_called_once()
+            main.historyroutes.ticker.start.assert_called_once()
         finally:
             for patch in reversed(patchers + others):
                 patch.stop()
