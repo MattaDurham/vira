@@ -544,6 +544,78 @@ class Trails(unittest.TestCase):
             V.list_entries("weekday")
 
 
+class _GridStore:
+    """A bare history store in a temporary folder, filled event by event."""
+
+    def __init__(self, case):
+        self.tmp = Path(tempfile.mkdtemp())
+        case.addCleanup(shutil.rmtree, self.tmp, True)
+        p = mock.patch.object(H, "DIR", self.tmp / "history")
+        p.start()
+        case.addCleanup(p.stop)
+        self.now = time.time()
+        V._cache.update(rev=None, index=None)
+        case.addCleanup(V._cache.update, rev=None, index=None)
+
+    def put(self, *events):
+        H.append(list(events))
+        V._cache.update(rev=None, index=None)
+
+
+class GridShortfall(unittest.TestCase):
+    """An hourly Program that missed one hour of a busy day: the hour cell
+    is missed, and the day cell, though it ran, says one due run never
+    started."""
+
+    def setUp(self):
+        self.st = _GridStore(self)
+        now = self.st.now
+        top = now - now % 3600
+        self.gap = top - 10 * 3600
+        runs = []
+        for k in range(30, 0, -1):
+            slot = top - k * 3600
+            if slot == self.gap:
+                continue
+            runs.append(H.event(f"run:program:p{k}", "run", slot + 44 * 60, sub="program",
+                                status=H.RAN, title="Export notes", project="vault",
+                                links={"program": "prog_x", "program_run": f"p{k}",
+                                       "flow_run": "fr1"}))
+        runs.append(H.event("run:flow:fr1", "run", top - 40 * 3600, sub="flow", status=H.RAN,
+                            title="Notes", links={"flow_run": "fr1", "schedule": "rt_h"}))
+        self.st.put(*runs)
+        sched = [{"id": "rt_h", "name": "Every hour", "every_hours": 1.0, "daily_at": "",
+                  "weekday": "", "flow": "", "kind": "circuit", "created": 0}]
+        p = mock.patch.object(V, "_schedules", return_value=sched)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def row(self, span):
+        g = V.grid(span=span)
+        return next(r for r in g["rows"] if r["id"] == "program:prog_x")
+
+    def test_the_missing_hour(self):
+        hour = self.row("hour")
+        cell = next(c for c in hour["cells"] if H.to_ts(c["start"]) == self.gap)
+        self.assertEqual(cell["outcome"], "missed")
+        self.assertEqual(cell["short"], 1)
+        nxt = next(c for c in hour["cells"] if H.to_ts(c["start"]) == self.gap + 3600)
+        self.assertEqual(nxt["outcome"], H.RAN, "a run at :44 is on time for its hour")
+        day = self.row("day")
+        self.assertGreaterEqual(day["short"], 1)
+        cell = next(c for c in day["cells"] if H.to_ts(c["start"]) <= self.gap < H.to_ts(c["end"]))
+        self.assertEqual(cell["outcome"], H.RAN)
+        self.assertEqual(cell["short"], 1)
+
+    def test_the_current_hour_is_not_missed_before_its_run(self):
+        now = time.time()
+        top = now - now % 3600
+        hour = self.row("hour")
+        cur = next((c for c in hour["cells"] if H.to_ts(c["start"]) == top - 3600), None)
+        if cur and not cur["runs"] and top + 600 > now:
+            self.assertNotEqual(cur["outcome"], "missed")
+
+
 class Grid(unittest.TestCase):
     def setUp(self):
         self.sb = Sandbox(self)
@@ -567,7 +639,12 @@ class Grid(unittest.TestCase):
         self.assertEqual(at(3), "missed")
         self.assertEqual(at(2), H.RAN)
         self.assertEqual(at(6.5), "none", "before the first stored run nothing is missed")
-        self.assertEqual(at(1), "missed", "the hour after the last run was missed too")
+        # A due slot is missed once the whole hour (and ten minutes) has
+        # passed: a run may come at :44 and still be on time.
+        slot = next(c for c in prog["cells"]
+                    if H.to_ts(c["start"]) <= self.sb.ago(1) < H.to_ts(c["end"]))
+        self.assertEqual(at(1), "missed" if H.to_ts(slot["start"]) + 4200 < time.time() else "none",
+                         "the hour after the last run was missed too, once it was over")
         self.assertGreaterEqual(prog["missed"], 2)
 
     def test_day_span_and_bad_span(self):

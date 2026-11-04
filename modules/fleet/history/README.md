@@ -136,7 +136,9 @@ The server runs `python -m server.historyingest tick` out of process every
 minute (a `backfill` when the store is empty), one at a time
 (`historyroutes.Ticker`). A pass reads only what changed: transcripts from
 their last byte offset, git from the last base-branch tip, gh at most every
-ten minutes. State lives in `data/history/ingest-state.json`. By hand:
+ten minutes. A pass that wrote anything rebuilds the views' lookup right
+away on the runner's thread, so the next request does not pay for it.
+State lives in `data/history/ingest-state.json`. By hand:
 
     .venv/bin/python -m server.historyingest backfill   # every source, all on disk
     .venv/bin/python -m server.historyingest tick
@@ -269,7 +271,12 @@ it failed, `Running` or `Waiting on you` while one is, `Ran` otherwise,
 `missed` when a Schedule expected a run there and none started, `none` when
 nothing was due. A Program inherits the Schedules of the Flow runs that ran
 it. Misses are only judged from a row's first stored run (no false misses
-before history began) and only for slots more than ten minutes past.
+before history began). A due time counts as missed only once its whole
+interval and ten minutes more have passed (an hourly run may start at :44
+and still be on time); a daily time, ten minutes after it. A cell's
+`short` counts the due runs in it that never started, so a day that ran
+23 of its 24 hourly runs reads `Ran` with `short: 1`; a row's `short` sums
+its cells.
 `tone` is a color hint: `ok`, `fail`, `live`, `wait`, `dropped`, `missed`,
 `empty`.
 
@@ -280,11 +287,12 @@ before history began) and only for slots more than ten minutes past.
            "project": "vault", "known_since": "2026-11-04T06:36:35+00:00",
            "schedules": [{"id": "rt_h", "name": "Every hour", "every_hours": 1.0,
                           "daily_at": "", "weekday": ""}],
-           "runs": 3, "failed": 1, "missed": 2, "last": "2026-11-04T09:36:35+00:00",
+           "runs": 3, "failed": 1, "missed": 2, "short": 2, "last": "2026-11-04T09:36:35+00:00",
            "cells": [{"start": "2026-11-04T08:00:00+00:00", "end": "2026-11-04T09:00:00+00:00",
-                      "outcome": "missed", "tone": "missed", "runs": [], "expected": 1, "counts": {}},
+                      "outcome": "missed", "tone": "missed", "runs": [], "expected": 1, "short": 1,
+                      "counts": {}},
                      {"start": "2026-11-04T09:00:00+00:00", "end": "2026-11-04T10:00:00+00:00",
-                      "outcome": "Ran", "tone": "ok", "expected": 1,
+                      "outcome": "Ran", "tone": "ok", "expected": 1, "short": 0,
                       "counts": {"new": 2, "updated": 1},
                       "runs": [{"id": "run:program:P2", "status": "Ran",
                                 "at": "2026-11-04T09:36:35+00:00",

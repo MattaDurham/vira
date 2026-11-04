@@ -101,6 +101,17 @@ class Ticker:
         rep["mode"] = self.mode
         with self.lock:
             self.last, self.proc = rep, None
+        if rep.get("written"):
+            self.warm()
+
+    def warm(self):
+        """Build the views' index for the store as it now is, here on the
+        runner's thread, so the next request finds it ready instead of
+        paying for the rebuild inside the request path."""
+        try:
+            V.index()
+        except Exception:  # noqa: BLE001 - a request will rebuild it and say why
+            pass
 
     def _loop(self):
         while not self._stop.wait(5 if not self.last else TICK_S):

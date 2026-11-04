@@ -228,6 +228,20 @@ class TickerCase(unittest.TestCase):
         self.assertEqual(t.status()["last"]["written"], 3)
         self.assertEqual(t.status()["last"]["mode"], "tick")
 
+    def test_a_pass_that_wrote_rebuilds_the_lookup_right_away(self):
+        for written, calls in ((3, 1), (0, 0)):
+            t = R.Ticker()
+            script = f"import json; print(json.dumps({{'written': {written}}}))"
+            with mock.patch.object(t, "spawn_args", lambda mode, s=script: [R.sys.executable, "-c", s]), \
+                    mock.patch.object(R.V, "index") as idx:
+                self.assertTrue(t.run_once("tick"))
+                for _ in range(500):
+                    if not t.status()["running"] and idx.call_count >= calls:
+                        break
+                    R.time.sleep(0.01)
+                R.time.sleep(0.05)  # the rebuild follows the report on the same thread
+                self.assertEqual(idx.call_count, calls, f"written={written}")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1019,10 +1019,34 @@ def grid(span="day", since=None, until=None, project=None):
         for s in row_scheds:
             since_ok = max(row["first_ts"], s["created"] or 0)
             expected += [x for x in _expected(s, start_ts, min(end_ts, now)) if x >= since_ok]
+        # A run due at a slot may start anywhere before the next one (an
+        # hourly Program that runs at :44 is not late at :10), so a due
+        # time counts as missed only once its interval, and ten minutes
+        # more, have passed.
+        every = max([0.0] + [s["every_hours"] * 3600 for s in row_scheds
+                             if s["every_hours"] > 0 and not s["daily_at"]])
+        grace = every + 600
+        # Which runs answer which due time: for an interval, a run in the
+        # due slot itself (the same buckets the hour cells use); for a daily
+        # time, a run from ten minutes before it to twelve hours after.
+        # Each run answers one due time at most.
+        lo_pad, hi_pad = (0.0, every) if every else (600.0, 12 * 3600.0)
+        unanswered = set()
+        free = sorted(r["ts"] for r in row["runs"])
+        for x in sorted(expected):
+            hit = next((t for t in free if x - lo_pad <= t < x + hi_pad), None)
+            if hit is None:
+                unanswered.add(x)
+            else:
+                free.remove(hit)
         cells = []
         for a, b in cells_t:
             runs = [r for r in row["runs"] if a <= r["ts"] < b]
             due = [x for x in expected if a <= x < b]
+            judged = [x for x in due if x + grace < now]
+            # Due times with no run started in their own interval: the gaps
+            # inside a busy cell (one hour missing from a day of 24).
+            short = sum(1 for x in judged if x in unanswered)
             if runs:
                 st = [r["status"] for r in runs]
                 outcome = (H.FAILED if H.FAILED in st else H.RUNNING if H.RUNNING in st
@@ -1030,7 +1054,7 @@ def grid(span="day", since=None, until=None, project=None):
                            if all(x == H.DROPPED for x in st) else H.RAN)
             elif due and b <= now + step:
                 # A slot whose time has not come yet is not missed.
-                outcome = "missed" if max(due) + 600 < now else "none"
+                outcome = "missed" if judged else "none"
             else:
                 outcome = "none"
             counts = {}
@@ -1043,7 +1067,7 @@ def grid(span="day", since=None, until=None, project=None):
                                    H.RAN: "ok", H.DROPPED: "dropped", "missed": "missed"}.get(outcome, "empty"),
                           "runs": [{"id": r["id"], "status": r["status"], "at": r.get("at"),
                                     "title": r["title"]} for r in sorted(runs, key=lambda r: r["ts"])],
-                          "expected": len(due), "counts": counts})
+                          "expected": len(due), "short": short, "counts": counts})
         in_span = [r for r in row["runs"] if start_ts <= r["ts"] < end_ts]
         out_rows.append({
             "id": key, "type": row["type"], "name": H.clean_title(row["name"]) or key,
@@ -1053,6 +1077,7 @@ def grid(span="day", since=None, until=None, project=None):
             "known_since": H.iso(row["first_ts"]), "runs": len(in_span),
             "failed": sum(1 for r in in_span if r["status"] == H.FAILED),
             "missed": sum(1 for c in cells if c["outcome"] == "missed"),
+            "short": sum(c["short"] for c in cells),
             "last": max((r.get("at") for r in row["runs"]), default=""),
             "cells": cells})
     out_rows.sort(key=lambda r: (-r["runs"], r["name"]))

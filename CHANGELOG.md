@@ -32,6 +32,9 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   you", and the lists leave it out unless asked; a session whose every
   branch and pull request merged reads Merged whatever its last summary
   said.
+  The automation grid counts an hourly run as missed only after its
+  hour has passed, and each day cell says how many due runs never
+  started.
 - Fleet shows what runs inside each Vira process. Every in-process pass
   registered with `runtimework` (media and mail archiving, contact and
   idea indexing, backups, the contacts sync, a flow starting) now rides
