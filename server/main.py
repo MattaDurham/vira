@@ -1812,7 +1812,8 @@ def api_find_status():
 
     return {"media": safe(mediaindex.status), "notes": safe(vault.status),
             "people": safe(crmindex.status),
-            "messages": safe(textindex.status)}
+            # remembered: the exact count is a full scan of the index
+            "messages": safe(textindex.remembered_status)}
 
 
 class FindChatReq(BaseModel):

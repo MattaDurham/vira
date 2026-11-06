@@ -31,7 +31,7 @@ from unittest import mock
 
 from server import agentbackend, aihealth, models, session, settings
 from server import suggest, virachat
-from tests.model_ledgers import pin_model_ledgers
+from tests.model_ledgers import forget_logins, pin_model_ledgers
 
 
 def _all_signed_in():
@@ -54,6 +54,7 @@ class _Pinned(unittest.TestCase):
 
     def setUp(self):
         self.cfg = {"ai_provider": "anthropic", "providers_disabled": []}
+        forget_logins(self)
         for p in _all_signed_in():
             p.start()
         mock.patch.object(settings, "raw", lambda: dict(self.cfg)).start()

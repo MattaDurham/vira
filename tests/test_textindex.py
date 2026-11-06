@@ -100,6 +100,29 @@ class TextIndexTests(unittest.TestCase):
         self.assertEqual(self.index(), 4)      # the "Liked" row is dropped
         self.assertEqual(textindex.status()["messages"], 4)
 
+    def test_remembered_status_serves_old_counts_and_recounts_once(self):
+        # The Find header must not wait on a full scan of the index.
+        memo = dict(textindex._status_memo)
+        self.addCleanup(textindex._status_memo.update, memo)
+        textindex._status_memo.update(at=0.0, value=None, counting=False)
+        self.index()
+        self.assertEqual(textindex.remembered_status()["messages"], 4)
+        started = []
+        with mock.patch.object(textindex, "_status_spawn",
+                               side_effect=started.append), \
+             mock.patch.object(textindex, "status",
+                               wraps=textindex.status) as exact:
+            self.assertEqual(textindex.remembered_status()["messages"], 4)
+            self.assertEqual(exact.call_count, 0)        # fresh: no count
+            textindex._status_memo["at"] -= textindex.STATUS_TTL + 1
+            textindex.remembered_status()
+            textindex.remembered_status()
+            self.assertEqual(exact.call_count, 0)        # old: served as is
+            self.assertEqual(len(started), 1)            # one recount
+            started[0]()
+            self.assertEqual(exact.call_count, 1)
+        self.assertFalse(textindex._status_memo["counting"])
+
     def test_attributed_body_rows_are_decoded(self):
         self.index()
         hits = textindex.search("skis")

@@ -63,6 +63,19 @@ class LinkExtraction(unittest.TestCase):
                 self.assertIsNone(resources.safe_http_url(url))
         self.assertEqual(resources.extract_links("", "".join('<a href="' + u + '">Pay</a>' for u in bad)), [])
 
+    def test_control_and_space_characters_are_refused_ascii_or_not(self):
+        # The ASCII fast path must refuse exactly what the per-character
+        # check refuses, and the memo must not change any answer.
+        for c in ["\x00", "\x1f", "\x7f", "\t", " ", "\x1c", "\u200b", "\u2028", "\u00a0"]:
+            url = "https://example.com/a" + c + "b"
+            with self.subTest(char=repr(c)):
+                self.assertIsNone(resources.safe_http_url(url))
+                self.assertIsNone(resources.safe_http_url(url))
+        good = "https://example.com/caf\u00e9?x=1"
+        self.assertEqual(resources.safe_http_url(good), good)
+        self.assertEqual(resources.safe_http_url("  " + good + " "), good)
+        self.assertIsNone(resources.safe_http_url("https://example.com/" + "a" * 5000))
+
     def test_image_label_entities_and_hidden_anchors(self):
         found = resources.extract_links("", '<a href="https://example.com/support"><img alt="Help &amp; support"></a>'
             '<a href="https://example.com/hidden" style="display: none">Hidden</a>')

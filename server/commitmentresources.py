@@ -3,6 +3,7 @@
 Labels describe links present in a message, not verified merchant identities.
 Keep the actual destination domain visible and preserve signed URLs unchanged.
 """
+import functools
 from html.parser import HTMLParser
 import ipaddress
 import re
@@ -27,14 +28,40 @@ _KINDS = (
 )
 
 
+# ASCII's whitespace and control characters (category C) are exactly
+# \x00-\x20 and \x7f, so an ASCII URL is checked by one regex instead of a
+# Python-level loop over every character.
+_ASCII_BAD = re.compile(r"[\x00-\x20\x7f]")
+_PCT_CONTROL = re.compile(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", re.I)
+
+
 def safe_http_url(value):
     """Return an unchanged navigable URL, or None for unsafe/malformed input."""
     if not isinstance(value, str):
         return None
     value = value.strip()
-    if (not value or len(value) > 4096 or any(c in value for c in '\\<>"')
-            or any(c.isspace() or unicodedata.category(c).startswith("C") for c in value)
-            or re.search(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", value, re.I)):
+    # Over-long input is refused before the memo, so it never holds one.
+    if not value or len(value) > 4096:
+        return None
+    return _safe_http_str(value)
+
+
+# Remembered per string: the check is pure, and the Assistant status
+# re-validates the same ~3,000 stored links on every call. That status is
+# built for both /api/assistant and the Attention poll (every 5 s), and the
+# per-character loop alone was 0.6 s of interpreter time per build
+# (780,000 iterations measured 2026-11-06), which starved every other
+# request during the desktop page's startup burst.
+@functools.lru_cache(maxsize=8192)
+def _safe_http_str(value):
+    if any(c in value for c in '\\<>"'):
+        return None
+    if value.isascii():
+        if _ASCII_BAD.search(value):
+            return None
+    elif any(c.isspace() or unicodedata.category(c).startswith("C") for c in value):
+        return None
+    if _PCT_CONTROL.search(value):
         return None
     try:
         parts = urlsplit(value)

@@ -39,6 +39,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import Counter
 from datetime import datetime, timezone
 
 from . import settings
@@ -53,16 +54,30 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _thread_frames(limit_threads=16, depth=4):
+# Innermost function names that mean "this thread is parked, not running
+# Python": waiting on a lock, a socket, a sleep or a select. A thread whose
+# innermost frame is anything else was executing when sampled.
+_IDLE = {"wait", "_wait_for_tstate_lock", "select", "poll", "control",
+         "sleep", "recv", "recv_into", "readinto", "read", "accept", "get",
+         "_worker", "acquire", "run_forever", "_run_once", "wait_for",
+         "_recv_bytes", "readline", "communicate", "_communicate"}
+
+
+def _thread_frames(limit_threads=48, depth=4):
     """Innermost frames of every live thread, right now. Best-effort: a
-    thread that dies mid-walk is skipped, never raised."""
+    thread that dies mid-walk is skipped, never raised. MainThread (the
+    event loop) comes first: with 40 thread-pool workers alive it used to
+    fall past the cap, and its frame is the one that says whether the loop
+    itself was blocked or only starved of the GIL."""
     names = {t.ident: t.name for t in threading.enumerate()}
     out = []
     try:
         frames = sys._current_frames()
     except Exception:  # noqa: BLE001 — diagnostics never break the server
         return out
-    for tid, frame in list(frames.items())[:limit_threads]:
+    main = threading.main_thread().ident
+    items = sorted(frames.items(), key=lambda kv: kv[0] != main)
+    for tid, frame in items[:limit_threads]:
         try:
             stack = traceback.extract_stack(frame)[-depth:]
             out.append({
@@ -73,6 +88,26 @@ def _thread_frames(limit_threads=16, depth=4):
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def _busy(frames):
+    """The threads in one sample that were running Python, as
+    'thread-kind: innermost frames' keys. Worker threads are numbered by
+    the pool, so the kind drops the number to let samples add up."""
+    keys = []
+    me = threading.current_thread().name      # the watchdog, sampling
+    for t in frames:
+        if t["thread"] == me:
+            continue
+        stack = t.get("stack") or []
+        if not stack:
+            continue
+        inner = stack[-1].rsplit(" ", 1)[-1]
+        if inner in _IDLE:
+            continue
+        kind = t["thread"].rstrip("0123456789_ ").rstrip("-") or t["thread"]
+        keys.append(f"{kind}: {' < '.join(reversed(stack[-3:]))}")
+    return keys
 
 
 class Watcher:
@@ -114,6 +149,8 @@ class Watcher:
 
     def _run(self):
         began, noticed, peak, frames = 0.0, "", 0.0, None
+        busy = Counter()
+        samples = 0
         while not self._stop.is_set():
             lag = self.lag()
             if lag >= self.threshold:
@@ -124,15 +161,22 @@ class Watcher:
                     # stale, so back-date the start or every stall reads
                     # THRESHOLD seconds shorter than it was.
                     began = time.monotonic() - lag
-                    peak, frames = lag, _thread_frames()
+                    peak, frames = lag, _thread_frames(depth=8)
+                    busy, samples = Counter(_busy(frames)), 1
                 else:
                     peak = max(peak, lag)
+                    # One snapshot at the start says what was alive; a
+                    # sample every tick says what kept running for the
+                    # whole stall, which is the thing holding the GIL.
+                    busy.update(_busy(_thread_frames(depth=8)))
+                    samples += 1
             elif self.stalling:
                 self.stalling = False
-                self._record(noticed, time.monotonic() - began, peak, frames)
+                self._record(noticed, time.monotonic() - began, peak, frames,
+                             busy, samples)
             self._stop.wait(self.tick)
 
-    def _record(self, noticed, duration, peak, frames):
+    def _record(self, noticed, duration, peak, frames, busy=None, samples=0):
         from . import admission          # local: avoid an import cycle
         entry = {
             "noticed": noticed,
@@ -140,6 +184,9 @@ class Watcher:
             "peak_lag_s": round(peak, 2),
             "gate": admission.gate.stats(),
             "threads": frames or [],
+            "samples": samples,
+            "busy": [{"where": k, "seen": n}
+                     for k, n in (busy or Counter()).most_common(12)],
         }
         with self._lock:
             self.stalls.append(entry)
@@ -154,6 +201,9 @@ class Watcher:
               f"gate={entry['gate']['waiting']} waiting / "
               f"{entry['gate']['admitted']} admitted; threads: {busy}",
               file=sys.stderr, flush=True)
+        for b in entry["busy"][:3]:
+            print(f"[loopwatch]   busy {b['seen']}/{samples}: {b['where']}",
+                  file=sys.stderr, flush=True)
 
     # ----- lifecycle -----
 

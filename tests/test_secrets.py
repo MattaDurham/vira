@@ -108,6 +108,83 @@ class MacBackendTests(unittest.TestCase):
                                side_effect=OSError("boom")):
             self.assertEqual(secrets.get("svc", "acct"), "")
 
+    def _counted(self, **answer):
+        return mock.patch.object(secrets.subprocess, "run",
+                                 return_value=mock.Mock(**answer))
+
+    def test_max_age_reuses_a_recent_keychain_answer(self):
+        # One desktop page load asked for the same model key 17 times,
+        # each a `security` process; a caller passing max_age asks once.
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=0, stdout="kc-val\n") as run:
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "kc-val")
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "kc-val")
+        self.assertEqual(run.call_count, 1)
+
+    def test_without_max_age_every_read_asks_the_keychain(self):
+        # The default stays fresh: a rotating token (the mail refresh
+        # token) must never be served from memory.
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=0, stdout="kc-val\n") as run:
+            secrets.get("svc", "acct", max_age=30)
+            secrets.get("svc", "acct")
+        self.assertEqual(run.call_count, 2)
+
+    def test_a_failed_read_is_never_remembered(self):
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=51, stdout="") as run:   # locked, denied
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "")
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "")
+        self.assertEqual(run.call_count, 2)
+
+    def test_not_found_is_remembered_and_set_forgets_it(self):
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=44, stdout="") as run:
+            secrets.get("svc", "acct", max_age=30)
+            secrets.get("svc", "acct", max_age=30)
+        self.assertEqual(run.call_count, 1)
+        with self._counted(returncode=0):
+            secrets.set("svc", "acct", "new")
+        with self._counted(returncode=0, stdout="new\n"):
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "new")
+
+    def test_concurrent_reads_of_one_secret_start_one_security_process(self):
+        import threading
+        self.addCleanup(secrets._recent.clear)
+        inside, release, calls = threading.Event(), threading.Event(), []
+
+        def slow(*a, **k):
+            calls.append(a)
+            inside.set()
+            release.wait(5)
+            return mock.Mock(returncode=0, stdout="kc-val\n")
+        got = []
+        with mock.patch.object(secrets.subprocess, "run", side_effect=slow):
+            readers = [threading.Thread(target=lambda: got.append(
+                secrets.get("svc", "acct", max_age=30))) for _ in range(3)]
+            readers[0].start()
+            self.assertTrue(inside.wait(5))
+            for r in readers[1:]:
+                r.start()
+            release.set()
+            for r in readers:
+                r.join(5)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(got, ["kc-val"] * 3)
+
+    def test_a_read_racing_a_write_does_not_keep_the_old_value(self):
+        self.addCleanup(secrets._recent.clear)
+
+        def read_then_write(*a, **k):
+            # The paste lands while this read is still in flight.
+            secrets._forget("svc", "acct")
+            return mock.Mock(returncode=0, stdout="old\n")
+        with mock.patch.object(secrets.subprocess, "run",
+                               side_effect=read_then_write):
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "old")
+        with self._counted(returncode=0, stdout="new\n"):
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "new")
+
     def test_set_prefers_keychain_and_skips_file(self):
         with mock.patch.object(secrets.subprocess, "run",
                                return_value=mock.Mock(returncode=0)):

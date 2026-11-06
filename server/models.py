@@ -565,7 +565,7 @@ def login_status(pid):
     m = _LOGIN_URL_RE.search(out)
     connected = False
     if mine and not running and exit_code == 0:
-        connected = bool((probe(pid) or {}).get("connected"))
+        connected = bool((probe(pid, fresh=True) or {}).get("connected"))
     if mine and not running and exit_code not in (None, 0) and not error:
         tail = [ln.strip() for ln in out.splitlines() if ln.strip()]
         error = tail[-1][:200] if tail else f"sign-in exited ({exit_code})"
@@ -593,9 +593,17 @@ def api_key(pid):
     if pid not in PROVIDERS:
         return ""
     try:
-        return secrets.get(settings.keychain_service("vira-model-key"), pid)
+        return secrets.get(settings.keychain_service("vira-model-key"), pid,
+                           max_age=KEY_TTL)
     except Exception:  # noqa: BLE001 — never raise out of a lookup
         return ""
+
+
+# A model key is only changed by pasting it into Vira (secrets.set forgets
+# the old answer at once) or by hand in Keychain Access, which this sees
+# within KEY_TTL. One desktop page load asked for the same key 17 times,
+# each a `security` process (measured 2026-11-06).
+KEY_TTL = 300.0
 
 
 def _probe_auth(pid, binary):
@@ -616,9 +624,10 @@ def _probe_auth(pid, binary):
                              capture_output=True, text=True, timeout=20,
                              env=settings.strip_env())
     except subprocess.TimeoutExpired:
-        return LOGGED_OUT, f"{spec['bin']} {' '.join(spec['status_cmd'])} timed out"
+        return LOGGED_OUT, _Unanswered(
+            f"{spec['bin']} {' '.join(spec['status_cmd'])} timed out")
     except Exception as e:  # noqa: BLE001
-        return LOGGED_OUT, f"probe error: {str(e)[:120]}"
+        return LOGGED_OUT, _Unanswered(f"probe error: {str(e)[:120]}")
 
     out = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
     try:
@@ -640,27 +649,104 @@ def _probe_auth(pid, binary):
     return SIGNED_IN, (out.splitlines() or ["signed in"])[0][:160]
 
 
-SIGNED_IN_TTL = 5.0      # one Config paint asks per module; spawn once
+class _Unanswered(str):
+    """The detail of a login check the CLI never answered (timed out, could
+    not start). Still shown as text; never remembered as the login state."""
+
+
+# How long one CLI's login answer is reused. The desktop page's startup
+# burst asks from several windows at once (Config, Setup, module models,
+# the brief), and every `claude auth status` / `codex login status` is a
+# Node or Rust process start: 4-6 per provider sweep, ~25 per page load,
+# each request 3-15 s while they ran together (measured 2026-11-06).
+#
+# Three rules keep that to at most one check per CLI, and none on the
+# request path once Vira has asked before:
+#   - an answer younger than SIGNED_IN_TTL is used as it is;
+#   - an older one (up to SIGNED_IN_STALE) is used while one background
+#     check refreshes it, so a page load after a break never waits on it;
+#   - callers that find no usable answer wait for the one check already
+#     running for that CLI instead of each starting their own.
+# A sign-in Vira drives itself is read fresh (login_status, the AI health
+# watcher and an explicit model-list refresh pass fresh=True); one made in
+# a terminal shows on the next read after the refresh it triggers.
+SIGNED_IN_TTL = 30.0
+SIGNED_IN_STALE = 3600.0
 _signed_in_cache = {}
+_auth_locks = {}          # binary -> lock held while its CLI is being asked
+_auth_refreshing = set()  # binaries with a background check in flight
+
+
+def _auth_lock(binary):
+    with _lock:
+        return _auth_locks.setdefault(binary, threading.Lock())
+
+
+def _auth_check(pid, binary):
+    """Ask the CLI now and remember a definite answer."""
+    answer = _probe_auth(pid, binary)
+    if not isinstance(answer[1], _Unanswered):
+        with _lock:
+            _signed_in_cache[binary] = (time.monotonic(), answer)
+    return answer
+
+
+def _remembered(binary, within):
+    with _lock:
+        hit = _signed_in_cache.get(binary)
+    if hit and time.monotonic() - hit[0] < within:
+        return hit[1]
+    return None
+
+
+def _spawn(fn):
+    """Test seam: where a background login check starts."""
+    threading.Thread(target=fn, daemon=True, name="vira-login-check").start()
+
+
+def _refresh_soon(pid, binary):
+    with _lock:
+        if binary in _auth_refreshing:
+            return
+        _auth_refreshing.add(binary)
+
+    def run():
+        try:
+            with _auth_lock(binary):
+                _auth_check(pid, binary)
+        finally:
+            with _lock:
+                _auth_refreshing.discard(binary)
+    _spawn(run)
+
+
+def _auth_answer(pid, binary, fresh=False):
+    """_probe_auth for this CLI, by the rules above."""
+    if not fresh:
+        hit = _remembered(binary, SIGNED_IN_TTL)
+        if hit is not None:
+            return hit
+        hit = _remembered(binary, SIGNED_IN_STALE)
+        if hit is not None:
+            _refresh_soon(pid, binary)
+            return hit
+    with _auth_lock(binary):
+        if not fresh:
+            # Whoever held the lock may have just asked for us.
+            hit = _remembered(binary, SIGNED_IN_TTL)
+            if hit is not None:
+                return hit
+        return _auth_check(pid, binary)
 
 
 def cli_signed_in(pid):
     """Whether this provider's CLI is installed AND signed in to the
     owner's own account - the subscription lane, with any API key ignored.
-    probe() folds a key in after this question; a lane choice must not.
-    Reused for a few seconds: a module snapshot asks once per module, and a
-    sign-in is read fresh by probe() itself, so nothing waits on the TTL."""
+    probe() folds a key in after this question; a lane choice must not."""
     binary = find_binary(pid)
     if not binary or not (PROVIDERS.get(pid) or {}).get("status_cmd"):
         return False
-    with _lock:
-        hit = _signed_in_cache.get(binary)
-    if hit and time.monotonic() - hit[0] < SIGNED_IN_TTL:
-        return hit[1]
-    ok = _probe_auth(pid, binary)[0] == SIGNED_IN
-    with _lock:
-        _signed_in_cache[binary] = (time.monotonic(), ok)
-    return ok
+    return _auth_answer(pid, binary)[0] == SIGNED_IN
 
 
 class ProviderDisabled(ValueError):
@@ -705,11 +791,12 @@ def is_disabled(pid):
     return pid in disabled_providers()
 
 
-def probe(pid):
+def probe(pid, fresh=False):
     """One provider's full record. Never raises. `connected` means usable
     HERE — auth works AND the owner has not disabled the provider; the raw
     auth verdict survives as `auth` so Config can say "disabled by you"
-    rather than "not signed in"."""
+    rather than "not signed in". The CLI's login answer is reused for
+    SIGNED_IN_TTL unless `fresh`."""
     spec = PROVIDERS.get(pid)
     if not spec:
         return None
@@ -721,7 +808,7 @@ def probe(pid):
         # `ai` reaches done so the splash and the reveal actually run.
         auth, detail = SIGNED_IN, "demo mode — not a real sign-in"
     elif binary:
-        auth, detail = _probe_auth(pid, binary)
+        auth, detail = _auth_answer(pid, binary, fresh=fresh)
         cli_auth = auth
         # A logged-out CLI with a key on file is still usable, via the API.
         if auth == LOGGED_OUT and key:
@@ -1027,7 +1114,7 @@ def options(refresh=False):
         return cached
     provs = []
     for pid, spec in PROVIDERS.items():
-        rec = probe(pid) or {}
+        rec = probe(pid, fresh=refresh) or {}
         caps = dict(rec.get("capabilities") or {})
         if not caps:
             from . import agentbackend
