@@ -85,7 +85,7 @@ def _intake():
 
 def _text_index():
     from . import textindex
-    st = textindex.status()
+    st = textindex.remembered_status()   # the exact count is a full scan
     detail = (f"{st.get('messages', 0):,} texts, {st.get('emails', 0):,} emails indexed"
               if st.get("available") else "not indexed yet")
     return _row("textindex", "Message index",

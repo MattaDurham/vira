@@ -799,6 +799,63 @@ def status():
         con.close()
 
 
+# The counts above are full scans of a multi-gigabyte table: 13 s with the
+# disk cache warm, 53 s cold, 47 s on the live server (measured
+# 2026-11-06). The Find window's header asks on every desktop page load,
+# and Chrome gives a page only six connections to Vira, so one of them sat
+# on this for the whole wait. The header and the workers list read the
+# counts below instead: returned at once, recounted in the background
+# when older than STATUS_TTL, and counted once at startup by the indexer
+# thread so the first page load finds them ready. status() stays exact
+# for the CLI and for callers that just wrote.
+STATUS_TTL = 600.0
+_status_memo = {"at": 0.0, "value": None, "counting": False}
+_status_lock = threading.Lock()       # guards _status_memo
+_status_counting = threading.Lock()   # held while one count runs
+
+
+def _status_spawn(fn):
+    """Test seam: where a background recount starts."""
+    threading.Thread(target=fn, daemon=True, name="vira-text-count").start()
+
+
+def _count_locked():
+    value = status()
+    with _status_lock:
+        _status_memo.update(at=time.monotonic(), value=value)
+    return value
+
+
+def _count_now():
+    with _status_counting:
+        return _count_locked()
+
+
+def remembered_status():
+    """status(), up to STATUS_TTL old (then refreshed in the background).
+    Callers with no remembered counts wait for the one count running."""
+    with _status_lock:
+        value, at = _status_memo["value"], _status_memo["at"]
+    if value is None:
+        with _status_counting:
+            with _status_lock:
+                value = _status_memo["value"]
+            return value if value is not None else _count_locked()
+    if time.monotonic() - at >= STATUS_TTL:
+        with _status_lock:
+            start = not _status_memo["counting"]
+            _status_memo["counting"] = True
+        if start:
+            def run():
+                try:
+                    _count_now()
+                finally:
+                    with _status_lock:
+                        _status_memo["counting"] = False
+            _status_spawn(run)
+    return value
+
+
 def _source_row(row):
     """Full local evidence plus only locators the index actually recorded."""
     when = mediaindex.apple_dt(row["date_ns"])
@@ -930,6 +987,10 @@ class Indexer(threading.Thread):
 
     def run(self):
         time.sleep(self.boot_wait)      # let the server finish booting
+        try:
+            _count_now()                # ready before the Find header asks
+        except Exception:  # noqa: BLE001 - the indexer never dies
+            pass
         while not self._stop.is_set():
             try:
                 con = _db()
