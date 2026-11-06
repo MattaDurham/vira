@@ -29166,6 +29166,8 @@ const RDOC_AXES = [
 // Untagged work sorts last and is never hidden — the Queue's rule. A document
 // the tagger has not reached yet must still be findable.
 const RDOC_UNTAGGED = " untagged";
+const RDOC_NONE_OPEN = " none";   // "the user closed the default-open group"
+const RDOC_LIST_PAGE = 200;       // flat List rows drawn per page
 
 let rdocGroup = lsGet("vira-reader-group", "month");
 let rdocQ = lsGet("vira-rdoc-q", "");
@@ -29428,6 +29430,7 @@ function rdocExpandAll(open) {
   const s = rdocOpenSet();
   s.clear();
   if (open) rdocLastGroups.forEach((g) => s.add(g.key));
+  else s.add(RDOC_NONE_OPEN);   // all closed means all closed, not "fresh"
   rdocSaveOpen();
   renderReaderDocs();
 }
@@ -29613,16 +29616,29 @@ function renderReaderDocs(opts = {}) {
 
 
   // The column header — Finder's, and the thing that makes a list read as a
-  // list rather than a stack of rows. List view only; the grid has its own
-  // section anatomy.
+  // list rather than a stack of rows.
   const head = el("div", "rdoc-head");
-  ["", "Name", "Tags", "Kind", "Added"].forEach((h, i) => {
+  ["", "Name", "Tags", "Source", "Added"].forEach((h, i) => {
     head.appendChild(el("div", "rdoc-h h" + i, h));
   });
   list.appendChild(head);
 
+  // Flat, the list is every capture and document at once — thousands of
+  // rows. It draws a page at a time with a counted button for the rest.
   if (!rdocGroup) {
-    groups[0].items.forEach((it) => list.appendChild(rdocRow(it)));
+    const all = groups[0].items;
+    const page = (from) => {
+      const to = Math.min(all.length, from + RDOC_LIST_PAGE);
+      for (let i = from; i < to; i++) list.appendChild(rdocRow(all[i]));
+      if (to < all.length) {
+        const more = el("button", "rdoc-mini rdoc-more",
+          "Show " + Math.min(RDOC_LIST_PAGE, all.length - to) + " more of "
+          + (all.length - to));
+        more.addEventListener("click", () => { more.remove(); page(to); });
+        list.appendChild(more);
+      }
+    };
+    page(0);
     restoreFocus();
     return;
   }
@@ -29632,8 +29648,12 @@ function renderReaderDocs(opts = {}) {
   // hide what the search just found.
   const searching = !!rdocQ.trim() || rdocTags.size > 0;
 
-  groups.forEach((g) => {
-    const isOpen = searching || open.has(g.key);
+  // Untouched, the first group (the newest month) starts open, so the
+  // Reader never opens on a wall of closed headings. Closing it records
+  // RDOC_NONE_OPEN so it stays closed.
+  const fresh = open.size === 0;
+  groups.forEach((g, gi) => {
+    const isOpen = searching || open.has(g.key) || (fresh && gi === 0);
     const wrap = el("div", "rdoc-group" + (isOpen ? " open" : ""));
     const ghead = el("button", "rdoc-ghead");
     ghead.appendChild(el("span", "rdoc-caret", "›"));
@@ -29644,7 +29664,8 @@ function renderReaderDocs(opts = {}) {
       ghead.appendChild(el("span", "rdoc-gfilm", "film"));
     }
     ghead.addEventListener("click", () => {
-      if (open.has(g.key)) open.delete(g.key); else open.add(g.key);
+      if (fresh && gi === 0) open.add(RDOC_NONE_OPEN);
+      else if (open.has(g.key)) open.delete(g.key); else open.add(g.key);
       rdocSaveOpen();
       renderReaderDocs();
     });
