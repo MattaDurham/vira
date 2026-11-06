@@ -70,7 +70,7 @@ branch; the suite and `check` say when it is whole.
 - [Library](library/README.md) - Browse a vault by subject and read it whole; the documents Vira serves itself.  
   Browse, Documents (13 files)
 - [Reader](reader/README.md) - Everything worth reading, wherever it lives, and the rooms that ingest it whole.  
-  Queue, Rooms (21 files)
+  Queue, Rooms (24 files)
 - [Research](research/README.md) - Claim-centred evidence over local, read-only research graphs.  
   Graphs, Topics (8 files)
 - [World](world/README.md) - The owner's world as a typed, temporal 3D graph: people, notes, concepts, time.  
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-820 of 820 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+823 of 823 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->

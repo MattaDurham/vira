@@ -11,7 +11,10 @@
     "tests/test_reader_grid_reveal.py",
     "tests/test_readinglist.py",
     "tests/test_reading.py",
-    "tests/test_plans.py"
+    "tests/test_plans.py",
+    "static/reader-explore.css",
+    "static/reader-explore.js",
+    "tests/test_reader_explore.py"
   ],
   "routes": [
     "/api/reading/list",
