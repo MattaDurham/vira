@@ -603,7 +603,7 @@ def api_key(pid):
 # the old answer at once) or by hand in Keychain Access, which this sees
 # within KEY_TTL. One desktop page load asked for the same key 17 times,
 # each a `security` process (measured 2026-11-06).
-KEY_TTL = 30.0
+KEY_TTL = 300.0
 
 
 def _probe_auth(pid, binary):
@@ -658,25 +658,85 @@ class _Unanswered(str):
 # burst asks from several windows at once (Config, Setup, module models,
 # the brief), and every `claude auth status` / `codex login status` is a
 # Node or Rust process start: 4-6 per provider sweep, ~25 per page load,
-# each request 3-15 s while they ran together (measured 2026-11-06). A
-# sign-in Vira drives itself is read fresh (login_status passes fresh=True);
-# one made in a terminal shows up within this many seconds.
+# each request 3-15 s while they ran together (measured 2026-11-06).
+#
+# Three rules keep that to at most one check per CLI, and none on the
+# request path once Vira has asked before:
+#   - an answer younger than SIGNED_IN_TTL is used as it is;
+#   - an older one (up to SIGNED_IN_STALE) is used while one background
+#     check refreshes it, so a page load after a break never waits on it;
+#   - callers that find no usable answer wait for the one check already
+#     running for that CLI instead of each starting their own.
+# A sign-in Vira drives itself is read fresh (login_status, the AI health
+# watcher and an explicit model-list refresh pass fresh=True); one made in
+# a terminal shows on the next read after the refresh it triggers.
 SIGNED_IN_TTL = 30.0
+SIGNED_IN_STALE = 3600.0
 _signed_in_cache = {}
+_auth_locks = {}          # binary -> lock held while its CLI is being asked
+_auth_refreshing = set()  # binaries with a background check in flight
 
 
-def _auth_answer(pid, binary, fresh=False):
-    """_probe_auth, reused for SIGNED_IN_TTL per binary."""
-    if not fresh:
-        with _lock:
-            hit = _signed_in_cache.get(binary)
-        if hit and time.monotonic() - hit[0] < SIGNED_IN_TTL:
-            return hit[1]
+def _auth_lock(binary):
+    with _lock:
+        return _auth_locks.setdefault(binary, threading.Lock())
+
+
+def _auth_check(pid, binary):
+    """Ask the CLI now and remember a definite answer."""
     answer = _probe_auth(pid, binary)
     if not isinstance(answer[1], _Unanswered):
         with _lock:
             _signed_in_cache[binary] = (time.monotonic(), answer)
     return answer
+
+
+def _remembered(binary, within):
+    with _lock:
+        hit = _signed_in_cache.get(binary)
+    if hit and time.monotonic() - hit[0] < within:
+        return hit[1]
+    return None
+
+
+def _spawn(fn):
+    """Test seam: where a background login check starts."""
+    threading.Thread(target=fn, daemon=True, name="vira-login-check").start()
+
+
+def _refresh_soon(pid, binary):
+    with _lock:
+        if binary in _auth_refreshing:
+            return
+        _auth_refreshing.add(binary)
+
+    def run():
+        try:
+            with _auth_lock(binary):
+                _auth_check(pid, binary)
+        finally:
+            with _lock:
+                _auth_refreshing.discard(binary)
+    _spawn(run)
+
+
+def _auth_answer(pid, binary, fresh=False):
+    """_probe_auth for this CLI, by the rules above."""
+    if not fresh:
+        hit = _remembered(binary, SIGNED_IN_TTL)
+        if hit is not None:
+            return hit
+        hit = _remembered(binary, SIGNED_IN_STALE)
+        if hit is not None:
+            _refresh_soon(pid, binary)
+            return hit
+    with _auth_lock(binary):
+        if not fresh:
+            # Whoever held the lock may have just asked for us.
+            hit = _remembered(binary, SIGNED_IN_TTL)
+            if hit is not None:
+                return hit
+        return _auth_check(pid, binary)
 
 
 def cli_signed_in(pid):

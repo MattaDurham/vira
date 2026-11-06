@@ -207,7 +207,9 @@ def _probe_cli():
     from . import models as provider
     pid = _provider_id()
     try:
-        rec = provider.probe(pid)
+        # fresh: the health check exists to notice a sign-out, so it never
+        # reads the login answer models.probe keeps for page loads.
+        rec = provider.probe(pid, fresh=True)
     except Exception as e:  # noqa: BLE001 — a probe must never crash the caller
         return "unknown", f"probe error: {str(e)[:120]}", {}
     if not rec:

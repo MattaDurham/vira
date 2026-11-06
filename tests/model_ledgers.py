@@ -15,11 +15,12 @@ from server import answer_runtime, modeladmission, modelbudget, models, secrets
 
 def forget_logins(test):
     """Start and end the test with no remembered CLI login answers or
-    Keychain reads. Both are reused for 30 s in the server (models.
-    SIGNED_IN_TTL, models.KEY_TTL), which is longer than a whole run of
-    the model tests, so one test's mocked login would otherwise answer
-    for the next."""
-    for clear in (models._signed_in_cache.clear, secrets._recent.clear):
+    Keychain reads. The server reuses both (models.SIGNED_IN_TTL and
+    SIGNED_IN_STALE, models.KEY_TTL) for longer than a whole run of the
+    model tests, so one test's mocked login would otherwise answer for the
+    next."""
+    for clear in (models._signed_in_cache.clear, models._auth_refreshing.clear,
+                  secrets._recent.clear):
         clear()
         test.addCleanup(clear)
 

@@ -148,6 +148,43 @@ class MacBackendTests(unittest.TestCase):
         with self._counted(returncode=0, stdout="new\n"):
             self.assertEqual(secrets.get("svc", "acct", max_age=30), "new")
 
+    def test_concurrent_reads_of_one_secret_start_one_security_process(self):
+        import threading
+        self.addCleanup(secrets._recent.clear)
+        inside, release, calls = threading.Event(), threading.Event(), []
+
+        def slow(*a, **k):
+            calls.append(a)
+            inside.set()
+            release.wait(5)
+            return mock.Mock(returncode=0, stdout="kc-val\n")
+        got = []
+        with mock.patch.object(secrets.subprocess, "run", side_effect=slow):
+            readers = [threading.Thread(target=lambda: got.append(
+                secrets.get("svc", "acct", max_age=30))) for _ in range(3)]
+            readers[0].start()
+            self.assertTrue(inside.wait(5))
+            for r in readers[1:]:
+                r.start()
+            release.set()
+            for r in readers:
+                r.join(5)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(got, ["kc-val"] * 3)
+
+    def test_a_read_racing_a_write_does_not_keep_the_old_value(self):
+        self.addCleanup(secrets._recent.clear)
+
+        def read_then_write(*a, **k):
+            # The paste lands while this read is still in flight.
+            secrets._forget("svc", "acct")
+            return mock.Mock(returncode=0, stdout="old\n")
+        with mock.patch.object(secrets.subprocess, "run",
+                               side_effect=read_then_write):
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "old")
+        with self._counted(returncode=0, stdout="new\n"):
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "new")
+
     def test_set_prefers_keychain_and_skips_file(self):
         with mock.patch.object(secrets.subprocess, "run",
                                return_value=mock.Mock(returncode=0)):

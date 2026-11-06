@@ -99,6 +99,51 @@ class AuthProbeTest(unittest.TestCase):
             models.probe("anthropic")
         self.assertEqual(run.call_count, 2)
 
+    def test_an_old_answer_is_served_at_once_while_one_check_refreshes_it(self):
+        # A page load after a break must not wait on `claude auth status`.
+        models._signed_in_cache["/x/bin"] = (
+            time.monotonic() - models.SIGNED_IN_TTL - 1,
+            (models.SIGNED_IN, "signed in"))
+        started = []
+        with mock.patch.object(models, "_spawn", side_effect=started.append), \
+             mock.patch.object(models, "_probe_auth",
+                               return_value=(models.LOGGED_OUT, "not signed in")) as ask:
+            self.assertEqual(models._auth_answer("anthropic", "/x/bin")[0],
+                             models.SIGNED_IN)
+            models._auth_answer("anthropic", "/x/bin")
+            self.assertEqual(ask.call_count, 0)     # nothing on the request path
+            self.assertEqual(len(started), 1)       # one refresh, not two
+            started[0]()
+            self.assertEqual(ask.call_count, 1)
+            self.assertEqual(models._auth_answer("anthropic", "/x/bin")[0],
+                             models.LOGGED_OUT)
+
+    def test_callers_with_no_answer_wait_for_the_one_check_running(self):
+        import threading
+        inside, release, calls = threading.Event(), threading.Event(), []
+
+        def slow(pid, binary):
+            calls.append(binary)
+            inside.set()
+            release.wait(5)
+            return models.SIGNED_IN, "signed in"
+        results = []
+        with mock.patch.object(models, "_probe_auth", side_effect=slow):
+            first = threading.Thread(target=lambda: results.append(
+                models._auth_answer("anthropic", "/x/bin")))
+            first.start()
+            self.assertTrue(inside.wait(5))
+            second = threading.Thread(target=lambda: results.append(
+                models._auth_answer("anthropic", "/x/bin")))
+            second.start()
+            second.join(0.2)
+            self.assertTrue(second.is_alive())      # waiting, not asking
+            release.set()
+            first.join(5)
+            second.join(5)
+        self.assertEqual(calls, ["/x/bin"])
+        self.assertEqual([r[0] for r in results], [models.SIGNED_IN] * 2)
+
     def test_json_logged_in(self):
         r = self._probe("anthropic",
                         stdout=json.dumps({"loggedIn": True,

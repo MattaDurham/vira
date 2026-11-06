@@ -228,11 +228,25 @@ def _file_delete(service, account):
 # for the same model key 17 times in one load (measured 2026-11-06).
 _recent = {}
 _recent_lock = threading.Lock()
+_reading = {}             # (service, account) -> lock held during a read
+
+
+def _recent_hit(key, max_age):
+    with _recent_lock:
+        hit = _recent.get(key)
+    if hit and time.monotonic() - hit[0] < max_age:
+        return hit[1]
+    return None
+
+
+_forgotten = {}           # (service, account) -> times forgotten
 
 
 def _forget(service, account):
+    key = (service, account or None)
     with _recent_lock:
-        _recent.pop((service, account or None), None)
+        _recent.pop(key, None)
+        _forgotten[key] = _forgotten.get(key, 0) + 1
 
 
 def get(service, account=None, max_age=0):
@@ -246,19 +260,30 @@ def get(service, account=None, max_age=0):
     delete through this module forgets its own entry at once, and a read
     the store could not answer is never remembered."""
     if _mac_available():
+        if max_age <= 0:
+            val = _mac_get(service, account)
+            return val if val is not None else (_file_get(service, account) or "")
         key = (service, account or None)
-        if max_age > 0:
+        hit = _recent_hit(key, max_age)
+        if hit is not None:
+            return hit
+        # Callers asking for the same secret at once wait for one read.
+        with _recent_lock:
+            gate = _reading.setdefault(key, threading.Lock())
+        with gate:
+            hit = _recent_hit(key, max_age)
+            if hit is not None:
+                return hit
             with _recent_lock:
-                hit = _recent.get(key)
-            if hit and time.monotonic() - hit[0] < max_age:
-                return hit[1]
-        val, definite = _mac_lookup(service, account)
-        if val is None:
-            val = _file_get(service, account) or ""
-        if max_age > 0 and definite:
+                generation = _forgotten.get(key, 0)
+            val, definite = _mac_lookup(service, account)
+            if val is None:
+                val = _file_get(service, account) or ""
             with _recent_lock:
-                _recent[key] = (time.monotonic(), val)
-        return val
+                # A write that landed during this read makes it stale.
+                if definite and _forgotten.get(key, 0) == generation:
+                    _recent[key] = (time.monotonic(), val)
+            return val
     elif IS_WIN:
         try:
             val = _win_get(service, account)
@@ -272,7 +297,16 @@ def get(service, account=None, max_age=0):
 def set(service, account, value):
     """Store the secret in the best reachable store. Raises RuntimeError
     only when every candidate refused."""
+    # Forgotten before AND after: a read racing the write must not keep
+    # the old value it saw mid-write.
     _forget(service, account)
+    try:
+        return _store(service, account, value)
+    finally:
+        _forget(service, account)
+
+
+def _store(service, account, value):
     if _mac_available():
         try:
             _mac_set(service, account, value)
@@ -293,6 +327,13 @@ def delete(service, account=None):
     """Best-effort removal from every store (a secret must not resurrect
     from the fallback after the primary copy is deleted)."""
     _forget(service, account)
+    try:
+        _remove(service, account)
+    finally:
+        _forget(service, account)
+
+
+def _remove(service, account):
     if _mac_available():
         try:
             _mac_delete(service, account)
