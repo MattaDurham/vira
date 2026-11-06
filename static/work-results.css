@@ -52,8 +52,15 @@
 .wr-confirm .wr-button { margin-right: 8px; }
 .wr-action-status { font-size: 12px; }
 @media (max-width: 600px) {
-  .wr-detail-backdrop { padding: 8px; }
-  .wr-detail { max-height: calc(100dvh - 16px); }
+  /* Keep the sheet, and its Close button, clear of the iPhone status bar
+     and home indicator (the page uses viewport-fit=cover). */
+  .wr-detail-backdrop {
+    padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right))
+      calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+  }
+  .wr-detail { max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  .wr-detail-header { align-items: center; }
+  .wr-detail-header .wr-button { flex-shrink: 0; }
   .wr-detail-header, .wr-detail-body { padding: 15px; }
   .wr-timeline .wr-card:has(.wr-image-button) { grid-template-columns: 80px minmax(0, 1fr); }
   .wr-timeline .wr-preview { height: 64px; }
