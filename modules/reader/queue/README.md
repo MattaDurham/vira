@@ -20,7 +20,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Attention / Brief](../../attention/brief/README.md)
 
-### Files (9)
+### Files (12)
 
 **Server**
 
@@ -30,6 +30,13 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `server/reading.py` | Reading-room pages: which rooms exist and what a Reader tab shows for one. |
 | `server/readinglist.py` | The Reader's queue: everything worth reading, wherever it actually lives. |
 
+**Frontend**
+
+| File | What it is |
+|---|---|
+| `static/reader-shelves.css` | ==================== Reader > Documents — the Shelves view =============== Sections scroll down; each section is a sideways strip of shelf cards that snaps c... |
+| `static/reader-shelves.js` | ==================== Reader > Documents — the Shelves view ================ A third way to look at the library, after List (Finder's rows) and Grid (the gall... |
+
 **Tests**
 
 | File | What it is |
@@ -38,6 +45,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_plan_output.py` | A plan is an OUTPUT SHAPE, not a permission mode. |
 | `tests/test_plans.py` | Saved plans — the vault home + registry for Plan-mode output. |
 | `tests/test_reader_grid_reveal.py` | Regression contract for the Reader grid's scroll reveal. |
+| `tests/test_reader_shelves.py` | Reader > Documents, Shelves view (static/reader-shelves.js). |
 | `tests/test_reading.py` | Reading-room pages: what the Reader lists and what a room's tab shows. |
 | `tests/test_readinglist.py` | Vira's Documents: soft pointers, and no read state at all. |
 
