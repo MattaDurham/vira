@@ -877,15 +877,18 @@ class Surface(unittest.TestCase):
         self.assertLess(resume.index("await reviewSessionLaunch"),
                         resume.index('post("/api/orphanwork/resume"'))
 
-    def test_the_retired_window_routes_to_the_shared_results_inventory(self):
+    def test_the_retired_window_routes_to_history(self):
+        # Showroom became the Work > Results gallery, and Results itself
+        # retired into Fleet > History (2026-11-04): the old id opens History.
         js = (self.ROOT / "static" / "app.js").read_text(encoding="utf-8")
         self.assertNotIn('{ id: "showroom", title: "Showroom"', js)
-        self.assertIn('showroom: { tab: "live", view: "gallery" }', js)
-        self.assertIn('if (alias.view) ensureWorkResults()?.setView(alias.view)', js)
+        self.assertIn('const HISTORY_ALIAS = new Set(["showroom", "jobs", "results", "record"', js)
+        self.assertIn('if (HISTORY_ALIAS.has(id)) { openHistoryView(); return; }', js)
+        self.assertIn('"showroom": () => openHistoryView(),', js)
         html = (self.ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('id="work-results-root"', html)
-        self.assertIn('src="/work-results.js"', html)
-
+        self.assertNotIn('id="work-results-root"', html)
+        self.assertNotIn('src="/work-results.js"', html)
+        self.assertIn('src="/history.js"', html)
 
 if __name__ == "__main__":
     unittest.main()

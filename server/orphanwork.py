@@ -70,6 +70,12 @@ from . import (gitutil, jobfiles, joblog, jsonstore, prindex, sessiondiag,
 ROOT = Path(__file__).resolve().parent.parent
 STORE = ROOT / "data" / "orphan-work.json"
 
+
+def ACTIONS_LOG():
+    """Merge and Discard pressed on a branch, one JSON line each, beside
+    STORE (read by server/historyingest.py)."""
+    return STORE.with_name("branch-actions.jsonl")
+
 STALE_AFTER_S = 6 * 3600     # a sweep older than this is served stale=true
 ACTION_TIMEOUT = 600         # branch.sh merge/discard, same ceiling worktree.py uses
 DIRTY_MTIME_CAP = 50         # dirty paths stat'd for the "when was this touched" signal
@@ -713,6 +719,12 @@ def _run_action(slug, argv, name, post_ok=None):
             return False, "an action is already running for this branch"
         _actions[branch] = {"name": name, "status": "running", "output": "",
                             "started": _now_iso(), "finished": None}
+        started = _actions[branch]["started"]
+    # The owner's choice is a decision the history keeps (no store kept it
+    # before): one line when it starts, one with the outcome when it ends.
+    from . import history
+    history.archive_lines(ACTIONS_LOG(), [{"at": started, "branch": branch,
+                                           "action": name, "by": "button"}])
 
     def run():
         text, ok = "", False
@@ -733,6 +745,9 @@ def _run_action(slug, argv, name, post_ok=None):
             refresh()             # re-sweep BEFORE the status flips off "running" —
         except Exception:  # noqa: BLE001 — a re-sweep must never crash the thread
             pass           # else a caller polling for completion could act on a
+        history.archive_lines(ACTIONS_LOG(), [{
+            "at": started, "branch": branch, "action": name, "by": "button",
+            "ok": ok, "finished": _now_iso(), "outcome": text[-400:]}])
         with _actions_lock:      # list that has not caught up with this action yet
             _actions[branch] = {
                 "name": name, "status": "ok" if ok else "failed",

@@ -106,6 +106,10 @@ app.add_middleware(runtimework.Middleware)
 app.include_router(correspondence.router)
 app.include_router(reminderstickies.router)
 app.include_router(workresults.router)
+# History: one store of every event, and the API every history view reads
+# (server/history*.py, modules/fleet/history/README.md).
+from . import historyroutes  # noqa: E402 - beside the router it registers
+app.include_router(historyroutes.router)
 
 
 def _work_filing_receipts():
@@ -236,6 +240,9 @@ async def _startup():
     vault_indexer.start()
     circuits.driver.start()
     routines.scheduler.start()
+    # The history ingest: out of process, every minute (a backfill first
+    # when this instance has no history yet).
+    historyroutes.ticker.start()
     # Contact Atlas: the materialized graph builds once in the background
     # when no cached view exists yet (refresh is on-demand / weekly after).
     if not atlas.GRAPH.exists():

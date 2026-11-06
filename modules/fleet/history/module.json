@@ -1,0 +1,36 @@
+{
+  "id": "fleet/history",
+  "name": "History",
+  "summary": "One append-only store of every event on the Mac, and the API every history view reads.",
+  "owns": [
+    "server/history.py",
+    "server/historyingest.py",
+    "server/historyroutes.py",
+    "server/historyview.py",
+    "tests/test_history.py",
+    "tests/test_history_ingest.py",
+    "tests/test_history_api.py",
+    "tests/test_history_timemap_api.py"
+  ],
+  "routes": [
+    "/api/history"
+  ],
+  "stores": [
+    "data/history/",
+    "data/circuit-runs-archive.jsonl",
+    "data/notify-log-archive.jsonl",
+    "data/brief-journal-archive.jsonl",
+    "data/branch-actions.jsonl"
+  ],
+  "reads": [
+    "fleet/readers",
+    "work/sessions",
+    "work/branches",
+    "work/ideas",
+    "work/automations"
+  ],
+  "feeds": [
+    "fleet/window"
+  ],
+  "registry": []
+}

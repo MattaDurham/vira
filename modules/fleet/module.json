@@ -9,6 +9,7 @@
   ],
   "submodules": [
     "window",
+    "history",
     "readers"
   ]
 }

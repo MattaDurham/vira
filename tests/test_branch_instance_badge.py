@@ -37,8 +37,11 @@ const fs = require("node:fs");
 const context = { window: {}, URL, location: {
   origin: "https://example.ts.net:8392", protocol: "https:", hostname: "example.ts.net"
 } };
-vm.runInNewContext(fs.readFileSync("static/work-results.js", "utf8"), context);
-const origin = context.window.ViraWorkResults.primaryOrigin;
+const app = fs.readFileSync("static/app.js", "utf8");
+const at = app.indexOf("function primaryOrigin(metadata) {");
+assert.ok(at >= 0, "primaryOrigin is gone from app.js");
+vm.runInNewContext(app.slice(at, app.indexOf("function shrLaunchOrigin()", at)) + "\nwindow.primaryOrigin = primaryOrigin;", context);
+const origin = context.window.primaryOrigin;
 assert.equal(origin({kind: "branch", primary_url: "http://localhost:8450"}), "https://example.ts.net:8450");
 assert.equal(origin({kind: "branch", primary_url: "https://primary.example:8443"}), "https://primary.example:8443");
 assert.equal(origin({kind: "primary"}), "https://example.ts.net:8392");

@@ -70,6 +70,10 @@ class _EngineCase(unittest.TestCase):
         gp = mock.patch.object(evidence, "_git_log", return_value=[])
         gp.start()
         self.addCleanup(gp.stop)
+        # the history store is not this fixture's: its jobs are the ledger's
+        sp = mock.patch.object(evidence, "_store_index", return_value=None)
+        sp.start()
+        self.addCleanup(sp.stop)
         jp = mock.patch("server.joblog.list_records", return_value=[])
         jp.start()
         self.addCleanup(jp.stop)

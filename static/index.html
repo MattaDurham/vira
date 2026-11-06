@@ -25,9 +25,9 @@
 <link rel="stylesheet" href="/research.css">
 <link rel="stylesheet" href="/library.css">
 <link rel="stylesheet" href="/fleet.css">
+<link rel="stylesheet" href="/history.css">
 <link rel="stylesheet" href="/orbits.css">
 <link rel="stylesheet" href="/assistant.css">
-<link rel="stylesheet" href="/work-results.css">
 <link rel="stylesheet" href="/workspace.css">
 <link rel="stylesheet" href="/reminder-stickies.css">
 <link rel="stylesheet" href="/desktop-backgrounds.css">
@@ -293,14 +293,9 @@
   <!-- THE FORGE. The internal id remains work so saved layouts, dock order,
        deep links and every folded cockpit alias keep their established home. -->
   <section id="view-work" class="view">
-    <!-- Runs + Record merged into ONE chronological ledger (2026-08-27,
-         owner's ruling: "one clean list of everything that Vira has
-         done"). The surviving tab id is `live`; the retired `record` id
-         is aliased in setWorkTab so every stored link still lands. -->
     <div class="section-head"><h2>Work</h2><span class="hint">From the first idea to the finished result</span></div>
     <div class="seg ideas-tabs" id="work-tabs">
       <button data-tab="queue" class="seg-btn on">Ideas</button>
-      <button data-tab="live" class="seg-btn">Results</button>
       <button data-tab="dispatch" class="seg-btn">Automations</button>
     </div>
 
@@ -348,6 +343,10 @@
           <button id="idea-tagbtn" class="idea-sort tagbtn"
                   aria-haspopup="true" aria-expanded="false">All tags</button>
         </span>
+        <!-- Filed: deferred, dropped and done ideas in place of the queue
+             (moved here from Work > Results' folded list, 2026-11-04) -->
+        <button id="idea-filed" class="fchip sm" aria-pressed="false"
+                title="Show the deferred, dropped and done ideas">Filed</button>
       </div>
       <div id="idea-count" class="idea-count"></div>
       <div id="work-journal-lane"></div>
@@ -466,48 +465,10 @@
       </div>
     </div>
 
-    <!-- RECORD — one chronological ledger. Flow runs, stage sessions and
-         unlanded branches merged into one stream on 2026-08-12; the old
-         Record tab's two timelines (the durable job ledger's history and
-         the retro-derived Shipped changelog) folded into the SAME stream
-         on 2026-08-27 — they were two timelines of one subject, split by
-         recency rather than by anything meaningful. See the RUNS block in
-         app.js for the whole reasoning. -->
-    <div id="work-live-pane" style="display:none">
-      <div id="work-results-root"></div>
-      <details class="workspace-advanced" id="work-advanced">
-        <summary>History tools, rules, and filed ideas</summary>
-      <div class="ideas-sortbar runs-bar">
-        <!-- The first four chips FILTER the chronology; History and
-             Shipped are two more sources of the same stream. Rules and
-             Filed SWAP the pane's list instead (the lesson-recurrence
-             counter and Deferred & Dropped are not runs) — RUN_VIEWS in
-             app.js is the split. -->
-        <div class="seg mini" id="runs-filter">
-          <button data-run="all" class="seg-btn on">All</button>
-          <button data-run="unlanded" class="seg-btn">Not merged</button>
-          <button data-run="flow" class="seg-btn">Flows</button>
-          <button data-run="session" class="seg-btn">Sessions</button>
-          <button data-run="history" class="seg-btn">History</button>
-          <button data-run="shipped" class="seg-btn">Shipped</button>
-          <button data-run="rules" class="seg-btn">Rules</button>
-          <button data-run="filed" class="seg-btn">Filed</button>
-        </div>
-        <div class="idea-searchwrap">
-          <input id="runs-q" class="search" type="search"
-                 placeholder="Search the record — name, branch, status, what was asked"
-                 autocomplete="off" spellcheck="false">
-          <button id="runs-q-clear" class="idea-search-clear"
-                  title="Clear search" aria-label="Clear search">×</button>
-        </div>
-        <button class="fchip sm" id="runs-refresh">Refresh</button>
-      </div>
-      <div id="runs-count" class="idea-count"></div>
-      <div id="runs-list" class="runs-list"></div>
-      <div id="work-rules-list" class="list" style="display:none"></div>
-      <div id="work-filed-list" class="list" style="display:none"></div>
-      </details>
-    </div>
+    <!-- Work > Results and its folded list (runs, Rules, Filed) retired
+         2026-11-04: history is Fleet > History (static/history.js), Rules is
+         its "Sessions that broke a rule" filter, Filed is the Ideas tab's
+         Filed filter. The old tab ids open History (WORK_TAB_ALIAS). -->
   </section>
 
   <!-- FIND (one search over notes, media, people and messages — the
@@ -1368,7 +1329,6 @@
 
 <script src="/forge.js"></script>
 <script src="/assistant.js"></script>
-<script src="/work-results.js"></script>
 <script src="/workspace-intake.js"></script>
 <script src="/folder-picker.js"></script>
 <script src="/module-models.js"></script>
@@ -1380,6 +1340,7 @@
 <script src="/reminder-stickies.js"></script>
 <script src="/research.js"></script>
 <script src="/library.js"></script>
+<script src="/history.js"></script>
 <script src="/fleet.js"></script>
 <script src="/atlas.js"></script>
 </body>

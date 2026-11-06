@@ -108,6 +108,11 @@ def _record(entry):
     with _lock:
         log = _load_log()
         log.setdefault("sent", []).append(entry)
+        if len(log["sent"]) > 200:
+            # The log keeps the newest 200; the history keeps every text.
+            from . import history
+            history.archive_lines(LOG.with_name("notify-log-archive.jsonl"),
+                                  log["sent"][:-200])
         log["sent"] = log["sent"][-200:]
         _save_log(log)
 

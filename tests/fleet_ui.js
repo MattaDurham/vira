@@ -2,7 +2,7 @@
 
 // The Fleet window (static/fleet.js), run for real against synthetic
 // snapshots in a small fake DOM: the pure pieces (which sessions show,
-// lanes, counts, the timeline, the week, background calls, the live label)
+// lanes, counts, background calls, the History tab, the live label)
 // and the render path a live frame takes (strip, needs-you row, lanes,
 // tiles, navigation). Run by tests/test_fleet.py.
 
@@ -156,7 +156,7 @@ assert.equal(F.liveLabel(2000).text, "Live");
 assert.match(F.liveLabel(20000).text, /^Paused, updated 20s ago$/);
 assert.equal(F.liveLabel(20000, "stream").text, "Reconnecting");
 
-// the timeline: landings and change-log rows, by mode, search and day
+// background calls on one scale (the repos frame)
 const repos = {
   viraRepo: "/r/alpha", repos: [
     { root: "/r/alpha", name: "alpha", landings: [
@@ -173,24 +173,6 @@ const repos = {
   week: [{ id: "w1", tool: "claude", project: "alpha", title: "W", start: NOW - 9 * DAY, end: NOW - 2 * DAY },
          { id: "i1", tool: "codex", project: "beta", title: "I", start: NOW - H, end: NOW, live: true }],
 };
-const tl = (o = {}) => ({ mode: "all", q: "", day: null, ...o });
-assert.deepEqual(plain(F.timelineRows(repos, f(), tl()).map((r) => r.kind)),
-  ["landing", "change", "landing", "log", "landing"], "newest first, every kind");
-assert.deepEqual(plain(F.timelineRows(repos, f(), tl({ mode: "landed" })).map((r) => r.kind)), ["landing", "landing", "landing"]);
-assert.deepEqual(plain(F.timelineRows(repos, f(), tl({ mode: "log" })).map((r) => r.kind)), ["change", "log"]);
-assert.equal(F.timelineRows(repos, f(), tl({ q: "fleet window" })).length, 1, "search reads PR titles");
-assert.equal(F.timelineRows(repos, f({ project: "beta" }), tl()).length, 1);
-const days = F.landingDays(repos, f(), 7, NOW);
-assert.equal(days.length, 7);
-const total = days.reduce((a, d) => a + d.claude + d.codex + d.other + d.direct, 0);
-assert.equal(total, 3, "every landing in range lands in one day's stack");
-assert.ok(days.some((d) => d.titles.includes("#4 Fleet window")), "a bar's tooltip names the PR");
-
-const bars = F.weekBars(repos.week, f(), NOW);
-const start = F.weekStart(NOW);
-assert.equal(new Date(start).getHours(), 0, "the week starts at a local midnight");
-assert.equal(bars[0].x, 0, "a session older than the week is clipped to its start");
-assert.ok(bars[1].x > 0.8 && bars[1].x < 1, "today sits in the last column");
 const calls = F.callRows(repos.calls, f());
 assert.equal(calls[0].weekW, 1, "the busiest row fills its cell");
 assert.equal(calls[1].weekW, 0.5, "every row is on the same scale");
@@ -337,6 +319,31 @@ const rows = root.querySelector(".fl-lanes").querySelectorAll(".fl-tr");
 assert.equal(rows.length, 3, "a header and two call rows");
 assert.match(rows[1].textContent, /library tagging/);
 F.S.tab = "sessions";
+
+// The Show switch is Now, History and Background calls; Timeline and
+// Last 7 days are retired, and History is the Time map (static/history.js),
+// mounted once and kept across frames.
+const show = root.querySelector(".fl-controls").querySelector(".fl-seg-ctl");
+assert.deepEqual(show.children.map((b) => b.textContent), ["Now", "History", "Background calls"]);
+let mounted = 0, opened = [];
+context.window.ViraHistory = {
+  mountMap: (box) => { mounted += 1; box.className += " hx-root"; return { open: (o) => opened.push(o) }; },
+};
+F.openHistory({ day: "2026-11-04" });
+assert.equal(F.S.tab, "history");
+const hroot = root.querySelector(".fl-lanes").querySelector(".fl-history");
+assert.ok(hroot, "the History tab mounts the time map");
+F.onFrame("fleet", snap);
+F.render();
+assert.equal(mounted, 1, "a frame keeps the mounted map");
+assert.equal(root.querySelector(".fl-lanes").querySelector(".fl-history"), hroot);
+assert.deepEqual(plain(opened), [{ day: "2026-11-04" }], "a pending open reaches the map once it mounts");
+F.openHistory({ entry: "pr:vira#178" });
+assert.deepEqual(plain(opened[1]), { entry: "pr:vira#178" });
+// a tool filter means nothing to History, so it is not offered there
+assert.equal(root.querySelector(".fl-controls").querySelectorAll(".fl-seg-ctl").length, 1);
+F.S.tab = "sessions";
+F.render();
 
 // A tick keeps the strip live without a new snapshot.
 F.S.receivedAt = Date.now() - 60e3;

@@ -24,7 +24,6 @@ class AttentionConsolidationContracts(unittest.TestCase):
         cls.app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         cls.css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
-        cls.results = (ROOT / "static" / "work-results.js").read_text(encoding="utf-8")
 
     def test_one_top_level_surface_replaces_four_peer_windows(self):
         self.assertIn('id="view-attention"', self.html)
@@ -169,11 +168,10 @@ class AttentionConsolidationContracts(unittest.TestCase):
             'run: () => openWorkResult({ branch: r.orphan_branch })',
             self.app)
         self.assertIn('run: () => openWorkResult({ job_id: r.job_id })', self.app)
-        self.assertIn('ensureWorkResults()?.open(ref);', self.app)
-        self.assertIn('ref?.branch ? "branch:" + ref.branch', self.results)
-        self.assertIn('ref?.job_id ? "job:" + ref.job_id', self.results)
-        self.assertIn('(row.aliases || [row.id]).includes(identity)', self.results)
-        self.assertIn('/api/work/results/detail?id=', self.results)
+        # The exact object opens as its History entry (Work > Results retired).
+        self.assertIn('openHistoryView(entry ? { entry } : {});', self.app)
+        self.assertIn('if (ref?.branch) return "branch:" + ref.branch;', self.app)
+        self.assertIn('if (ref?.job_id) return "job:" + ref.job_id;', self.app)
         self.assertIn('n.dataset.runBranch === branch', self.app)
         self.assertIn(
             'card.dataset.runBranch = it.src.branch || "";', self.app)
@@ -185,9 +183,9 @@ class AttentionConsolidationContracts(unittest.TestCase):
 
     def test_attention_opens_its_work_in_place(self):
         # Work waiting on the owner lives in Attention only: opening one of
-        # its branches or sessions shows the inspector over Attention and
-        # never raises the Work window (tests/attention_inspect_ui.js runs
-        # the real attnVerb and openWorkResult under node).
+        # its branches or sessions opens its History entry and never raises
+        # the Work window (tests/attention_inspect_ui.js runs the real
+        # attnVerb and openWorkResult under node).
         node = shutil.which("node")
         if not node:
             self.skipTest("Node is not installed")

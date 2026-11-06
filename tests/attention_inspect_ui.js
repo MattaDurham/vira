@@ -1,29 +1,25 @@
 // Attention's verbs, run against the REAL app.js functions in a VM (the
 // tests/approve_builds_ui.js pattern). Work waiting on the owner lives in
-// Attention only, so opening one of its branches or sessions shows the
-// inspector over Attention and never raises the Work window behind it.
+// Attention only, so opening one of its branches or sessions opens that
+// entry in Fleet > History (Work > Results retired 2026-11-04) and never
+// raises the Work window.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const app = fs.readFileSync('static/app.js', 'utf8');
-let appsOpened = [], workTabs = [], inspected = [], sessionsOpened = [], mounts = 0;
+let appsOpened = [], workTabs = [], inspected = [], sessionsOpened = [];
 const context = vm.createContext({
   console,
-  $: (sel) => (sel === '#work-results-root' ? {} : null),
+  $: () => null,
   openApp: (id) => appsOpened.push(id),
   setWorkTab: (tab) => workTabs.push(tab),
   setAttentionTab() {}, startPoll() {}, openNote() {},
   openSession: (id) => sessionsOpened.push(id),
   traceFlowRun() {}, openOrphanFocus() {}, revealOrphan() {},
   window: {
-    // Refs built inside the VM carry its own Object prototype, so they are
-    // copied out as plain data before comparing.
-    ViraWorkResults: {
-      mount: () => {
-        mounts += 1;
-        return { open: (ref) => inspected.push(JSON.parse(JSON.stringify(ref))) };
-      },
-    },
+    // What History was asked to open, copied out as plain data (objects
+    // built inside the VM carry its own Object prototype).
+    openHistory: (o) => inspected.push(JSON.parse(JSON.stringify(o))),
   },
 });
 function section(start, end) {
@@ -32,14 +28,15 @@ function section(start, end) {
   return app.slice(at, app.indexOf(end, at));
 }
 vm.runInContext(section('function attnVerb(r) {', 'function attnKindLabel('), context);
-vm.runInContext(section('let workResultsController = null;', '$("#work-advanced")'), context);
+vm.runInContext(section('const HISTORY_ALIAS = new Set(', '// Search and Brain folded'), context);
+vm.runInContext(section('// A reference from an older screen', 'function workTabLoad('), context);
 const verb = (row) => vm.runInContext('attnVerb', context)(row);
 
 // A branch waiting to land opens that exact branch.
 const branch = verb({ kind: 'orphan', orphan_branch: 'claude/example' });
 assert.equal(branch.label, 'review');
 branch.run();
-assert.deepEqual(inspected, [{ branch: 'claude/example' }]);
+assert.deepEqual(inspected, [{ entry: 'branch:claude/example' }]);
 
 // A session row's button opens that session's window, and the card opens
 // its full detail in the inspector.
@@ -49,7 +46,7 @@ session.run();
 assert.deepEqual(sessionsOpened, ['job-1234abcd']);
 assert.equal(inspected.length, 1);
 session.detail.run();
-assert.deepEqual(inspected[1], { job_id: 'job-1234abcd' });
+assert.deepEqual(inspected[1], { entry: 'job:job-1234abcd' });
 
 // A row with one destination has no separate card action.
 assert.equal(branch.detail, undefined);
@@ -79,12 +76,11 @@ button.listeners.click({ stopPropagation() {} });
 assert.equal(sessionsOpened.at(-1), 'job-5678efgh');
 const before = inspected.length;
 cardRun();
-assert.deepEqual(inspected[before], { job_id: 'job-5678efgh' });
+assert.deepEqual(inspected[before], { entry: 'job:job-5678efgh' });
 assert.equal(sessionsOpened.length, 2);
 
-// Neither raised Work or switched its tab, and the inspector mounted once.
+// Neither raised Work or switched its tab.
 assert.deepEqual(appsOpened, []);
 assert.deepEqual(workTabs, []);
-assert.equal(mounts, 1);
 
 console.log('attention inspect: passed');

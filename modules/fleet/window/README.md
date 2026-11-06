@@ -18,7 +18,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** no other module directly
 
-### Files (5)
+### Files (9)
 
 **Server**
 
@@ -32,13 +32,17 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 |---|---|
 | `static/fleet.css` | Fleet: every agent session on this machine, live (static/fleet.js). |
 | `static/fleet.js` | Fleet - every agent session on this machine, live. |
+| `static/history.css` | History: the Time map in Fleet and the History view in every module window and idea card (static/history.js). |
+| `static/history.js` | History - the Time map in Fleet, and the History view inside every module window and on every idea card. |
 
 **Tests**
 
 | File | What it is |
 |---|---|
 | `tests/fleet_ui.js` |  |
+| `tests/history_ui.js` |  |
 | `tests/test_fleet.py` | Fleet's collector (server/fleet.py and its readers) on synthetic sources. |
+| `tests/test_history_ui.py` | The Time map and every History view (static/history.js), run under node in tests/history_ui.js with a fake DOM and a stubbed fetch. |
 
 ### Routes (4)
 

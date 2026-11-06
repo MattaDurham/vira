@@ -1034,27 +1034,28 @@ def replace_modules(mods):
             + (f", removed {', '.join(removed)}" if removed else "") + ".")
 
 
+# The System Map's recent list is retired (2026-11-04): what changed, and
+# where, is Fleet > History, read from the one history store. The map's
+# page still reads `recent`, so it carries one card that says where the
+# list went, with no change lines of its own.
+RECENT_MOVED = {"date": "", "time": "", "no_retro": True, "retired": True,
+                "goal": "Moved to Fleet > History: every merge into main, session and "
+                        "automation run, on a time map, with each module's own lane "
+                        "in its window's History.",
+                "href": "/#fleet/history", "retros": [], "entries": []}
+
+
 def payload():
     """Everything the Modules page needs: the registry, the group legend,
-    and the recent Vira-scoped change log with each entry tagged with the
-    modules its text mentions."""
-    from . import changelog
+    and where the retired recent-changes list went (RECENT_MOVED)."""
     with _lock, locked(STORE):
         s = _load()
         if not STORE.exists():   # first read seeds the instance copy
             _save(s)
     mods = s["modules"]
-    recent = []
-    for g in changelog.groups()[:8]:
-        entries = []
-        for e in g["entries"]:
-            low = e["text"].lower()
-            tags = [m["id"] for m in mods
-                    if any(k in low for k in m.get("keywords") or [])]
-            entries.append({**e, "modules": tags[:4]})
-        recent.append({**g, "entries": entries})
     return {"modules": mods, "groups": GROUPS, "layers": list(LAYERS),
-            "meta": s.get("meta") or {}, "recent": recent}
+            "meta": s.get("meta") or {}, "recent": [dict(RECENT_MOVED)],
+            "history": {"href": RECENT_MOVED["href"], "label": "Fleet > History"}}
 
 
 def refresh_prompt():

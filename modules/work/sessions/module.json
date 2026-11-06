@@ -10,8 +10,6 @@
     "server/sessiondiag.py",
     "server/judge.py",
     "server/workresults.py",
-    "static/work-results.css",
-    "static/work-results.js",
     "tests/test_session_*.py",
     "tests/session_agents_ui.js",
     "tests/session_launch_ui.js",

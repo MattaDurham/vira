@@ -112,6 +112,10 @@ def add(text, person_id=None, integrate=True, context=None):
         s = _load()
         s["entries"].append(entry)
         if len(s["entries"]) > MAX_ENTRIES:
+            # The store keeps the newest MAX_ENTRIES; the history keeps every note.
+            from . import history
+            history.archive_lines(STORE.with_name("brief-journal-archive.jsonl"),
+                                  s["entries"][:-MAX_ENTRIES])
             s["entries"] = s["entries"][-MAX_ENTRIES:]
         _save(s)
     if integrate:
