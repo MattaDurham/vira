@@ -109,5 +109,9 @@
 .wr-summary { line-height:1.65; }
 .wr-detail { --wr-muted:var(--text-dim); background:var(--bg); }
 .wr-detail-header h2 { font:normal 30px/1.2 var(--display); letter-spacing:-.025em; }
+/* On a phone a long title at 30px filled half the sheet; cap it at two lines. */
+@media (max-width: 600px) {
+  .wr-detail-header h2 { font-size:21px; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+}
 .wr-button, .wr-search, .wr-module { min-height:36px; }
 @media (min-width:1100px) { #view-work>.section-head { display:none; } }

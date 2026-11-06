@@ -133,6 +133,25 @@ const card = (id) => host.querySelectorAll("[data-assistant-id]").find((n) => n.
   await ui.load();
   assert.equal(card("r1").querySelector(".assistant-evidence"), evidence, "unchanged polling preserves the open evidence DOM");
 
+  const fold = () => host.querySelector(".assistant-fold");
+  assert.equal(fold().open, true, "the section starts unfolded");
+  assert.equal(fold().children[0].tag, "summary", "the heading is the fold's arrow");
+  const clicks = [];
+  const refreshClick = { preventDefault() { clicks.push("prevented"); } };
+  for (const fn of button("Refresh").listeners.click) await fn(refreshClick);
+  assert.deepEqual(clicks, ["prevented"], "Refresh in the heading does not also fold the section");
+  fold().open = false;
+  await fold().emit("toggle");
+  snapshot.last_success = "2030-01-01T12:05:00+00:00";
+  await ui.load(true);
+  assert.equal(fold().open, false, "a folded section stays folded through a repaint");
+  await ui.reveal("r1");
+  assert.equal(fold().open, true, "opening a reminder from elsewhere unfolds the section");
+  snapshot.last_success = fixture.last_success;
+  await ui.load(true);
+  assert.equal(fold().open, true, "an unfold from a reminder link survives the next repaint");
+  card("r1").querySelector(".assistant-evidence").open = true;
+
   snapshot.contact.errors = [{ person_id: "sample", error: "ValueError", retry_at: 1900000000 }];
   await ui.load();
   assert.match(text(), /Needs attention/);

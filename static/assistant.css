@@ -12,6 +12,12 @@
 .assistant-head { margin-bottom: 10px; }
 .assistant-head h3 { margin: 0; font-size: 17px; color: var(--text-head); }
 .assistant-head > button { margin-left: auto; }
+summary.assistant-head { cursor: pointer; list-style: none; }
+summary.assistant-head::-webkit-details-marker { display: none; }
+.assistant-caret::before { content: "\25B6"; display: inline-block; font-size: 9px; color: var(--text-dim); transition: transform .15s; }
+.assistant-fold[open] .assistant-caret::before { transform: rotate(90deg); }
+.assistant-fold:not([open]) > summary.assistant-head { margin-bottom: 0; }
+@media (prefers-reduced-motion: reduce) { .assistant-caret::before { transition: none; } }
 .assistant-tag { font: 10px var(--mono); color: var(--text-dim); }
 .assistant-note { margin: 7px 0; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
 .assistant-warning, .assistant-action-error { color: var(--red); }
