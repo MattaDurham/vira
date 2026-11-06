@@ -24,7 +24,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** no other module directly
 
-### Files (40)
+### Files (38)
 
 **Server**
 
@@ -49,8 +49,6 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `static/icon-maskable-512.png` |  |
 | `static/icon-maskable.svg` |  |
 | `static/icon.svg` |  |
-| `static/index.html` | Pinned so the home-screen label is always "Vira" — <title> is not, it picks up the " — TEST" suffix on a branch instance. |
-| `static/index.html` | Pinned so the home-screen label is always "Vira" — <title> is not, it picks up the " — TEST" suffix on a branch instance. |
 | `static/index.html` | Pinned so the home-screen label is always "Vira" — <title> is not, it picks up the " — TEST" suffix on a branch instance. |
 | `static/layouts/base-perimeter.json` |  |
 | `static/manifest.webmanifest` |  |

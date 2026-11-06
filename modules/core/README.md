@@ -20,7 +20,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 ### Submodules
 
-- [Shell](shell/README.md) - The FastAPI app and the single-page desktop: windows, palette, deep links, UI state. (40 files)
+- [Shell](shell/README.md) - The FastAPI app and the single-page desktop: windows, palette, deep links, UI state. (38 files)
 - [Runtime](runtime/README.md) - Admission control, locks and stores, backups, restart, update, workers, and the stall detector. (32 files)
 - [Settings](settings/README.md) - The one table of owner settings, the Config window's forms, and the Keychain. (10 files)
 - [Setup](setup/README.md) - First run: the fixture demo, onboarding, module front doors, data connections, the folder picker. (51 files)
@@ -35,6 +35,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Windows: `launchpad`, `setup` (ids from `WINDOWS` in `static/app.js`).
 
-133 tracked files across 4 submodules. `python -m server.moduletree brief core` prints every submodule's page in one go.
+131 tracked files across 4 submodules. `python -m server.moduletree brief core` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

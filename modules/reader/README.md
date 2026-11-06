@@ -19,7 +19,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 ### Submodules
 
-- [Queue](queue/README.md) - The Reader's documents list, room page listing, and saved plans. (12 files)
+- [Queue](queue/README.md) - The Reader's documents list, room page listing, and saved plans. (15 files)
 - [Rooms](rooms/README.md) - Reading rooms, full ingest into the vault, and the nightly inflow shelf. (12 files)
 
 ### Neighbours
@@ -32,6 +32,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `reader` (ids from `WINDOWS` in `static/app.js`).
 
-24 tracked files across 2 submodules. `python -m server.moduletree brief reader` prints every submodule's page in one go.
+27 tracked files across 2 submodules. `python -m server.moduletree brief reader` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

@@ -20,7 +20,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Attention / Brief](../../attention/brief/README.md)
 
-### Files (12)
+### Files (15)
 
 **Server**
 
@@ -34,6 +34,8 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 | File | What it is |
 |---|---|
+| `static/reader-explore.css` | ==================== Reader > Documents: the Explore view ================ The photo wall (static/reader-explore.js): three columns, hairline gaps, square co... |
+| `static/reader-explore.js` | ==================== Reader > Documents: the Explore view ================= A photo wall, after a social app's Explore tab (owner's screen recording, 2026-11... |
 | `static/reader-shelves.css` | ==================== Reader > Documents — the Shelves view =============== Sections scroll down; each section is a sideways strip of shelf cards that snaps c... |
 | `static/reader-shelves.js` | ==================== Reader > Documents — the Shelves view ================ A third way to look at the library, after List (Finder's rows) and Grid (the gall... |
 
@@ -44,6 +46,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_plan_destinations.py` | Plans keep their resolved source through saves, jobs, and continuation. |
 | `tests/test_plan_output.py` | A plan is an OUTPUT SHAPE, not a permission mode. |
 | `tests/test_plans.py` | Saved plans — the vault home + registry for Plan-mode output. |
+| `tests/test_reader_explore.py` | Reader > Documents, Explore view (static/reader-explore.js). |
 | `tests/test_reader_grid_reveal.py` | Regression contract for the Reader grid's scroll reveal. |
 | `tests/test_reader_shelves.py` | Reader > Documents, Shelves view (static/reader-shelves.js). |
 | `tests/test_reading.py` | Reading-room pages: what the Reader lists and what a room's tab shows. |
