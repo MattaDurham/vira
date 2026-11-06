@@ -29333,7 +29333,7 @@ function rdocBar() {
   // gallery. A control this asked-for ("where's my grid view button?")
   // does not hide in a menu.
   const seg = el("div", "rdoc-viewseg");
-  [["list", "List"], ["grid", "Grid"]].forEach(([v, lab]) => {
+  [["list", "List"], ["grid", "Grid"], ...Object.entries(window.RDOC_VIEWS || {}).map(([v, x]) => [v, x.label])].forEach(([v, lab]) => {
     const b = el("button", "rdoc-vbtn" + (rdocView === v ? " on" : ""), lab);
     b.addEventListener("click", () => {
       if (rdocView === v) return;
@@ -29600,6 +29600,7 @@ function renderReaderDocs(opts = {}) {
   }
   rdocLastGroups = rdocGroup ? groups : [];
 
+  if ((window.RDOC_VIEWS || {})[rdocView]) { window.RDOC_VIEWS[rdocView].render(list, groups); restoreFocus(); return; }
   if (rdocView === "grid") {
     renderRdocGrid(list, groups);
     restoreFocus();
