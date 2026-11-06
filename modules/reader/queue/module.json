@@ -6,12 +6,18 @@
     "server/readinglist.py",
     "server/reading.py",
     "server/plans.py",
+    "static/reader-shelves.js",
+    "static/reader-shelves.css",
+    "tests/test_reader_shelves.py",
     "tests/test_plan_destinations.py",
     "tests/test_plan_output.py",
-    "tests/test_reader_grid_reveal.py",
     "tests/test_readinglist.py",
     "tests/test_reading.py",
-    "tests/test_plans.py"
+    "tests/test_plans.py",
+    "static/reader-explore.css",
+    "static/reader-explore.js",
+    "tests/test_reader_explore.py",
+    "tests/test_reader_one.py"
   ],
   "routes": [
     "/api/reading/list",

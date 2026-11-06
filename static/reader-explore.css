@@ -1,0 +1,436 @@
+/* ==================== Reader > Documents: the Explore view ================
+   The photo wall (static/reader-explore.js): three columns, hairline gaps,
+   square corners, one tall tile per block of five; the overlay that a tile
+   zooms up into. */
+
+/* Grouping does not apply to one stream, so its control steps aside. */
+#reader-docs:has(.rx-wall) .rdoc-pair,
+#reader-docs:has(.rx-wall) .rdoc-fold { display: none; }
+
+.rx-wall {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  max-width: 940px;
+  margin: 0 auto;
+}
+.rx-tile {
+  position: relative;
+  display: block;
+  min-width: 0;
+  aspect-ratio: 3 / 4;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--bg-card);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.rx-tile.tall-r { grid-column: 3; grid-row: span 2; aspect-ratio: auto; }
+.rx-tile.tall-l { grid-column: 1; grid-row: span 2; aspect-ratio: auto; }
+.rx-tile img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  /* A dossier's capture is a wide page: its headline sits top left. */
+  object-position: 18% 0;
+  display: block;
+}
+.rx-tile:hover img { filter: brightness(1.08); }
+.rx-tile:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -2px; }
+.rx-tile.missing { opacity: .45; }
+.rx-wall.anim .rx-tile { animation: rx-in .32s ease-out both; }
+@keyframes rx-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* The corner count: the kind's mark and the date, white on any picture. */
+.rx-count {
+  position: absolute; left: 7px; bottom: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+  pointer-events: none;
+}
+.rx-count .rx-ico {
+  width: 13px; height: 13px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6));
+}
+.rx-reel {
+  position: absolute; top: 7px; right: 7px;
+  width: 16px; height: 16px;
+  fill: #fff; stroke: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6));
+}
+.rx-ico, .rx-act svg, .rx-ibtn svg, .rx-side svg, .rx-av svg {
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* Text tiles: a document with no picture wears its title as its face, on
+   a tone picked by its topic. */
+.rx-face {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  padding: 10px 10px 26px;
+  min-width: 0;
+}
+.rx-kick {
+  font-family: var(--mono);
+  font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: rgba(255, 255, 255, .62);
+}
+.rx-kick.dark { color: #8a7f6c; margin-bottom: 10px; }
+.rx-ttl {
+  margin-top: auto;
+  font-family: var(--display);
+  font-size: 15px; line-height: 1.18;
+  color: #fff;
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5; overflow: hidden;
+}
+.rx-ttl.big { font-size: 21px; -webkit-line-clamp: 9; }
+.rx-topic {
+  margin-top: 6px;
+  font-size: 10.5px; color: rgba(255, 255, 255, .6);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rx-tone0 { background: linear-gradient(160deg, #3b3c40, #1d1e20); }
+.rx-tone1 { background: linear-gradient(160deg, #8a4a35, #4a2318); }
+.rx-tone2 { background: linear-gradient(160deg, #56624c, #262d22); }
+.rx-tone3 { background: linear-gradient(160deg, #4b6170, #1f2c35); }
+.rx-tone4 { background: linear-gradient(160deg, #94601f, #4b2c0b); }
+.rx-tone5 { background: linear-gradient(160deg, #3f4a5f, #1a1f2b); }
+.rx-tone6 { background: linear-gradient(160deg, #7d776b, #3b3831); }
+.rx-tone7 { background: linear-gradient(160deg, #634659, #2c1d28); }
+
+.rx-foot { display: flex; justify-content: center; padding: 18px 0 28px; }
+.rx-more {
+  background: none; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text-dim); font: inherit; font-size: 12.5px;
+  padding: 7px 16px; cursor: pointer;
+}
+.rx-more:hover { color: var(--text); border-color: var(--accent-line); }
+.rx-end { font-size: 12px; color: var(--text-faint); }
+
+/* ---------- the overlay ---------- */
+
+.rx-ov {
+  position: fixed; inset: 0;
+  z-index: 790 !important;  /* over the receded windows, under a document opened from it (800) */
+  display: flex; align-items: center; justify-content: center;
+  overscroll-behavior: contain;
+}
+.rx-scrim {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, .62);
+  opacity: 0; transition: opacity .2s ease;
+}
+.rx-ov.open .rx-scrim { opacity: 1; }
+/* A document opened from the overlay sits on top; the overlay waits dimmed. */
+body:has(.panel.focus-lit) .rx-ov .rx-card { filter: brightness(.55); }
+
+.rx-card {
+  position: relative;
+  width: min(520px, calc(100vw - 16px));
+  height: min(920px, calc(100dvh - 24px));
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .7);
+  transform-origin: 0 0;
+  display: flex; flex-direction: column;
+}
+.rx-card.slide-l { animation: rx-slide-l .22s ease-out; }
+.rx-card.slide-r { animation: rx-slide-r .22s ease-out; }
+@keyframes rx-slide-l { from { transform: translateX(28px); opacity: .5; } }
+@keyframes rx-slide-r { from { transform: translateX(-28px); opacity: .5; } }
+
+.rx-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: calc(8px + env(safe-area-inset-top)) 8px 8px;
+  background: linear-gradient(rgba(0, 0, 0, .55), rgba(0, 0, 0, 0));
+  pointer-events: none;
+}
+.rx-top > * { pointer-events: auto; }
+.rx-ibtn {
+  width: 40px; height: 40px;
+  display: grid; place-items: center;
+  background: none; border: 0; color: #fff; cursor: pointer;
+  border-radius: 999px;
+}
+.rx-ibtn:hover { background: rgba(255, 255, 255, .1); }
+.rx-ibtn svg { width: 24px; height: 24px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
+.rx-pos { font-size: 12px; color: rgba(255, 255, 255, .7); }
+
+.rx-stage {
+  position: relative;
+  flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: pan-y;
+}
+.rx-media {
+  position: relative; width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-in;
+}
+.rx-media img, .rx-media video {
+  max-width: 100%; max-height: 100%;
+  width: 100%; height: auto;
+  object-fit: contain; display: block;
+}
+.rx-media video { position: absolute; opacity: 0; transition: opacity .3s; }
+.rx-media.playing video { opacity: 1; }
+.rx-loading { color: rgba(255, 255, 255, .6); font-size: 13px; }
+
+/* A note as pages: a sideways track, one paper page per screen. */
+.rx-track {
+  width: 100%; height: 100%;
+  display: flex;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+}
+.rx-track::-webkit-scrollbar { display: none; }
+.rx-page {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  height: 100%;
+  overflow-y: auto;
+  padding: 64px 22px 150px;
+  background: #f3f0e8;
+  color: #23211d;
+  font-size: 15px; line-height: 1.55;
+}
+.rx-page h1, .rx-page h2, .rx-page h3 {
+  font-family: var(--display);
+  color: #1a1814; line-height: 1.15;
+  margin: 0 0 .5em;
+}
+.rx-page h1 { font-size: 28px; }
+.rx-page h2 { font-size: 23px; }
+.rx-page h3 { font-size: 18px; }
+.rx-page p, .rx-page ul, .rx-page ol, .rx-page pre, .rx-page blockquote { margin: 0 0 .8em; }
+.rx-page ul, .rx-page ol { padding-left: 1.2em; }
+.rx-page a { color: #6a4216; text-decoration: none; }
+.rx-page code {
+  font-family: var(--mono); font-size: 13px;
+  background: rgba(0, 0, 0, .06); padding: 0 3px; border-radius: 3px;
+}
+.rx-page pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rx-page img { max-width: 100%; height: auto; }
+.rx-page table { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
+.rx-page td, .rx-page th { border: 1px solid rgba(0, 0, 0, .12); padding: 3px 6px; }
+.rx-page hr { border: 0; border-top: 1px solid rgba(0, 0, 0, .15); }
+.rx-page .note-meta, .rx-page .fm, .rx-page details { font-size: 12.5px; color: #6c665c; }
+.rx-pill {
+  position: absolute; top: calc(58px + env(safe-area-inset-top)); right: 14px; z-index: 2;
+  background: rgba(30, 30, 30, .72); color: #fff;
+  font-size: 12px; font-weight: 600;
+  padding: 3px 8px; border-radius: 999px;
+  pointer-events: none;
+}
+.rx-dots {
+  position: absolute; left: 0; right: 0; bottom: 128px; z-index: 2;
+  display: flex; justify-content: center; gap: 5px;
+  pointer-events: none;
+}
+.rx-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(0, 0, 0, .25); }
+.rx-dot.on { background: #2f7cf6; }
+
+.rx-paper {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 70px 24px 170px;
+}
+.rx-paper .rx-ttl.big { font-size: 34px; -webkit-line-clamp: 8; margin-top: 12px; }
+.rx-openbig {
+  align-self: flex-start;
+  margin-top: 18px;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .25);
+  color: #fff; font: inherit; font-size: 13.5px;
+  padding: 8px 16px; border-radius: 999px; cursor: pointer;
+}
+.rx-openbig:hover { background: rgba(255, 255, 255, .22); }
+
+/* The action column on the right edge. */
+.rx-rail {
+  position: absolute; right: 6px; bottom: 132px; z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+}
+.rx-act {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: none; border: 0; color: #fff; cursor: pointer;
+  font: inherit; font-size: 11px; font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+  padding: 2px 4px;
+}
+.rx-act svg {
+  width: 27px; height: 27px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .6));
+}
+.rx-act:hover svg { transform: scale(1.08); }
+
+/* Who and what, then the caption, over a fade at the bottom. */
+.rx-cap {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  padding: 48px 64px calc(18px + env(safe-area-inset-bottom)) 14px;
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .78) 45%);
+  pointer-events: none;
+}
+.rx-cap > * { pointer-events: auto; }
+.rx-by { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rx-av {
+  flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .85);
+}
+.rx-av svg { width: 17px; height: 17px; }
+.rx-who { min-width: 0; }
+.rx-name {
+  font-size: 14.5px; font-weight: 650; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rx-meta {
+  font-size: 12px; color: rgba(255, 255, 255, .72);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rx-text {
+  margin-top: 8px;
+  font-size: 13.5px; line-height: 1.4; color: rgba(255, 255, 255, .92);
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; overflow: hidden;
+  cursor: pointer;
+}
+.rx-text.full { -webkit-line-clamp: 12; }
+
+/* Details, behind the sliders icon. */
+.rx-info {
+  position: absolute; left: 10px; right: 10px;
+  top: calc(56px + env(safe-area-inset-top)); z-index: 4;
+  background: rgba(24, 24, 24, .94);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: none;
+  font-size: 12.5px;
+}
+.rx-card.info .rx-info { display: block; }
+.rx-irow { display: flex; gap: 10px; padding: 3px 0; min-width: 0; }
+.rx-ik { flex: 0 0 52px; color: rgba(255, 255, 255, .5); }
+.rx-iv { min-width: 0; overflow-wrap: anywhere; color: #fff; }
+.rx-itags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+
+/* Desktop arrows beside the card. */
+.rx-side {
+  position: absolute; top: 50%; z-index: 2;
+  width: 40px; height: 40px; margin-top: -20px;
+  display: grid; place-items: center;
+  border-radius: 50%; border: 0; cursor: pointer;
+  background: rgba(255, 255, 255, .88); color: #111;
+}
+.rx-side svg { width: 20px; height: 20px; }
+.rx-side.prev { left: calc(50% - min(260px, 50vw - 8px) - 60px); }
+.rx-side.next { right: calc(50% - min(260px, 50vw - 8px) - 60px); }
+.rx-side:disabled { opacity: 0; pointer-events: none; }
+@media (max-width: 680px) {
+  .rx-side { display: none; }
+  .rx-card { width: calc(100vw - 12px); height: calc(100dvh - 12px); border-radius: 12px; }
+  .rx-ttl { font-size: 13.5px; }
+  .rx-ttl.big { font-size: 17px; }
+  .rx-count { font-size: 11px; left: 5px; bottom: 5px; }
+  .rx-face { padding: 8px 8px 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rx-wall.anim .rx-tile, .rx-card.slide-l, .rx-card.slide-r { animation: none; }
+  .rx-scrim { transition: none; }
+}
+
+/* A picture tile darkens at its foot so the corner count reads on a white
+   page capture. */
+.rx-tile.has-pic::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 34%;
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .5));
+  pointer-events: none;
+}
+.rx-tile .rx-count { z-index: 2; }
+
+/* A tall picture tile is a poster: the whole capture across the top over a
+   blurred fill of itself, the title below. */
+.rx-tile.poster img.rx-blur {
+  object-fit: cover;
+  filter: blur(18px) brightness(.5) saturate(1.1);
+  transform: scale(1.2);
+}
+.rx-tile.poster img:not(.rx-blur) {
+  inset: 0 0 auto 0;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: 50% 0;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
+}
+.rx-tile.poster .rx-face { z-index: 1; background: none; }
+.rx-tile.poster::after { height: 55%; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .55)); }
+
+/* The overlay's live page: drawn at the card's width, input off, a tap
+   opens it in the Reader's viewer. The capture shows while it loads. */
+.rx-media.rx-live { align-items: stretch; background: #fff; cursor: pointer; }
+.rx-media.rx-live iframe {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border: 0; background: #fff;
+  pointer-events: none;
+  opacity: 0; transition: opacity .25s ease;
+}
+.rx-media.rx-live.loaded iframe { opacity: 1; }
+.rx-media.rx-live img.rx-ph {
+  position: absolute; top: 56px; left: 0; width: 100%; height: auto; max-height: none;
+}
+.rx-hit {
+  position: absolute; inset: 0; z-index: 1;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+
+/* A note's first page leads with its title, the way a carousel's first
+   slide does. */
+.rx-page h1.rx-pagetitle { font-size: 34px; line-height: 1.05; margin-bottom: .55em; }
+.rx-page { padding-right: 58px; }
+.rx-tile.poster .rx-kick { display: none; }
+
+/* Desktop: focus mode raises the desktop background (z 700) over every
+   window, which would hide the wall the overlay came from. While the overlay
+   is open the Reader window stays above the background, dimmed, and below
+   the overlay (790); a document opened from the overlay still lights at 800. */
+body.focus-mode.rx-open .fwin:has(#reader-list) {
+  z-index: 760 !important;
+  filter: brightness(.42) saturate(.85);
+  transform: none;
+}
+@media (min-width: 681px) {
+  /* Stop above the dock (fixed at the bottom, z 900). */
+  .rx-ov { align-items: flex-start; padding-top: 14px; }
+  .rx-card { height: min(920px, calc(100dvh - 112px)); }
+}
+
+/* Over a live page the top bar is solid and the page starts below it, so
+   the page's own header is not under the back chevron. */
+.rx-card.is-live .rx-top { background: #000; position: relative; flex: 0 0 auto; }
+.rx-card.is-live .rx-media.rx-live img.rx-ph { top: 0; }
+/* The actions keep a dark backing so they read on a white page too. */
+.rx-rail {
+  padding: 10px 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .32);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}

@@ -7774,6 +7774,34 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 .rdoc-q { flex: 1 1 160px; min-width: 120px; }
 .rdoc-tagbtn { cursor: pointer; }
 .rdoc-tagbtn.on { border-color: var(--sel-line); color: var(--sel-text); background: var(--sel-bg); }
+/* The one Reader bar (2026-11-06): search on its own full-width line, then
+   Show / Group by / Tags, with the Explore / Shelves / List switch at the
+   end of that row. */
+.rdoc-bar > .rdoc-q {
+  flex: 1 1 100%; font-size: 14px; padding: 8px 11px; border-radius: 6px;
+}
+.rdr-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%;
+}
+.rdr-filters .rdoc-viewseg { margin-left: auto; }
+.rdr-show-pop { min-width: 240px; }
+.rdr-show-h {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-faint); padding: 8px 10px 4px;
+}
+@media (max-width: 560px) {
+  /* Show, group and tags share one row; the view switch gets the next. */
+  /* The grouping select sizes to its words; Show and Tags share the rest. */
+  .rdr-filters > .rdoc-tagbtn { flex: 1 1 0; min-width: 0; padding-inline: 6px; }
+  .rdr-filters > .rdoc-tagbtn:first-child { flex-grow: 1.5; }
+  .rdr-filters > .rdoc-pair { flex: none; }
+  .rdr-filters .rdoc-sel { max-width: 116px; }
+  .rdr-filters > .rdoc-tagbtn {
+    font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rdr-filters .rdoc-viewseg { margin-left: 0; width: 100%; }
+  .rdr-filters .rdoc-vbtn { flex: 1; }
+}
 .rdoc-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
 .rdoc-kchip {
   background: none; border: 1px solid var(--line); border-radius: 999px;
@@ -7845,6 +7873,25 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
   transition: background .14s ease;
 }
 .rdoc-row:hover { background: var(--accent-soft); }
+/* A phone cannot fit five columns (44 + 190 + 84 + 92 px before the name
+   gets any), and the name column collapsed to nothing. Two lines instead:
+   picture on the left, the name across the top, then tags, source, date. */
+@media (max-width: 560px) {
+  .rdoc-head { display: none; }
+  .rdoc-row {
+    grid-template-columns: 56px minmax(0, 1fr) auto auto;
+    column-gap: 10px; row-gap: 4px; padding: 8px 4px;
+  }
+  .rdoc-row > .rdoc-thumb { grid-column: 1; grid-row: 1 / span 2; }
+  .rdoc-row > .rdoc-main { grid-column: 2 / -1; grid-row: 1; }
+  .rdoc-row > .rdoc-tags { grid-column: 2; grid-row: 2; flex-wrap: nowrap; overflow: hidden; }
+  .rdoc-row > .rdoc-kind { grid-column: 3; grid-row: 2; font-size: 11px; }
+  .rdoc-row > .rdoc-date { grid-column: 4; grid-row: 2; font-size: 11px; }
+  .rdoc-row .rdoc-name {
+    white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; font-size: 14px;
+  }
+}
 .rdoc-row.missing { opacity: .6; }
 
 .rdoc-thumb {
@@ -7910,7 +7957,7 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
   text-overflow: ellipsis; white-space: nowrap; }
 .rdoc-popn { flex: none; font-size: 10.5px; color: var(--text-faint); }
 
-/* List / Grid toggle — a seg, and the first thing on the bar. */
+/* Explore / Shelves / List switch — a seg at the end of the filter row. */
 .rdoc-viewseg {
   display: flex; border: 1px solid var(--line); border-radius: 2px;
   overflow: hidden; flex: none;
@@ -7924,191 +7971,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 .rdoc-vbtn:hover { color: var(--text); }
 .rdoc-vbtn.on {
   color: var(--sel-text); background: var(--sel-bg);
-}
-
-/* ==================== The grid view — the gallery =========================
-   The lab treatment turned inward: editorial sections, mono kickers with
-   count-ups, display-serif names, self-drawing hairlines, film tiles that
-   play their own loops. Tokens only, so every skin reaches it. */
-
-.rdoc-grid { padding-top: 6px; }
-
-.rdg-sec { margin: 0 0 34px; }
-.rdg-sechead { margin-bottom: 14px; }
-.rdg-kicker {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--text-faint);
-  display: flex; align-items: baseline; gap: 8px;
-}
-.rdg-count { color: var(--accent-bright); font-size: 11px; }
-.rdg-kfilm {
-  color: var(--accent-bright); border: 1px solid var(--accent-line);
-  border-radius: 999px; padding: 0 7px; font-size: 9.5px;
-}
-.rdg-name {
-  font-family: var(--display); font-weight: 500; font-size: 26px;
-  line-height: 1.15; letter-spacing: 0.005em; margin: 4px 0 10px;
-  background: linear-gradient(100deg, var(--text-head) 20%,
-    var(--accent-bright) 50%, var(--text-head) 80%);
-  background-size: 220% 100%; background-position: 100% 0;
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent; color: var(--text-head);
-  width: fit-content; max-width: 100%;
-}
-.rdg-rule {
-  height: 1px; background: linear-gradient(90deg, var(--accent-line),
-    var(--line) 60%, transparent);
-  transform-origin: left center;
-}
-.rdg-bandlab {
-  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--text-faint); margin: 14px 0 8px;
-}
-
-/* Films: a shelf of playing tiles. Scrolls INSIDE itself when it must —
-   the shelf may never widen the document (the shrink-to-fit rule). */
-/* Films TILE like the plans do (owner's call, 2026-08-05) — the shelf was a
-   horizontal scroller, and the library must never scroll sideways. */
-.rdg-shelf {
-  display: grid; gap: 14px; padding: 2px 2px 8px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-}
-.rdg-film {
-  min-width: 0; cursor: pointer; position: relative;
-}
-.rdg-filmframe {
-  position: relative; width: 100%; aspect-ratio: 16 / 10;
-  border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
-  background: var(--bg-card);
-  display: flex; align-items: center; justify-content: center;
-  transition: border-color 0.18s ease, transform 0.18s ease,
-    box-shadow 0.18s ease;
-}
-.rdg-filmframe img, .rdg-motion {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; display: block;
-}
-.rdg-film:hover .rdg-filmframe {
-  border-color: var(--accent-line); transform: translateY(-2px);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
-}
-.rdg-filmcap { padding: 8px 2px 0; }
-.rdg-ikicker {
-  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--text-faint);
-}
-.rdg-iname {
-  font-size: 13px; color: var(--text); line-height: 1.35; margin-top: 3px;
-}
-.rdg-film:hover .rdg-iname, .rdg-tile:hover .rdg-iname {
-  color: var(--accent-bright);
-}
-.rdg-isub {
-  font-size: 11px; color: var(--text-faint); margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-/* Plans and dossiers: boxes. `.rdg-minor` is the retros-and-briefs variant —
-   cards too (owner's call, 2026-08-05: widescreen wants a grid, not a list),
-   just denser. */
-.rdoc-grid { overflow-x: clip; }
-.rdg-tiles {
-  display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-}
-.rdg-tiles.rdg-minor {
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-}
-/* The ungrouped library: films and documents in ONE stream, so the column is
-   wide enough for a film's 16:10 frame and a tile sits happily in the same
-   cell. No bands, because the owner asked for none. */
-.rdg-stream {
-  display: grid; gap: 14px; padding: 2px 2px 8px;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  align-items: start;
-}
-/* An HTML document's rendered face, when the thumbnailer has one. */
-.rdg-tileframe {
-  position: relative; margin: -12px -12px 9px; aspect-ratio: 16 / 10;
-  border-bottom: 1px solid var(--line); overflow: hidden;
-  border-radius: 3px 3px 0 0; background: var(--bg-card);
-}
-.rdg-tileframe img {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; object-position: top; display: block;
-}
-.rdg-more-tile {
-  border: 1px dashed var(--line); border-radius: 3px; background: none;
-  color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer;
-  min-height: 64px;
-}
-.rdg-more-tile:hover { border-color: var(--accent-line); color: var(--text); }
-.rdg-tile {
-  position: relative; border: 1px solid var(--line); border-radius: 3px;
-  background: var(--bg-card); padding: 12px 12px 14px; cursor: pointer;
-  min-width: 0;
-  transition: border-color 0.18s ease, transform 0.18s ease,
-    box-shadow 0.18s ease;
-}
-.rdg-tile:hover {
-  border-color: var(--accent-line); transform: translateY(-2px);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
-}
-.rdg-tile .rdg-iname { margin-top: 5px; }
-.rdg-itags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 7px; }
-.rdg-itags .rdoc-chip { pointer-events: none; }
-
-.rdg-more {
-  align-self: flex-start; margin-top: 6px; background: none;
-  border: 1px solid var(--line); border-radius: 2px; color: var(--text-dim);
-  font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
-}
-.rdg-more:hover { border-color: var(--accent-line); color: var(--text); }
-
-.rdg-item.missing { opacity: 0.45; }
-
-/* The entrance: sections and items rise in with a stagger, the hairline
-   draws, the name shimmers once, the count counts up (JS). Only under
-   .anim — reduced motion never gets a hidden state to miss. */
-.rdoc-grid.anim .rdg-sec,
-.rdoc-grid.anim .rdg-item {
-  opacity: 0; transform: translateY(10px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  transition-delay: calc(var(--i, 0) * 40ms);
-}
-.rdoc-grid.anim .rdg-sec.rv,
-.rdoc-grid.anim .rdg-item.rv { opacity: 1; transform: none; }
-.rdoc-grid.anim .rdg-rule { transform: scaleX(0); transition: transform
-  0.9s cubic-bezier(0.22, 0.61, 0.36, 1) 0.15s; }
-.rdoc-grid.anim .rdg-sec.rv .rdg-rule { transform: scaleX(1); }
-.rdoc-grid.anim .rdg-sec.rv .rdg-name {
-  animation: rdgShimmer 1.4s ease 0.2s 1 both;
-}
-@keyframes rdgShimmer {
-  from { background-position: 100% 0; }
-  to { background-position: 0% 0; }
-}
-
-/* Mobile: the columns that carry the least drop out first. Tags and kind go,
-   name and date stay — a row must never overflow the document, which is what
-   triggers WebKit's shrink-to-fit and scales the whole app down. */
-@media (max-width: 1099px) {
-  .rdoc-head { display: none; }
-  .rdoc-row {
-    grid-template-columns: 44px minmax(0, 1fr);
-    grid-template-areas: "thumb main";
-    row-gap: 2px;
-  }
-  .rdoc-thumb { grid-area: thumb; }
-  .rdoc-main { grid-area: main; }
-  .rdoc-tags, .rdoc-kind, .rdoc-date { display: none; }
-  .rdoc-q { flex: 1 1 100%; }
-  /* Grid on a phone: narrower film tiles (the shelf still scrolls inside
-     itself), tighter boxes, and the date column gives way on lines — the
-     title is what must survive. */
-  .rdg-film { flex-basis: 230px; width: 230px; }
-  .rdg-tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  .rdg-name { font-size: 21px; }
 }
 
 /* ---------- The build story ("What is this?") — an animated timeline ----------
@@ -8396,196 +8258,6 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
 @media (prefers-reduced-motion: reduce) {
   .rdoc-group.open .rdoc-gbody > .rdoc-row { animation: none; }
   .rdoc-caret { transition: none; }
-  .rdg-filmframe, .rdg-tile { transition: none; }
-}
-
-/* ==================== The Inflow — the nightly ingest shelf ==============
-   Browsing cards, the Documents grid's editorial treatment, but the picture
-   leads: these captures carry extracted charts and keyframes and that is
-   what you are grazing for. Tokens only, so every skin reaches it. */
-
-.inf-bar { padding: 4px 0 10px; }
-.inf-controls {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-}
-.inf-pair { display: flex; align-items: center; gap: 6px; }
-.inf-plabel {
-  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--text-faint);
-}
-.inf-select, .inf-search {
-  background: var(--bg-raised); border: 1px solid var(--line);
-  border-radius: var(--radius); color: var(--text); font-size: 12px;
-  padding: 4px 7px; font-family: var(--sans);
-}
-/* The flexible column, so a long placeholder cannot push the Rescan button
-   off a narrow window — min-width 0 is what lets it shrink at all. */
-.inf-search { flex: 1 1 150px; min-width: 0; }
-.inf-count {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
-  text-transform: uppercase; color: var(--text-faint); margin-top: 9px;
-}
-/* The load-more sentinel: a real counted button (auto-fires when scrolled
-   near; the click is the no-observer fallback). */
-.inf-sentinel {
-  display: block; width: 100%; margin: 2px 0 30px; padding: 11px;
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em;
-  text-transform: uppercase; color: var(--text-dim); cursor: pointer;
-  background: var(--bg-raised); border: 1px dashed var(--line);
-  border-radius: var(--radius);
-}
-.inf-sentinel:hover { border-color: var(--line-warm-bright); color: var(--text); }
-
-.inf-list { padding-top: 4px; }
-.inf-sec { margin: 0 0 32px; }
-.inf-sechead { margin-bottom: 12px; }
-.inf-kicker {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--text-faint);
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-}
-.inf-count-n { color: var(--accent-bright); font-size: 11px; }
-.inf-kpic {
-  color: var(--accent-bright); border: 1px solid var(--accent-line);
-  border-radius: 999px; padding: 0 7px; font-size: 9.5px;
-}
-.inf-secname {
-  font-family: var(--display); font-weight: 500; font-size: 24px;
-  line-height: 1.15; margin: 4px 0 9px; color: var(--text-head);
-}
-.inf-rule { height: 1px; background: var(--line); transform-origin: left; }
-.inf-wrap.anim .inf-sec { opacity: 0; }
-.inf-wrap.anim .inf-sec.rv {
-  opacity: 1; transition: opacity .5s ease;
-}
-.inf-wrap.anim .inf-sec .inf-rule { transform: scaleX(0); }
-.inf-wrap.anim .inf-sec.rv .inf-rule {
-  transform: scaleX(1); transition: transform .7s ease .1s;
-}
-
-.inf-grid {
-  display: grid; gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  align-items: start;
-}
-.inf-card {
-  border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--bg-raised); overflow: hidden; cursor: pointer;
-  display: flex; flex-direction: column;
-  transition: border-color .18s ease, transform .18s ease;
-}
-.inf-card:hover {
-  border-color: var(--accent-line); transform: translateY(-2px);
-}
-.inf-wrap.anim .inf-sec.rv .inf-card {
-  animation: infRise .45s ease backwards;
-  animation-delay: calc(var(--i, 0) * 45ms);
-}
-@keyframes infRise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
-}
-
-.inf-cover {
-  position: relative; aspect-ratio: 16 / 10; background: var(--bg);
-  border-bottom: 1px solid var(--line); overflow: hidden;
-}
-.inf-cover img {
-  width: 100%; height: 100%; object-fit: cover; display: block;
-  transition: transform .5s ease;
-}
-.inf-card:hover .inf-cover img { transform: scale(1.03); }
-.inf-at, .inf-more-n {
-  position: absolute; bottom: 7px; font-family: var(--mono); font-size: 10px;
-  letter-spacing: 0.05em; color: var(--text-bright);
-  background: var(--scrim-strong); padding: 2px 6px; border-radius: var(--radius);
-}
-.inf-at { left: 7px; }
-.inf-more-n { right: 7px; }
-
-.inf-body { padding: 11px 13px 12px; display: flex; flex-direction: column; gap: 7px; }
-.inf-meta {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--text-faint);
-}
-.inf-src { color: var(--accent-bright); }
-.inf-title {
-  font-size: 15px; line-height: 1.3; margin: 0; color: var(--text-head);
-  font-weight: 500;
-}
-.inf-blurb {
-  margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
-}
-.inf-strip { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-.inf-thumb {
-  width: 52px; height: 38px; padding: 0; border-radius: var(--radius);
-  border: 1px solid var(--line); background: var(--bg); overflow: hidden;
-  cursor: pointer;
-}
-.inf-thumb:hover { border-color: var(--accent-line); }
-.inf-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.inf-strip-more {
-  font-family: var(--mono); font-size: 10px; color: var(--text-faint);
-}
-.inf-tags { display: flex; flex-wrap: wrap; gap: 5px; }
-.inf-tag {
-  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.05em;
-  color: var(--text-faint); background: transparent;
-  border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px;
-  cursor: pointer;
-}
-.inf-tag:hover { color: var(--accent-bright); border-color: var(--accent-line); }
-.inf-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.inf-acts a.fchip { text-decoration: none; }
-
-/* ---- the lightbox: an extracted chart at full size ---- */
-.inf-box {
-  position: fixed; inset: 0; z-index: 4150; background: var(--scrim-strong);
-  backdrop-filter: blur(6px);
-  display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 12px; padding: 26px;
-}
-.inf-box-stage {
-  flex: 1 1 auto; min-height: 0; display: flex; align-items: center;
-  justify-content: center; width: 100%;
-}
-.inf-box-img {
-  max-width: 100%; max-height: 100%; object-fit: contain;
-  border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--bg-raised);
-}
-.inf-box-cap {
-  flex: 0 0 auto; max-width: 780px; width: 100%;
-  background: var(--bg-hud-panel); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 11px 14px;
-  display: flex; flex-direction: column; gap: 7px;
-}
-.inf-box-head {
-  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
-}
-.inf-box-at {
-  font-family: var(--mono); font-size: 11px; color: var(--accent-bright);
-}
-.inf-box-label { font-size: 14px; color: var(--text-head); }
-.inf-box-n {
-  font-family: var(--mono); font-size: 10px; color: var(--text-faint);
-  margin-left: auto;
-}
-.inf-box-text {
-  margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
-}
-.inf-box-acts { display: flex; flex-wrap: wrap; gap: 6px; }
-.inf-box-acts a.fchip { text-decoration: none; }
-
-@media (max-width: 1099px) {
-  .inf-grid { grid-template-columns: 1fr; }
-  .inf-box { padding: 12px; }
-  .inf-secname { font-size: 20px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .inf-card, .inf-cover img { transition: none; }
-  .inf-card:hover { transform: none; }
 }
 
 /* ==================== The resume viewport ====================
