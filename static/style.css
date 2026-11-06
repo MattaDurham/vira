@@ -7790,6 +7790,15 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
   color: var(--text-faint); padding: 8px 10px 4px;
 }
 @media (max-width: 560px) {
+  /* Show, group and tags share one row; the view switch gets the next. */
+  /* The grouping select sizes to its words; Show and Tags share the rest. */
+  .rdr-filters > .rdoc-tagbtn { flex: 1 1 0; min-width: 0; padding-inline: 6px; }
+  .rdr-filters > .rdoc-tagbtn:first-child { flex-grow: 1.5; }
+  .rdr-filters > .rdoc-pair { flex: none; }
+  .rdr-filters .rdoc-sel { max-width: 116px; }
+  .rdr-filters > .rdoc-tagbtn {
+    font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .rdr-filters .rdoc-viewseg { margin-left: 0; width: 100%; }
   .rdr-filters .rdoc-vbtn { flex: 1; }
 }
@@ -7864,6 +7873,25 @@ textarea.fd-input { resize: vertical; line-height: 1.45; }
   transition: background .14s ease;
 }
 .rdoc-row:hover { background: var(--accent-soft); }
+/* A phone cannot fit five columns (44 + 190 + 84 + 92 px before the name
+   gets any), and the name column collapsed to nothing. Two lines instead:
+   picture on the left, the name across the top, then tags, source, date. */
+@media (max-width: 560px) {
+  .rdoc-head { display: none; }
+  .rdoc-row {
+    grid-template-columns: 56px minmax(0, 1fr) auto auto;
+    column-gap: 10px; row-gap: 4px; padding: 8px 4px;
+  }
+  .rdoc-row > .rdoc-thumb { grid-column: 1; grid-row: 1 / span 2; }
+  .rdoc-row > .rdoc-main { grid-column: 2 / -1; grid-row: 1; }
+  .rdoc-row > .rdoc-tags { grid-column: 2; grid-row: 2; flex-wrap: nowrap; overflow: hidden; }
+  .rdoc-row > .rdoc-kind { grid-column: 3; grid-row: 2; font-size: 11px; }
+  .rdoc-row > .rdoc-date { grid-column: 4; grid-row: 2; font-size: 11px; }
+  .rdoc-row .rdoc-name {
+    white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; font-size: 14px;
+  }
+}
 .rdoc-row.missing { opacity: .6; }
 
 .rdoc-thumb {

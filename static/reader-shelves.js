@@ -210,7 +210,7 @@
     const head = el("header", "shv-sechead");
     head.appendChild(el("h3", "shv-secname", sectionLabel(group.key)));
     head.appendChild(el("span", "shv-secn",
-      group.items.length + " document" + (group.items.length === 1 ? "" : "s")));
+      group.items.length + " item" + (group.items.length === 1 ? "" : "s")));
     sec.appendChild(head);
 
     const wrap = el("div", "shv-stripwrap");
@@ -382,7 +382,7 @@
     top.appendChild(el("h3", "shv-rname",
       shelf ? shelf.label : "Everything in " + sectionLabel(group.key)));
     top.appendChild(el("span", "shv-secn",
-      items.length + " document" + (items.length === 1 ? "" : "s")));
+      items.length + " item" + (items.length === 1 ? "" : "s")));
     page.appendChild(top);
 
     // Tabs: the whole section, then each of its shelves.

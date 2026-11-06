@@ -29321,8 +29321,12 @@ function rdocRow(it) {
   row.appendChild(tags);
 
   row.appendChild(el("div", "rdoc-kind", READER_KIND[it.kind] || it.kind));
+  // A bare "2026-11-05" parses as midnight UTC, which is the evening
+  // before here; read a date-only value as midday so it keeps its day.
+  const made = /^\d{4}-\d{2}-\d{2}$/.test(it.created || "")
+    ? it.created + "T12:00:00" : it.created;
   row.appendChild(el("div", "rdoc-date",
-    it.created ? fmtTime(it.created) : (it.missing ? "missing" : "")));
+    made ? fmtTime(made) : (it.missing ? "missing" : "")));
 
   // Whole-card activation, the Vira-wide rule (cardAction skips buttons,
   // links and form controls, and leaves right-click alone).
@@ -29359,9 +29363,11 @@ function rdocBar() {
   show.addEventListener("click", (e) => readerShowPicker(e.currentTarget));
   row.appendChild(show);
 
+  // The option says the whole thing ("By month", "No grouping"), so the
+  // control needs no label beside it and fits a phone's row.
   const grp = el("select", "rdoc-sel");
   RDOC_AXES.forEach((a) => {
-    const o = el("option", "", a.label);
+    const o = el("option", "", a.id ? "By " + a.label.toLowerCase() : "No grouping");
     o.value = a.id;
     if (a.id === rdocGroup) o.selected = true;
     grp.appendChild(o);
@@ -29373,7 +29379,6 @@ function rdocBar() {
     renderReaderDocs();
   });
   const grpPair = el("label", "rdoc-pair");
-  grpPair.appendChild(el("span", "rdoc-lab", "Group by"));
   grpPair.appendChild(grp);
   row.appendChild(grpPair);
 
@@ -30059,7 +30064,7 @@ function readerShowSet() {
 }
 
 function readerShowLabel() {
-  if (!rdocKinds.size) return "Show: everything usual";
+  if (!rdocKinds.size) return "Show: usual mix";
   if (rdocKinds.size === 1) {
     return "Show: " + readerKindPlural([...rdocKinds][0]);
   }
