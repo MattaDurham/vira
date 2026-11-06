@@ -14,6 +14,9 @@ window.ViraAssistant = (() => {
   const emailViews = new Map();
   const expandedResources = new Set();
   const copyStates = new Map();
+  const FOLD_KEY = "vira-assistant-folded";
+  let folded = false;
+  try { folded = localStorage.getItem(FOLD_KEY) === "1"; } catch (_) {}
   const host = () => document.querySelector("#assistant-body");
   const node = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -668,23 +671,33 @@ window.ViraAssistant = (() => {
     body.appendChild(details);
   }
   function render(data) {
-    const body = host();
-    if (!body || !data) return;
+    const root = host();
+    if (!root || !data) return;
     const ids = new Set((data.reminders || []).map((row) => row.id));
     for (const [key, state] of emailViews) if (!ids.has(state.reminderId)) emailViews.delete(key);
     for (const key of copyStates.keys()) if (!ids.has(key)) copyStates.delete(key);
     const signature = JSON.stringify([data, feedback]);
-    if (signature === painted && !body.querySelector(".assistant-load-error")) return;
+    if (signature === painted && !root.querySelector(".assistant-load-error")) return;
     painted = signature;
     // A poll can update commitments while a settings edit stays intact.
-    const editing = dirty ? body.querySelector(".assistant-settings") : null;
-    const coverageOpen = body.querySelector(".assistant-coverage")?.open;
-    const moreOpen = body.querySelector(".assistant-more")?.open;
-    const evidenceOpen = new Set([...body.querySelectorAll("[data-assistant-id]")]
+    const editing = dirty ? root.querySelector(".assistant-settings") : null;
+    const coverageOpen = root.querySelector(".assistant-coverage")?.open;
+    const moreOpen = root.querySelector(".assistant-more")?.open;
+    const evidenceOpen = new Set([...root.querySelectorAll("[data-assistant-id]")]
       .filter((card) => card.querySelector(".assistant-evidence")?.open)
       .map((card) => card.dataset.assistantId));
-    body.replaceChildren();
-    const head = node("div", "assistant-head");
+    root.replaceChildren();
+    // The whole section folds under its heading's arrow, like the schedule
+    // below it, so a long list never pushes the rest of the day out of reach.
+    const body = node("details", "assistant-fold");
+    body.open = !folded;
+    body.addEventListener("toggle", () => {
+      folded = !body.open;
+      try { localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch (_) {}
+    });
+    root.appendChild(body);
+    const head = node("summary", "assistant-head");
+    head.appendChild(node("span", "assistant-caret"));
     head.appendChild(node("h3", "", "Reminders & follow-through"));
     const state = data.fixture ? "Sample data"
       : !data.enabled ? "Paused" : data.last_error || data.contact?.last_error || data.contact?.errors?.length
@@ -692,7 +705,10 @@ window.ViraAssistant = (() => {
       ? "Needs attention" : !data.worker_running ? "Worker not running"
       : data.active === false ? "Inactive" : data.last_success ? "Running" : "Waiting for first successful scan";
     head.appendChild(node("span", "assistant-tag", state));
-    head.appendChild(button("Refresh", () => load(true)));
+    const refresh = button("Refresh", () => load(true));
+    // A button inside the heading would otherwise also fold the section.
+    refresh.addEventListener("click", (e) => e.preventDefault());
+    head.appendChild(refresh);
     body.appendChild(head);
     if (feedback) {
       const message = node("p", "assistant-feedback" + (feedback.warning ? " assistant-warning" : ""), feedback.text);
@@ -746,6 +762,9 @@ window.ViraAssistant = (() => {
     await load();
     const body = host();
     if (!body) return;
+    const fold = body.querySelector(".assistant-fold");
+    folded = false;
+    if (fold) fold.open = true;
     const target = [...body.querySelectorAll("[data-assistant-id]")]
       .find((n) => n.dataset.assistantId === id) || body;
     if (target.parentElement?.classList.contains("assistant-more")) target.parentElement.open = true;
