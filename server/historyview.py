@@ -1123,6 +1123,9 @@ def grid(span="day", since=None, until=None, project=None):
 
 # ---------------------------------------------------------------- the time map
 
+CATCH_ALL_LANES = ("No folder", "No module")
+
+
 def timemap(since=None, until=None, lane="project", filters=None):
     """Lanes per project or per module for a span: sessions as spans,
     merges as points, automation runs as ticks."""
@@ -1170,8 +1173,13 @@ def timemap(since=None, until=None, lane="project", filters=None):
             item = dict(base, at=e.get("at"), end=e.get("end") or e.get("at"), sub=e["sub"])
             for ln in lanes_of(e) if lane == "project" else ["Automations"]:
                 add(ln, "ticks", item)
-    out = sorted(lanes.values(), key=lambda ln: (-(len(ln["spans"]) + len(ln["points"])),
+    # The catch-all lane (work with no project folder or no Vira module)
+    # goes last however busy it is: it says the least about where work went.
+    out = sorted(lanes.values(), key=lambda ln: (ln["key"] in CATCH_ALL_LANES,
+                                                 -(len(ln["spans"]) + len(ln["points"])),
                                                  ln["key"]))
+    for ln in out:
+        ln["catch_all"] = ln["key"] in CATCH_ALL_LANES
     for ln in out:
         for k in ("spans", "points", "ticks"):
             ln[k].sort(key=lambda x: H.to_ts(x.get("start") or x.get("at")))

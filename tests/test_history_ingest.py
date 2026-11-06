@@ -669,6 +669,17 @@ class TimeMap(unittest.TestCase):
         with self.assertRaises(ValueError):
             V.timemap(lane="person")
 
+    def test_the_catch_all_lane_goes_last(self):
+        sb = Sandbox(self)
+        sb.build_all()
+        sb.ingest()
+        for lane, catch in (("project", "No folder"), ("module", "No module")):
+            tm = V.timemap(since=iso(sb.ago(60)), lane=lane)
+            keys = [ln["key"] for ln in tm["lanes"]]
+            self.assertIn(catch, keys, f"the sandbox has {lane} work with no {lane}")
+            self.assertEqual(keys[-1], catch, f"{catch} is last however busy it is")
+            self.assertEqual([ln["key"] for ln in tm["lanes"] if ln["catch_all"]], [catch])
+
 
 class Hooks(unittest.TestCase):
     """The stores that trim their records now archive them first."""

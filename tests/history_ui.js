@@ -556,6 +556,30 @@ const last = (p) => calls.filter((c) => c.path === p).at(-1);
   assert.equal(ihost.querySelectorAll(".hx-ti").length, 1);
   assert.match(ihost.querySelector(".hx-ti").textContent, /Merged into main/);
 
+  // ---------- the catch-all lane: drawn last, folded to one row, its label opens it ----------
+  TIMEMAP.lanes.push({ key: "No folder", label: "No folder", catch_all: true, points: [], ticks: [],
+    spans: [0, 1, 2].map((i) => ({ id: `session:claude:nf${i}`, title: `Loose chat ${i}`, status: "Answered", trail: `trail:NF${i}`,
+      start: iso(at(1, 2)), end: iso(at(1, 5)), app: "Claude Code", active_s: 60 })) });
+  const chost = new Node("div");
+  chost.clientWidth = 1200;
+  body.append(chost);
+  VH.mountMap(chost, {});
+  await flush();
+  const nfLane = () => chost.querySelector(".hx-svg").querySelectorAll(".hx-lane").find((g) => g.getAttribute("data-lane") === "No folder");
+  const nfRows = () => new Set(nfLane().querySelectorAll(".hx-bar").map((b) => b.querySelector(".hx-open").getAttribute("y"))).size;
+  assert.equal(nfRows(), 1, "the catch-all lane starts folded to one row");
+  assert.match(nfLane().textContent, /\+2 more/, "and says how many it folded away");
+  assert.match(nfLane().querySelector(".hx-ln").textContent, /^No folder \+No folder: work not tied/);
+  const nfCalls = calls.filter((c) => c.path === "/api/history").length;
+  nfLane().querySelector(".hx-lanelab").dispatch("click");
+  await flush();
+  assert.equal(nfRows(), 3, "its label opens it");
+  assert.match(nfLane().querySelector(".hx-ln").textContent, /^No folder -No folder: .*fold it to one row/);
+  assert.equal(calls.filter((c) => c.path === "/api/history").length, nfCalls, "and does not filter the list to it");
+  nfLane().querySelector(".hx-lanelab").dispatch("click");
+  assert.equal(nfRows(), 1, "a second click folds it again");
+  TIMEMAP.lanes.pop();
+
   // ---------- live: a moved revision re-reads what is on screen ----------
   const n0 = calls.filter((c) => c.path === "/api/history/timemap").length;
   X.Live.onRev("rev-1");

@@ -875,9 +875,15 @@
         const spans = st.layers.sessions ? (ln.spans || []) : [];
         const points = st.layers.merges ? (ln.points || []) : [];
         const live = spans.filter((s) => UNFINISHED.includes(s.status) && s.status !== "Not merged");
-        const lab = sv("g", { class: "hx-lanelab", "data-lanekey": ln.key });
-        lab.append(svTitle(sv("text", { x: 6, y: top + 11, class: "hx-ln" }, ln.label.length > 18 ? ln.label.slice(0, 17) + "..." : ln.label),
-          `${ln.label}: click to filter to this ${st.lane}`));
+        // The catch-all lane (no folder, no module) is drawn last and folded
+        // to one row; its label opens and closes it instead of filtering.
+        const catchAll = !!ln.catch_all;
+        const folded = catchAll && !st.catchOpen;
+        const lab = sv("g", catchAll ? { class: "hx-lanelab fold", "data-fold": "1" } : { class: "hx-lanelab", "data-lanekey": ln.key });
+        const name = ln.label.length > 18 ? ln.label.slice(0, 17) + "..." : ln.label;
+        lab.append(svTitle(sv("text", { x: 6, y: top + 11, class: "hx-ln" }, catchAll ? `${name} ${folded ? "+" : "-"}` : name),
+          catchAll ? `${ln.label}: work not tied to one ${st.lane}. Click to ${folded ? "show all its rows" : "fold it to one row"}`
+            : `${ln.label}: click to filter to this ${st.lane}`));
         // counts one per line, so they stay inside the label column
         if (spans.length) lab.append(sv("text", { x: 6, y: top + 24, class: "hx-lnsub" }, plural(spans.length, "session")));
         if (points.length) lab.append(sv("text", { x: 6, y: top + (spans.length ? 36 : 24), class: "hx-lnsub" }, plural(points.length, "merge")));
@@ -910,7 +916,7 @@
           });
           laneH = cellH + 8;
         } else {
-          const packed = packRows(spans.map((s) => s), MAX_ROWS);
+          const packed = packRows(spans.map((s) => s), folded ? 1 : MAX_ROWS);
           const rowsTop = top + 4;
           packed.placed.forEach((s) => {
             const xa = x(s._a), xb = Math.max(xa + 2.5, x(s._b));
@@ -1086,6 +1092,7 @@
         const item = t.closest && t.closest("[data-id]");
         if (item) { pick(item.getAttribute("data-id")); return; }
         const lab = t.closest && t.closest(".hx-lanelab");
+        if (lab && lab.getAttribute("data-fold")) { st.catchOpen = !st.catchOpen; drawMap(); return; }
         if (lab && lab.getAttribute("data-auto")) { st.gridOpen = !st.gridOpen; gridBox.hidden = !st.gridOpen; if (st.gridOpen) drawGrid(); drawMap(); return; }
         if (lab) {
           const key = lab.getAttribute("data-lanekey");
