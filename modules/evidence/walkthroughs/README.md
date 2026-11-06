@@ -18,7 +18,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Library / Documents](../../library/documents/README.md)
 
-### Files (23)
+### Files (24)
 
 **Server**
 
@@ -62,6 +62,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `walkthroughs/idea-live-session/idea-cards.png` |  |
 | `walkthroughs/source-health/README.md` | "Nothing found" used to read the same as "nothing there": a calendar that |
 | `walkthroughs/source-health/brief-banner.png` |  |
+| `walkthroughs/work-detail-safe-area/phone-detail.png` |  |
 
 ### Routes (0)
 
