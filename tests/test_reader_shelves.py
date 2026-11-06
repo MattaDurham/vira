@@ -32,15 +32,13 @@ class ShelvesContract(unittest.TestCase):
 
     def test_app_js_turns_registered_views_into_buttons_and_renderers(self):
         self.assertIn('...Object.entries(window.RDOC_VIEWS || {})', APP)
-        hook = APP.index("(window.RDOC_VIEWS || {})[rdocView]")
-        grid = APP.index('if (rdocView === "grid") {')
-        self.assertLess(hook, grid, "registered views must dispatch before Grid")
+        self.assertIn("(window.RDOC_VIEWS || {})[rdocView]", APP)
 
     def test_the_choice_lives_in_the_readers_own_setting(self):
-        # The view button saves rdocView under vira-rdoc-view; Shelves keeps
+        # The view button saves rdocView under vira-reader-view; Shelves keeps
         # no setting of its own for which view is showing.
-        self.assertIsNone(re.search(r"ls(Get|Set)\(\s*\"vira-rdoc-view", JS))
-        self.assertIn('lsSet("vira-rdoc-view", v)', APP)
+        self.assertIsNone(re.search(r"ls(Get|Set)\(\s*\"vira-reader-view", JS))
+        self.assertIn('lsSet("vira-reader-view", v)', APP)
 
     def test_loaded_after_app_js(self):
         app = HTML.index('<script src="/app.js"></script>')
@@ -55,8 +53,8 @@ class ShelvesContract(unittest.TestCase):
         self.assertIn("prefers-reduced-motion", JS)
 
     def test_nothing_waits_on_an_observer(self):
-        # tests/test_reader_grid_reveal.py: content hidden until an observer
-        # fires is how the Grid view once showed an empty page.
+        # Content hidden until an observer fires is how the retired Grid view
+        # once showed an empty page (2026-08-11).
         self.assertFalse("new IntersectionObserver" in JS)
         # The one thing hidden is a picture still loading, over a grey
         # placeholder; its load or error event always uncovers the tile.
@@ -81,6 +79,7 @@ const ctx = {
   rdocSortNew: (xs) => xs.slice().sort(
     (a, b) => String(b.created).localeCompare(String(a.created))),
   rdocGroupLabel: (k) => k,
+  readerKindPlural: (k) => k.charAt(0).toUpperCase() + k.slice(1) + "s",
 };
 vm.createContext(ctx);
 vm.runInContext(src, ctx);
@@ -123,8 +122,10 @@ class ShelvesGrouping(unittest.TestCase):
             [" untagged", "Not yet tagged", ["d"]],
         ])
 
-    def test_grouped_by_kind_the_shelves_split_by_feature(self):
-        self.assertEqual(self.out["axisWhenKind"], "module")
+    def test_grouped_by_source_the_shelves_split_by_topic_then_feature(self):
+        # Captures carry topics (the theme axis); documents without one
+        # fall back to their feature tag.
+        self.assertEqual(self.out["axisWhenKind"], "topic")
         self.assertEqual(self.out["byModule"], [
             ["Reader", ["b", "a"]],
             ["Work", ["c", "e"]],

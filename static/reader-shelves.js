@@ -17,10 +17,10 @@
 //
 // Registration is the whole contract with app.js: RDOC_VIEWS.shelves gives
 // rdocBar a "Shelves" button and renderReaderDocs a renderer. The choice is
-// kept in the Reader's own `vira-rdoc-view` setting.
+// kept in the Reader's own `vira-reader-view` setting.
 //
 // No IntersectionObserver: nothing is hidden until it scrolls into view
-// (tests/test_reader_grid_reveal.py), and pictures lazy-load natively.
+// (the retired Grid's 2026-08-11 lesson), and pictures lazy-load natively.
 
 (function () {
   const VIEW = "shelves";
@@ -35,29 +35,28 @@
   const reduceMotion = () =>
     matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // The second axis. Grouped by kind, the shelves split on the feature tag;
-  // grouped by anything else (or flat), they split on kind.
+  // The second axis. Grouped by source, the shelves split on topic (a
+  // document's feature when it has no topic); grouped by anything else (or
+  // flat), they split on source.
   function subAxis() {
-    return rdocGroup === "kind" ? "module" : "kind";
+    return rdocGroup === "kind" ? "topic" : "kind";
   }
 
   function subKey(it) {
     if (subAxis() === "kind") return it.kind || RDOC_UNTAGGED;
-    const t = rdocTagsOf(it, "module");
+    // A capture's topic, else a document's feature: whichever names it.
+    const t = rdocTagsOf(it, "theme").concat(rdocTagsOf(it, "module"));
     return t.length ? t[0] : RDOC_UNTAGGED;
   }
 
   function subLabel(key) {
     if (key === RDOC_UNTAGGED) return "Not yet tagged";
-    if (subAxis() === "kind") {
-      const k = READER_KIND[key] || key;
-      return k.charAt(0).toUpperCase() + k.slice(1) + "s";
-    }
+    if (subAxis() === "kind") return readerKindPlural(key);
     return key;
   }
 
   function sectionLabel(key) {
-    return key ? rdocGroupLabel(key) : "The library";
+    return key ? rdocGroupLabel(key) : "Everything";
   }
 
   // A section's shelves: biggest first, untagged last, each newest first.
@@ -351,36 +350,11 @@
     return card;
   }
 
+  // Show is the Reader's one picker for captures and documents alike.
   function kindMenu(anchor) {
-    closeCtxPops();
-    const pop = el("div", "ctx-pop rdoc-pop");
-    const body = el("div", "rdoc-poplist");
-    ["walkthrough", "plan", "dossier", "retro", "brief"].forEach((k) => {
-      const line = el("button", "rdoc-popitem" + (rdocKinds.has(k) ? " on" : ""));
-      line.type = "button";
-      line.appendChild(el("span", "rdoc-poptag", READER_KIND[k] || k));
-      line.addEventListener("click", () => {
-        if (rdocKinds.has(k)) rdocKinds.delete(k); else rdocKinds.add(k);
-        lsSet("vira-rdoc-kinds", [...rdocKinds]);
-        pop.remove();
-        renderReaderDocs();
-      });
-      body.appendChild(line);
-    });
-    pop.appendChild(body);
-    if (rdocKinds.size) {
-      const clear = el("button", "rdoc-mini", "Every kind");
-      clear.addEventListener("click", () => {
-        rdocKinds.clear();
-        lsSet("vira-rdoc-kinds", []);
-        pop.remove();
-        renderReaderDocs();
-      });
-      pop.appendChild(clear);
-    }
-    const r = anchor.getBoundingClientRect();
-    placeCtxPop(pop, r.left, r.bottom + 4);
+    readerShowPicker(anchor);
   }
+
 
   function dropBtn(label, on, run) {
     const b = el("button", "shv-drop" + (on ? " on" : ""));
@@ -437,9 +411,7 @@
     // Filters: the Reader's own kind and tag filters, as dropdowns.
     const filters = el("div", "shv-filters");
     filters.appendChild(dropBtn(
-      rdocKinds.size === 0 ? "Kind"
-        : rdocKinds.size === 1 ? (READER_KIND[[...rdocKinds][0]] || "Kind")
-          : rdocKinds.size + " kinds",
+      readerShowLabel(),
       rdocKinds.size > 0, kindMenu));
     filters.appendChild(dropBtn(
       rdocTags.size === 0 ? "Tags"
@@ -449,11 +421,9 @@
       const clear = el("button", "shv-clear", "Clear filters");
       clear.type = "button";
       clear.addEventListener("click", () => {
-        rdocKinds.clear();
         rdocTags.clear();
-        lsSet("vira-rdoc-kinds", []);
         lsSet("vira-rdoc-tags", []);
-        renderReaderDocs();
+        readerSetShow([]);
       });
       filters.appendChild(clear);
     }

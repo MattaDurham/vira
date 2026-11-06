@@ -123,7 +123,7 @@
       b.addEventListener("click", () => rxMore());
       foot.appendChild(b);
     } else {
-      foot.appendChild(el("div", "rx-end", rxItems.length + " documents, all shown"));
+      foot.appendChild(el("div", "rx-end", rxItems.length + " items, all shown"));
     }
   }
 

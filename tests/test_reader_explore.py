@@ -55,19 +55,19 @@ class ExploreIsWired(unittest.TestCase):
         self.assertIn('<link rel="stylesheet" href="/reader-explore.css">', INDEX)
 
     def test_the_switch_and_the_render_read_the_registry(self):
-        self.assertIn('[["list", "List"], ["grid", "Grid"], ...Object.entries('
-                      'window.RDOC_VIEWS || {}).map(([v, x]) => [v, x.label])]', APP)
+        self.assertIn('[...Object.entries(window.RDOC_VIEWS || {}).map(([v, x]) => '
+                      '[v, x.label]), ["list", "List"]]', APP)
         self.assertIn("window.RDOC_VIEWS[rdocView].render(list, groups)", APP)
-        # Same saved setting as List and Grid.
-        self.assertIn('lsSet("vira-rdoc-view", v)', APP)
+        # Same saved setting as Shelves and List.
+        self.assertIn('lsSet("vira-reader-view", v)', APP)
 
     def test_it_uses_the_grids_list_and_the_readers_open_path(self):
         for name in ("rdocSortNew", "openReaderItem", "enterFocus"):
             self.assertIn(name, JS)
 
     def test_no_reveal_hides_a_tile(self):
-        # tests/test_reader_grid_reveal.py pins the observer count; the wall
-        # loads by a scroll listener and never hides a tile until it is seen.
+        # The wall loads by a scroll listener and never hides a tile until it
+        # is seen (the retired Grid's 2026-08-11 empty-page lesson).
         self.assertNotIn("IntersectionObserver", JS)
         self.assertIn("prefers-reduced-motion", CSS)
 
