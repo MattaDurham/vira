@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from server import models
-from tests.model_ledgers import pin_model_ledgers
+from tests.model_ledgers import forget_logins, pin_model_ledgers
 
 
 def _fake_bin(dirpath, name):
@@ -63,6 +63,7 @@ class AuthProbeTest(unittest.TestCase):
     def setUp(self):
         models._bin_cache.clear()
         self.addCleanup(models._bin_cache.clear)
+        forget_logins(self)
 
     def _probe(self, pid, stdout="", stderr="", code=0, key=""):
         with mock.patch.object(models, "find_binary", return_value="/x/bin"), \
@@ -72,6 +73,31 @@ class AuthProbeTest(unittest.TestCase):
                                                       stderr=stderr,
                                                       returncode=code)):
             return models.probe(pid)
+
+    def test_login_answer_is_reused_until_asked_fresh(self):
+        # Each provider sweep started 4-6 CLI processes and the page load
+        # ran ~6 sweeps at once; one answer now serves SIGNED_IN_TTL.
+        done = mock.Mock(stdout=json.dumps({"loggedIn": True}), stderr="",
+                         returncode=0)
+        with mock.patch.object(models, "find_binary", return_value="/x/bin"), \
+             mock.patch.object(models, "api_key", return_value=""), \
+             mock.patch.object(models.subprocess, "run",
+                               return_value=done) as run:
+            models.probe("anthropic")
+            models.probe("anthropic")
+            self.assertTrue(models.cli_signed_in("anthropic"))
+            self.assertEqual(run.call_count, 1)
+            models.probe("anthropic", fresh=True)
+            self.assertEqual(run.call_count, 2)
+
+    def test_an_unanswered_login_check_is_not_remembered(self):
+        with mock.patch.object(models, "find_binary", return_value="/x/bin"), \
+             mock.patch.object(models, "api_key", return_value=""), \
+             mock.patch.object(models.subprocess, "run",
+                               side_effect=subprocess.TimeoutExpired("x", 20)) as run:
+            self.assertEqual(models.probe("anthropic")["auth"], models.LOGGED_OUT)
+            models.probe("anthropic")
+        self.assertEqual(run.call_count, 2)
 
     def test_json_logged_in(self):
         r = self._probe("anthropic",
@@ -347,6 +373,7 @@ class CatalogTest(unittest.TestCase):
         models._options_cache.update(at=0.0, payload=None)
         self.addCleanup(models._models_cache.clear)
         self.addCleanup(models._options_cache.update, at=0.0, payload=None)
+        forget_logins(self)
 
     def test_no_key_means_an_empty_api_list_not_a_stale_one(self):
         # The whole point of MODEL SOURCES: with nothing to verify against,
@@ -468,7 +495,7 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(models.provider_for_model("opaque-google"), "google")
 
     def test_active_is_the_configured_provider_when_it_is_usable(self):
-        def probe(pid):
+        def probe(pid, fresh=False):
             return {"connected": pid == "openai", "auth": models.SIGNED_IN,
                     "has_key": False}
         with mock.patch.object(models, "probe", side_effect=probe), \
@@ -630,6 +657,7 @@ class ApiOnlyDraftRoutingTest(unittest.TestCase):
 
     def setUp(self):
         pin_model_ledgers(self)
+        forget_logins(self)
 
     def _cfg(self, pid):
         from server import suggest

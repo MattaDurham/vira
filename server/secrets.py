@@ -29,6 +29,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from . import settings
@@ -51,7 +53,14 @@ def _mac_available():
     return IS_MAC and bool(shutil.which("security"))
 
 
-def _mac_get(service, account):
+# security(1) exits 44 when the item does not exist: a definite "no such
+# secret", unlike a locked Keychain or a timeout, which say nothing.
+_MAC_NOT_FOUND = 44
+
+
+def _mac_lookup(service, account):
+    """(value or None, definite). `definite` is False when the store could
+    not answer, so a caller never remembers a failed read as a fact."""
     cmd = ["security", "find-generic-password"]
     if account:
         cmd += ["-a", account]
@@ -59,8 +68,14 @@ def _mac_get(service, account):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     except Exception:  # noqa: BLE001 — reads never raise
-        return None
-    return res.stdout.strip() if res.returncode == 0 else None
+        return None, False
+    if res.returncode == 0:
+        return res.stdout.strip(), True
+    return None, res.returncode == _MAC_NOT_FOUND
+
+
+def _mac_get(service, account):
+    return _mac_lookup(service, account)[0]
 
 
 def _mac_set(service, account, value):
@@ -208,14 +223,42 @@ def _file_delete(service, account):
 
 # ---------- the ladder ----------
 
-def get(service, account=None):
+# Recent Keychain answers, for callers that pass max_age. Each Keychain
+# read starts a `security` process; the desktop page's startup burst asked
+# for the same model key 17 times in one load (measured 2026-11-06).
+_recent = {}
+_recent_lock = threading.Lock()
+
+
+def _forget(service, account):
+    with _recent_lock:
+        _recent.pop((service, account or None), None)
+
+
+def get(service, account=None, max_age=0):
     """The secret, or "" when nowhere. Never raises. OS store first, then
     the locked file — so a secret written on a store-less platform is
-    still found, and a healthy Keychain always wins."""
+    still found, and a healthy Keychain always wins.
+
+    `max_age` (seconds) lets a caller reuse a Keychain answer that recent.
+    Only for secrets that are not rotated behind this process's back: a
+    value another process rewrote is seen up to max_age late. A write or
+    delete through this module forgets its own entry at once, and a read
+    the store could not answer is never remembered."""
     if _mac_available():
-        val = _mac_get(service, account)
-        if val is not None:
-            return val
+        key = (service, account or None)
+        if max_age > 0:
+            with _recent_lock:
+                hit = _recent.get(key)
+            if hit and time.monotonic() - hit[0] < max_age:
+                return hit[1]
+        val, definite = _mac_lookup(service, account)
+        if val is None:
+            val = _file_get(service, account) or ""
+        if max_age > 0 and definite:
+            with _recent_lock:
+                _recent[key] = (time.monotonic(), val)
+        return val
     elif IS_WIN:
         try:
             val = _win_get(service, account)
@@ -229,6 +272,7 @@ def get(service, account=None):
 def set(service, account, value):
     """Store the secret in the best reachable store. Raises RuntimeError
     only when every candidate refused."""
+    _forget(service, account)
     if _mac_available():
         try:
             _mac_set(service, account, value)
@@ -248,6 +292,7 @@ def set(service, account, value):
 def delete(service, account=None):
     """Best-effort removal from every store (a secret must not resurrect
     from the fallback after the primary copy is deleted)."""
+    _forget(service, account)
     if _mac_available():
         try:
             _mac_delete(service, account)

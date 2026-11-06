@@ -108,6 +108,46 @@ class MacBackendTests(unittest.TestCase):
                                side_effect=OSError("boom")):
             self.assertEqual(secrets.get("svc", "acct"), "")
 
+    def _counted(self, **answer):
+        return mock.patch.object(secrets.subprocess, "run",
+                                 return_value=mock.Mock(**answer))
+
+    def test_max_age_reuses_a_recent_keychain_answer(self):
+        # One desktop page load asked for the same model key 17 times,
+        # each a `security` process; a caller passing max_age asks once.
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=0, stdout="kc-val\n") as run:
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "kc-val")
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "kc-val")
+        self.assertEqual(run.call_count, 1)
+
+    def test_without_max_age_every_read_asks_the_keychain(self):
+        # The default stays fresh: a rotating token (the mail refresh
+        # token) must never be served from memory.
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=0, stdout="kc-val\n") as run:
+            secrets.get("svc", "acct", max_age=30)
+            secrets.get("svc", "acct")
+        self.assertEqual(run.call_count, 2)
+
+    def test_a_failed_read_is_never_remembered(self):
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=51, stdout="") as run:   # locked, denied
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "")
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "")
+        self.assertEqual(run.call_count, 2)
+
+    def test_not_found_is_remembered_and_set_forgets_it(self):
+        self.addCleanup(secrets._recent.clear)
+        with self._counted(returncode=44, stdout="") as run:
+            secrets.get("svc", "acct", max_age=30)
+            secrets.get("svc", "acct", max_age=30)
+        self.assertEqual(run.call_count, 1)
+        with self._counted(returncode=0):
+            secrets.set("svc", "acct", "new")
+        with self._counted(returncode=0, stdout="new\n"):
+            self.assertEqual(secrets.get("svc", "acct", max_age=30), "new")
+
     def test_set_prefers_keychain_and_skips_file(self):
         with mock.patch.object(secrets.subprocess, "run",
                                return_value=mock.Mock(returncode=0)):
