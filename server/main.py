@@ -87,6 +87,7 @@ from . import (
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings, settingschema, restart, runtimework,
                genreroutes,
+               scanroutes, scans,
                skins,
                subs_visuals, worldgraph, worldsubsets,
                subscriptions, suggest, threadread, triage, uistate, update, vault,
@@ -259,6 +260,7 @@ def _start_account_workers():
     executive.start()
     correspondence.start()
     jobboards_poller.start()
+    scans.start()              # Scans: new scans read, named and filed
 
 
 # ---------- people ----------
@@ -6227,6 +6229,7 @@ app.include_router(skins.assets)
 # The instrument behind the picker: references -> aspects -> gain -> knobs ->
 # manifest -> skin, with every stage exposed. Engine in genrestudio.py.
 app.include_router(genreroutes.router)
+app.include_router(scanroutes.router)
 
 # ---------- Image Atlas (the vault's images as a 3D galaxy) ----------------
 # chaska adapter: serves the bundled viewer + the vault-sidecar export under

@@ -62,7 +62,7 @@ TREE = ROOT / "modules"
 # Root-level files (AGENTS*.md, README.md, LICENSE, .gitignore) sit above the
 # tree and are not claimed; a manifest may still claim one explicitly.
 SCOPE = ("server", "static", "tests", "scripts", "android", "bridge",
-         "fixtures", "walkthroughs", "walkthrough_anon")
+         "fixtures", "walkthroughs", "walkthrough_anon", "macos")
 
 GROUPS = {
     "communicate": "Communicate",

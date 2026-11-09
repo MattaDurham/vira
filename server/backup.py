@@ -94,6 +94,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # The programs' own log files keep their lines, but the record of
          # which run did what exists only here.
          "routine-runs.json",
+         # Scans: where each scan was filed and under what name, so a
+         # filing can be undone; the files themselves live in the vault.
+         "scans.json",
          # Records the stores above trim (Flow runs past the newest 120,
          # texts past 200, journal notes past 400) and the owner's Merge and
          # Discard presses: each exists only in its archive once trimmed.

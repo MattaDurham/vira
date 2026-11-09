@@ -26,6 +26,7 @@
 <link rel="stylesheet" href="/library.css">
 <link rel="stylesheet" href="/reader-shelves.css">
 <link rel="stylesheet" href="/fleet.css">
+<link rel="stylesheet" href="/scans.css">
 <link rel="stylesheet" href="/history.css">
 <link rel="stylesheet" href="/orbits.css">
 <link rel="stylesheet" href="/assistant.css">
@@ -796,6 +797,13 @@
   <!-- FLEET (every agent session on this machine, live: server/fleet.py
        collects Claude Code, Codex and Vira's jobs across every project;
        static/fleet.js owns this view and its own heading) -->
+  <!-- SCANS (paper from the scanner, read, named and filed: server/scans.py;
+       static/scans.js owns this view) -->
+  <section id="view-scans" class="view">
+    <div class="section-head"><h2>Scans</h2></div>
+    <div id="scans-root" class="sc-root"></div>
+  </section>
+
   <section id="view-fleet" class="view">
     <div id="fleet-root" class="fl-root"></div>
   </section>
@@ -1356,6 +1364,7 @@
 <script src="/reader-explore.js"></script>
 <script src="/reader-shelves.js"></script>
 <script src="/fleet.js"></script>
+<script src="/scans.js"></script>
 <script src="/atlas.js"></script>
 </body>
 </html>

@@ -706,6 +706,25 @@ SCHEMA = [
       "{enabled, auto_file, model_classification, auto_confidence, "
       "catchup_days, routes}. Edited in Attention > Inbox; routes name a "
       "vault and a category.", control="intake"),
+    S("scans_folder", "intake", "path", "", "Scans folder",
+      "The folder your scanner saves into. Vira reads each new PDF or "
+      "picture there, names it, saves copies in the folders it belongs in "
+      "and writes a summary note. Empty turns scan filing off. Put it "
+      "inside a connected vault so the copies and the note can be written."),
+    S("scans_auto", "intake", "bool", True, "File scans without asking",
+      "On: a scan the reader is sure about is filed at once. Off, or when "
+      "the reader is unsure or has a question, it waits in Scans for you."),
+    S("scans_rename", "intake", "bool", True, "Rename the scan itself",
+      "On: the file in the scans folder is renamed to the reader's name for "
+      "it (a date, the sender, what it is). Off: only the copies get the "
+      "new name."),
+    S("scans_summary_dir", "intake", "str", "", "Folder for scan notes",
+      "The vault folder that gets one summary note per filed scan, relative "
+      "to the vault that holds the scans folder. Empty = that vault's "
+      "capture folder."),
+    S("scans_scanner_app", "intake", "str", "app.vira.folio",
+      "Scanner app", "The macOS bundle id that Scans > Open scanner starts.",
+      advanced=True),
 
     # ------------------------------------------------------------- system
     S("fixture_mode", "system", "bool", None, "Force demo or real mode",

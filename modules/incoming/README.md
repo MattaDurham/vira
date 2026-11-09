@@ -29,17 +29,18 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 - [WhatsApp](whatsapp/README.md) - Receive-only WhatsApp through a linked-device sidecar process. (8 files)
 - [Companion](companion/README.md) - The Android companion app: pairing, message ingest, and phone pings. (30 files)
 - [Triage](triage/README.md) - Unknown senders, institutional chores, and correspondence that is evidence first. (11 files)
+- [Scans](scans/README.md) - Paper from the scanner: read by an AI session, renamed, copied into the vault folders it belongs in, summarised, and its to-dos listed. (31 files)
 
 ### Neighbours
 
-**Reads from:** [People](../people/README.md), [Core](../core/README.md), [Models](../models/README.md)
+**Reads from:** [People](../people/README.md), [Core](../core/README.md), [Models](../models/README.md), [Work](../work/README.md)
 
 **Feeds:** [Attention](../attention/README.md), [Find](../find/README.md), [People](../people/README.md), [Money](../money/README.md)
 
 ### In the app
 
-Windows: `feed`, `admin` (ids from `WINDOWS` in `static/app.js`).
+Windows: `feed`, `admin`, `scans` (ids from `WINDOWS` in `static/app.js`).
 
-87 tracked files across 6 submodules. `python -m server.moduletree brief incoming` prints every submodule's page in one go.
+118 tracked files across 7 submodules. `python -m server.moduletree brief incoming` prints every submodule's page in one go.
 
 <!-- moduletree:end -->
