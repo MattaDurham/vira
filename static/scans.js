@@ -180,15 +180,14 @@
     const grid = el("div", "sc-dgrid");
     // pages
     const pages = el("div", "sc-pages");
-    if (it.kind === "pdf") {
-      const fr = el("iframe", "sc-pdf");
-      fr.title = "The scan";
-      fr.src = `/api/scans/${it.id}/file#view=FitH`;
-      pages.appendChild(fr);
-    } else {
+    // Each page as a picture Vira draws: not every browser shows a PDF inline.
+    const count = Math.max(1, Math.min(it.pages || 1, 40));
+    for (let n = 1; n <= count; n++) {
       const img = el("img", "sc-img");
-      img.alt = "The scan";
-      img.src = `/api/scans/${it.id}/file`;
+      img.alt = `Page ${n} of the scan`;
+      img.loading = n > 2 ? "lazy" : "eager";
+      img.src = `/api/scans/${it.id}/page/${n}?v=${encodeURIComponent(it.sha256.slice(0, 8))}`;
+      img.addEventListener("error", () => img.remove());
       pages.appendChild(img);
     }
     const open = el("a", "sc-lk", "Open the file in a new tab");

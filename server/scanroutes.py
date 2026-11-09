@@ -129,6 +129,14 @@ def api_scan_thumb(sid: str):
     return FileResponse(t, media_type="image/png")
 
 
+@router.get("/{sid}/page/{n}")
+def api_scan_page(sid: str, n: int):
+    t = scans.page_image(_item(sid), n)
+    if not t:
+        raise HTTPException(404, "no such page")
+    return FileResponse(t, media_type="image/png")
+
+
 @router.post("/{sid}/read")
 def api_scan_read(sid: str):
     it = _item(sid)

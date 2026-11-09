@@ -304,3 +304,46 @@ class DecisionParse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(settings.IS_MAC, "Quartz and Vision are macOS frameworks")
+class MacText(unittest.TestCase):
+    """The real extraction path, on a PDF whose page is only a picture (a
+    scan from another app): no text layer, so on-device OCR must read it,
+    and the page must draw as a PNG for the window."""
+
+    def picture_pdf(self, path):
+        import Quartz
+        from AppKit import NSBitmapImageRep, NSFont, NSGraphicsContext, NSString
+        from Foundation import NSURL
+        w, h = 1200, 400
+        rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+            None, w, h, 8, 4, True, False, "NSDeviceRGBColorSpace", 0, 0)
+        ctx = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.setCurrentContext_(ctx)
+        Quartz.CGContextSetRGBFillColor(ctx.CGContext(), 1, 1, 1, 1)
+        Quartz.CGContextFillRect(ctx.CGContext(), ((0, 0), (w, h)))
+        NSString.stringWithString_("WATER BILL TOTAL DUE 42").drawAtPoint_withAttributes_(
+            (60, 160), {"NSFont": NSFont.systemFontOfSize_(72)})
+        NSGraphicsContext.restoreGraphicsState()
+        image = rep.CGImage()
+        pdf = Quartz.CGPDFContextCreateWithURL(NSURL.fileURLWithPath_(str(path)), ((0, 0), (612, 204)), None)
+        Quartz.CGContextBeginPage(pdf, ((0, 0), (612, 204)))
+        Quartz.CGContextDrawImage(pdf, ((0, 0), (612, 204)), image)
+        Quartz.CGContextEndPage(pdf)
+        Quartz.CGPDFContextClose(pdf)
+
+    def test_a_picture_only_pdf_is_read_on_the_device_and_drawn(self):
+        with tempfile.TemporaryDirectory() as d:
+            pdf = Path(d) / "picture.pdf"
+            self.picture_pdf(pdf)
+            text, pages, method = scans.extract_text(pdf)
+            self.assertEqual(pages, 1)
+            self.assertIn("OCR", method)
+            self.assertIn("WATER BILL", text.upper())
+            self.assertEqual(scans._page_count(pdf), 1)
+            with mock.patch.object(scans, "PAGES", Path(d) / "pages"):
+                png = scans.page_image({"id": "x1", "path": str(pdf)}, 1)
+                self.assertTrue(png and png.read_bytes().startswith(b"\x89PNG"))
+                self.assertIsNone(scans.page_image({"id": "x1", "path": str(pdf)}, 2))

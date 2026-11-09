@@ -224,7 +224,7 @@ def discover():
                 "original_name": p.name, "size": st.st_size,
                 "mtime": st.st_mtime, "kind": "pdf" if p.suffix.lower() in PDF_EXTS else "image",
                 "arrived": _now(), "updated": _now(), "state": "new",
-                "pages": 0, "text": "", "text_method": "", "job_id": "",
+                "pages": _page_count(p), "text": "", "text_method": "", "job_id": "",
                 "decision": None, "filing": None, "error": "", "done_actions": [],
             }
         for sid, it in items.items():
@@ -246,6 +246,8 @@ def discover():
                     str(Path(it.get("path", "")).parent) == str(f):
                 it["state"], it["error"] = "missing", "the file is no longer in the scans folder"
     _mutate(fn)
+    for sha, p, _ in added:
+        make_thumb(sha[:12], p)
     return [sha[:12] for sha, _, _ in added]
 
 
@@ -263,6 +265,21 @@ def _pdf_text(path):
         pg = doc.pageAtIndex_(i)
         pages.append(str(pg.string() or "") if pg is not None else "")
     return pages, doc
+
+
+def _page_count(path):
+    """Pages in a scan, without reading its text; 0 when unknown."""
+    if Path(path).suffix.lower() not in PDF_EXTS:
+        return 1
+    if not settings.IS_MAC:
+        return 0
+    try:
+        import Quartz
+        from Foundation import NSURL
+        doc = Quartz.PDFDocument.alloc().initWithURL_(NSURL.fileURLWithPath_(str(path)))
+        return int(doc.pageCount()) if doc is not None else 0
+    except Exception:  # noqa: BLE001 - unknown is an answer
+        return 0
 
 
 def _ocr_cgimage(cg):
@@ -289,8 +306,9 @@ def _page_cgimage(page, width=2000):
     scale = width / w
     img = page.thumbnailOfSize_forBox_((width, box.size.height * scale),
                                        Quartz.kPDFDisplayBoxMediaBox)
-    cg, _, _ = img.CGImageForProposedRect_context_hints_(None, None, None)
-    return cg
+    got = img.CGImageForProposedRect_context_hints_(None, None, None)
+    # pyobjc returns (image, rect) here; older bridges returned the image.
+    return got[0] if isinstance(got, tuple) else got
 
 
 def _image_cgimage(path):
@@ -336,6 +354,49 @@ def extract_text(path):
 
 def thumb_path(sid):
     return THUMBS / f"{sid}.png"
+
+
+PAGES = ROOT / "data" / "scans" / "pages"
+# Width a page is drawn at for the Scans window: sharp on a large screen,
+# about 300 KB a page.
+PAGE_PX = 1400
+
+
+def page_image(it, n):
+    """Page `n` (1-based) of a scan as a PNG path, drawn once and cached.
+    The window shows these instead of embedding the PDF, because not every
+    browser (nor iOS) displays a PDF inline, and a picture always shows."""
+    sid = it["id"]
+    out = PAGES / f"{sid}-{int(n)}.png"
+    if out.is_file():
+        return out
+    path = Path(it["path"])
+    if not path.is_file() or not settings.IS_MAC:
+        return None
+    PAGES.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name("." + out.name)
+    try:
+        import Quartz
+        from AppKit import NSBitmapImageRep, NSPNGFileType
+        if path.suffix.lower() in PDF_EXTS:
+            _, doc = _pdf_text(path)
+            if not 1 <= int(n) <= doc.pageCount():
+                return None
+            cg = _page_cgimage(doc.pageAtIndex_(int(n) - 1), PAGE_PX)
+        elif int(n) == 1:
+            cg = _image_cgimage(path)
+        else:
+            return None
+        if cg is None:
+            return None
+        rep = NSBitmapImageRep.alloc().initWithCGImage_(cg)
+        data = rep.representationUsingType_properties_(NSPNGFileType, {})
+        tmp.write_bytes(bytes(data))
+        tmp.replace(out)
+        return out
+    except Exception:  # noqa: BLE001 - a page that cannot draw shows a link instead
+        tmp.unlink(missing_ok=True)
+        return None
 
 
 def make_thumb(sid, path):
