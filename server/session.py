@@ -10,8 +10,10 @@ side of that split:
 - observe: snapshots are assembled from the runner's state.json +
   output.log tail — the same legacy /api/jobs/{id} shape as ever (plus
   mode/awaiting/live/pending). A supervisor thread polls active job dirs,
-  fans SSE pokes to the UI, and finalizes any runner that died without
-  writing a finish (stale heartbeat + dead pid -> "orphaned").
+  fans SSE pokes to the UI when something a viewer can see changed (the
+  runner's 2-second heartbeat write alone is read, never announced), and
+  finalizes any runner that died without writing a finish (stale
+  heartbeat + dead pid -> "orphaned").
 - steer: say / permission / interrupt / close append command lines to the
   job's control.jsonl; the runner tails it. Because the whole exchange is
   file-based, a server booted AFTER the runner started re-attaches and
@@ -562,6 +564,19 @@ def resumable(snap):
 
 # ---------- registry entries ----------
 
+def _announceable(state):
+    """state.json as a viewer can see it: everything except `heartbeat`.
+
+    A runner rewrites state.json every 2 seconds to stamp `heartbeat`, which
+    only the dead-runner check reads. Announcing that write made every open
+    page refetch every 2 seconds for as long as a session sat waiting for a
+    reply, and any screen that redrew on the event lost the owner's text
+    selection (2026-11-09). A string, so a later in-place edit of a cached
+    state can never make two different states compare equal."""
+    return json.dumps({k: v for k, v in (state or {}).items()
+                       if k != "heartbeat"}, sort_keys=True, default=str)
+
+
 class DetachedJob:
     """Supervisor handle for one runner process. The truth lives on disk;
     `last_state` is the supervisor's cached copy (refreshed on its tick and
@@ -577,6 +592,12 @@ class DetachedJob:
         self.last_state = None
         self._out_size = -1
         self._state_mtime = -1.0
+        # What the supervisor last announced: state.json without the
+        # runner's liveness stamp (see _announceable). Its own field for
+        # the same reason as `ended` below: last_state is refreshed by every
+        # reader, so comparing against it would let an open terminal's poll
+        # swallow a change before the supervisor told anyone else.
+        self._announced = None
         # Whether the supervisor has handled this session's end (the worktree
         # tidy and the status poke). Its own flag, because last_state is NOT
         # the supervisor's alone: a UI snapshot, an answer or a permission
@@ -1551,12 +1572,18 @@ class Sessions:
                     joblog.record_finish(h.id, "error", dead["error"])
                     self._handle_end(h, "error")
                 continue
+            wrote = out_sz != h._out_size
             h._state_mtime = st_m
             h._out_size = out_sz
+            # Always read: the dead-runner check above and recent() need the
+            # fresh heartbeat in last_state even when nobody is told.
             st = h.read_state() or {}
             if st.get("status", "running") != "running":
                 self._handle_end(h, st.get("status"))
-            else:
+                continue
+            now = _announceable(st)
+            if wrote or now != h._announced:
+                h._announced = now
                 self._emit("update", h.id)
 
     def _handle_end(self, h, status):

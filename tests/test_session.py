@@ -6,6 +6,8 @@ SDK-absent fallback path, and the live-session cap. The runner itself
 Run: .venv/bin/python -m unittest discover tests
 """
 import json
+import os
+import queue
 import tempfile
 import time
 import unittest
@@ -177,6 +179,104 @@ class PendingAllTests(unittest.TestCase):
         for k in ("job_id", "mode", "provider", "cwd", "card"):
             self.assertIn(k, row)
         self.assertEqual(row["mode"], "interactive")
+
+
+class HeartbeatIsNotNewsTests(unittest.TestCase):
+    """A runner rewrites state.json every 2 seconds to stamp `heartbeat`.
+    The supervisor reads that write but tells no page about it: an "update"
+    means something a viewer can see changed (owner, 2026-11-09: a session
+    waiting for a reply made every open page refetch every 2 seconds, and a
+    screen that redrew on the event dropped a text selection). Driven
+    through the real _poll_once over real files."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.reg = make_registry()
+        self.h = make_detached(self.reg, self.tmp.name, jid="k" * 12)
+        self.q = queue.Queue()
+        self.reg.subscribe(self.q)
+        self.clock = time.time()
+        self.reg._poll_once()      # the first sight of a session is news
+        self.assertEqual(self.kinds(), ["update"])
+
+    def kinds(self):
+        return [self.q.get_nowait()["kind"] for _ in range(self.q.qsize())]
+
+    def rewrite(self, **changes):
+        """What runner.flush_state does: stamp a new heartbeat, write the
+        whole state. The mtime is set by hand so no test depends on how
+        coarse the filesystem's clock is."""
+        path = self.h.dir / "state.json"
+        st = json.loads(path.read_text(encoding="utf-8"))
+        self.clock += 2
+        st.update(changes, heartbeat=changes.get("heartbeat", self.clock))
+        path.write_text(json.dumps(st), encoding="utf-8")
+        os.utime(path, (self.clock, self.clock))
+        return st
+
+    def test_a_heartbeat_alone_is_not_announced(self):
+        for _ in range(3):
+            st = self.rewrite()
+            self.reg._poll_once()
+            self.assertEqual(self.kinds(), [])
+            # ... but it was read: the dead-runner check and the Fleet's
+            # recent() both go by this cached copy.
+            self.assertEqual(self.h.last_state["heartbeat"], st["heartbeat"])
+
+    def test_another_field_changing_is_announced(self):
+        self.rewrite()
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), [])
+        self.rewrite(awaiting="reply")
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), ["update"])
+        self.rewrite()             # parked now: quiet again
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), [])
+
+    def test_a_nested_field_changing_is_announced(self):
+        self.rewrite(execution={"updated_t": 1.0})
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), ["update"])
+        self.rewrite(execution={"updated_t": 2.0})
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), ["update"])
+
+    def test_new_transcript_is_announced(self):
+        with (self.h.dir / "output.log").open("a", encoding="utf-8") as f:
+            f.write("one more line\n")
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), ["update"])
+
+    def test_a_reader_that_saw_the_change_first_does_not_swallow_it(self):
+        """An open terminal polls get() every 800 ms, and get() refreshes
+        the same cached state. The supervisor must compare against what IT
+        last announced, or the terminal's read hides the change from every
+        other page (the 2026-10-08 failure, for updates)."""
+        self.rewrite(pending=[{"req_id": "r1", "tool": "Bash",
+                               "created": 1.0}])
+        self.assertEqual(len(self.reg.get(self.h.id)["pending"]), 1)
+        self.reg._poll_once()
+        self.assertEqual(self.kinds(), ["update"])
+
+    def test_a_runner_that_stops_beating_is_still_found_dead(self):
+        """The quiet read keeps the cached heartbeat current, so the check
+        that runs once the file stops moving judges the runner's LAST beat,
+        not the last one somebody was told about."""
+        gone = time.time() - jobfiles.STALE_AFTER - 60
+        with mock.patch.object(session.joblog, "mark_orphaned",
+                               lambda jid: None):
+            self.rewrite(pid=None)         # no process behind this fixture
+            self.reg._poll_once()
+            self.assertEqual(self.kinds(), ["update"])
+            self.rewrite(heartbeat=gone)
+            self.reg._poll_once()          # the last beat: read, not news
+            self.assertEqual(self.kinds(), [])
+            self.assertEqual(self.h.last_state["heartbeat"], gone)
+            self.reg._poll_once()          # no movement since: dead
+        self.assertEqual(self.kinds(), ["status"])
+        self.assertEqual(self.h.last_state["status"], "orphaned")
 
 
 class ControlTests(unittest.TestCase):
