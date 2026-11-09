@@ -3296,7 +3296,6 @@ function findChatLetGo() {
   findChatHeldTimer = setTimeout(() => {
     findChatHeldTimer = null;
     if (!findChatHeld || findChatPressed) return;
-    findChatHeld = false;
     renderFindChat();   // holds again, turn by turn, where a selection still stands
   }, 200);
 }
@@ -3342,6 +3341,7 @@ function renderFindChat() {
   // also shows the session's clock, queue place, checklist and activity
   const around = JSON.stringify({...findChatSession, turns: null});
   const had = log._findChatTurns || new Map(), kept = new Map(), want = [];
+  findChatHeld = false;   // decided again below, by this pass alone
   if (findChatSession?.history?.before) {
     if (!log._findChatEarlier) {
       log._findChatEarlier = el("button", "fchip sm", "Load earlier messages");
