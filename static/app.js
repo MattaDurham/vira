@@ -26581,11 +26581,30 @@ async function historyModuleFor(winId) {
 }
 function toggleModuleHistory(host, before, winId, title, btn) {
   if (winId === "fleet") { openHistoryView(); return; }
-  const open = [...host.children].find((n) => n.classList.contains("hx-panel"));
-  if (open) { open.remove(); btn.classList.remove("on"); return; }
+  // In a desktop window History docks to the window's bottom with its own
+  // scroll, and an item's detail opens in a panel down the window's whole
+  // right side. On a phone screen it stays inline above the screen.
+  const win = host.classList.contains("fwin-body") ? host.closest(".fwin") : null;
+  const scope = win || host;
+  const open = [...scope.children].find((n) => n.classList.contains("hx-panel"));
+  if (open) { closeModuleHistory(scope); btn.classList.remove("on"); return; }
   if (!window.ViraHistory) { toast("History did not load"); return; }
   const panel = el("div", "hx-panel");
-  host.insertBefore(panel, before);
+  let side = null;
+  if (win) {
+    panel.classList.add("hx-dock");
+    const saved = Number(localStorage.getItem("vira-history-dock-height"));
+    if (saved > 0) panel.style.height = `${saved}px`;
+    const grip = el("div", "hx-dock-grip");
+    grip.title = "Drag to resize History";
+    grip.addEventListener("pointerdown", (e) => startHistoryDockDrag(e, win, panel));
+    side = el("aside", "hx-side");
+    side.hidden = true;
+    win.classList.add("hx-docked");
+    win.append(grip, panel, side);
+  } else {
+    host.insertBefore(panel, before);
+  }
   btn.classList.add("on");
   panel.appendChild(el("p", "hx-dim", "Reading..."));
   historyModuleFor(winId).then((mod) => {
@@ -26594,8 +26613,42 @@ function toggleModuleHistory(host, before, winId, title, btn) {
       panel.replaceChildren(el("p", "hx-dim", `${title} is not one module's window, so it has no history of its own.`));
       return;
     }
-    window.ViraHistory.mountFor(panel, { module: mod.module, title: `${mod.name}: history` });
+    const opts = { module: mod.module, title: `${mod.name}: history` };
+    if (side) {
+      opts.detailHost = side;
+      opts.onDetail = (on) => {
+        const bar = win.querySelector(":scope > .fwin-bar");
+        win.style.setProperty("--hx-bar-h", `${bar ? bar.offsetHeight : 0}px`);
+        win.classList.toggle("hx-side-open", on);
+      };
+    }
+    panel._hx = window.ViraHistory.mountFor(panel, opts);
   });
+}
+function closeModuleHistory(scope) {
+  [...scope.children].forEach((n) => {
+    if (n.classList.contains("hx-panel") && n._hx) n._hx.destroy();
+    if (n.matches(".hx-panel, .hx-side, .hx-dock-grip")) n.remove();
+  });
+  scope.classList.remove("hx-docked", "hx-side-open");
+}
+// Drag the line above the docked History to share the window's height
+// between the module and its History; the height is remembered.
+function startHistoryDockDrag(e, win, panel) {
+  e.preventDefault();
+  e.stopPropagation();
+  const y0 = e.clientY, h0 = panel.offsetHeight;
+  const max = () => Math.max(120, win.clientHeight - 140);
+  const move = (ev) => {
+    panel.style.height = `${Math.min(max(), Math.max(100, h0 - (ev.clientY - y0)))}px`;
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    try { localStorage.setItem("vira-history-dock-height", String(panel.offsetHeight)); } catch (err) { /* private mode */ }
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
 }
 function addHistoryButton(bar, body, spec) {
   const b = el("button", "fwin-hist", "History");

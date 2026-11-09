@@ -3,15 +3,15 @@
    tokens, so light and dark skins both read; the few hues of their own
    are mid tones that hold on either ground. */
 
-.hx-root, .hx-for {
+.hx-root, .hx-for, .hx-side {
   --hx-vira: #c9b86b; --hx-claude: var(--claude, #d97757); --hx-codex: #6fbfb6; --hx-other: #8f8d85;
   --hx-live: #7fa6e8; --hx-wait: #e0a24e; --hx-open: #8fbf8a; --hx-merged: #a991c9;
   --hx-ok: #7d9a74; --hx-fail: var(--red, #ea6843); --hx-dropped: var(--text-faint);
   --hx-r: 4px;
   font-size: 13px; color: var(--text); min-width: 0;
 }
-.hx-root [hidden], .hx-for [hidden] { display: none !important; }
-.hx-root button, .hx-for button { font: inherit; color: inherit; }
+.hx-root [hidden], .hx-for [hidden], .hx-side [hidden] { display: none !important; }
+.hx-root button, .hx-for button, .hx-side button { font: inherit; color: inherit; }
 .hx-root { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .hx-dim { color: var(--text-faint); }
 .hx-err { color: var(--hx-fail); }
@@ -291,6 +291,25 @@ button.hx-chip:hover { border-color: var(--text-faint); color: var(--text); }
 .hx-fordetail { border: 1px solid var(--line); border-radius: var(--hx-r); background: var(--bg-raised); padding: 10px 12px; min-width: 0; max-height: 480px; overflow: auto; }
 .hx-panel { padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--bg-window, var(--bg)); max-height: 60vh; overflow: auto; }
 .idea .hx-for { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+
+/* ---- History docked in a desktop window: the module above, History at
+   the bottom with its own scroll, and the clicked item's detail down the
+   window's whole right side (app.js toggleModuleHistory). */
+.fwin.hx-docked > .hx-dock { flex: none; height: 42%; min-height: 100px; max-height: none; overflow: auto;
+  border-bottom: 0; padding: 8px 14px 12px; }
+.fwin.hx-docked > .hx-dock .hx-forlist { max-height: none; overflow: visible; }
+.hx-dock-grip { flex: none; height: 7px; cursor: ns-resize; border-top: 1px solid var(--line);
+  background: var(--bg-titlebar, var(--bg-raised)); position: relative; }
+.hx-dock-grip::after { content: ""; position: absolute; left: 50%; top: 2px; width: 36px; height: 3px; margin-left: -18px;
+  border-radius: 2px; background: var(--line); }
+.hx-dock-grip:hover::after { background: var(--accent); }
+.fwin.hx-side-open { --hx-side-w: min(460px, 42%); }
+.fwin.hx-side-open > .fwin-body, .fwin.hx-side-open > .hx-dock, .fwin.hx-side-open > .hx-dock-grip {
+  margin-right: var(--hx-side-w); }
+.hx-side { position: absolute; right: 0; top: var(--hx-bar-h, 38px); bottom: 0; width: var(--hx-side-w, 420px);
+  z-index: 5; overflow: auto; overscroll-behavior: contain; padding: 12px 14px 16px;
+  border-left: 1px solid var(--line); background: var(--bg-raised); }
+.hx-side[hidden] { display: none !important; }
 
 /* ---- phone width: list with a day strip */
 @media (max-width: 720px) {
