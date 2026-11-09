@@ -83,3 +83,5 @@
   .sc-body { grid-template-columns: minmax(0, 1fr); height: auto; }
   .sc-list { max-height: 300px; }
 }
+.sc-prose p { margin: 0 0 8px; line-height: 1.5; }
+.sc-prose strong { color: var(--text-head); font-weight: 600; }

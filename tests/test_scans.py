@@ -293,6 +293,60 @@ class ScansCase(unittest.TestCase):
         self.assertEqual(scans.safe_filename("Bill.", ".pdf"), "Bill.pdf")
 
 
+class OpenScanner(unittest.TestCase):
+    """Open scanner: opens the app, or builds and installs it when macOS
+    does not know it. No real build, open or install happens here."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        src = self.tmp / "src"
+        (src / "scripts").mkdir(parents=True)
+        (src / "scripts" / "build.sh").write_text("#!/bin/zsh\n", encoding="utf-8")
+        self.calls = []
+        self.installed = False
+
+        def run(argv, **kw):
+            self.calls.append(argv)
+            if argv[:2] == ["open", "-b"]:
+                return mock.Mock(returncode=0 if self.installed else 1)
+            if argv[0] == "/bin/zsh":
+                (scans.SCANNER_BUILD / "build" / "Folio.app").mkdir(parents=True)
+            if argv[0] == "ditto":
+                self.installed = True
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        for p in (mock.patch.object(scans, "SCANNER_SRC", src),
+                  mock.patch.object(scans, "SCANNER_BUILD", self.tmp / "build-here"),
+                  mock.patch.object(scans, "APPS", self.tmp / "Applications"),
+                  mock.patch.object(settings, "IS_MAC", True),
+                  mock.patch.object(scans.shutil, "which", return_value="/usr/bin/swift"),
+                  mock.patch.object(scans.subprocess, "run", side_effect=run),
+                  mock.patch.object(scans, "_spawn", side_effect=lambda fn: fn())):
+            p.start()
+            self.addCleanup(p.stop)
+        scans._install.update(state="", error="", at="")
+
+    def test_an_installed_app_just_opens(self):
+        self.installed = True
+        self.assertEqual(scans.open_scanner(), {"opened": True, "installing": False})
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_missing_app_is_built_installed_and_opened(self):
+        self.assertTrue(scans.open_scanner()["installing"])
+        self.assertEqual(scans._install["state"], "installed")
+        kinds = [c[0] for c in self.calls]
+        self.assertEqual(kinds[:3], ["open", "/bin/zsh", "ditto"])
+        self.assertEqual(self.calls[2][-1], str(self.tmp / "Applications" / "Folio.app"))
+        self.assertEqual(self.calls[-1][:2], ["open", "-b"])
+
+    def test_no_swift_says_why(self):
+        with mock.patch.object(scans.shutil, "which", return_value=None):
+            with self.assertRaises(ValueError) as e:
+                scans.open_scanner()
+        self.assertIn("Swift", str(e.exception))
+
+
 class DecisionParse(unittest.TestCase):
     def test_last_valid_block_wins_and_junk_is_none(self):
         self.assertIsNone(scans.parse_decision("no json here"))

@@ -1037,6 +1037,74 @@ def start():
     _thread.start()
 
 
+# ------------------------------------------------------------------ scanner app
+
+SCANNER_SRC = ROOT / "macos" / "scanner"
+SCANNER_BUILD = ROOT / "data" / "scans" / "scanner-build"
+APPS = Path.home() / "Applications"
+_install = {"state": "", "error": "", "at": ""}
+_install_lock = threading.Lock()
+
+
+def _open_scanner():
+    bid = str(settings.get("scans_scanner_app") or "").strip()
+    if not bid:
+        raise ValueError("no scanner app is set (Config > Intake)")
+    r = subprocess.run(["open", "-b", bid], capture_output=True, text=True, timeout=20)
+    return r.returncode == 0
+
+
+def open_scanner():
+    """Start the scanner app. When macOS does not know it (never built,
+    or built in a branch folder a merge removed), build it from
+    macos/scanner, install it in ~/Applications, and open it - about a
+    minute, in the background. Returns {"opened": bool, "installing": bool}."""
+    if not settings.IS_MAC:
+        raise ValueError("the scanner app runs on macOS")
+    if _open_scanner():
+        return {"opened": True, "installing": False}
+    if not (SCANNER_SRC / "scripts" / "build.sh").is_file():
+        raise ValueError("the scanner app is not installed, and its source is not in this checkout")
+    if not shutil.which("swift"):
+        raise ValueError("the scanner app is not installed, and building it needs Apple's "
+                         "command-line tools (Swift), which this Mac does not have")
+    if not _install_lock.acquire(blocking=False):
+        return {"opened": False, "installing": True}
+    _install.update(state="installing", error="", at=_now())
+
+    def run():
+        try:
+            if SCANNER_BUILD.exists():
+                shutil.rmtree(SCANNER_BUILD / "build", ignore_errors=True)
+            shutil.copytree(SCANNER_SRC, SCANNER_BUILD, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns(".build", "build"))
+            r = subprocess.run(["/bin/zsh", str(SCANNER_BUILD / "scripts" / "build.sh")],
+                               capture_output=True, text=True, timeout=1200)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or r.stdout).strip()[-400:] or "the build failed")
+            APPS.mkdir(parents=True, exist_ok=True)
+            app = APPS / "Folio.app"
+            subprocess.run(["ditto", str(SCANNER_BUILD / "build" / "Folio.app"), str(app)],
+                           check=True, capture_output=True, timeout=120)
+            subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+                            "LaunchServices.framework/Support/lsregister", "-f", str(app)],
+                           capture_output=True, timeout=60)
+            if not _open_scanner():
+                subprocess.run(["open", str(app)], capture_output=True, timeout=20)
+            _install.update(state="installed", error="", at=_now())
+        except Exception as e:  # noqa: BLE001 - shown in the Scans window
+            _install.update(state="failed", error=f"{type(e).__name__}: {str(e)[:400]}", at=_now())
+        finally:
+            _install_lock.release()
+    _spawn(run)
+    return {"opened": False, "installing": True}
+
+
+def _spawn(fn):
+    """The install runs off the request thread (a build takes a minute)."""
+    threading.Thread(target=fn, name="vira-scanner-install", daemon=True).start()
+
+
 # ------------------------------------------------------------------ views
 
 def public(it, detail=False):
@@ -1069,6 +1137,7 @@ def status():
         "counts": counts,
         "items": [public(i) for i in items[:500]],
         "last_error": _last_error,
+        "scanner_install": dict(_install),
     }
 
 
