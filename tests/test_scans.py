@@ -306,7 +306,19 @@ if __name__ == "__main__":
     unittest.main()
 
 
-@unittest.skipUnless(settings.IS_MAC, "Quartz and Vision are macOS frameworks")
+def _has_quartz():
+    try:
+        import Quartz  # noqa: F401
+        import Vision  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# CI's macOS runner has no pyobjc; the owner's venv has it, so the real
+# extraction path is tested wherever it can actually run.
+@unittest.skipUnless(settings.IS_MAC and _has_quartz(),
+                     "needs macOS with pyobjc Quartz and Vision")
 class MacText(unittest.TestCase):
     """The real extraction path, on a PDF whose page is only a picture (a
     scan from another app): no text layer, so on-device OCR must read it,
