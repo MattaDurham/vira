@@ -23,7 +23,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 - [Search](search/README.md) - The sorter: which of the four corpora answers this query. (2 files)
 - [Notes](notes/README.md) - The vault index and grounded ask (a thin adapter over qocha), and every confined vault write. (13 files)
 - [Media](media/README.md) - The local index over everything ever shared: photos, documents, voice memos, links, message bodies. (14 files)
-- [Ask](ask/README.md) - Grounded answering: hybrid retrieval, policy-checked local evidence, and the durable Find chat. (16 files)
+- [Ask](ask/README.md) - Grounded answering: hybrid retrieval, policy-checked local evidence, and the durable Find chat. (18 files)
 - [Define](define/README.md) - Right-click any selected text: a definition card, and the Mac service that reaches it. (8 files)
 
 ### Neighbours
@@ -36,6 +36,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Windows: `find`, `find-cloud`, `find-related`, `find-define` (ids from `WINDOWS` in `static/app.js`).
 
-53 tracked files across 5 submodules. `python -m server.moduletree brief find` prints every submodule's page in one go.
+55 tracked files across 5 submodules. `python -m server.moduletree brief find` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

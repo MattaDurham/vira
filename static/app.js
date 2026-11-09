@@ -3459,16 +3459,38 @@ function findCloudOverlap(a, b, pad) {
     || a.y + a.h + pad < b.y || b.y + b.h + pad < a.y);
 }
 
+// A small seeded generator (mulberry32 over an FNV-1a hash of the seed), so
+// the same concepts in the same box always land in the same places.
+function findCloudRandom(seed) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  return () => {
+    h = (h + 0x6D2B79F5) | 0;
+    let t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// The chat poll re-renders every 1.5 s while a turn streams or its panels
+// load. The layout is seeded from what it draws and skipped when that has
+// not changed, so a poll never reshuffles the cloud under the owner.
 function renderFindCloudInto(target) {
   if (!target) return;
   const concepts = [...(findChatSession?.concepts || [])]
     .sort((a, b) => b.weight - a.weight);
   if (!concepts.length) {
+    target._findCloudKey = null;
     target.innerHTML = '<div class="find-companion-empty">Concepts appear here as you chat.</div>';
     return;
   }
   const W = target.clientWidth, H = target.clientHeight;
   if (W < 40 || H < 40) return;
+  const key = JSON.stringify([W, H, concepts.map((c) =>
+    [c.term, c.weight, c.turns, c.primary_path])]);
+  if (key === target._findCloudKey && target.firstChild) return;
+  target._findCloudKey = key;
+  const random = findCloudRandom(key);
   target.innerHTML = "";
   const cx = W / 2, cy = H / 2;
   const placed = [];
@@ -3487,9 +3509,9 @@ function renderFindCloudInto(target) {
       const th = Math.ceil(size * 1.16);
       const bw = rotate ? th : tw, bh = rotate ? tw : th;
       for (let attempt = 0; attempt < 600; attempt++) {
-        const radius = Math.pow(Math.random(), headline ? 3.5 : (i < 6 ? 2.2 : 1.4))
+        const radius = Math.pow(random(), headline ? 3.5 : (i < 6 ? 2.2 : 1.4))
           * Math.hypot(W, H) * .55;
-        const angle = Math.random() * Math.PI * 2;
+        const angle = random() * Math.PI * 2;
         const px = placed.length ? cx + radius * Math.cos(angle) : cx;
         const py = placed.length ? cy + radius * Math.sin(angle) : cy;
         const box = {x: px - bw / 2, y: py - bh / 2, w: bw, h: bh};

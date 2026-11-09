@@ -66,7 +66,7 @@ branch; the suite and `check` say when it is whole.
 ### Know
 
 - [Find](find/README.md) - One search box over four corpora, with grounded answers and definitions.  
-  Search, Notes, Media, Ask, Define (53 files)
+  Search, Notes, Media, Ask, Define (55 files)
 - [Library](library/README.md) - Browse a vault by subject and read it whole; the documents Vira serves itself.  
   Browse, Documents (13 files)
 - [Reader](reader/README.md) - Everything worth reading, wherever it lives, and the rooms that ingest it whole.  
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-872 of 872 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+874 of 874 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->
