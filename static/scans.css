@@ -1,7 +1,8 @@
 /* Scans: paper from the scanner, read, named and filed (static/scans.js). */
 
 .sc-root { --sc-ok: #8fbf8a; --sc-busy: #7fa6e8; --sc-need: #e0a24e; --sc-bad: var(--red);
-  display: flex; flex-direction: column; gap: 10px; min-width: 0; font-size: 13px; color: var(--text); }
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; font-size: 13px; color: var(--text);
+  container-type: inline-size; container-name: scans; }
 .sc-root button { font: inherit; }
 .sc-dim { color: var(--text-faint); }
 .sc-warn { color: var(--sc-need); }
@@ -49,7 +50,7 @@
 .sc-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0; }
 .sc-bar .primary, .sc-info .primary { border-color: var(--accent-bright); color: var(--text-head); }
 .sc-bar .quiet { opacity: .75; }
-.sc-dgrid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 14px; min-width: 0; }
+.sc-dgrid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 14px; min-width: 0; }
 .sc-pages { min-width: 0; }
 .sc-pdf { width: 100%; height: min(72vh, 820px); border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 .sc-pages { display: flex; flex-direction: column; gap: 10px; }
@@ -72,9 +73,13 @@
 .sc-text pre { white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
   max-height: 360px; overflow-y: auto; background: var(--bg-raised); padding: 8px; border-radius: 5px; }
 
-@media (max-width: 900px) {
+/* The window, not the screen, decides the layout: a Vira window can be
+   narrow on a wide display. */
+@container scans (max-width: 1050px) {
+  .sc-dgrid { grid-template-columns: minmax(0, 1fr); }
+  .sc-info { order: -1; }
+}
+@container scans (max-width: 720px) {
   .sc-body { grid-template-columns: minmax(0, 1fr); height: auto; }
   .sc-list { max-height: 300px; }
-  .sc-dgrid { grid-template-columns: minmax(0, 1fr); }
-  .sc-pdf { height: 60vh; }
 }

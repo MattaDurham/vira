@@ -30,7 +30,10 @@
   };
   const day = (iso) => {
     if (!iso) return "";
-    const d = new Date(iso);
+    // A bare YYYY-MM-DD is a calendar date, not midnight UTC: read it as
+    // local, or west of Greenwich it shows the day before.
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(iso);
     return isNaN(d) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
   const time = (iso) => {
