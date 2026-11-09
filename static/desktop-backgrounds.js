@@ -688,11 +688,16 @@
     // Studio door opened it) keeps the stylesheet's top-right spot.
     function place() {
       const r = trigger.getBoundingClientRect();
-      if (!r.width && !r.height) { panel.style.left = panel.style.top = panel.style.right = ""; return; }
-      const w = panel.offsetWidth, vw = window.innerWidth;
+      if (!r.width && !r.height) {
+        panel.style.left = panel.style.top = panel.style.right = panel.style.maxHeight = "";
+        return;
+      }
+      const w = panel.offsetWidth, vw = window.innerWidth, vh = window.innerHeight;
+      const top = Math.max(18, Math.min(r.bottom + 8, vh - 320));
       panel.style.right = "auto";
       panel.style.left = Math.max(18, Math.min(r.right - w, vw - w - 18)) + "px";
-      panel.style.top = Math.max(18, Math.min(r.bottom + 8, window.innerHeight - 220)) + "px";
+      panel.style.top = top + "px";
+      panel.style.maxHeight = (vh - top - 18) + "px";   // scrolls inside, never off-screen
     }
     function show() {
       panel.hidden = false; trigger.setAttribute("aria-expanded", "true"); place();
