@@ -12,11 +12,12 @@ Vira's own `proposed` ideas.
 So this is an AGGREGATOR, not a lessons panel. Each contributing store is a
 SOURCE registered here with one reader and (optionally) one actor; the queue
 knows nothing about any store's file format beyond what its reader returns.
-Adding a source is adding a `register(Source(...))` call. Nine today:
+Adding a source is adding a `register(Source(...))` call. Ten today:
 lesson proposals, the self-record inbox, open adjudication flags, proposed
 ideas, un-staged journal instructions, contact-worthy unknown senders, a
 pending Morning Picker batch, childcare pickups nobody is covering, and
-family moments whose photos are waiting to be relayed.
+family moments whose photos are waiting to be relayed, and scanned
+documents waiting to be filed or carrying a to-do.
 
 FOUR RULES THIS MODULE IS BENT AROUND:
 
@@ -964,6 +965,29 @@ register(Source(
     "moments", "Family moments",
     "a family event's photos are ready to share - open Moments to send them",
     _moments_read, _moments_act, actions=("dismiss",)))
+
+
+# --------------------------------------------------------- source: scans
+
+def _scans_read():
+    """Scans waiting to be filed or that failed, and the to-dos of filed
+    scans (server/scans.py). A scan row is a pointer into the Scans window;
+    a to-do row can be marked done here."""
+    from . import scans
+    return [item("scans", r["raw_id"], r["title"], why=r["why"],
+                 stamp=r["stamp"], actions=r["actions"], open=r["open"])
+            for r in scans.review_rows()]
+
+
+def _scans_act(raw_id, action):
+    from . import scans
+    return scans.review_act(raw_id, action)
+
+
+register(Source(
+    "scans", "Scans",
+    "a scanned document is waiting to be filed, or asks you to do something",
+    _scans_read, _scans_act, actions=("done",)))
 
 
 # --------------------------------------------- source: Morning Picker

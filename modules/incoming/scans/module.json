@@ -1,0 +1,30 @@
+{
+  "id": "incoming/scans",
+  "name": "Scans",
+  "summary": "Paper from the scanner: read by an AI session, renamed, copied into the vault folders it belongs in, summarised, and its to-dos listed.",
+  "owns": [
+    "server/scans.py",
+    "server/scanroutes.py",
+    "static/scans.js",
+    "static/scans.css",
+    "tests/test_scans.py",
+    "macos/scanner/**"
+  ],
+  "routes": [
+    "/api/scans"
+  ],
+  "stores": [
+    "data/scans.json",
+    "data/scans/thumbs/"
+  ],
+  "reads": [
+    "core/settings",
+    "models/sessions",
+    "work/sessions"
+  ],
+  "feeds": [
+    "attention/review",
+    "find/notes"
+  ],
+  "registry": []
+}

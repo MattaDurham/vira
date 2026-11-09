@@ -18760,6 +18760,7 @@ function viewLoad(id) {
   if (id === "maps") loadMaps().catch((e) => mapsNote("Could not load maps: " + errText(e)));
   if (id === "library") window.loadLibrary?.().catch(() => {});
   if (id === "fleet") window.loadFleet?.().catch(() => {});
+  if (id === "scans") window.loadScans?.().catch(() => {});
   if (id === "imageatlas") loadImageAtlas().catch(() => {});
   if (id === "design") {
     loadDesignStudio().catch(() => {});    // the studio frame, or why not
@@ -24481,6 +24482,10 @@ const WINDOWS = [
     icon: "M4 6h16v12H4zM4 7l8 6 8-6M15 17l1.5 1.5L20 15" },
   { id: "coverage", title: "Childcare", w: 640,
     icon: "M8 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM16.5 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM3.5 20c.4-4 2.2-6.5 4.5-6.5s4.1 2.5 4.5 6.5M13.5 20c.3-3 1.4-5 3-5s2.7 2 3 5M8 10v3.5" },
+  // Scans (2026-11-09): paper from the scanner, read by an AI session,
+  // named, filed into the vault and summarised (server/scans.py).
+  { id: "scans", title: "Scans", w: 1120,
+    icon: "M6 3h9l3 3v15H6zM15 3v3h3M3 12h18M9 16h6" },
   { id: "moments", title: "Moments", w: 680,
     icon: "M4 7h3l1.5-2h7L17 7h3v12H4zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM17.5 10h.5" },
   { id: "journal", title: "Journal", w: 520,
@@ -28818,6 +28823,11 @@ const HASH_ROUTES = {
   "coverage": "coverage",
   "childcare": "coverage",
   "moments": "moments",
+  // #scans, #scans/<id> - the Scans window, opened on that scan
+  "scans": (rest) => {
+    if (window.openScan) window.openScan(rest[0] ? decodeURIComponent(rest[0]) : "");
+    else openApp("scans");
+  },
   "attention": (rest) => { setAttentionTab(rest[0] || "now", { defer: true }); openApp("attention"); },
   // Retired history screens open Fleet > History (2026-11-04):
   // #showroom, #jobs, #results, #history, #history/<YYYY-MM-DD>.

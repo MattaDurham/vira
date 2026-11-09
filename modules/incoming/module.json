@@ -6,7 +6,8 @@
   "summary": "Every channel a message can arrive on, merged into one live feed.",
   "windows": [
     "feed",
-    "admin"
+    "admin",
+    "scans"
   ],
   "submodules": [
     "feed",
@@ -14,6 +15,7 @@
     "mail",
     "whatsapp",
     "companion",
-    "triage"
+    "triage",
+    "scans"
   ]
 }

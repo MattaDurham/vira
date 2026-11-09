@@ -30,7 +30,7 @@ tree with counts.
 
 `python -m server.moduletree check` fails when any tracked file under
 `server/`, `static/`, `tests/`, `scripts/`, `android/`, `bridge/`,
-`fixtures/`, `walkthroughs/` or `walkthrough_anon/` is owned by no submodule
+`fixtures/`, `walkthroughs/`, `walkthrough_anon/` or `macos/` is owned by no submodule
 or by two, when a link points at a submodule that does not exist, or when a
 README's generated block no longer matches the manifest and the code.
 `tests/test_moduletree.py` runs it on every PR. A new file is placed by
@@ -59,7 +59,7 @@ branch; the suite and `check` say when it is whole.
 ### Communicate
 
 - [Incoming](incoming/README.md) - Every channel a message can arrive on, merged into one live feed.  
-  Feed, iMessage, Mail, WhatsApp, Companion, Triage (87 files)
+  Feed, iMessage, Mail, WhatsApp, Companion, Triage, Scans (118 files)
 - [People](people/README.md) - The CRM: who the owner knows, what the evidence says, and who to talk to next.  
   CRM, Sync, Networking (28 files)
 
@@ -109,6 +109,6 @@ branch; the suite and `check` say when it is whole.
 - [Money](money/README.md) - What the owner actually pays for, at what cadence, and the bank connection behind it.  
   Subscriptions, Banking (8 files)
 
-841 of 841 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
+872 of 872 tracked files in scope are placed; 0 unplaced. `python -m server.moduletree check` lists any that are.
 
 <!-- moduletree:end -->
