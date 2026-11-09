@@ -22,7 +22,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Find / Search](../search/README.md)
 
-### Files (16)
+### Files (18)
 
 **Server**
 
@@ -38,6 +38,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 | File | What it is |
 |---|---|
+| `tests/concept_cloud_ui.js` | The Concept Cloud keeps its layout across chat polls: the same concepts in the same box are not redrawn, and a fresh draw puts them in the same places. |
 | `tests/fixtures/answer_eval/README.md` | This fixture is entirely invented. |
 | `tests/fixtures/answer_eval/cases.json` |  |
 | `tests/test_answer_eval.py` | Synthetic evaluation contracts; no model, personal stores, or live server. |
@@ -45,6 +46,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `tests/test_answer_sources.py` | Versioned source reads over synthetic files and SQLite stores only. |
 | `tests/test_ask_landing.py` | The answer path lands the thing it found (2026-09-01, branch claude/omni-ask-landing). |
 | `tests/test_chat_contract.py` | User-visible chat guarantees; fixtures never launch a provider or read owner data. |
+| `tests/test_concept_cloud_ui.py` | The Concept Cloud keeps its layout across chat polls (tests/concept_cloud_ui.js). |
 | `tests/test_retrieval.py` | Shared retrieval-core tests: the primitives in server/retrieval.py directly (FTS query building, RRF math, cosine top-k, the float16 codec, matrix-cache stal... |
 | `tests/test_retrieval_contract.py` | Cross-layer regressions: scope, wall clocks, exact filters and paging. |
 | `tests/test_virachat.py` | Chat with Vira - a session rendered as a conversation (2026-09-01). |

@@ -17,7 +17,9 @@
     "tests/test_answer_runtime.py",
     "tests/test_answer_sources.py",
     "tests/test_retrieval.py",
-    "tests/test_virachat.py"
+    "tests/test_virachat.py",
+    "tests/concept_cloud_ui.js",
+    "tests/test_concept_cloud_ui.py"
   ],
   "routes": [
     "/api/answer",
