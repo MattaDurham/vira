@@ -33,7 +33,7 @@ ANSWER = """I looked at both pages.
                    {"folder": "raw/House/Utilities", "reason": "new subfolder"},
                    {"folder": "../outside", "reason": "bad"}],
   "actions": [{"text": "Pay the water bill", "due": "2026-10-15",
-               "quote": "DUE DATE: 10/15/2026"},
+               "quote": "\u201cDUE DATE: 10/15/2026.\u201d"},
               {"text": "Call the village", "due": "2026-10-01",
                "quote": "words that are not on the page"}],
   "confidence": "high",

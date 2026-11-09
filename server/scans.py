@@ -571,7 +571,9 @@ def _slug(v):
 
 
 def _norm(t):
-    return re.sub(r"\s+", " ", str(t or "")).strip().casefold()
+    # Quote marks the reader wraps a quote in are not on the page.
+    t = re.sub(r"\s+", " ", str(t or "")).strip().strip("\"'\u201c\u201d\u2018\u2019 .")
+    return t.casefold()
 
 
 def ground(decision, text):
