@@ -11042,12 +11042,7 @@ function renderAttention() {
   const body = $("#attention-body"), decisions = $("#attention-live-decisions");
   if (!body || !attnData) return;
   const rows = attnData.rows || [], cards = attnData.cards || [];
-  const need = attnData.counts?.needs_you || 0, working = attnData.counts?.working || 0;
-  $("#attn-count").textContent = [need ? need + " waiting on you" : "No urgent decisions",
-    working ? working + " in progress" : ""].filter(Boolean).join(" · ");
-  $("#attn-hero-title").textContent = need ? "A little focus goes a long way." : "Room to move.";
-  $("#attn-hero-sub").textContent = need ? "Your day below. Decisions are gathered in Review."
-    : "Your commitments, your calendar, and what is moving forward.";
+  const need = attnData.counts?.needs_you || 0;
   // Keep each answer form alive across unrelated incoming activity.
   const active = new Set();
   cards.forEach((c) => {
