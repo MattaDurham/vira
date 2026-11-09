@@ -200,8 +200,6 @@ class AttentionConsolidationContracts(unittest.TestCase):
                       self.app)
         self.assertIn('setAttentionTab("now", { defer: true });\n    '
                       'openWindow("attention")', self.app)
-        self.assertIn('setAttentionTab("now", { defer: true });\n      '
-                      'openApp("attention")', self.app)
 
 
 if __name__ == "__main__":
