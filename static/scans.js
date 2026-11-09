@@ -73,7 +73,7 @@
     const mode = el("div", "sc-mode");
     mode.textContent = d.auto ? "Files scans on its own when the reader is sure"
       : "Waits for you before filing";
-    if (!d.automatic_here) mode.textContent += " (on the main Vira; here only when you press a button)";
+    if (!d.automatic_here) mode.textContent = "This Vira is a test copy: it lists scans, and reads or files one only when you press its button. The main Vira does it on its own.";
     const tools = el("div", "sc-tools");
     tools.append(
       btn("Open scanner", "", (b) => act(b, () => post("/api/scans/open-scanner", {}))),

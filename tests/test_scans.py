@@ -245,6 +245,7 @@ class ScansCase(unittest.TestCase):
         self.drop()
         with mock.patch("server.instance.owns_automation", return_value=False):
             scans.tick()
+            scans.tick(automatic=False)      # "Look now" on a test instance
         self.assertFalse(self.launched.called)
         self.assertEqual(next(iter(scans._read()["items"].values()))["state"], "new")
 

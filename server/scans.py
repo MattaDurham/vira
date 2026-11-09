@@ -917,7 +917,10 @@ def _auto_ok(it):
 
 
 def tick(automatic=True):
-    """One look: arrivals, finished reads, new reads, automatic filing."""
+    """One look: arrivals, finished reads, and - on the instance holding
+    the automation lease - new reads and automatic filing. `automatic`
+    says whether the timer or the owner asked; it does not widen what a
+    non-owning instance may do."""
     global _last_error
     if not enabled():
         return
@@ -926,7 +929,11 @@ def tick(automatic=True):
     try:
         discover()
         poll_reads()
-        if automatic and not instance.owns_automation():
+        # Reading and filing on their own belong to the lease holder alone,
+        # whether this look was the timer or a "Look now": a test instance
+        # shares the owner's real vault, so there a scan is read or filed
+        # only by its own button.
+        if not instance.owns_automation():
             return
         items = sorted(_read()["items"].values(), key=lambda i: i.get("arrived") or "")
         reading = sum(1 for i in items if i.get("state") == "reading")
