@@ -139,6 +139,60 @@ class SendingATurn(ChatBase):
             virachat.send("   ")
 
 
+class OpenedFromTheBrief(ChatBase):
+    """The brief's chat bar opens a chat with origin "brief": its session is
+    told where the owner is writing from and handed today's summary."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("server.brief.cached_narrative",
+                       return_value={"text": "A synthetic day: one visit at 9:30."})
+        p.start(); self.addCleanup(p.stop)
+
+    def test_the_first_turn_carries_the_brief_and_its_summary(self):
+        s = virachat.send("Move the 9:30 to 10", origin="brief")
+        prompt = self.launched[0][0][0]
+        self.assertIn("chat bar under the Daily Brief", prompt)
+        self.assertIn("A synthetic day: one visit at 9:30.", prompt)
+        self.assertIn("mcp__vira__daily_brief", prompt)
+        self.assertIn("mcp__vira__ask_owner", prompt)
+        # the owner's words stay the last thing the session reads
+        self.assertLess(prompt.index("Daily Brief"), prompt.index("Move the 9:30 to 10"))
+        self.assertTrue(prompt.rstrip().endswith("Move the 9:30 to 10"))
+        self.assertEqual(virachat.summary_rows()[0]["origin"], "brief")
+        self.assertEqual(s["origin"], "brief")
+
+    def test_a_chat_opened_elsewhere_says_nothing_about_the_brief(self):
+        virachat.send("hello")
+        self.assertNotIn("Daily Brief", self.launched[0][0][0])
+        self.assertEqual(virachat.summary_rows()[0]["origin"], "")
+
+    def test_a_missing_summary_still_names_the_brief(self):
+        with mock.patch("server.brief.cached_narrative", return_value=None):
+            virachat.send("What is first?", origin="brief")
+        prompt = self.launched[0][0][0]
+        self.assertIn("chat bar under the Daily Brief", prompt)
+        self.assertNotIn("Today's brief summary reads", prompt)
+
+    def test_a_later_turn_keeps_the_chat_and_its_origin(self):
+        virachat.send("first", origin="brief")
+        virachat._finish_turn(virachat.current()["id"], 0, "done", "", [], [], [], [])
+        virachat.send("second")
+        self.assertEqual(len(self.launched), 1)
+        self.assertEqual(self.said, [("job000000001", "second")])
+        self.assertEqual(virachat.current()["origin"], "brief")
+
+    def test_the_http_engine_is_pointed_at_the_brief_route(self):
+        with mock.patch("server.instance.api_url", return_value="http://localhost:8392"):
+            prompt = virachat._launch_prompt("hi", native=False, origin="brief")
+        self.assertIn("GET http://localhost:8392/api/brief", prompt)
+
+    def test_an_unknown_origin_is_refused(self):
+        with self.assertRaises(ValueError):
+            virachat.send("hello", origin="elsewhere")
+        self.assertEqual(self.launched, [])
+
+
 class FollowingATurn(ChatBase):
     """_follow driven with a scripted sequence of snapshots and a fake clock."""
 

@@ -1852,6 +1852,7 @@ class ViraChatReq(BaseModel):
     session_id: str | None = None
     mode: str | None = None
     sources: list[str] | None = None
+    origin: str | None = None
 
 
 class ViraChatSwitchReq(BaseModel):
@@ -1887,7 +1888,8 @@ def api_vira_chat_send(body: ViraChatReq):
     if not q:
         raise HTTPException(400, "empty message")
     try:
-        return {"session": virachat.send(q, body.session_id, mode=body.mode, sources=body.sources),
+        return {"session": virachat.send(q, body.session_id, mode=body.mode,
+                                         sources=body.sources, origin=body.origin),
                 "sessions": virachat.summary_rows()}
     except virachat.Busy as e:
         raise HTTPException(409, str(e))

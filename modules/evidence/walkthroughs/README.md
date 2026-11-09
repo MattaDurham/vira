@@ -18,7 +18,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** [Library / Documents](../../library/documents/README.md)
 
-### Files (24)
+### Files (27)
 
 **Server**
 
@@ -50,6 +50,9 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | `walkthrough_anon/mapping.py` | Build the deterministic real->synthetic mapping for walkthrough capture. |
 | `walkthrough_anon/pools.py` | Synthetic vocabulary for the walkthrough anonymization layer. |
 | `walkthrough_anon/scan.py` | The scanner gate: prove no real string survived into a walkthrough's final assets. |
+| `walkthroughs/brief-chat-bar/README.md` | A chat bar at the bottom of Attention > Today lets the owner ask Vira, or |
+| `walkthroughs/brief-chat-bar/brief-chat-desktop.png` |  |
+| `walkthroughs/brief-chat-bar/brief-chat-mobile.png` |  |
 | `walkthroughs/childcare-coverage/README.md` | The owner enters each child's pickup time and who normally covers each |
 | `walkthroughs/childcare-coverage/childcare-desktop.png` |  |
 | `walkthroughs/childcare-coverage/childcare-mobile.png` |  |

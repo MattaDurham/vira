@@ -1,14 +1,16 @@
 {
   "id": "attention/brief",
   "name": "Brief",
-  "summary": "The Daily Brief, its dismissed-row state, the Journal typed into it, and the source-health sentinel that labels a source gone quiet.",
+  "summary": "The Daily Brief, its dismissed-row state, the Journal typed into it, and the source-health sentinel that labels a source gone quiet, and the chat bar under it.",
   "owns": [
     "server/brief.py",
     "server/briefstate.py",
     "server/journal.py",
     "tests/test_brief_edit.py",
     "server/sourcehealth.py",
-    "tests/test_sourcehealth.py"
+    "tests/test_sourcehealth.py",
+    "tests/brief_chat_ui.js",
+    "tests/test_brief_chat_ui.py"
   ],
   "routes": [
     "/api/brief$",
@@ -34,7 +36,8 @@
     "attention/assistant",
     "incoming/imessage",
     "incoming/mail",
-    "find/notes"
+    "find/notes",
+    "find/ask"
   ],
   "feeds": [
     "attention/now"

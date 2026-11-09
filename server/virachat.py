@@ -88,6 +88,7 @@ def summary_rows(state=None):
         turns = s.get("turns") or []
         rows.append({"id": s["id"], "started": s.get("started"),
                      "updated": s.get("updated"), "turns": len(turns),
+                     "origin": s.get("origin") or "",
                      "title": (turns[0]["question"] if turns else "New chat")[:80]})
     return sorted(rows, key=lambda r: r.get("updated") or "", reverse=True)
 
@@ -187,16 +188,61 @@ unknown; never invent a source. Do not file an unrequested artifact.
 {question}"""
 
 
+# Where a chat was opened from. A chat started in the Daily Brief's chat bar
+# (Attention > Today) is the owner asking Vira to act on what the brief shows,
+# so its session is told that, and handed today's summary so "this" and "the
+# 9:30" resolve without a search. Only named origins are accepted.
+ORIGINS = ("brief",)
+# The summary is a few sentences; this only guards a runaway cache file.
+ORIGIN_SUMMARY_CHARS = 2000
+
+ORIGIN_BRIEF = """
+Where {owner} is writing from: the chat bar under the Daily Brief
+(Attention > Today) on {today}. When they refer to "today", "tomorrow", "this",
+or an item without naming its source, they mean what the brief shows; read it
+with {brief_tool} and the calendar before asking. They want you to act on
+their behalf when they ask: do it with Vira's tools, then say in one or two
+lines what changed and where. Before anything is sent as {owner} (mail,
+messages, invitations) or cannot be undone, confirm with {ask_tool}.
+{summary}"""
+
+
+def _origin_context(origin, native=True, provider="anthropic"):
+    if origin != "brief":
+        return ""
+    summary = ""
+    try:
+        from . import brief
+        text = ((brief.cached_narrative() or {}).get("text") or "").strip()
+        if text:
+            summary = "Today's brief summary reads: " + text[:ORIGIN_SUMMARY_CHARS]
+    except Exception:  # noqa: BLE001 - the summary is a convenience, never the turn
+        summary = ""
+    prefix = "mcp__vira__" if provider == "anthropic" else "vira."
+    return ORIGIN_BRIEF.format(
+        owner=_owner(), today=datetime.now().astimezone().strftime("%A %Y-%m-%d"),
+        brief_tool=(prefix + "daily_brief") if native
+        else "GET " + instance.api_url() + "/api/brief",
+        ask_tool=(prefix + "ask_owner") if native else "a question to the owner",
+        summary=summary).rstrip() + "\n"
+
+
 def _launch_prompt(question, native=True, provider="anthropic", *,
-                   mode="auto", sources=None, chat_id=None):
+                   mode="auto", sources=None, chat_id=None, origin=None):
     brief = CHAT_BRIEF if native else CHAT_BRIEF_HTTP
     prefix = "mcp__vira__" if provider == "anthropic" else "vira."
     scope = ", ".join(sources or []) or "all sources enabled for model answers"
-    return brief.format(owner=_owner(), question=question.strip(),
+    text = brief.format(owner=_owner(), question=question.strip(),
                         tool_prefix=prefix, mode=mode, scope=scope,
-                        api_url=instance.api_url()) + (
-                            "\nFor every /api/answer request include ?session_id=" + chat_id
-                            if chat_id and not native else "")
+                        api_url=instance.api_url())
+    where = _origin_context(origin, native, provider)
+    if where:
+        # Before the owner's words, so the message stays the last thing read.
+        head, sep, tail = text.rpartition("\n\n" + _owner() + " says:\n")
+        text = head + "\n" + where + sep + tail if sep else text + "\n" + where
+    return text + (
+        "\nFor every /api/answer request include ?session_id=" + chat_id
+        if chat_id and not native else "")
 
 
 def _session_snapshot(job_id):
@@ -292,7 +338,7 @@ def _conversation_context(turns, route):
 
 
 def _open_session(job_id, question, *, route=None, prior_route=None, turns=(),
-                  mode="auto", sources=None, chat_id=None):
+                  mode="auto", sources=None, chat_id=None, origin=None):
     """Return (job id, model changed, carried context truncated).
 
     An engine change starts a new run with the same evidence and answer contract.
@@ -323,7 +369,8 @@ def _open_session(job_id, question, *, route=None, prior_route=None, turns=(),
                 + (transcript or "(no completed messages)")
                 + "\n\nCURRENT MESSAGE:\n" + question)
         new_job = session.sessions.launch(
-            _launch_prompt(message, native, provider or "", mode=mode, sources=sources, chat_id=chat_id), model=model,
+            _launch_prompt(message, native, provider or "", mode=mode, sources=sources, chat_id=chat_id,
+                           origin=origin), model=model,
             effort=settings.raw().get("chat_effort") or None,
             runtime={"prompt_version": PROMPT_VERSION, "chat_id": chat_id, "evidence_scope": {"sources": sources or []},
                      "answer_mode": mode, "work_class": "foreground",
@@ -336,8 +383,11 @@ def _open_session(job_id, question, *, route=None, prior_route=None, turns=(),
     return out.get("job") or job_id, False, False
 
 
-def send(question, session_id=None, *, mode=None, sources=None):
-    """Reserve a turn atomically, then launch its session outside the lock."""
+def send(question, session_id=None, *, mode=None, sources=None, origin=None):
+    """Reserve a turn atomically, then launch its session outside the lock.
+
+    `origin` names where a NEW chat was opened from (ORIGINS); a chat keeps
+    the origin of its first turn."""
     question = (question or "").strip()
     if not question:
         raise ValueError("empty message")
@@ -345,6 +395,8 @@ def send(question, session_id=None, *, mode=None, sources=None):
         raise ValueError("unknown answer mode")
     if sources is not None and (not isinstance(sources, list) or not all(isinstance(x, str) for x in sources)):
         raise ValueError("sources must be a list of source IDs")
+    if origin is not None and origin not in ORIGINS:
+        raise ValueError("unknown chat origin")
     turn = {"id": "turn_" + secrets.token_hex(8), "question": question,
             "answer": "", "status": "pending", "created": _now(),
             "sent_t": time.time(), "looked_at": [], "citations": [],
@@ -368,6 +420,8 @@ def send(question, session_id=None, *, mode=None, sources=None):
         if not s.get("turns"):
             s["sources"] = sources or []
             s["answer_mode"] = mode or "auto"
+            if origin:
+                s["origin"] = origin
         turn["answer_mode"] = mode or s.get("answer_mode", "auto")
         turn["sources"] = s.get("sources", [])
         turn["prompt_version"] = PROMPT_VERSION
@@ -378,7 +432,7 @@ def send(question, session_id=None, *, mode=None, sources=None):
         st["active_id"] = sid
         reserved.update(sid=sid, job_id=s.get("job_id") or "", prior=prior,
                         prior_route=s.get("model_selection"), history=s["turns"][:-1],
-                        idx=len(s["turns"]) - 1)
+                        idx=len(s["turns"]) - 1, origin=s.get("origin"))
     _mutate(reserve)
     sid, job_id, prior = reserved["sid"], reserved["job_id"], reserved["prior"]
     error = ""
@@ -391,7 +445,7 @@ def send(question, session_id=None, *, mode=None, sources=None):
         job_id, changed, truncated = _open_session(
             job_id, question, route=route, prior_route=reserved["prior_route"],
             turns=reserved["history"], mode=turn["answer_mode"],
-            sources=turn["sources"], chat_id=sid)
+            sources=turn["sources"], chat_id=sid, origin=reserved["origin"])
         if changed:
             prior = ""  # a fresh engine has no parked answer to skip
     except Exception as e:  # noqa: BLE001 - the refusal is the turn's answer
