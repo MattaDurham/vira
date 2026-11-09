@@ -3373,7 +3373,7 @@ function chatAnswer(turn, session) {
     const c = byRef[(a.dataset.ref || "").trim().toLowerCase()];
     if (c?.evidence_handle) {
       a.title = "Open the exact passage read";
-      a.addEventListener("click", () => openAnswerEvidence(c.evidence_handle));
+      a.addEventListener("click", () => openAnswerEvidence(c.evidence_handle, session?.id));
       return;
     }
     if (!c || !c.path) { a.classList.add("dead"); return; }
@@ -3392,7 +3392,7 @@ function chatAnswer(turn, session) {
     rail.appendChild(el("span", "hint", "looked at"));
     looked.forEach((c) => {
       const chip = el("span", "cite-chip chat-src " + c.kind, c.label || c.kind);
-      chip.addEventListener("click", () => openLookedAt(c));
+      chip.addEventListener("click", () => openLookedAt(c, session?.id));
       rail.appendChild(chip);
     });
     box.appendChild(rail);
@@ -3416,8 +3416,8 @@ function chatTrailLine(m) {
 
 // Where a "looked at" card goes: the surface that shows what the session
 // read. Never a second implementation - each is an existing opener.
-function openLookedAt(c) {
-  if (c.evidence_handle) return openAnswerEvidence(c.evidence_handle);
+function openLookedAt(c, chatId) {
+  if (c.evidence_handle) return openAnswerEvidence(c.evidence_handle, chatId);
   if (c.kind === "find") return openFindQuery(c.query || c.label, c.tab ? { tab: c.tab } : {});
   if (c.kind === "note") return openNote(c.path, c.label);
   if (c.kind === "person") return c.pid ? openPerson(c.pid)
@@ -3426,7 +3426,7 @@ function openLookedAt(c) {
   if (c.kind === "queue") { openApp("work"); return setWorkTab("queue"); }
 }
 
-async function openAnswerEvidence(handle) {
+async function openAnswerEvidence(handle, chatId = findChatSession?.id) {
   const dialog = el("dialog", "answer-evidence");
   const close = el("button", "btn", "Close");
   close.addEventListener("click", () => dialog.close());
@@ -3439,7 +3439,7 @@ async function openAnswerEvidence(handle) {
   dialog.showModal();
   try {
     const d = await api("/api/answer/evidence/" + encodeURIComponent(handle)
-      + (findChatSession?.id ? "?session_id=" + encodeURIComponent(findChatSession.id) : ""));
+      + (chatId ? "?session_id=" + encodeURIComponent(chatId) : ""));
     title.textContent = d.title || d.source_handle || "Evidence passage";
     const span = d.span || {};
     meta.textContent = [d.source_date ? "Source date " + d.source_date : "Source date unknown",
@@ -14394,6 +14394,185 @@ async function loadBrief() {
         : "Brief unavailable: " + raw));
   }
 }
+
+// ---------- the brief's chat bar ----------
+// Ask Vira, or tell it to act, from under the brief. It is Vira's own chat
+// (the Find chat's engine and store, server/virachat.py), opened with
+// origin "brief" so the session knows the owner is looking at today's brief.
+// One conversation per local day, remembered on this device; "Open in chat"
+// continues the same conversation in Find with its sources and companions.
+const BRIEF_CHAT_KEY = "vira.briefChat";
+// The bar shows the last few exchanges; the full conversation is in Find.
+const BRIEF_CHAT_SHOWN = 4;
+let briefChatSession = null;
+let briefChatPoll = null;
+let briefChatBusy = false;
+
+const briefChatDay = () => new Date().toLocaleDateString("en-CA");
+
+function briefChatRefs() {
+  const form = $("#brief-chat-form");
+  if (!form) return null;
+  return { form, input: $("#brief-chat-input"), send: $("#brief-chat-send"),
+    stop: $("#brief-chat-stop"), log: $("#brief-chat-log"), head: $("#brief-chat-head") };
+}
+
+function briefChatStoredId() {
+  const saved = lsGet(BRIEF_CHAT_KEY, null);
+  return saved && saved.day === briefChatDay() ? saved.id : null;
+}
+
+function briefChatPending() {
+  return (briefChatSession?.turns || []).some((t) => t.status === "pending");
+}
+
+// The controls only: typing repaints these, never the conversation.
+function paintBriefChatControls() {
+  const r = briefChatRefs();
+  if (!r) return;
+  const turns = briefChatSession?.turns || [];
+  const pending = briefChatPending();
+  r.stop.hidden = !pending;
+  r.stop.disabled = !!turns.at(-1)?.stop_requested_t;
+  r.send.textContent = pending ? "Send guidance" : "Send";
+  r.send.disabled = briefChatBusy || !r.input.value.trim()
+    || (pending && !!turns.at(-1)?.stop_requested_t);
+  r.input.placeholder = pending ? "Vira is working. Add guidance, or press Stop"
+    : "Ask Vira, or tell it what to do about your day";
+}
+
+function renderBriefChat() {
+  const r = briefChatRefs();
+  if (!r) return;
+  paintBriefChatControls();
+  const turns = briefChatSession?.turns || [];
+  const pending = briefChatPending();
+  r.head.hidden = r.log.hidden = !turns.length;
+  const nearBottom = r.log.scrollHeight - r.log.scrollTop - r.log.clientHeight < 80;
+  r.log.innerHTML = "";
+  const shown = turns.slice(-BRIEF_CHAT_SHOWN);
+  if (turns.length > shown.length || briefChatSession?.history?.before)
+    r.log.appendChild(el("div", "hint brief-chat-more",
+      "Earlier messages are in the full chat."));
+  shown.forEach((turn) => {
+    r.log.appendChild(el("div", "brain-msg you", turn.question || ""));
+    r.log.appendChild(chatAnswer(turn, briefChatSession));
+  });
+  if (nearBottom || pending) r.log.scrollTop = r.log.scrollHeight;
+}
+
+function briefChatAdopt(session) {
+  briefChatSession = session || null;
+  if (session?.id) lsSet(BRIEF_CHAT_KEY, { day: briefChatDay(), id: session.id });
+  renderBriefChat();
+  briefChatFollow();
+}
+
+// Poll only while a turn is pending, the way the Find chat does.
+function briefChatFollow() {
+  if (!briefChatPending()) { briefChatPoll?.stop(); briefChatPoll = null; return; }
+  if (briefChatPoll) return;
+  briefChatPoll = startPoll(async (h) => {
+    const sid = briefChatSession?.id;
+    if (!sid || briefChatBusy) return;
+    try {
+      const d = await api("/api/vira/chat?session_id=" + encodeURIComponent(sid));
+      if (briefChatSession?.id !== sid || !d.session) return;
+      briefChatSession = d.session;
+      renderBriefChat();
+      if (!briefChatPending()) {
+        h.stop(); briefChatPoll = null;
+        briefChatRefs()?.input.focus();
+      }
+    } catch { /* keep polling; the next tick recovers */ }
+  }, 1500);
+}
+
+async function loadBriefChat() {
+  const id = briefChatStoredId();
+  if (!id) { briefChatSession = null; renderBriefChat(); return; }
+  try {
+    const d = await api("/api/vira/chat?session_id=" + encodeURIComponent(id));
+    // A chat deleted elsewhere, or an older server: the bar starts fresh.
+    briefChatAdopt(d.session && d.session.id === id ? d.session : null);
+  } catch { renderBriefChat(); }
+}
+
+async function sendBriefChat() {
+  const r = briefChatRefs();
+  const q = (r?.input.value || "").trim();
+  if (!q || briefChatBusy) return;
+  briefChatBusy = true;
+  renderBriefChat();
+  try {
+    if (briefChatPending()) {
+      const d = await post("/api/vira/chat/" + briefChatSession.id + "/control",
+        { action: "steer", text: q });
+      r.input.value = "";
+      briefChatBusy = false;
+      briefChatAdopt(d.session || briefChatSession);
+      return;
+    }
+    let sid = briefChatStoredId();
+    if (!sid) {
+      // A fresh conversation, so today's chat never joins one already open
+      // in Find; the brief origin is recorded on its first turn.
+      const fresh = await post("/api/vira/chat/new", {});
+      sid = fresh.session?.id || null;
+    }
+    r.log.hidden = false;
+    r.log.appendChild(el("div", "brain-msg you", q));
+    r.log.appendChild(el("div", "brain-msg vira thinking", "Vira is looking…"));
+    r.log.scrollTop = r.log.scrollHeight;
+    r.input.value = "";
+    const d = await post("/api/vira/chat", { question: q, session_id: sid, origin: "brief" });
+    briefChatBusy = false;
+    briefChatAdopt(d.session);
+  } catch (e) {
+    briefChatBusy = false;
+    if (!r.input.value) r.input.value = q;   // never lose what was typed
+    renderBriefChat();
+    r.log.hidden = false;
+    r.log.appendChild(el("div", "brain-msg vira error", "Not sent: " + errText(e)));
+  }
+}
+
+async function stopBriefChat() {
+  if (!briefChatSession?.id || !briefChatPending()) return;
+  try {
+    const d = await post("/api/vira/chat/" + briefChatSession.id + "/control", { action: "stop" });
+    briefChatAdopt(d.session);
+  } catch (e) { toast("Could not stop: " + errText(e)); }
+}
+
+async function openBriefChatInFind() {
+  const sid = briefChatSession?.id;
+  if (!sid) return;
+  try { await post("/api/vira/chat/switch", { session_id: sid }); }
+  catch (e) { toast("Could not open that chat: " + errText(e)); return; }
+  if (isDesktop) { openWindow("find"); focusWin(winState.find?.el); }
+  else openApp("find");
+  showFindChat();
+}
+
+function startNewBriefChat() {
+  if (briefChatPending()) { toast("Vira is still answering. Stop it first."); return; }
+  localStorage.removeItem(BRIEF_CHAT_KEY);
+  briefChatSession = null;
+  renderBriefChat();
+  briefChatRefs()?.input.focus();
+}
+
+(() => {
+  const r = briefChatRefs();
+  if (!r) return;   // stale cached index.html
+  r.form.addEventListener("submit", (ev) => { ev.preventDefault(); sendBriefChat(); });
+  r.input.addEventListener("input", paintBriefChatControls);
+  r.stop.addEventListener("click", stopBriefChat);
+  $("#brief-chat-open")?.addEventListener("click", openBriefChatInFind);
+  $("#brief-chat-new")?.addEventListener("click", startNewBriefChat);
+  loadBriefChat();
+})();
 
 $("#brief-refresh")?.addEventListener("click", () => loadBrief());
 $("#journal-refresh")?.addEventListener("click", () => loadJournal().catch(() => {}));

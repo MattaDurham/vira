@@ -111,6 +111,24 @@
         <button class="fchip sm" id="brief-refresh">Refresh day</button>
         <div id="brief-body"></div>
       </details>
+      <!-- The brief's chat bar: ask Vira, or tell it to act, about the day
+           above. One Vira chat per day (server/virachat.py, origin "brief");
+           Open in chat continues the same conversation in Find. -->
+      <section class="brief-chat" id="brief-chat" aria-label="Ask Vira about your day">
+        <div class="brief-chat-head" id="brief-chat-head" hidden>
+          <span class="brief-chat-title">Today's chat with Vira</span>
+          <button type="button" class="fchip sm" id="brief-chat-open">Open in chat</button>
+          <button type="button" class="fchip sm" id="brief-chat-new">New</button>
+        </div>
+        <div class="brief-chat-log" id="brief-chat-log" aria-live="polite" hidden></div>
+        <form class="brief-chat-bar" id="brief-chat-form" autocomplete="off">
+          <input class="brief-chat-input" id="brief-chat-input" type="text" maxlength="4000"
+                 aria-label="Ask Vira, or tell Vira what to do"
+                 placeholder="Ask Vira, or tell it what to do about your day">
+          <button type="button" class="fchip sm" id="brief-chat-stop" hidden>Stop</button>
+          <button type="submit" class="btn primary" id="brief-chat-send" disabled>Send</button>
+        </form>
+      </section>
     </div>
     <div class="attention-pane" id="attention-decide-pane" style="display:none">
       <header class="workspace-lead">

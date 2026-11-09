@@ -22,7 +22,7 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 ### Submodules
 
 - [Now](now/README.md) - The aggregator: what Vira is doing right now and what is waiting on the owner right now. (4 files)
-- [Brief](brief/README.md) - The Daily Brief, its dismissed-row state, the Journal typed into it, and the source-health sentinel that labels a source gone quiet. (6 files)
+- [Brief](brief/README.md) - The Daily Brief, its dismissed-row state, the Journal typed into it, and the source-health sentinel that labels a source gone quiet, and the chat bar under it. (8 files)
 - [Review](review/README.md) - One queue for every decision waiting on the owner, and how often each standing rule breaks. (4 files)
 - [Assistant](assistant/README.md) - The standing executive: commitments, quiet reminders, desktop pins, calendar suggestions, appointments from reminders, event prep. (28 files)
 - [Childcare](childcare/README.md) - Childcare coverage: notice a pickup nobody is covering, block it, ask once. (2 files)
@@ -38,6 +38,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Windows: `attention`, `journal`, `coverage`, `moments` (ids from `WINDOWS` in `static/app.js`).
 
-46 tracked files across 6 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
+48 tracked files across 6 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
 
 <!-- moduletree:end -->
