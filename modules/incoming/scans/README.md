@@ -93,7 +93,7 @@ the instance holding the automation lease reads and files on its own.
 | `macos/scanner/scripts/make-icon.swift` |  |
 | `macos/scanner/scripts/test.sh` | Standalone Command Line Tools ship Testing.framework outside Swift's default search path. |
 
-### Routes (14)
+### Routes (15)
 
 Prefixes: `/api/scans`
 
@@ -105,6 +105,7 @@ Prefixes: `/api/scans`
 - `GET /api/scans/{sid}` (server/scanroutes.py)
 - `GET /api/scans/{sid}/file` (server/scanroutes.py)
 - `GET /api/scans/{sid}/thumb` (server/scanroutes.py)
+- `GET /api/scans/{sid}/page/{n}` (server/scanroutes.py)
 - `POST /api/scans/{sid}/read` (server/scanroutes.py)
 - `PUT /api/scans/{sid}/decision` (server/scanroutes.py)
 - `POST /api/scans/{sid}/file` (server/scanroutes.py)
