@@ -32,6 +32,173 @@ load('async function loadEarlierFindChat(', 'const findChatVisible =');
 load('function findChatEnriching(', 'function findChatRestartRequired(');
 load('function chatAnswer(', '// Where a "looked at" card goes:');
 load('// ----- the pinned checklist', 'function renderPlanStrip(');
+
+// ----- the conversation keeps its nodes (text selection) -----
+// The real renderFindChat against a small DOM that records every node taken
+// out of the log. A selection lives in nodes: a node that leaves the log
+// takes the selection with it, so "was it detached" is the whole question.
+function selectionChecks() {
+  const detached = [];
+  function node(tag, cls, text) {
+    return {tag, cls, textContent: text, kids: [], parent: null, style: {}, dataset: {},
+      classList: {add() {}}, querySelectorAll() { return []; },
+      addEventListener() {}, setAttribute() {},
+      get children() { return this.kids; },
+      remove() {
+        if (!this.parent) return;
+        this.parent.kids.splice(this.parent.kids.indexOf(this), 1);
+        this.parent = null;
+        detached.push(this);
+      },
+      appendChild(c) { return this.insertBefore(c, null); },
+      insertBefore(c, ref) {
+        c.remove();
+        c.parent = this;
+        this.kids.splice(ref ? this.kids.indexOf(ref) : this.kids.length, 0, c);
+        return c;
+      }};
+  }
+  const log = node('div', 'find-chat-log');
+  Object.assign(log, {scrollTop: 0, scrollHeight: 0, clientHeight: 0});
+  let selection = null, panels = 0, reply = null;
+  const timers = [];
+  const ctx = vm.createContext({
+    URLSearchParams, el: node, mdToHtml: (text) => text,
+    window: {getSelection: () => selection},
+    document: {querySelectorAll: () => []},
+    requestAnimationFrame: (fn) => fn(),
+    setTimeout: (fn) => { timers.push(fn); return timers.length; },
+    startPoll: (fn) => { ctx.tick = fn; return {stop() {}}; },
+    api: async () => JSON.parse(JSON.stringify(reply)),
+    findChatSession: null, findChatList: [], findChatLoaded: false,
+    findChatPending: false, findChatPollStop: null,
+    findChatRefs: {log, status: {}, stop: {}, steer: {}, scope: {}, mode: {},
+      send: {}, empty: {style: {}}, input: {value: '', focus() {}}, chatPane: {}},
+    findChatSessionLabel: () => 'Chat',
+    acknowledgeFindChat() {},
+    renderFindClouds() { panels++; }, renderFindRelated() {},
+  });
+  const part = (start, end) => {
+    const offset = app.indexOf(start);
+    assert(offset >= 0 && app.indexOf(end, offset) > offset, start);
+    vm.runInContext(app.slice(offset, app.indexOf(end, offset)), ctx);
+  };
+  part('function mergeFindChatHistory(', 'async function loadEarlierFindChat(');
+  part('let findChatEventTimer =', 'function acknowledgeFindChat(');
+  part('function findChatAdopt(', 'async function loadFindChat(');
+  part('function findChatEnriching(', 'function findChatRestartRequired(');
+  part('// ----- the conversation keeps its nodes -----', '// One chat turn\'s answer.');
+  part('function chatAnswer(', '// Where a "looked at" card goes:');
+  part('// ----- the pinned checklist', 'function renderPlanStrip(');
+  const chat = (second, extra = {}) => ({session: {id: 'c1', job_id: 'job-1', turns: [
+    {id: 't1', sent_t: 1, status: 'done', question: 'First?', answer: 'First answer'},
+    {id: 't2', sent_t: 2, question: 'Second?', ...second}], ...extra}});
+  const answers = () => log.kids.filter((n) => n.cls === 'brain-msg vira')
+    .map((n) => n.kids.find((k) => k.cls === 'chat-md')?.innerHTML);
+
+  ctx.findChatAdopt(chat({status: 'done', answer: 'Second answer'}));
+  const first = [...log.kids];
+  assert.equal(first.length, 4, 'a question and an answer per turn');
+  assert.deepEqual(answers(), ['First answer', 'Second answer']);
+
+  // the same conversation drawn again leaves every node where it is
+  detached.length = 0;
+  ctx.findChatAdopt(chat({status: 'done', answer: 'Second answer'}));
+  assert.deepEqual(log.kids, first, 'an unchanged conversation keeps its nodes');
+  assert.equal(detached.length, 0, 'and none of them left the log on the way');
+
+  // a turn that changed is redrawn; the turn above it is not touched
+  ctx.findChatAdopt(chat({status: 'done', answer: 'Second answer, revised'}));
+  assert.deepEqual(log.kids.slice(0, 2), first.slice(0, 2));
+  assert.ok(!detached.includes(first[0]) && !detached.includes(first[1]),
+    'the earlier turn never left the log');
+  assert.deepEqual(answers(), ['First answer', 'Second answer, revised']);
+
+  // the placeholder a send appends does not outlive the next draw
+  const stray = log.appendChild(node('div', 'brain-msg vira thinking', 'Vira is looking'));
+  ctx.renderFindChat();
+  assert.ok(!log.kids.includes(stray));
+  assert.equal(log.kids.length, 4);
+
+  // a selection standing in a turn holds that turn back, changed or not...
+  const held = [...log.kids];
+  selection = {isCollapsed: false, containsNode: (n) => n === held[3]};
+  detached.length = 0;
+  ctx.findChatAdopt(chat({status: 'done', answer: 'Third version'}));
+  assert.deepEqual(log.kids, held, 'the selected answer is not replaced under the selection');
+  assert.equal(detached.length, 0);
+  // ...and the turn catches up once the selection is let go
+  selection = {isCollapsed: true, containsNode: () => false};
+  ctx.findChatLetGo();
+  assert.equal(timers.length, 1, 'letting go schedules the held redraw once');
+  ctx.findChatLetGo();
+  assert.equal(timers.length, 1);
+  timers.shift()();
+  assert.deepEqual(answers(), ['First answer', 'Third version']);
+
+  // a press in the log is the start of a selection: nothing moves under it
+  const pressed = [...log.kids];
+  vm.runInContext('findChatPressed = true;', ctx);
+  ctx.findChatAdopt(chat({status: 'done', answer: 'Fourth version'}));
+  assert.deepEqual(log.kids, pressed);
+  ctx.findChatLetGo();
+  timers.shift()();
+  assert.deepEqual(log.kids, pressed, 'still pressed: still held');
+  vm.runInContext('findChatPressed = false;', ctx);
+  ctx.findChatLetGo();
+  timers.shift()();
+  assert.deepEqual(answers(), ['First answer', 'Fourth version']);
+
+  // An answer still being written redraws as it grows without disturbing
+  // the settled answer above it.
+  ctx.findChatAdopt(chat({status: 'pending', messages: [{phase: 'commentary', text: 'One'}]},
+    {elapsed_s: 2}));
+  const settled = log.kids.slice(0, 2), writing = log.kids[3];
+  detached.length = 0;
+  ctx.findChatAdopt(chat({status: 'pending', messages: [{phase: 'commentary', text: 'One'}]},
+    {elapsed_s: 4}));
+  assert.deepEqual(log.kids.slice(0, 2), settled);
+  assert.ok(!detached.includes(settled[0]) && !detached.includes(settled[1]));
+  assert.notEqual(log.kids[3], writing, 'the clock on a pending turn still advances');
+  return {ctx, log, timers, detached, drawn: () => panels, setReply: (r) => { reply = r; }};
+}
+
+// A session waiting for a reply beats every two seconds and each beat pokes
+// the page. A poke, or a poll, whose reply reads the same as what is on
+// screen draws nothing.
+async function quietRefreshChecks() {
+  const {ctx, log, timers, detached, drawn, setReply} = selectionChecks();
+  const idle = {session: {id: 'c1', job_id: 'job-1', turns: [
+    {id: 't1', sent_t: 1, status: 'done', question: 'First?', answer: 'First answer'}]},
+    sessions: [{id: 'c1', title: 'First?', turns: 1}]};
+  ctx.findChatAdopt(JSON.parse(JSON.stringify(idle)));
+  const before = drawn(), nodes = [...log.kids];
+  detached.length = 0;
+  setReply(idle);
+  for (let beat = 0; beat < 3; beat++) {
+    ctx.refreshFindChatFromEvent({kind: 'update', id: 'job-1'});
+    await timers.shift()();
+  }
+  assert.equal(drawn(), before, 'a beat with nothing new draws nothing');
+  assert.deepEqual(log.kids, nodes);
+  assert.equal(detached.length, 0);
+  setReply({...idle, sessions: [{id: 'c1', title: 'First?', turns: 1}, {id: 'c2', title: 'Other'}]});
+  ctx.refreshFindChatFromEvent({kind: 'update', id: 'job-1'});
+  await timers.shift()();
+  assert.equal(drawn(), before + 1, 'a real change is still drawn');
+  assert.deepEqual(log.kids, nodes, 'around the nodes already there');
+
+  // the poll that follows panel work: same rule
+  const loading = JSON.parse(JSON.stringify(idle));
+  loading.session.turns[0].enrichment = {status: 'running'};
+  ctx.findChatAdopt(JSON.parse(JSON.stringify(loading)));
+  setReply(loading);
+  const polled = drawn();
+  await ctx.tick({stop() {}});
+  await ctx.tick({stop() {}});
+  assert.equal(drawn(), polled, 'a poll with nothing new draws nothing');
+}
+
 const handle = {stop() { stopped++; }};
 function session(status, enrichment) {
   return {id: 'chat-test', turns: [{status, answer: 'Ready answer', enrichment}]};
@@ -225,5 +392,6 @@ function session(status, enrichment) {
   await new Promise(setImmediate);
   assert.equal(intervals.size, 0, 'a terminal answer stops the real poller');
   assert.equal(context.findChatRefs.send.disabled, false);
+  await quietRefreshChecks();
   process.stdout.write('Chat answer delivery UI checks passed\n');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
