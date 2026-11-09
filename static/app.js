@@ -2879,6 +2879,22 @@ function mergeFindChatHistory(incoming) {
     history: {...incoming.history, start, before: start || null}};
 }
 
+// What the chat pane last drew, as text. A session that is waiting for a
+// reply still beats every two seconds; each beat pokes this page and the
+// poke refetches the chat. When the reply reads the same as what is already
+// on screen there is nothing to redraw, and redrawing anyway is not free:
+// it replaced the nodes under a text selection in progress, shut an open
+// chat picker and rebuilt Related and the Concept Cloud, every two seconds.
+let findChatShown = null;
+function findChatDrawn(session, list) {
+  return JSON.stringify([session || null, list || []]);
+}
+function findChatUnchanged(d) {
+  return findChatShown !== null && findChatShown === findChatDrawn(
+    mergeFindChatHistory(d.session || null),
+    Array.isArray(d.sessions) ? d.sessions : findChatList);
+}
+
 async function loadEarlierFindChat() {
   const session = findChatSession;
   if (!session?.history?.before) return;
@@ -2918,7 +2934,8 @@ function refreshFindChatFromEvent(ev) {
     const before = findChatSession;
     try {
       const d = await api("/api/vira/chat?session_id=" + encodeURIComponent(before.id));
-      if (!findChatSending && before === findChatSession && d.session?.id === before.id)
+      if (!findChatSending && before === findChatSession && d.session?.id === before.id
+          && !findChatUnchanged(d))
         findChatAdopt(d);
     } catch { /* the regular poll remains the recovery path */ }
   }, 250);
@@ -2985,10 +3002,11 @@ function findChatWatch() {
       if (findChatSending || before !== findChatSession || !d.session || d.session.id !== before?.id) return;
       const still = (d.session.turns || []).some((t) => t.status === "pending");
       const wasPending = findChatPending;
+      const same = findChatUnchanged(d);
       findChatSession = mergeFindChatHistory(d.session);
       findChatPending = still;
       if (Array.isArray(d.sessions)) findChatList = d.sessions;
-      renderFindChat();
+      if (!same) renderFindChat();
       if (findChatRefs) {
         findChatRefs.send.disabled = still || !findChatRefs.input.value.trim();
         if (wasPending && !still) findChatRefs.input.focus();
@@ -3009,6 +3027,7 @@ function renderFindChatFailure(e) {
   if (!findChatRefs) return;
   const restart = findChatRestartRequired(e);
   findChatRefs.status.textContent = restart ? "Restart required" : "Chat unavailable";
+  findChatShown = null;   // the conversation is off screen; the next reply redraws it
   findChatRefs.log.innerHTML = "";
   findChatRefs.log.appendChild(el("div", "brain-msg error",
     restart
@@ -3178,6 +3197,13 @@ function initFindChatShell(root, searchPane, searchInput) {
 
   const chatBody = el("div", "find-chat-body");
   const log = el("div", "brain-log find-chat-log");
+  // a press in the conversation may be the start of a selection: see
+  // findChatSelecting. The release is heard on the window, because a drag
+  // ends wherever the pointer happens to be.
+  log.addEventListener("pointerdown", () => { findChatPressed = true; });
+  ["pointerup", "pointercancel", "blur"].forEach((name) =>
+    window.addEventListener(name, () => { findChatPressed = false; findChatLetGo(); }));
+  document.addEventListener("selectionchange", findChatLetGo);
   const empty = el("div", "brain-empty find-chat-empty");
   empty.appendChild(el("p", "hint",
     "Talk to Vira about anything it holds: your messages and mail, every "
@@ -3247,9 +3273,52 @@ function initFindChatShell(root, searchPane, searchInput) {
   syncFindCompanionToggles();
 }
 
+// ----- the conversation keeps its nodes -----
+// A turn's nodes stay in the log for as long as that turn reads the same, so
+// text the owner is selecting is never replaced underneath them. Replacing
+// it moved the start of the selection to the top of the log: the drag then
+// selected everything from the first line down, and the next redraw cleared
+// it. A turn that did change is still held back while the owner is pressing
+// in the log or has a selection standing in that turn, and is redrawn when
+// they let go.
+let findChatPressed = false;    // a pointer went down in the log and is not up yet
+let findChatHeld = false;       // a changed turn is waiting for the selection to end
+let findChatHeldTimer = null;
+
+function findChatSelecting(nodes) {
+  if (findChatPressed) return true;
+  const sel = window.getSelection?.();
+  return !!sel && !sel.isCollapsed && nodes.some((n) => sel.containsNode(n, true));
+}
+
+function findChatLetGo() {
+  if (!findChatHeld || findChatHeldTimer) return;
+  findChatHeldTimer = setTimeout(() => {
+    findChatHeldTimer = null;
+    if (!findChatHeld || findChatPressed) return;
+    findChatHeld = false;
+    renderFindChat();   // holds again, turn by turn, where a selection still stands
+  }, 200);
+}
+
+function findChatTurnNodes(turn) {
+  const nodes = [];
+  if (turn.model_changed) {
+    const model = [turn.provider, turn.model].filter(Boolean).join(" · ");
+    nodes.push(el("div", "hint chat-model-change",
+      "Model changed" + (model ? " to " + model : "") + ". "
+      + (turn.context_truncated ? "Recent messages carried forward; full history stays here."
+        : "Saved messages carried forward.")));
+  }
+  nodes.push(el("div", "brain-msg you", turn.question || ""));
+  nodes.push(chatAnswer(turn, findChatSession));
+  return nodes;
+}
+
 function renderFindChat() {
   if (!findChatRefs) return;
   const turns = findChatSession?.turns || [];
+  findChatShown = findChatDrawn(findChatSession, findChatList);
   findChatRefs.status.textContent = findChatSessionLabel();
   document.querySelectorAll(".find-chat-session").forEach((n) => {
     n.textContent = findChatSessionLabel();
@@ -3267,25 +3336,39 @@ function renderFindChat() {
   findChatRefs.mode.value = findChatSession?.answer_mode || "auto";
   const native = findChatSession?.runtime?.effective || turns.at(-1)?.runtime?.effective;
   if (native?.model) findChatRefs.status.textContent += " · " + native.model + (native.effort ? " · " + native.effort : "");
-  findChatRefs.log.innerHTML = "";
+  const log = findChatRefs.log;
+  const sid = findChatSession?.id || "";
+  // a settled answer is drawn from its turn alone; one still being written
+  // also shows the session's clock, queue place, checklist and activity
+  const around = JSON.stringify({...findChatSession, turns: null});
+  const had = log._findChatTurns || new Map(), kept = new Map(), want = [];
   if (findChatSession?.history?.before) {
-    const earlier = el("button", "fchip sm", "Load earlier messages");
-    earlier.addEventListener("click", loadEarlierFindChat);
-    findChatRefs.log.appendChild(earlier);
-  }
-  turns.forEach((turn) => {
-    if (turn.model_changed) {
-      const model = [turn.provider, turn.model].filter(Boolean).join(" · ");
-      findChatRefs.log.appendChild(el("div", "hint chat-model-change",
-        "Model changed" + (model ? " to " + model : "") + ". "
-        + (turn.context_truncated ? "Recent messages carried forward; full history stays here."
-          : "Saved messages carried forward.")));
+    if (!log._findChatEarlier) {
+      log._findChatEarlier = el("button", "fchip sm", "Load earlier messages");
+      log._findChatEarlier.addEventListener("click", loadEarlierFindChat);
     }
-    findChatRefs.log.appendChild(el("div", "brain-msg you", turn.question || ""));
-    findChatRefs.log.appendChild(chatAnswer(turn, findChatSession));
+    want.push(log._findChatEarlier);
+  }
+  turns.forEach((turn, i) => {
+    const id = sid + "\n" + (turn.id || turn.sent_t || i);
+    const writing = turn.status === "pending" || turn.status === "stopped";
+    const key = JSON.stringify([turn, writing ? around : sid]);
+    let row = had.get(id);
+    if (row && row.key !== key && findChatSelecting(row.nodes)) findChatHeld = true;
+    else if (!row || row.key !== key) row = {key, nodes: findChatTurnNodes(turn)};
+    kept.set(id, row);
+    want.push(...row.nodes);
     if (turn.status === "done" || turn.messages?.length) requestAnimationFrame(() =>
       acknowledgeFindChat(turn, turn.status === "done" ? "answer" : "useful"));
   });
+  log._findChatTurns = kept;
+  // Bring the log into order around the nodes that stay. What is no longer
+  // wanted leaves first (a redrawn turn's old nodes, the placeholder a send
+  // appends), so what stays is already in order and only new nodes are
+  // inserted: a node that stays is never detached.
+  const wanted = new Set(want);
+  [...log.children].forEach((n) => { if (!wanted.has(n)) n.remove(); });
+  want.forEach((n, i) => { if (log.children[i] !== n) log.insertBefore(n, log.children[i] || null); });
   // the picker names every saved chat; the active one is selected
   if (findChatRefs.picker) {
     const pk = findChatRefs.picker;
