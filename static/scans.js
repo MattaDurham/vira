@@ -42,6 +42,21 @@
   };
   const titleOf = (it) => (it.decision && it.decision.title) || it.name || it.original_name;
   const note = (host, text, cls) => host.appendChild(el("div", "sc-note " + (cls || ""), text));
+  // The reader writes its summary in markdown. Paragraphs and **bold** are
+  // all it uses; built as DOM nodes, never innerHTML, since it is model text.
+  const prose = (md) => {
+    const box = el("div", "sc-prose");
+    for (const para of String(md || "").split(/\n\s*\n/)) {
+      if (!para.trim()) continue;
+      const p = el("p");
+      String(para).split(/(\*\*[^*]+\*\*)/).forEach((part) => {
+        if (/^\*\*[^*]+\*\*$/.test(part)) p.appendChild(el("strong", "", part.slice(2, -2)));
+        else if (part) p.appendChild(document.createTextNode(part));
+      });
+      box.appendChild(p);
+    }
+    return box;
+  };
 
   async function act(b, fn, done) {
     if (b) b.disabled = true;
@@ -79,7 +94,9 @@
     if (!d.automatic_here) mode.textContent = "Another running Vira does automatic work right now, so this one lists scans and reads or files one only when you press its button.";
     const tools = el("div", "sc-tools");
     tools.append(
-      btn("Open scanner", "", (b) => act(b, () => post("/api/scans/open-scanner", {}))),
+      btn("Open scanner", "", (b) => act(b, () => post("/api/scans/open-scanner", {}), (r) => {
+        if (r.installing) toast("Installing the scanner in your Applications folder. It opens by itself in about a minute.");
+      })),
       btn("Look now", "", (b) => act(b, () => post("/api/scans/look", {}),
         () => setTimeout(refresh, 1500))),
     );
@@ -87,6 +104,9 @@
     host.appendChild(top);
     host.appendChild(mode);
     if (d.last_error) note(host, "The last look failed: " + d.last_error, "warn");
+    const inst = d.scanner_install || {};
+    if (inst.state === "installing") note(host, "Installing the scanner app. It opens by itself when it is ready.");
+    if (inst.state === "failed") note(host, "The scanner app could not be installed: " + inst.error, "warn");
   }
 
   // ---------------------------------------------------------------- list
@@ -212,6 +232,7 @@
         summary: field("Summary", d.summary, { area: true, rows: 6 }),
       };
       info.append(f.title.wrap, f.filename.wrap);
+      if (!S.editing) f.summary.wrap.replaceChildren(el("span", "sc-flabel", "Summary"), prose(d.summary));
       // folders
       info.appendChild(el("div", "sc-flabel", it.state === "filed" ? "Copies saved in" : "Copies go to"));
       const dests = el("div", "sc-dests");

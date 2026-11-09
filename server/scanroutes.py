@@ -7,7 +7,6 @@ the folder now instead of on its next tick.
 """
 from __future__ import annotations
 
-import subprocess
 import threading
 from pathlib import Path
 
@@ -90,16 +89,11 @@ def api_scans_arrived(req: ArrivedReq):
 
 @router.post("/open-scanner")
 def api_scans_open_scanner():
-    if not settings.IS_MAC:
-        raise HTTPException(400, "the scanner app runs on macOS")
-    bid = str(settings.get("scans_scanner_app") or "").strip()
-    if not bid:
-        raise HTTPException(400, "no scanner app is set (Config > Intake)")
-    r = subprocess.run(["open", "-b", bid], capture_output=True, text=True, timeout=20)
-    if r.returncode != 0:
-        raise HTTPException(404, f"the scanner app ({bid}) is not installed: "
-                                 "build it with macos/scanner/scripts/build.sh")
-    return {"ok": True}
+    """Open the scanner app; build and install it first when it is missing."""
+    try:
+        return scans.open_scanner()
+    except ValueError as e:
+        _bad(e)
 
 
 @router.get("/{sid}")
