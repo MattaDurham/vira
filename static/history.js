@@ -1424,9 +1424,12 @@
     const head = el("div", "hx-forhead");
     const laneBox = el("div", "hx-forlane");
     const listBox = el("div", "hx-forlist");
-    const detail = el("div", "hx-fordetail");
+    // opts.detailHost: a panel outside this view (a module window's right
+    // side) that the detail opens in; opts.onDetail(open) hears it open and close.
+    const detail = opts.detailHost || el("div", "hx-fordetail");
+    const showDetail = (on) => { detail.hidden = !on; if (opts.onDetail) opts.onDetail(on); };
     detail.hidden = true;
-    root.append(head, laneBox, detail, listBox);
+    root.append(head, laneBox, ...(opts.detailHost ? [] : [detail]), listBox);
     const today = dayStart(Date.now());
     const T0 = addDays(today, -29), T1 = addDays(today, 1);
     const whole = !!(opts.module || (opts.project && !opts.idea && !opts.ref));
@@ -1477,12 +1480,13 @@
     }
     async function pickLocal(id) {
       st.picked = id;
-      detail.hidden = false;
+      showDetail(true);
+      detail.scrollTop = 0;
       detail.replaceChildren(el("p", "hx-dim", "Reading..."));
       try {
         const d = await getJSON(`/api/history/entry?${qs({ id })}`);
         if (st.picked !== id) return;
-        renderDetail(detail, d, { close: () => { st.picked = null; detail.hidden = true; }, refresh: view.refresh });
+        renderDetail(detail, d, { close: () => { st.picked = null; showDetail(false); }, refresh: view.refresh });
       } catch (err) { detail.replaceChildren(el("p", "hx-err", `Could not read this entry: ${err.message || err}`)); }
     }
     const ctx = { get picked() { return st.picked; }, pick: pickLocal, act: (a, box) => runAction(a, box, () => view.refresh()) };
