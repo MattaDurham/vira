@@ -683,8 +683,24 @@
       host?.style.setProperty("--scene-dim", prefs.dim); save();
     });
     const trigger = document.getElementById("background-btn");
+    // The button sits in the Config window's header, which can be anywhere
+    // on the desk; open the panel under it. A closed Config (the Design
+    // Studio door opened it) keeps the stylesheet's top-right spot.
+    function place() {
+      const r = trigger.getBoundingClientRect();
+      if (!r.width && !r.height) {
+        panel.style.left = panel.style.top = panel.style.right = panel.style.maxHeight = "";
+        return;
+      }
+      const w = panel.offsetWidth, vw = window.innerWidth, vh = window.innerHeight;
+      const top = Math.max(18, Math.min(r.bottom + 8, vh - 320));
+      panel.style.right = "auto";
+      panel.style.left = Math.max(18, Math.min(r.right - w, vw - w - 18)) + "px";
+      panel.style.top = top + "px";
+      panel.style.maxHeight = (vh - top - 18) + "px";   // scrolls inside, never off-screen
+    }
     function show() {
-      panel.hidden = false; trigger.setAttribute("aria-expanded", "true");
+      panel.hidden = false; trigger.setAttribute("aria-expanded", "true"); place();
       status(); panel.querySelector(`[data-scene="${prefs.scene}"]`).focus();
     }
     function hide(focus = true) {

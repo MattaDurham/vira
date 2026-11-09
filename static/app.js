@@ -10764,13 +10764,6 @@ function alertRaise(reqId) {
   renderAlerts();
 }
 
-function alertRaiseAll() {
-  if (!alertMin.size) return;
-  alertMin.clear();
-  saveAlertMin();
-  renderAlerts();
-}
-
 function alertCard(row) {
   const { card: p, job_id: jid } = row;
   const box = el("div", "alert-card" + (isChoiceCard(p) ? " ask" : ""));
@@ -10795,17 +10788,11 @@ function alertCard(row) {
 function renderAlerts() {
   const layer = $("#alerts");
   const waiting = alertWaiting();
-  // The badge counts everything that needs the owner — cards plus parked
-  // replies, unlanded work, health — not just cards, because it is the
-  // attention window's closed-state face. Falls back to the card count
-  // when the payload has not landed yet.
+  // The phone's brand dot counts everything that needs the owner — cards
+  // plus parked replies, unlanded work, health — not just cards. Falls back
+  // to the card count when the payload has not landed yet. The desk's
+  // topbar count was removed (2026-11-09): Attention already shows it.
   const need = attnData ? (attnData.counts?.needs_you || 0) : waiting.length;
-  const btn = $("#alerts-btn");
-  if (btn) {
-    btn.hidden = !need;
-    btn.textContent = need + " waiting";
-    btn.classList.toggle("parked", waiting.length > 0 && !alertVisible().length);
-  }
   $("#brand-btn")?.classList.toggle("has-alerts", need > 0);
   if (document.body.classList.contains("nd-open")) renderNavDrawer();
   if (!layer) return;
@@ -11402,7 +11389,6 @@ function breakRow(rule, b) {
 // and the always-revisitable config board. The helpers below (mail,
 // WhatsApp, notifications, updates, backend) are called by Setup's manage
 // cards; see renderSetup / SETUP_MANAGE / cardChannels / cardAi.
-$("#settings-btn").addEventListener("click", () => openApp("setup"));
 
 async function notifyTest(btn) {
   const hint = $("#notify-hint");
@@ -28400,7 +28386,7 @@ function paletteMatches(q) {
     // Orbits is a VIEW of World, not a window, so the palette names it itself
     { label: "Orbits — World · the network as time", kind: "window",
       run: () => { setWorldView("orbits", { load: false }); openWindow("atlas"); } },
-    { label: "Settings", kind: "sheet", run: () => $("#settings-btn").click() },
+    { label: "Settings", kind: "sheet", run: () => openApp("setup") },
     { label: "Layout: Freeform", kind: "layout",
       run: () => setLayout("freeform") },
     ...savedLayouts().map((l) => ({
@@ -31950,6 +31936,16 @@ function closeAllModules() {
   toast(n ? "Closed " + n + " modules" : "Nothing open");
 }
 
+// Where layout popups open: under the Layout button in Config's header. The
+// Config window can be closed (an edit saved from the desktop right-click),
+// and a hidden button measures 0x0 at the corner, so fall back to the top
+// middle of the screen.
+function layoutAnchor() {
+  const r = $("#layout-btn")?.getBoundingClientRect();
+  if (r && (r.width || r.height)) return { x: r.left, y: r.bottom + 6 };
+  return { x: Math.max(16, window.innerWidth / 2 - 160), y: 64 };
+}
+
 function updateLayoutBtn() {
   const b = $("#layout-btn");
   if (!b) return;
@@ -31993,8 +31989,7 @@ function openLayoutMenu(x, y) {
   // on (confirm only), Save as names a new one (name entry only).
   const cur = currentSavedLayout();
   const atBtn = () => {
-    const r = $("#layout-btn").getBoundingClientRect();
-    return { x: r.left, y: r.bottom + 6 };
+    return layoutAnchor();
   };
   if (cur) items.push({ label: "Save  ·  " + cur.name,
                         run: () => confirmSaveLayout(cur.id) });
@@ -32013,10 +32008,10 @@ function editMenuItems() {
   const items = [{ head: "Editing " + (editSession?.name || "layout") }];
   if (isSaved) items.push({ label: "Save", run: () => commitEdit(false) });
   items.push({ label: "Save as new…", run: () => {
-    const r = $("#layout-btn").getBoundingClientRect();
+    const r = layoutAnchor();
     layoutNamePopup({ title: "Save as new layout", cta: "Save",
                       value: isSaved ? editSession.name + " copy" : "",
-                      x: r.left, y: r.bottom + 6,
+                      x: r.x, y: r.y,
                       onName: (n) => commitEdit(true, n) });
   } });
   items.push({ sep: true });
@@ -32248,8 +32243,8 @@ function confirmSaveLayout(id) {
   actions.appendChild(cancel);
   actions.appendChild(save);
   pop.appendChild(actions);
-  const r = $("#layout-btn").getBoundingClientRect();
-  placeCtxPop(pop, r.left, r.bottom + 6);
+  const r = layoutAnchor();
+  placeCtxPop(pop, r.x, r.y);
   requestAnimationFrame(() => save.focus());
 }
 
@@ -32500,12 +32495,13 @@ async function boot() {
   }
   buildMobileDock();   // the phone's five-app access bar
   initReorg();         // long-press the grid or the bar to rearrange both
-  // the brand (upper left) is the Launchpad button: floating window on
-  // desktop, the left nav drawer on mobile (tap toggles it)
+  // the brand (upper left) opens Config at the desk — the dock carries the
+  // Launchpad there. On a phone it stays the nav drawer toggle, because the
+  // drawer is the phone's only way to every app.
   initNavDrawer();
   $("#brand-btn")?.addEventListener("click", () => {
-    if (!isDesktop && document.body.classList.contains("nd-open"))
-      closeLaunchpad();
+    if (isDesktop) return openApp("setup");
+    if (document.body.classList.contains("nd-open")) closeLaunchpad();
     else openApp("launchpad");
   });
   initFindView();
@@ -32545,14 +32541,6 @@ async function boot() {
   // The stream is the fast path; this poll is what survives a dead stream.
   refreshAlerts();
   startPoll(() => refreshAlerts({ changed: false }), 5000);
-  // Desktop: the badge is the Attention window's closed-state face, so
-  // clicking it opens the window. The phone keeps the cascade raise.
-  $("#alerts-btn")?.addEventListener("click",
-    () => {
-      if (!isDesktop) return alertRaiseAll();
-      setAttentionTab("now", { defer: true });
-      openApp("attention");
-    });
   $("#attn-refresh")?.addEventListener("click", () => { attentionTabLoad(attentionTab); window.ViraIntake?.load(); });
   startPoll(() => {
     // the sent log lives in Setup's Notifications card now; the node

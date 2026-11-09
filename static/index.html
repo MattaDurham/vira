@@ -59,15 +59,12 @@
 
 <div id="shell">
 <header class="topbar">
-  <button class="brand" id="brand-btn" title="Launchpad"><svg class="brand-solar" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/></svg>VIRA</button>
+  <!-- The brand (upper left) opens Config at the desk; the dock carries the
+       Launchpad. On a phone it still toggles the nav drawer, which is the
+       phone's Launchpad. Layout and background live in Config's header. -->
+  <button class="brand" id="brand-btn" title="Config"><svg class="brand-solar" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/></svg>VIRA</button>
   <span class="inst-badge" id="inst-badge" hidden>TEST</span>
   <div class="topbar-sub" id="status-line">connecting…</div>
-  <button class="icon-btn alerts-btn" id="alerts-btn"
-          title="Decisions waiting on you — click to bring them back" hidden></button>
-  <button class="icon-btn" id="layout-btn" title="Layout templates" hidden>layout</button>
-  <button class="icon-btn" id="settings-btn" title="Settings">config</button>
-  <button class="icon-btn" id="background-btn" title="Choose a desktop background"
-          aria-expanded="false" aria-controls="background-picker" hidden>background</button>
 </header>
 
 <!-- AI-backend down banner: shown only when the deterministic health probe
@@ -632,6 +629,12 @@
   <section id="view-setup" class="view">
     <div class="section-head"><h2>Config</h2>
       <span class="hint" id="setup-mode" style="margin-left:auto"></span>
+      <!-- moved here from the topbar (2026-11-09); desktop-only, like before -->
+      <span class="setup-desk-tools">
+        <button class="fchip sm" id="layout-btn" title="Layout templates" hidden>Layout</button>
+        <button class="fchip sm" id="background-btn" title="Choose a desktop background"
+                aria-expanded="false" aria-controls="background-picker" hidden>Background</button>
+      </span>
     </div>
     <div id="setup-body"></div>
   </section>

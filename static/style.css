@@ -2230,20 +2230,19 @@ body.nd-open .alert-layer, body.lp-open .alert-layer { display: none; }
   .attention-hero::after, .attention-orbit i, .attention-orbit span,
   .attention-day-arc i, .attention-card-stack i { animation: none; }
 }
-/* Where the waiting count lives is a per-width decision, the way the layout
-   button is desktop-only: at the desk it is a topbar count, on a phone the
-   brand wears a dot and the drawer carries the list. A "3 waiting" button in
-   a 402px topbar wraps to a second line and pushes the bar out of shape. */
-.alerts-btn { display: none; }
-@media (min-width: 1100px) { .alerts-btn { display: inline-block; } }
-.alerts-btn[hidden] { display: none; }
-.alerts-btn { color: var(--accent); }
-.alerts-btn.parked { color: var(--text-dim); }
-.brand.has-alerts { position: relative; }
-.brand.has-alerts::after {
-  content: ""; position: absolute; top: 3px; right: 0;
-  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+/* On a phone the brand wears a dot when something waits and the drawer
+   carries the list. At the desk the brand opens Config and Attention shows
+   the count, so the dot is phone-only. */
+@media (max-width: 1099px) {
+  .brand.has-alerts { position: relative; }
+  .brand.has-alerts::after {
+    content: ""; position: absolute; top: 3px; right: 0;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
 }
+/* Config's header carries the desk's Layout and Background buttons */
+.setup-desk-tools { display: inline-flex; gap: 6px; margin-left: 10px; }
+.setup-desk-tools [hidden] { display: none; }
 .nd-sec-head.alert { color: var(--accent); }
 .nd-alert { align-items: flex-start; }
 .nd-alert-main { flex: 1; min-width: 0; display: flex;
