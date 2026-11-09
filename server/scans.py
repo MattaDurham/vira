@@ -993,9 +993,9 @@ def tick(automatic=True):
         discover()
         poll_reads()
         # Reading and filing on their own belong to the lease holder alone,
-        # whether this look was the timer or a "Look now": a test instance
-        # shares the owner's real vault, so there a scan is read or filed
-        # only by its own button.
+        # whether this look was the timer or a "Look now": every running
+        # instance shares the owner's real vault, so only one may act on
+        # its own; anywhere else a scan is read or filed by its button.
         if not instance.owns_automation():
             return
         items = sorted(_read()["items"].values(), key=lambda i: i.get("arrived") or "")
