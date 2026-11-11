@@ -24,13 +24,14 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 
 **Feeds:** no other module directly
 
-### Files (38)
+### Files (40)
 
 **Server**
 
 | File | What it is |
 |---|---|
 | `server/__init__.py` |  |
+| `server/fractallink.py` | Show a local Find note or filed scan in Fractal Hybrid on the same Mac. |
 | `server/main.py` | Vira server: CRM surface + live iMessage feed + reply suggestions + Claude Code cockpit, served as one mobile-ready web app. |
 | `server/omniroute.py` | The omni router - rung 2 of the dictation door (2026-09-01). |
 | `server/uistate.py` | Server-persisted UI state — the desktop window arrangement. |
@@ -73,6 +74,7 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 | File | What it is |
 |---|---|
 | `tests/test_drag_handle_controls.py` | Regression contract: a drag handle must not swallow a control's click. |
+| `tests/test_fractallink.py` | Exercise the Vira handoff over HTTP with synthetic vaults and no app launch. |
 | `tests/test_omni_palette.py` | The dictation door is held as a source contract. |
 | `tests/test_omniroute.py` | The omni router - rung 2 of the dictation door (claude/omni-router). |
 | `tests/test_touch_selection.py` | Regression contract for the mobile selected-text action palette. |
@@ -84,10 +86,11 @@ Everything below is generated from `module.json` and the files themselves. Scrip
 |---|---|
 | `scripts/make-icons.sh` | Regenerate the home-screen app-icon rasters. |
 
-### Routes (7)
+### Routes (8)
 
-Prefixes: `/api/ui-state`, `/api/omni`, `/api/reveal`, `/api/instance`, `/api/favicon`, `/api/stream`
+Prefixes: `/api/ui-state`, `/api/omni`, `/api/reveal`, `/api/fractal`, `/api/instance`, `/api/favicon`, `/api/stream`
 
+- `POST /api/fractal/reveal` (server/fractallink.py)
 - `GET /api/ui-state`
 - `POST /api/ui-state`
 - `POST /api/omni/route`

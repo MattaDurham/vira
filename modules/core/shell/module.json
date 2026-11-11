@@ -4,6 +4,7 @@
   "summary": "The FastAPI app and the single-page desktop: windows, palette, deep links, UI state.",
   "owns": [
     "server/main.py",
+    "server/fractallink.py",
     "server/__init__.py",
     "server/uistate.py",
     "server/omniroute.py",
@@ -29,12 +30,14 @@
     "tests/test_drag_handle_controls.py",
     "tests/test_touch_selection.py",
     "tests/test_uistate.py",
-    "tests/test_omniroute.py"
+    "tests/test_omniroute.py",
+    "tests/test_fractallink.py"
   ],
   "routes": [
     "/api/ui-state",
     "/api/omni",
     "/api/reveal",
+    "/api/fractal",
     "/api/instance",
     "/api/favicon",
     "/api/stream"

@@ -183,6 +183,7 @@
       bar.appendChild(btn(S.editing ? "Stop changing" : "Change", "", () => { S.editing = !S.editing; draw(); }));
     }
     if (it.state === "filed") {
+      if (canShowInFractal()) bar.appendChild(showInFractalButton({ kind: "scan", ref: it.id }));
       bar.appendChild(btn("Undo filing", "", (b) => act(b, () => post(`/api/scans/${it.id}/undo`, {}), (r) => {
         if (r.kept && r.kept.length) toast("Undone, but kept: " + r.kept.map((k) => `${k.path} (${k.why})`).join("; "));
         else toast("Filing undone. The scan has its old name back.");
@@ -243,6 +244,7 @@
           for (const c of it.filing.copies || []) {
             const r = el("div", "sc-dest");
             r.appendChild(el("span", "sc-mono", c.rel));
+            if (canShowInFractal()) r.appendChild(showInFractalButton({ kind: "scan", ref: it.id, copy: c.rel }));
             dests.appendChild(r);
           }
           for (const s of it.filing.skipped || []) {

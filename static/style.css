@@ -1466,6 +1466,8 @@ h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
   text-align: left; font-family: inherit; font-size: 14px;
 }
 .link-row:hover, .doc-row:hover { border-color: var(--accent); }
+.find-note-result { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; margin-bottom: 4px; }
+.find-note-result > .doc-row { flex: 1 1 180px; min-width: 0; }
 .link-fav {
   width: 30px; height: 30px; border-radius: 2px; flex: none;
   background: var(--bg-raised); border: 1px solid var(--line);

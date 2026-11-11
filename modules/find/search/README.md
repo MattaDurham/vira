@@ -9,6 +9,9 @@ meaning, picks the corpus, and shapes the result list the window renders.
 The corpora themselves belong to their submodules; this one only chooses and
 asks.
 
+On the same Mac, a Markdown note result can **Show in Fractal**. It selects
+the original note in Fractal Hybrid using the existing vault reference.
+
 ## What lives here
 
 Everything below is generated from `module.json` and the files themselves. Scripts, assets, tests and documents that belong to this submodule are listed here even while they still sit in the shared top-level folders; see "Moving code" in the root README.
