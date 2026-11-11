@@ -4030,6 +4030,27 @@ function findAnswer(d) {
   return wrap;
 }
 
+function canShowInFractal() {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)
+    && /^Mac/.test(navigator.platform || "");
+}
+
+function showInFractalButton(request) {
+  const button = el("button", "fchip sm", "Show in Fractal");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await post("/api/fractal/reveal", request);
+    } catch (e) {
+      toast(errText(e));
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
 function renderNoteRows(box, rows) {
   rows.forEach((r) => {
     const row = el("button", "doc-row");
@@ -4042,7 +4063,11 @@ function renderNoteRows(box, rows) {
     if (r.snippet) main.appendChild(el("div", "link-ctx", r.snippet));
     row.appendChild(main);
     row.addEventListener("click", () => openNote(r.path, r.title));
-    box.appendChild(row);
+    if (r.path && canShowInFractal()) {
+      const result = el("div", "find-note-result");
+      result.append(row, showInFractalButton({ kind: "note", ref: r.path }));
+      box.appendChild(result);
+    } else box.appendChild(row);
   });
 }
 

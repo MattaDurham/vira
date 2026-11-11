@@ -86,7 +86,7 @@ from . import (
                launchdjobs, runlist, claudetasks, adopt, cardcode,
                search as msearch, secrets, send, sendpref, session,
                sessiondiag, settings, settingschema, restart, runtimework,
-               genreroutes,
+               fractallink, genreroutes,
                scanroutes, scans,
                skins,
                subs_visuals, worldgraph, worldsubsets,
@@ -6230,6 +6230,7 @@ app.include_router(skins.assets)
 # manifest -> skin, with every stage exposed. Engine in genrestudio.py.
 app.include_router(genreroutes.router)
 app.include_router(scanroutes.router)
+app.include_router(fractallink.router)
 
 # ---------- Image Atlas (the vault's images as a 3D galaxy) ----------------
 # chaska adapter: serves the bundled viewer + the vault-sidecar export under
