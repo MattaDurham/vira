@@ -1626,8 +1626,9 @@ def from_documents(ctx):
     # Retros: one document each, linked to its session; never one entry per line.
     d = _retro_dir()
     st = ctx.state.setdefault("retros", {})
+    from . import sessionvault
     try:
-        files = sorted(d.glob("*.md")) if d.is_dir() else []
+        files = (sorted(d.glob("*.md")) if d.is_dir() else []) + sessionvault.retro_files()
     except OSError:
         files = []
     for p in files:

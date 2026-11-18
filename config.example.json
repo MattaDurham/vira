@@ -271,6 +271,8 @@
   "_lessons": "Lessons and review: The corrections ledger and review queue.",
   "evidence_retro_dir": "",
   "_evidence_retro_dir": "Directory the Evidence Ledger mines session retros from (glob \"* vira.md\"). Empty = ~/TC-IL/Sessions. The ledger also reads this checkout's own git-ignored retros/*.md when present.",
+  "session_vault_root": "",
+  "_session_vault_root": "Folder of the Sessions vault: every agent session on this machine, one folder per session by date, with its conversation, its files copied unchanged, and its retro. When set, session retros and their daily and weekly rollups are written there instead of the session retro folder. Empty = off.",
   "lessons_ledger_path": "",
   "_lessons_ledger_path": "The ledger the lesson-recurrence counter reads (Work > RECORD > Rules). Empty = ~/.claude/LESSONS.md; a missing file leaves the module dormant. Vira only ever READS this file.",
   "lessons_state_dir": "",

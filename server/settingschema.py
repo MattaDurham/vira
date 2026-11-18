@@ -671,6 +671,12 @@ SCHEMA = [
       "Directory the Evidence Ledger mines session retros from (glob "
       "\"* vira.md\"). Empty = ~/TC-IL/Sessions. The ledger also reads this "
       "checkout's own git-ignored retros/*.md when present.", advanced=True),
+    S("session_vault_root", "lessons", "path", "", "Sessions vault folder",
+      "Folder of the Sessions vault: every agent session on this machine, "
+      "one folder per session by date, with its conversation, its files "
+      "copied unchanged, and its retro. When set, session retros and their "
+      "daily and weekly rollups are written there instead of the session "
+      "retro folder. Empty = off.", advanced=True),
     S("lessons_ledger_path", "lessons", "path", "", "Corrections ledger",
       "The ledger the lesson-recurrence counter reads (Work > RECORD > "
       "Rules). Empty = ~/.claude/LESSONS.md; a missing file leaves the module "
