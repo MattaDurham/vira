@@ -605,6 +605,14 @@ def facts(s, d, events):
                          or prs & set(el.get("pr") or []))
         if by_sha or (on_branch and in_span):
             out.append(ev)
+    # A branch removed after its merge is housekeeping, and so is the note
+    # that a branch was merged or its worktree cleared: the merge line says it.
+    merged = {b for e in out if e.get("sub") == "merged"
+              for b in (e.get("links") or {}).get("branch") or []}
+    out = [e for e in out
+           if e.get("sub") not in ("merged_branch", "worktree_cleared")
+           and not (e.get("sub") == "discarded"
+                    and merged & set((e.get("links") or {}).get("branch") or []))]
     out.sort(key=lambda e: e.get("at") or "")
     return out
 
@@ -620,6 +628,8 @@ def _fact_line(ev):
         return f"Reached main (`{sha}`): {title}"
     if sub == "pr_opened":
         return f"Pull request {(el.get('pr') or ['?'])[0]}: {title} ({ev.get('status') or 'open'})"
+    if sub == "discarded":
+        return f"Branch discarded without reaching main: {title}"
     return f"{str(sub or 'code').replace('_', ' ').capitalize()}: {title}"
 
 

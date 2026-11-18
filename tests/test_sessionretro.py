@@ -395,6 +395,23 @@ class WhatARetroSays(Sandbox):
         self.assertNotIn("Commit titled elsewhere", text)
         self.assertIn("Opened pull request #77.", text)
 
+    def test_a_branch_removed_after_its_merge_is_not_listed_as_discarded(self):
+        start = ts("2026-11-10", "09:00")
+        self.plain("c1", start=start, links={"branch": ["alpha:claude/a", "alpha:claude/b"]})
+        for key, sub, branch in (("m", "merged", "alpha:claude/a"),
+                                 ("d1", "discarded", "alpha:claude/a"),
+                                 ("d2", "discarded", "alpha:claude/b")):
+            ev = H.event(f"code:{sub}:alpha:{key}", "code", start + 600, sub=sub,
+                         status=H.MERGED if sub == "merged" else H.DROPPED,
+                         title=f"Work {key}", project="alpha",
+                         links={"commit": [key * 8], "branch": [branch]})
+            self.events[ev["id"]] = ev
+        SR.run_pass()
+        text = (self.retros / self.files()[0]).read_text(encoding="utf-8")
+        self.assertIn("Reached main", text)
+        self.assertNotIn("Work d1", text)
+        self.assertIn("Branch discarded without reaching main: Work d2", text)
+
     def test_a_codex_patch_names_only_the_file(self):
         row = {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec",
                "input": 'tools.apply_patch("*** Begin Patch\\n*** Add File: build/a b.py\\n+x\\n*** End Patch")'}}
