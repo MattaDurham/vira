@@ -221,6 +221,12 @@ class Hits(list):
         self.next_cursor = next_cursor
 
 
+# A candidate list this short is looked up row by row inside the MATCH
+# (fast for one person's messages); a longer one is applied after the
+# match, since walking a whole vault's candidates row by row took seconds.
+SQL_CANDIDATES_MAX = 5000
+
+
 def candidate_clause(con, cand, column="rowid"):
     if cand is None:
         return ""
@@ -231,21 +237,34 @@ def candidate_clause(con, cand, column="rowid"):
     return f" AND {column} IN (SELECT id FROM retrieval_candidates)"
 
 
-def matching_fts(con, q, cand=None, table="fts", phrases=()):
-    """All lexical matches, suitable for SQL ordering/counting afterwards."""
+def matching_fts(con, q, cand=None, table="fts", phrases=(), enough=None, report=False,
+                 drop_common=False):
+    """All lexical matches, suitable for SQL ordering/counting afterwards.
+
+    With `enough`, the queries stop once that many matches are in hand: the
+    strict ones (phrase, all words) run first, and the any-word query on a
+    common word can match most of a large index. With `report`, returns
+    (matches, whether every query ran)."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
         raise ValueError("invalid FTS table")
-    candidates = candidate_clause(con, cand)
-    qs = fts_queries(q, phrases)
+    drop = common_terms(con, table, re.findall(r"[A-Za-z0-9']+", q)) if drop_common else set()
+    qs = fts_queries(q, phrases, drop)
     if phrases:
         qs = [" AND ".join('"' + str(p).replace('"', '""') + '"' for p in phrases)]
+    small = cand is not None and len(cand) <= SQL_CANDIDATES_MAX
+    candidates = candidate_clause(con, cand) if small else ""
+    keep = None if cand is None or small else (cand if isinstance(cand, (set, frozenset)) else set(cand))
     out = set()
-    for fq in qs:
+    ran_all = not drop
+    for i, fq in enumerate(qs):
+        if enough is not None and len(out) >= enough:
+            ran_all = i >= len(qs)
+            break
         check_deadline()
-        out.update(r[0] for r in con.execute(
-            f"SELECT rowid FROM {table} WHERE {table} MATCH ?" + candidates,
-            (fq,)))
-    return out
+        rows = (r[0] for r in con.execute(
+            f"SELECT rowid FROM {table} WHERE {table} MATCH ?" + candidates, (fq,)))
+        out.update(rows if keep is None else (r for r in rows if r in keep))
+    return (out, ran_all) if report else out
 
 def _require_np():
     if np is None:
@@ -254,7 +273,39 @@ def _require_np():
 
 # ---------- FTS ----------
 
-def fts_queries(q, phrases=()):
+# In the any-word fallback, a word found in more than this share of an
+# index's rows is left out: one common word ("up", "never") matched most of
+# a 250,000-chunk vault and ranking it took seconds per query. The rarest
+# word is always kept.
+COMMON_SHARE = 0.02
+# ...and only in an index where that share is more than this many rows: in a
+# small index every word is "common" and leaving words out loses matches.
+COMMON_MIN_ROWS = 500
+
+
+def common_terms(con, table, terms, share=COMMON_SHARE):
+    """The words of `terms` found in more than `share` of the index's rows,
+    read from the index's own vocabulary (no scan of the rows)."""
+    try:
+        total = con.execute(f"SELECT count(*) FROM {table}_docsize").fetchone()[0]
+        con.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS temp.{table}_vocab "
+                    f"USING fts5vocab(main, {table}, 'row')")
+        df = {}
+        for t in terms:
+            row = con.execute(f"SELECT doc FROM temp.{table}_vocab WHERE term=?",
+                              (t.lower(),)).fetchone()
+            df[t] = row[0] if row else 0
+    except Exception:  # noqa: BLE001 - no vocabulary: keep every word
+        return set()
+    floor = max(total * share, COMMON_MIN_ROWS) if total else None
+    common = {t for t, n in df.items() if floor is not None and n > floor}
+    present = [t for t, n in df.items() if n and t not in common]
+    if common and not present:
+        common.discard(min(common, key=df.get))    # keep the rarest word
+    return common
+
+
+def fts_queries(q, phrases=(), drop=()):
     """User text -> ranked fts5 queries: quoted phrases first (a phrase
     the user typed in quotes is the one thing they are sure of), then
     all-terms (precise hits dominate), then any-term (recall for
@@ -268,28 +319,39 @@ def fts_queries(q, phrases=()):
     if not terms:
         return out
     all_q = " ".join(f'"{t}"' for t in terms)
-    any_q = " OR ".join(f'"{t}"' for t in terms)
+    any_q = " OR ".join(f'"{t}"' for t in terms if t not in drop) or \
+        " OR ".join(f'"{t}"' for t in terms)
     out += [all_q, any_q] if len(terms) > 1 else [any_q]
     return out
 
 
-def rank_fts(con, q, cand, limit, table="fts", phrases=()):
-    """Apply candidates in SQL BEFORE relevance ranking and LIMIT."""
+def rank_fts(con, q, cand, limit, table="fts", phrases=(), drop_common=False):
+    """Ranked matches among the candidates, at most `limit`: the candidates
+    are applied before the limit is counted, so disallowed rows never use up
+    a place."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
         raise ValueError("invalid FTS table")
-    candidates = candidate_clause(con, cand)
     out, seen = [], set()
-    queries = fts_queries(q, phrases)
+    drop = common_terms(con, table, re.findall(r"[A-Za-z0-9']+", q)) if drop_common else set()
+    queries = fts_queries(q, phrases, drop)
     if phrases:
         queries = [" AND ".join('"' + str(p).replace('"', '""') + '"' for p in phrases)]
+    small = cand is not None and len(cand) <= SQL_CANDIDATES_MAX
+    candidates = candidate_clause(con, cand) if small else ""
+    keep = None if cand is None or small else (cand if isinstance(cand, (set, frozenset)) else set(cand))
     for fq in queries:
         check_deadline()
-        rows = con.execute(
-            f"SELECT rowid, bm25({table}) AS r FROM {table} "
-            f"WHERE {table} MATCH ?" + candidates + " ORDER BY r, rowid LIMIT ?",
-            (fq, limit)).fetchall()
+        # A long candidate list is applied after ranking (see matching_fts);
+        # otherwise the candidates and the LIMIT apply in SQL.
+        sql = (f"SELECT rowid, bm25({table}) AS r FROM {table} WHERE {table} MATCH ?" + candidates +
+               " ORDER BY r, rowid")
+        rows = con.execute(sql + " LIMIT ?", (fq, limit)) if keep is None else con.execute(sql, (fq,))
         for r in rows:
             rid = r[0]
+            if keep is not None and rid not in keep:
+                continue
+            if len(out) >= limit:
+                break
             if rid not in seen:
                 seen.add(rid)
                 out.append(rid)

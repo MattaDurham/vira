@@ -6,6 +6,18 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ## Unreleased
 
+### Fixed
+
+- Vault search (Find, the chat's vault tools) answers in well under a
+  second across several vaults instead of timing out. Each vault gets a
+  fair share of the 5-second limit, so a slow one cannot use up the time
+  of the vaults after it. Each note's real path is worked out once per
+  index scan in the background instead of on every search. A search with
+  every note allowed builds no candidate list, fetches the ranked chunks by
+  id, and leaves words found in more than 2% of a large index out of the
+  any-word fallback (the rarest word is always kept). Full-text matching
+  applies a long candidate list after the match instead of inside it.
+
 ### Added
 
 - The Sessions vault: `python -m server.sessionvault sync` keeps every

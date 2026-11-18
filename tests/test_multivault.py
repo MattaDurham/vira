@@ -184,3 +184,83 @@ class VaultSourceRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchTimeShareTests(MultiVaultIndexTests):
+    """A slow vault cannot use up the search time of the vaults after it,
+    and the faster search paths keep their results and their access rules."""
+
+    def setUp(self):
+        super().setUp()
+        vault._ACTUAL.clear()
+        vault._DIRS.clear()
+        self.addCleanup(vault._ACTUAL.clear)
+        self.addCleanup(vault._DIRS.clear)
+
+    def test_a_slow_first_vault_leaves_the_next_vault_its_share(self):
+        import time
+        from server import retrieval
+        vault.scan_once()
+        real = vault._path_allowed
+
+        def slow(spec, rel, policy, actual=False):
+            if spec["id"] == "primary":     # slow the way a search is: checking
+                while True:                 # its deadline until it runs out
+                    retrieval.check_deadline()
+                    time.sleep(0.01)
+            return real(spec, rel, policy, actual)
+        vault._ACTUAL.clear()               # no ready path map: check each note
+        with mock.patch.object(vault, "_actual_map", return_value=None), \
+                mock.patch.object(vault, "_path_allowed", side_effect=slow):
+            out = vault.query_notes("abundance clean water", limit=5,
+                                    deadline=time.monotonic() + 1.0)
+        status = {c["source_id"]: c["status"] for c in out["coverage"] if c.get("elapsed_ms") is not None}
+        self.assertEqual(status["primary"], "timed_out")
+        self.assertEqual(status["research"], "complete")
+        self.assertEqual(out["hits"][0]["path"], "@research/shared.md")
+
+    def test_the_path_map_built_after_a_scan_gives_the_same_results(self):
+        vault.scan_once()                   # builds the map in this thread
+        self.assertTrue(any(Path(k[0]).resolve() == self.extra.resolve() for k in vault._ACTUAL))
+        hits = vault.search("abundance clean water", limit=5)
+        self.assertEqual(hits[0]["path"], "@research/shared.md")
+        self.assertEqual(vault.search("cedar porch", limit=5)[0]["path"], "wiki/primary-only.md")
+
+    def test_a_link_out_of_the_vault_is_still_refused(self):
+        import os
+        outside = Path(self.tmp.name) / "outside.md"
+        outside.write_text("# Secret\nOutside the vault: abundance.\n", encoding="utf-8")
+        try:
+            os.symlink(outside, self.extra / "linked.md")
+        except (OSError, NotImplementedError):
+            self.skipTest("symbolic links are not available here")
+        vault.scan_once()
+        paths = [h["path"] for h in vault.search("abundance", limit=10)]
+        self.assertNotIn("@research/linked.md", paths)
+        self.assertIn("@research/shared.md", paths)
+
+
+class CommonWordTests(unittest.TestCase):
+    def test_common_words_are_left_out_only_in_a_large_index(self):
+        import sqlite3
+        from server import retrieval
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE VIRTUAL TABLE t USING fts5(text)")
+        rows = [("the up launching",)] + [("the up never",)] * 2000
+        con.executemany("INSERT INTO t VALUES(?)", rows)
+        self.assertEqual(retrieval.common_terms(con, "t", ["the", "up", "launching"]), {"the", "up"})
+        self.assertEqual(retrieval.fts_queries("the up launching", drop={"the", "up"})[-1], '"launching"')
+        small = sqlite3.connect(":memory:")
+        small.execute("CREATE VIRTUAL TABLE t USING fts5(text)")
+        small.executemany("INSERT INTO t VALUES(?)", [("acme raising",), ("beach house",)])
+        self.assertEqual(retrieval.common_terms(small, "t", ["what", "acme"]), set())
+        # both words are in half the rows, but the index is too small to drop either
+        self.assertEqual(retrieval.common_terms(small, "t", ["acme", "beach"]), set())
+
+    def test_every_word_common_keeps_the_rarest(self):
+        import sqlite3
+        from server import retrieval
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE VIRTUAL TABLE t USING fts5(text)")
+        con.executemany("INSERT INTO t VALUES(?)", [("never up",)] * 3000 + [("never",)] * 1000)
+        self.assertEqual(retrieval.common_terms(con, "t", ["never", "up"]), {"never"})
