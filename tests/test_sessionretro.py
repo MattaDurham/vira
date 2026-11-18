@@ -179,6 +179,41 @@ class Readers(Sandbox):
                          ["Count the rows.", "Counting now.", "There are 12 rows."])
         self.assertEqual(d["tools"]["Read"], 1)
 
+    def test_a_compressed_transcript_is_found_beside_its_recorded_name_and_read(self):
+        ev = self.session("z1", sub="codex", rows=[
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "Draw it."}},
+            {"type": "event_msg", "payload": {"type": "agent_message", "message": "Drawn."}}])
+        plain = Path(ev["data"]["transcript"])
+        packed = Path(str(plain) + ".zst")
+        plain.rename(packed)                 # stands in for the compressed file
+        self.assertEqual(SR.transcript_file(str(plain)), packed)
+
+        def unpack(path):
+            with open(path, encoding="utf-8") as fh:
+                yield from fh
+        with mock.patch.object(SR, "_zstd_lines", unpack):
+            self.assertEqual(SR.run_pass()["written"], 1)
+        self.assertIn(packed.name, (self.retros / self.files()[0]).read_text(encoding="utf-8"))
+
+    def test_a_record_that_cannot_be_read_is_not_called_an_empty_session(self):
+        ev = self.session("z2", sub="codex", rows=[])
+        plain = Path(ev["data"]["transcript"])
+        plain.rename(Path(str(plain) + ".zst"))
+        self.session("gone", sub="codex", start=ts("2026-11-10", "10:00"))
+        gone = self.events["session:codex:gone"]
+        gone["data"]["transcript"] = str(self.root / "transcripts" / "never-there.jsonl")
+        with mock.patch.object(SR.shutil, "which", lambda name: None):
+            counts = SR.run_pass()
+        self.assertEqual(counts["unreadable"], 2)
+        self.assertNotIn("empty", counts)
+        self.assertEqual(self.prompts, [])
+        st = SR.status()
+        self.assertEqual(st["record_could_not_be_read"], 2)
+        self.assertEqual(st["nothing_to_write_about"], 0)
+        errors = sorted(m["error"] for m in SR.jsonstore.read(SR.STORE, {})["sessions"].values())
+        self.assertIn("no zstd program", errors[0] + errors[1])
+        self.assertIn("transcript file is gone", errors[0] + errors[1])
+
     def test_a_long_conversation_keeps_its_start_and_end_and_says_what_it_left_out(self):
         d = SR._blank_digest()
         d["turns"] = [{"role": "user", "text": "FIRST ask"}]

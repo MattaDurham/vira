@@ -62,6 +62,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 from collections import Counter
 from datetime import datetime, timedelta
@@ -341,7 +343,7 @@ def classify(now=None, quiet_s=QUIET_S, since=None, only=None, events=None):
             continue
         mark = marks.get(s["id"]) or {}
         if abs(float(mark.get("last") or 0) - s["last"]) < 1 and (
-                mark.get("status") == "empty"
+                mark.get("status") in ("empty", "unreadable")
                 or int(mark.get("attempts") or 0) >= MAX_ATTEMPTS):
             s["mark"] = mark
             out["skipped"].append(s)
@@ -407,20 +409,57 @@ def _blocks_text(content):
     return "\n".join(out)
 
 
+def transcript_file(path):
+    """The file a recorded transcript path names today, or None. Codex
+    compresses a rollout to `<name>.zst` after some days and its thread
+    database keeps the old name, so the sibling is looked for too."""
+    if not path:
+        return None
+    p = Path(path)
+    if p.is_file():
+        return p
+    z = Path(str(p) + ".zst")
+    return z if z.is_file() else None
+
+
+def _zstd_lines(path):
+    """Lines of a zstd-compressed file, through the `zstd` program: the
+    Python this runs on (3.12 and 3.13) has no reader of its own."""
+    exe = shutil.which("zstd")
+    if not exe:
+        raise OSError("the transcript is zstd-compressed and no zstd program is installed")
+    proc = subprocess.Popen([exe, "-dc", str(path)], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL)
+    try:
+        for raw in proc.stdout:
+            yield raw.decode("utf-8", "ignore")
+    finally:
+        proc.stdout.close()
+        proc.wait()
+
+
+def _text_lines(path):
+    if str(path).endswith(".zst"):
+        yield from _zstd_lines(path)
+        return
+    with open(path, encoding="utf-8", errors="ignore") as fh:
+        yield from fh
+
+
 def _lines(path, d):
     try:
-        with open(path, encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                if len(line) > BIG_LINE:
-                    d["skipped_lines"] += 1
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict):
-                    yield row
-    except OSError:
+        for line in _text_lines(path):
+            if len(line) > BIG_LINE:
+                d["skipped_lines"] += 1
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                yield row
+    except OSError as exc:
+        d["problem"] = str(exc)
         return
 
 
@@ -530,11 +569,11 @@ def read_vira_job(job_id):
 
 def digest(s):
     """What a session said and did, read from whichever record it left."""
-    path = s["transcript"]
+    path = transcript_file(s["transcript"])
     d = None
-    if path and Path(path).is_file():
+    if path:
         d = read_codex(path) if s["tool"] == "codex" else read_claude(path)
-        if not d["turns"]:
+        if not d["turns"] and not d.get("problem"):
             # the path names a format this reader did not expect: try the other
             other = read_claude(path) if s["tool"] == "codex" else read_codex(path)
             d = other if other["turns"] else d
@@ -543,7 +582,10 @@ def digest(s):
             d = read_vira_job(job)
             if d["turns"]:
                 break
-    return d or _blank_digest()
+    d = d or _blank_digest()
+    if not d["turns"] and not d.get("problem") and s["transcript"] and not path:
+        d["problem"] = f"the transcript file is gone: {s['transcript']}"
+    return d
 
 
 def conversation(d, budget):
@@ -799,7 +841,8 @@ def render_session(s, d, obj, fact_events, dropped, left_out):
         f"- Owner messages: {owner_turns}. Tool calls: {tools}",
         f"- Files changed: {len(files)}" + (f" ({shown})" if files else ""),
         f"- Read from: {d['source'] or 'no record'}"
-        + (f" `{s['transcript']}`" if s["transcript"] else ""),
+        + (f" `{transcript_file(s['transcript']) or s['transcript']}`"
+           if s["transcript"] else ""),
     ]
     if left_out:
         record.append(f"- The conversation was too long to send whole: {left_out} "
@@ -895,6 +938,11 @@ def write_retro(s, events, model=None):
     d = digest(s)
     if not any(t["role"] == "user" for t in d["turns"]) or \
             not any(t["role"] == "assistant" for t in d["turns"]):
+        if d.get("problem"):
+            # the session's record could not be read. That is not the same
+            # as a session with nothing said, and `status` counts it apart.
+            _mark(s, status="unreadable", error=d["problem"][:300])
+            return "unreadable"
         # nothing was asked or nothing was answered: there is no session to
         # describe. Remembered, so the transcript is not re-read every pass.
         _mark(s, status="empty")
@@ -1269,6 +1317,7 @@ def status():
             "waiting_by_tool": dict(by_tool),
             "still_active": len(c["active"]),
             "nothing_to_write_about": marks.get("empty", 0),
+            "record_could_not_be_read": marks.get("unreadable", 0),
             "failed_three_times": marks.get("failed", 0)}
 
 
