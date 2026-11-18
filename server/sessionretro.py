@@ -641,6 +641,17 @@ def _ask(prompt, model=None):
     return suggest._extract_json(text)
 
 
+def _ask_json(prompt, model=None):
+    """`_ask`, with one more try when the reply is not valid JSON (a model
+    now and then leaves a quote unescaped inside a long string)."""
+    try:
+        return _ask(prompt, model)
+    except ValueError:
+        return _ask(prompt + "\n\nYour last reply could not be read as JSON. "
+                    "Reply with one valid JSON object only, and escape every "
+                    "double quote inside a string.", model)
+
+
 def _budget():
     from . import modelbudget
     try:
@@ -885,7 +896,7 @@ def write_retro(s, events, model=None):
         facts="\n".join(f"- {_fact_line(e)}" for e in fact_events) or "- none recorded",
         note=note, conversation=text)
     try:
-        obj = _ask(prompt, model)
+        obj = _ask_json(prompt, model)
         if not isinstance(obj, dict):
             raise ValueError("the model did not return an object")
     except Exception as exc:  # noqa: BLE001 - one session never stops a pass
@@ -1049,7 +1060,7 @@ def roll_day(day, by_project, model=None):
         state = _stale(path, h)
         if state == "write":
             try:
-                obj = _ask(DAY_PROMPT.format(project=project, day=day, n=len(files),
+                obj = _ask_json(DAY_PROMPT.format(project=project, day=day, n=len(files),
                                              sources=_sources_text(files, _budget())), model)
             except Exception as exc:  # noqa: BLE001
                 print(f"failed: day {day} {project}: {type(exc).__name__}: {exc}"[:300], flush=True)
@@ -1101,7 +1112,7 @@ def roll_day(day, by_project, model=None):
         counts[f"cross-project {state}"] += 1
         return counts
     try:
-        obj = _ask(CROSS_PROMPT.format(day=day, sources=_sources_text(day_files, _budget())), model)
+        obj = _ask_json(CROSS_PROMPT.format(day=day, sources=_sources_text(day_files, _budget())), model)
     except Exception as exc:  # noqa: BLE001
         print(f"failed: cross-project {day}: {type(exc).__name__}: {exc}"[:300], flush=True)
         counts["failed"] += 1
@@ -1185,7 +1196,7 @@ def run_weekly(week_ending=None, model=None, now=None):
         return {f"week rollups {state}": 1}
     with locked(str(_store()) + ".pass"):
         try:
-            obj = _ask(WEEK_PROMPT.format(first=days[0], last=days[-1],
+            obj = _ask_json(WEEK_PROMPT.format(first=days[0], last=days[-1],
                                           sources=_sources_text(files, _budget())), model)
         except Exception as exc:  # noqa: BLE001
             print(f"failed: week {week_ending}: {type(exc).__name__}: {exc}"[:300], flush=True)

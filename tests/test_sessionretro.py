@@ -284,6 +284,21 @@ class WhichSessions(Sandbox):
         self.events[ev["id"]] = dict(ev, end=H.iso(ts("2026-11-10", "12:00")))
         self.assertEqual(SR.run_pass()["written"], 1)
 
+    def test_a_reply_that_is_not_json_is_asked_for_once_more(self):
+        self.plain("c1")
+        replies = [ValueError("not json"), dict(GOOD)]
+
+        def ask(prompt, model=None):
+            self.prompts.append((prompt, model))
+            r = replies.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        with mock.patch.object(SR, "_ask", ask):
+            self.assertEqual(SR.run_pass()["written"], 1)
+        self.assertEqual(len(self.prompts), 2)
+        self.assertIn("could not be read as JSON", self.prompts[1][0])
+
     def test_a_missing_retro_folder_is_a_named_error_not_a_new_folder(self):
         gone = self.root / "nowhere"
         self.plain("c1")
