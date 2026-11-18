@@ -240,6 +240,41 @@ class RetroPlacementTests(VaultCase):
             self.assertEqual(sessionretro._day_folder(self.day, Path("/flat")), Path("/flat"))
 
 
+class CodexAppTests(VaultCase):
+    def test_the_codex_app_form_and_its_helper_agents_land_in_one_folder(self):
+        day = "2026-11-17"
+        parent = "01a1ea2d-4d5b-7950-baaf-681702ff1c4d"
+        helper = "01a1ea36-2c46-7b93-8a99-4578e8869810"
+        base = self.over["codex"] / "2026" / "11" / "17"
+        _write_jsonl(base / f"rollout-2026-11-17T10-43-19-{parent}.jsonl", [
+            {"type": "session_meta", "timestamp": _ts(day, "10:43"),
+             "payload": {"id": parent, "cwd": "/nowhere/algonquin", "originator": "Codex Desktop"}},
+            {"type": "event_msg", "timestamp": _ts(day, "10:43"),
+             "payload": {"type": "item_completed", "item": {"type": "UserMessage",
+                         "content": [{"type": "text", "text": "Redo the photoreal renderings."}]}}},
+            {"type": "event_msg", "timestamp": _ts(day, "10:44"),
+             "payload": {"type": "item_completed", "item": {"type": "AgentMessage",
+                         "content": [{"type": "Text", "text": "I will look for the saved views."}]}}},
+        ])
+        _write_jsonl(base / f"rollout-2026-11-17T10-53-01-{helper}.jsonl", [
+            {"type": "session_meta", "timestamp": _ts(day, "10:53"),
+             "payload": {"id": helper, "parent_thread_id": parent, "thread_source": "subagent"}},
+            {"type": "event_msg", "timestamp": _ts(day, "10:54"),
+             "payload": {"type": "item_completed", "item": {"type": "AgentMessage",
+                         "content": [{"type": "Text", "text": "Living room view rendered."}]}}},
+        ])
+        sv.sync()
+        f = self.folder(f"codex:{parent}")
+        self.assertIsNone(self.folder(f"codex:{helper}"))
+        conv = (f / "conversation.md").read_text(encoding="utf-8")
+        self.assertIn("Redo the photoreal renderings.", conv)
+        self.assertIn("I will look for the saved views.", conv)
+        self.assertIn("your_messages: 1", conv)
+        self.assertTrue((f / "original" / "helpers" / f"rollout-2026-11-17T10-53-01-{helper}.jsonl").is_file())
+        self.assertIn("Living room view rendered.",
+                      (f / "work" / "helpers" / f"{helper}.md").read_text(encoding="utf-8"))
+
+
 class CloudTests(VaultCase):
     def _export(self):
         exp = self.tmp / "export"

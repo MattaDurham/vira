@@ -318,6 +318,16 @@ def _the_ask(text):
     return (m.group(1) if m else text).strip()
 
 
+def _codex_parent(log):
+    """The thread that started a Codex helper agent, from its first record."""
+    for row in rows(log):
+        p = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if row.get("type") == "session_meta":
+            return str(p.get("parent_thread_id") or "")
+        return ""
+    return ""
+
+
 def _job_links(jroot):
     """{transcript session id: [job dir]} and the jobs with none."""
     linked, alone = {}, []
@@ -389,6 +399,16 @@ def discover(origin="this Mac", claude=None, codex=None, jobs=True, app_root="de
         prev = seen.get(rec["key"])
         if prev is None or str(prev["log"]).endswith(".zst"):
             seen[rec["key"]] = rec
+    # A Codex helper agent writes a log of its own that names the thread
+    # that started it: it belongs in that session's folder, as Claude's
+    # helper agents do, not in a folder of its own.
+    for rec in list(seen.values()):
+        if rec["tool"] != "codex":
+            continue
+        parent = _codex_parent(rec["log"])
+        if parent and f"codex:{parent}" in seen and parent != rec["sid"]:
+            seen[f"codex:{parent}"]["extras"].append((rec["log"], "helpers"))
+            del seen[rec["key"]]
     out = list(seen.values())
     for root in cloud if cloud is not None else ([cloud_root()] if origin == "this Mac" else []):
         if not Path(root).is_dir():
@@ -538,6 +558,16 @@ def facts(rec):
                 f["first_ask"] = f["first_ask"] or _the_ask(p.get("message"))
             elif kind == "event_msg" and ptype == "agent_message":
                 f["replies"] += 1
+                f["first_reply"] = f.get("first_reply") or str(p.get("message") or "")
+            elif kind == "event_msg" and ptype == "item_completed":
+                # the Codex app's newer form: one completed item per message
+                item = p.get("item") if isinstance(p.get("item"), dict) else {}
+                if item.get("type") == "UserMessage":
+                    f["you"] += 1
+                    f["first_ask"] = f["first_ask"] or _the_ask(_text(item.get("content")))
+                elif item.get("type") == "AgentMessage":
+                    f["replies"] += 1
+                    f["first_reply"] = f.get("first_reply") or _text(item.get("content"))
             elif kind == "event_msg" and ptype == "token_count":
                 info = p.get("info") if isinstance(p.get("info"), dict) else {}
                 tot = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else {}
@@ -581,7 +611,7 @@ def facts(rec):
         stamp(meta.get("created_at"))
         if meta.get("configured_model"):
             f["models"][str(meta["configured_model"])] += 0
-    f["title"] = history.clean_title(_the_ask(f["title"] or f["first_ask"]).split("\n")[0],
+    f["title"] = history.clean_title(_the_ask(f["title"] or f["first_ask"] or f.get("first_reply", "")).split("\n")[0],
                                      cap=TITLE_IN_NAME) or "Untitled"
     f["project"] = _project(f["cwd"])
     f["started_by"] = _started_by(f["entry"], rec)
@@ -797,7 +827,7 @@ def _short(inp, cap=160):
     return s[:cap] + ("..." if len(s) > cap else "")
 
 
-def render_claude(path, conv, work, label="Claude"):
+def render_claude(path, conv, work, label="Claude", asker="You"):
     """Append a Claude Code log to the two pages: conversation lines to
     `conv`, every record to `work`."""
     step = 0
@@ -819,9 +849,9 @@ def render_claude(path, conv, work, label="Claude"):
                 if b.get("type") == "text":
                     raw = b.get("text") or ""
                     said = _WRAPPER.sub("", raw).strip()
-                    work.append(f"#### {'Injected text' if row.get('isMeta') else 'You'} - {when}\n\n{_fence(raw)}")
+                    work.append(f"#### {'Injected text' if row.get('isMeta') else asker} - {when}\n\n{_fence(raw)}")
                     if said and not row.get("isMeta") and not side:
-                        conv.append(f"### You - {when}\n\n{said}")
+                        conv.append(f"### {asker} - {when}\n\n{said}")
                 elif b.get("type") == "tool_result":
                     out = _text(b.get("content"))
                     err = " (error)" if b.get("is_error") else ""
@@ -888,18 +918,34 @@ def render_codex(path, conv, work):
                 said = str(p.get("message") or "").strip()
                 if said:
                     conv.append(f"### Codex - {when}\n\n{said}")
+                    work.append(f"#### Codex - {when}\n\n{said}")
 
             elif ptype == "agent_reasoning":
                 said = str(p.get("text") or "").strip()
                 if said:
                     conv.append(f"_Thinking:_\n\n{_quote(said)}")
+                    work.append(f"#### Thinking - {when}\n\n{_quote(said)}")
             elif ptype == "item_completed":
                 item = p.get("item") if isinstance(p.get("item"), dict) else {}
-                if item.get("type") == "UserMessage":
+                itype = item.get("type")
+                if itype == "UserMessage":
                     said = _text(item.get("content")).strip()
                     if said:
                         conv.append(f"### You - {when}\n\n{said}")
                         work.append(f"#### You - {when}\n\n{_fence(said)}")
+                elif itype == "AgentMessage":
+                    said = _text(item.get("content")).strip()
+                    if said:
+                        conv.append(f"### Codex - {when}\n\n{said}")
+                        work.append(f"#### Codex - {when}\n\n{said}")
+                elif itype == "Reasoning":
+                    said = "\n".join(str(x) for x in item.get("summary_text") or [] if x).strip()
+                    if said:
+                        conv.append(f"_Thinking:_\n\n{_quote(said)}")
+                        work.append(f"#### Thinking - {when}\n\n{_quote(said)}")
+                elif itype:
+                    work.append(f"#### {itype} - {when}\n\n"
+                                f"{_fence(json.dumps(item, ensure_ascii=False, indent=1)[:INLINE_CAP])}")
             continue
         if kind == "response_item":
             if ptype == "message":
@@ -1024,7 +1070,9 @@ def render(rec, f, folder, aliases):
         if rec["tool"] == "codex":
             render_codex(log_copy, conv, work)
         else:
-            render_claude(log_copy, conv, work)
+            # who wrote the "user" turns: you, or Vira or a program asking
+            asker = {"vira": "Vira asked", "a program": "Asked by a program"}.get(f["started_by"], "You")
+            render_claude(log_copy, conv, work, asker=asker)
     for extra in sorted((odir / "claude-ai").glob("*.events.jsonl")) if (odir / "claude-ai").is_dir() else []:
         work.append(f"### The copy claude.ai kept ({extra.name})")
         render_claude(extra, [], work)
@@ -1033,7 +1081,16 @@ def render(rec, f, folder, aliases):
         render_job(jcopy if jcopy.is_dir() else jdir, conv, work, with_conversation=not rec["log"])
     helpers = sorted((odir / "session-folder" / "subagents").glob("*.jsonl")) \
         if (odir / "session-folder" / "subagents").is_dir() else []
+    codex_helpers = sorted(p for p in (odir / "helpers").glob("*") if p.name.endswith((".jsonl", ".zst"))) \
+        if (odir / "helpers").is_dir() else []
     hdir = folder / WORK / "helpers"
+    for h in codex_helpers:
+        hwork = []
+        render_codex(h, [], hwork)
+        name = _UUID.findall(h.name)
+        _write(hdir / f"{name[-1] if name else h.stem}.md",
+               f"# Helper agent {name[-1] if name else h.stem}\n\n" + "\n\n".join(hwork) + "\n")
+    helpers_n = len(helpers) + len(codex_helpers)
     for h in helpers:
         hconv, hwork = [], []
         render_claude(h, hconv, hwork, label="Helper")
@@ -1057,8 +1114,8 @@ def render(rec, f, folder, aliases):
         lines.append("\nRetro: " + ", ".join(f"[[{p.stem}]]" for p in sorted(retro)))
     lines.append(f"\nEvery step's full input and output: [[{WORK}/work]]. "
                  f"The files this session left, unchanged: `{ORIGINAL}/`.")
-    if helpers:
-        lines.append(f"Helper agents: {len(helpers)} (in `{WORK}/helpers/`).")
+    if helpers_n:
+        lines.append(f"Helper agents: {helpers_n} (in `{WORK}/helpers/`).")
     if f["encrypted"]:
         lines.append(f"\n{f['encrypted']} thinking steps are stored encrypted by the tool's "
                      "provider; their bytes are kept in `original/` but cannot be read here.")
