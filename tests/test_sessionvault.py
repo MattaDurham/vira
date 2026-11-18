@@ -275,6 +275,38 @@ class CodexAppTests(VaultCase):
                       (f / "work" / "helpers" / f"{helper}.md").read_text(encoding="utf-8"))
 
 
+class ImportLabelTests(VaultCase):
+    def test_a_labeled_import_says_so_in_the_name_and_page_and_keeps_its_readme(self):
+        root = self.tmp / "backup" / "projects"
+        stand = root / "-SYNTHETIC-reconstructed-history"
+        _write_jsonl(stand / "synthetic-2026-02-02.jsonl", [
+            {"type": "user", "timestamp": "2026-02-02T12:00:00Z", "cwd": "/SYNTHETIC/x",
+             "message": {"content": "estimated activity"}}])
+        (stand / "_README_SYNTHETIC.md").write_text("These are estimates.", encoding="utf-8")
+        sv.sync(origin="old Mac", claude=[root], codex=[], jobs=False, app_root=None,
+                label="Estimated stand-in, not a real transcript")
+        f = self.folder("claude:synthetic-2026-02-02")
+        self.assertIn("Estimated stand-in, not a real transcript", f.name)
+        conv = (f / "conversation.md").read_text(encoding="utf-8")
+        self.assertIn('label: "Estimated stand-in, not a real transcript"', conv)
+        self.assertIn("**Estimated stand-in, not a real transcript.**", conv)
+        self.assertEqual((f / "original" / "beside-the-logs" / "_README_SYNTHETIC.md").read_text(
+            encoding="utf-8"), "These are estimates.")
+
+    def test_another_tools_log_is_kept_whole_and_shown_record_by_record(self):
+        chats = self.tmp / "backup" / "vscode"
+        _write_jsonl(chats / "123a97c9-9cea-4f9d-b95f-64632052dadd.jsonl", [
+            {"kind": 0, "v": {"creationDate": 1774361837725, "requests": [{"message": "hello there"}]}}])
+        sv.sync(origin="old Mac", claude=[], codex=[], jobs=False, app_root=None,
+                other=[("VS Code chat", chats)])
+        f = self.folder("vs-code-chat:123a97c9-9cea-4f9d-b95f-64632052dadd")
+        self.assertTrue((f / "original" / "123a97c9-9cea-4f9d-b95f-64632052dadd.jsonl").is_file())
+        self.assertIn("hello there", (f / "work" / "work.md").read_text(encoding="utf-8"))
+        conv = (f / "conversation.md").read_text(encoding="utf-8")
+        self.assertIn("This is a VS Code chat session", conv)
+        self.assertIn("started_by: you", conv)
+
+
 class CloudTests(VaultCase):
     def _export(self):
         exp = self.tmp / "export"
