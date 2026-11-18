@@ -658,6 +658,17 @@ def _resume_meta(row, jid):
     return meta
 
 
+def _resumed_runtime(runtime):
+    """The resumed record's runtime, as foreground work. A hard turn limit
+    saved by an older Find chat is dropped: chat turns have no time limit
+    (owner, 2026-11-18), so continuing an old chat must not bring one back."""
+    out = dict(runtime or {}, work_class="foreground")
+    budget = out.get("latency_budget")
+    if isinstance(budget, dict) and "hard_limit_s" in budget:
+        out["latency_budget"] = {k: v for k, v in budget.items() if k != "hard_limit_s"}
+    return out
+
+
 def module_session_model(choice):
     """Validate a module choice against the transport sessions really use.
 
@@ -1291,7 +1302,7 @@ class Sessions:
             cwd=cwd,
             model=(row.get("runtime") or {}).get("effective", {}).get("model") or row.get("model") or None,
             effort=(row.get("runtime") or {}).get("effective", {}).get("effort") or row.get("effort"),
-            runtime=dict(row.get("runtime") or {}, work_class="foreground"),
+            runtime=_resumed_runtime(row.get("runtime")),
             provider=row.get("provider") or None,
             mode=row.get("mode") or None,
             permission_mode=row.get("permission_mode") or None,

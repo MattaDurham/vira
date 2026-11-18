@@ -194,9 +194,9 @@ class OpenedFromTheBrief(ChatBase):
 
 
 class FollowingATurn(ChatBase):
-    """_follow driven with a scripted sequence of snapshots and a fake clock."""
+    """_follow driven with a scripted sequence of snapshots and a fake sleep."""
 
-    def drive(self, snaps, prior="", max_s=60, sent_t=0.0):
+    def drive(self, snaps, prior="", sent_t=0.0):
         virachat._mutate(lambda st: st["sessions"][self.sid]["turns"][0].update(sent_t=sent_t))
         seq = iter(snaps)
         last = {"s": None}
@@ -207,12 +207,10 @@ class FollowingATurn(ChatBase):
             except StopIteration:
                 pass
             return last["s"]
-        clock = {"t": 0.0}
         with mock.patch.object(virachat, "_session_snapshot", side_effect=get), \
              mock.patch.object(virachat, "_concepts", return_value=([], [])):
-            virachat._follow(self.sid, 0, "job000000001", prior, sent_t, max_s=max_s,
-                             clock=lambda: clock["t"],
-                             sleep=lambda s: clock.__setitem__("t", clock["t"] + s))
+            virachat._follow(self.sid, 0, "job000000001", prior, sent_t,
+                             sleep=lambda s: None)
             for call in virachat.threading.Thread.call_args_list:
                 if call.kwargs.get("target") is virachat._enrich:
                     virachat._enrich(*call.kwargs["args"])
@@ -244,10 +242,33 @@ class FollowingATurn(ChatBase):
         self.assertEqual(t["status"], "failed")
         self.assertIn("spend limit", t["answer"])
 
-    def test_a_turn_that_never_settles_times_out(self):
-        t = self.drive([snap(awaiting=None)] * 5, max_s=3)
-        self.assertEqual(t["status"], "failed")
-        self.assertIn("no answer after", t["answer"])
+    def test_a_long_turn_is_never_ended_by_time(self):
+        # Owner's rule, 2026-11-18: no time limit. Twenty minutes of
+        # one-second polls (twice the old cutoff), then the answer lands.
+        working = [snap(awaiting=None)] * 1200
+        t = self.drive(working + [snap(awaiting="reply", result="Found it.")])
+        self.assertEqual(t["status"], "done")
+        self.assertEqual(t["answer"], "Found it.")
+
+    def test_a_turn_waiting_on_the_owner_stays_open_until_they_answer(self):
+        asking = [snap(awaiting=None)] + [snap(awaiting="ask")] * 1200
+        t = self.drive(asking + [snap(awaiting="reply", result="Thanks, it is the red one.")])
+        self.assertEqual(t["status"], "done")
+        self.assertEqual(t["answer"], "Thanks, it is the red one.")
+
+    def test_the_session_prompt_says_to_keep_working_or_ask(self):
+        for native in (True, False):
+            text = " ".join(virachat._launch_prompt("where is it?", native).split())
+            self.assertIn("no time limit", text)
+            self.assertIn("never stop just because time", text.lower())
+            self.assertNotIn("three minutes", text)
+
+    def test_the_session_is_launched_with_no_hard_turn_limit(self):
+        from server import session
+        with mock.patch.object(session.sessions, "launch", return_value="job1") as launch:
+            virachat._open_session("", "where is it?", route={"provider": "anthropic", "model": ""})
+        budget = launch.call_args.kwargs["runtime"]["latency_budget"]
+        self.assertNotIn("hard_limit_s", budget)
 
     def test_a_vanished_session_fails_the_turn(self):
         t = self.drive([None])
@@ -505,7 +526,7 @@ class Recovery(ChatBase):
     def test_current_expires_a_launch_reservation_abandoned_by_a_crash(self):
         s = virachat.send("question")
         virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
-            launching=True, sent_t=time.time() - virachat.TURN_MAX_S - 1))
+            launching=True, sent_t=time.time() - virachat.DEAD_TURN_S - 1))
         t = virachat.current()["turns"][0]
         self.assertEqual(t["status"], "failed")
         self.assertIn("did not finish starting", t["answer"])
@@ -519,7 +540,7 @@ class Recovery(ChatBase):
             opened.append(question)
             if question == "slow launch":
                 virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
-                    sent_t=time.time() - virachat.TURN_MAX_S - 1))
+                    sent_t=time.time() - virachat.DEAD_TURN_S - 1))
                 self.assertEqual(virachat.current()["turns"][0]["status"], "failed")
                 virachat.send("new launch")
                 return "job_old_late", False, False
@@ -534,13 +555,33 @@ class Recovery(ChatBase):
         self.assertEqual(len(followers), 1)
         self.assertEqual(followers[0].kwargs["args"][2], "job_new")
 
-    def test_current_expires_a_pending_turn_whose_follower_was_lost(self):
+    def test_a_lost_follower_leaves_a_working_session_pending_however_old(self):
         s = virachat.send("question")
         virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
-            sent_t=time.time() - virachat.TURN_MAX_S - 1))
-        t = virachat.current()["turns"][0]
+            sent_t=time.time() - 86400))
+        with mock.patch.object(virachat, "_session_snapshot",
+                               return_value=snap(awaiting=None)):
+            t = virachat.current()["turns"][0]
+        self.assertEqual(t["status"], "pending")
+
+    def test_a_lost_follower_fails_the_turn_when_its_session_is_gone(self):
+        s = virachat.send("question")
+        virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
+            sent_t=time.time() - virachat.DEAD_TURN_S - 1))
+        with mock.patch.object(virachat, "_session_snapshot", return_value=None):
+            t = virachat.current()["turns"][0]
         self.assertEqual(t["status"], "failed")
-        self.assertIn("no answer after", t["answer"])
+        self.assertIn("the session is gone", t["answer"])
+
+    def test_a_lost_follower_fails_the_turn_when_its_session_ended(self):
+        s = virachat.send("question")
+        virachat._mutate(lambda st: st["sessions"][s["id"]]["turns"][0].update(
+            sent_t=time.time() - virachat.DEAD_TURN_S - 1))
+        with mock.patch.object(virachat, "_session_snapshot",
+                               return_value=snap(status="orphaned", awaiting=None)):
+            t = virachat.current()["turns"][0]
+        self.assertEqual(t["status"], "failed")
+        self.assertIn("orphaned", t["answer"])
 
 
 class ConceptCompletion(unittest.TestCase):
