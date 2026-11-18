@@ -8,6 +8,21 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- Session retros: `python -m server.sessionretro tick` writes one Markdown
+  retro for every agent session that has gone quiet for two hours, whatever
+  ran it (the Claude app and terminal, Codex, a session Vira dispatched
+  under any provider), into the session retro folder. The session list is
+  the history store's, so no end-of-session hook is involved, and a session
+  that resumes has its retro rewritten in place. Commits, pull requests and
+  changed files are copied from the record; a model writes the goal, what
+  shipped, decisions, dead ends, what is open and the next step, and any
+  line naming a commit, file or pull request the record does not hold is
+  dropped and counted. `daily` rolls a working day (04:00 to 04:00) up per
+  project and across projects, and `weekly` rolls seven days up. A retro
+  written by hand is never replaced. Folders listed in the new
+  `session_retro_private_roots` setting keep their retros in their own
+  `retros/` and out of every rollup. Each pass is meant to run as a Program
+  on a Schedule; none is on by default.
 - Fleet > History, the Time map: Fleet's tabs are now Now, History and
   Background calls. History opens on a map of the week with one lane per
   project (or per module): sessions are bars colored by app, solid for the

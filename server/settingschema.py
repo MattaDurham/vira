@@ -682,6 +682,12 @@ SCHEMA = [
       "Retro directories the counter reads as the markdown fallback, ALL "
       "projects. Empty = the retro folder above (or its default) plus this "
       "checkout's retros/.", advanced=True),
+    S("session_retro_private_roots", "lessons", "list", [],
+      "Folders whose session retros stay private",
+      "A session that ran inside one of these folders gets its retro in "
+      "that folder's own retros/ and never in the session retro folder, so "
+      "it is in no daily or weekly rollup. One absolute path per entry.",
+      advanced=True),
     S("lessons_script_path", "lessons", "path", "", "Lessons CLI",
       "The corrections-ledger CLI the review queue shells out to; it owns "
       "every ledger write. Empty = ~/.claude/scripts/lessons.py.",

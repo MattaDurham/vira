@@ -1,0 +1,22 @@
+{
+  "id": "evidence/sessionretros",
+  "name": "Session retros",
+  "summary": "A written retro for every agent session, rolled up by day and by week.",
+  "owns": [
+    "server/sessionretro.py",
+    "tests/test_sessionretro.py"
+  ],
+  "routes": [],
+  "stores": [
+    "data/session-retros.json"
+  ],
+  "reads": [
+    "fleet/history",
+    "models/backends"
+  ],
+  "feeds": [
+    "evidence/changelog",
+    "evidence/ledger"
+  ],
+  "registry": []
+}
