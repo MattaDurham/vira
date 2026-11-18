@@ -136,6 +136,8 @@ def _retro_files():
     d = _retro_dir()
     if d.exists():
         out += sorted(d.glob("* vira.md"))
+    from . import sessionvault
+    out += sessionvault.retro_files("* vira.md")
     if REPO_RETROS_DIR.is_dir():
         out += sorted(REPO_RETROS_DIR.glob("*.md"))
     return out
@@ -627,7 +629,9 @@ def export_approved():
 
 def status():
     retro_dir = _retro_dir()
-    tc_retros = sorted(retro_dir.glob("* vira.md")) if retro_dir.exists() else []
+    from . import sessionvault
+    tc_retros = (sorted(retro_dir.glob("* vira.md")) if retro_dir.exists() else []) + \
+        sessionvault.retro_files("* vira.md")
     repo_retro_files = (sorted(REPO_RETROS_DIR.glob("*.md"))
                         if REPO_RETROS_DIR.is_dir() else [])
     cases = list_cases()

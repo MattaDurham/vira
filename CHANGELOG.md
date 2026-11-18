@@ -8,6 +8,29 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
 
 ### Added
 
+- The Sessions vault: `python -m server.sessionvault sync` keeps every
+  agent session on the machine whole, one folder per session by working
+  day (`YYYY/YYYY-MM/YYYY-MM-DD/<date time project - title>/`). The list
+  comes from the files on disk: Claude Code logs (the app, the terminal,
+  sessions run through the SDK), Codex logs including their compressed
+  form, and Vira's job folders. Each folder holds `original/` (every file
+  the session left, copied unchanged with its sha256: the log, helper-agent
+  logs, saved tool output, file backups, the app's record, the scratchpad),
+  `conversation.md` (every message, the readable thinking, a line per step,
+  and the session's details at the top), and `work/` (every step's full
+  input and output). A copy is refreshed when its source changes; a source
+  that was rewritten rather than appended to keeps its earlier copy in
+  `original/versions/`. Nothing is deleted. With the new
+  `session_vault_root` setting, session retros go into their session's
+  folder and the rollups into the day folder and `weeks/`; every reader of
+  retros (change log, ledger, lesson counter, history, reading list) reads
+  the vault as well as the old folder. `import` files another machine's
+  logs the same way, `export-script` and `import-cloud` bring in the
+  sessions claude.ai holds (cloud sessions, and the Remote Control copies,
+  which are kept with the Mac session they mirror), `adopt` moves an old
+  flat retro folder into place without overwriting anything, and `check`
+  lists anything on disk not yet in the vault. The Find chat answers
+  questions about past sessions from this vault.
 - Session retros: `python -m server.sessionretro tick` writes one Markdown
   retro for every agent session that has gone quiet for two hours, whatever
   ran it (the Claude app and terminal, Codex, a session Vira dispatched

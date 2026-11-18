@@ -1,0 +1,22 @@
+{
+  "id": "evidence/sessionvault",
+  "name": "Sessions vault",
+  "summary": "Every agent session kept whole, one folder per session by date: its files copied unchanged, its conversation, its retro.",
+  "owns": [
+    "server/sessionvault.py",
+    "tests/test_sessionvault.py"
+  ],
+  "routes": [],
+  "stores": [
+    "data/session-vault.json"
+  ],
+  "reads": [
+    "fleet/history"
+  ],
+  "feeds": [
+    "evidence/sessionretros",
+    "evidence/changelog",
+    "evidence/ledger"
+  ],
+  "registry": []
+}

@@ -290,6 +290,8 @@ def _retro_files():
             # every project's retros — the ledger is global, and scoping to
             # one project would silently measure a fraction of the evidence
             out.extend(sorted(d.glob("*.md"), reverse=True))
+    from . import sessionvault
+    out.extend(reversed(sessionvault.retro_files()))
     return out
 
 

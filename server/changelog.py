@@ -176,8 +176,10 @@ def _retro_files():
     from the nightly writer's no-clobber suffix stay excluded — they are
     near-copies of a session already counted — but are counted in
     `warnings` rather than vanishing silently."""
+    from . import sessionvault
     return sorted(SESSIONS.glob("* vira.md")) + \
-        sorted(SESSIONS.glob("* vira — *.md"))
+        sorted(SESSIONS.glob("* vira — *.md")) + \
+        sessionvault.retro_files("* vira.md") + sessionvault.retro_files("* vira — *.md")
 
 
 def build():
@@ -186,7 +188,7 @@ def build():
     warnings = []
 
     retros = []
-    if SESSIONS.exists():
+    if True:   # the flat folder, the Sessions vault, or both
         for f in _retro_files():
             g = _parse_retro(f)
             if not g["date"]:

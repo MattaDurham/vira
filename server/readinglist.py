@@ -374,6 +374,19 @@ def _file_created(p, name=""):
         return _now()
 
 
+def _sessions_vault_retros():
+    """Retros and rollups in the Sessions vault, addressed as notes of that
+    vault (`@sessions/<path>`)."""
+    from . import sessionvault
+    root = sessionvault.vault_root()
+    out = []
+    for f in sessionvault.retro_files():
+        rel = f.relative_to(root).as_posix()
+        out.append({"title": f.stem, "kind": "retro", "locator": f"@sessions/{rel}",
+                    "locator_kind": "vault", "created": _file_created(f, f.stem)})
+    return out
+
+
 def _vault_documents():
     root = settings.get("vault_root")
     if not root:
@@ -390,6 +403,7 @@ def _vault_documents():
             found.append({"title": f.stem, "kind": kind,
                           "locator": f"{sub}/{f.name}", "locator_kind": "vault",
                           "created": _file_created(f, f.stem)})
+    found += _sessions_vault_retros()
     return found
 
 

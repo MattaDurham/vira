@@ -235,27 +235,47 @@ def _read_head(path):
         return ""
 
 
+def _vault():
+    """The Sessions vault's folder when one is set (server/sessionvault.py),
+    else None. With a vault, a session's retro goes in the session's own
+    folder there and the rollups in its day and week folders."""
+    if _dir_override:
+        return None
+    from . import sessionvault
+    root = sessionvault.vault_root()
+    return root if root and root.is_dir() else None
+
+
+def _retro_listing(dirs):
+    """Every retro or rollup file: the flat retro folder(s) and the vault."""
+    out = []
+    for d in dirs:
+        if d.is_dir():
+            out += sorted(d.glob("*.md"))
+    if _vault():
+        from . import sessionvault
+        out += sessionvault.retro_files()
+    return out
+
+
 def _index(dirs):
     """Every session retro already on disk: {session id: [record]} plus the
     records that carry no id (hand-written ones)."""
     by_sid, loose = {}, []
-    for d in dirs:
-        if not d.is_dir():
+    for p in _retro_listing(dirs):
+        if _ROLLUP_STEM.match(p.stem):
             continue
-        for p in sorted(d.glob("*.md")):
-            if _ROLLUP_STEM.match(p.stem):
-                continue
-            fm = _front(_read_head(p))
-            if not fm:
-                continue
-            rec = {"path": p, "by": fm.get("generated_by", ""),
-                   "end": history.to_ts(fm.get("session_end") or "") or 0.0,
-                   "cwd": fm.get("cwd", ""), "at": _file_ts(fm, p)}
-            sid = fm.get("session_id", "")
-            if sid:
-                by_sid.setdefault(sid, []).append(rec)
-            else:
-                loose.append(rec)
+        fm = _front(_read_head(p))
+        if not fm:
+            continue
+        rec = {"path": p, "by": fm.get("generated_by", ""),
+               "end": history.to_ts(fm.get("session_end") or "") or 0.0,
+               "cwd": fm.get("cwd", ""), "at": _file_ts(fm, p)}
+        sid = fm.get("session_id", "")
+        if sid:
+            by_sid.setdefault(sid, []).append(rec)
+        else:
+            loose.append(rec)
     return by_sid, loose
 
 
@@ -917,6 +937,19 @@ def _new_path(s, dest):
     return path
 
 
+def _vault_path(s):
+    """The retro's place in the session's vault folder, or None when there is
+    no vault or the session has no folder there yet (it then goes in the
+    flat folder, and moves when the vault adopts it)."""
+    if not _vault():
+        return None
+    from . import sessionvault
+    key = f"{s['tool']}:{s['sid']}" if s["tool"] in ("claude", "codex") else f"vira:{s['sid']}"
+    start = _local(s["start"])
+    stem = f"{start.strftime('%Y-%m-%d %H%M')} {_safe_name(s['project'])}"
+    return sessionvault.retro_path_for(key, stem, ids=s["ids"])
+
+
 def _mark(s, **fields):
     def fn(st):
         rows = st.setdefault("sessions", {})
@@ -967,7 +1000,7 @@ def write_retro(s, events, model=None):
         return "failed"
     obj, dropped = check_claims(obj, d, fact_events)
     dest, _private = _dest_dir(s["folder"])
-    path = s.get("path") or _new_path(s, dest)
+    path = s.get("path") or _vault_path(s) or _new_path(s, dest)
     _write(path, render_session(s, d, obj, fact_events, dropped, left_out))
     _mark(s)
     return "rewritten" if s.get("path") else "written"
@@ -1079,7 +1112,7 @@ def session_files_by_day():
     """{working day: {project: [retro files]}} for the shared folder."""
     out = {}
     d = _retro_dir()
-    for p in sorted(d.glob("*.md")) if d.is_dir() else []:
+    for p in _retro_listing([d]):
         if _ROLLUP_STEM.match(p.stem):
             continue
         fm = _front(_read_head(p))
@@ -1111,6 +1144,20 @@ def _rollup_front(tags, day, source_hash, project=None):
     return "\n".join(rows)
 
 
+def _day_folder(day, flat):
+    if _vault():
+        from . import sessionvault
+        return sessionvault.day_dir(day, _vault())
+    return flat
+
+
+def _week_folder(flat):
+    if _vault():
+        from . import sessionvault
+        return sessionvault.weeks_dir(_vault())
+    return flat
+
+
 def roll_day(day, by_project, model=None):
     """One day's rollups: a file per project, then the cross-project file."""
     counts = Counter()
@@ -1118,7 +1165,7 @@ def roll_day(day, by_project, model=None):
     day_files = []
     for project in sorted(by_project):
         files = by_project[project]
-        path = d / f"{day} day {_safe_name(project)}.md"
+        path = _day_folder(day, d) / f"{day} day {_safe_name(project)}.md"
         h = _hash([f"{p.name}:{p.stat().st_mtime_ns}" for p in files])
         state = _stale(path, h)
         if state == "write":
@@ -1167,7 +1214,7 @@ def roll_day(day, by_project, model=None):
             day_files.append(path)
     if not day_files:
         return counts
-    path = d / f"{day} cross-project.md"
+    path = _day_folder(day, d) / f"{day} cross-project.md"
     h = _hash([f"{p.name}:{_front(_read_head(p)).get('source_hash') or p.stat().st_mtime_ns}"
                for p in day_files])
     state = _stale(path, h)
@@ -1245,13 +1292,14 @@ def run_weekly(week_ending=None, model=None, now=None):
     days = [_day_add(week_ending, -n) for n in range(6, -1, -1)]
     files = []
     for day in days:
-        files += sorted(d.glob(f"{day} day *.md"))
-        cross = d / f"{day} cross-project.md"
-        if cross.exists():
-            files.append(cross)
+        for folder in dict.fromkeys([d, _day_folder(day, d)]):
+            files += sorted(folder.glob(f"{day} day *.md"))
+            cross = folder / f"{day} cross-project.md"
+            if cross.exists():
+                files.append(cross)
     if not files:
         return {"weeks with no daily rollups": 1}
-    path = d / f"{week_ending} week.md"
+    path = _week_folder(d) / f"{week_ending} week.md"
     h = _hash([f"{p.name}:{_front(_read_head(p)).get('source_hash') or p.stat().st_mtime_ns}"
                for p in files])
     state = _stale(path, h)

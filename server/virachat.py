@@ -143,6 +143,12 @@ Use {tool_prefix}answer_sources to discover available sources and their dates.
 Start with the narrowest useful tool: calendar for dates, a person's messages
 for a conversation, source search for a named document; use {tool_prefix}find
 when the location is unknown. Independent lookups may run in parallel.
+A question about a past agent session (what was asked, decided or built in a
+Claude, Codex or Vira session) is answered from the Sessions vault source
+(vault:sessions; its note paths start with @sessions/): search it with
+{tool_prefix}vault_query or {tool_prefix}find, read the session's
+conversation.md, and give the session's own link from that page. Never search raw session log files with
+the shell: they run to tens of gigabytes and the vault already holds them.
 
 Choose the research depth the question needs (requested mode: {mode}):
 - Lookup: read the decisive passage and answer promptly with its date.
