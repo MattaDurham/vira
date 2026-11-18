@@ -25,11 +25,16 @@ STORE = Path(__file__).resolve().parent.parent / "data" / "vira-chat.json"
 HISTORY_PAGE = 30
 PROMPT_VERSION = "vira-chat-v2"
 MAX_PRIOR_CONCEPTS = 60
-# A turn that has not settled by this is reported as failed rather than
-# left pending forever - the compose box must never wedge shut. A real
-# multi-tool turn on this machine runs 20-90s; ten minutes is far past any
-# honest answer.
-TURN_MAX_S = 600
+# A turn has no time limit. Owner's rule, 2026-11-18: a session that cannot
+# find an answer uses its judgment - keeps working or asks the owner - and is
+# never ended because time passed. It settles when it answers, fails, ends,
+# or the owner presses Stop. Only a turn with no live session behind it is
+# failed after this long, so the compose box never wedges shut: a launch that
+# never got a job (a crash between reserving and launching), or a turn whose
+# follower was lost and whose session vanished or ended without answering.
+# The wait keeps a just-sent message from being failed against the previous
+# turn's finished session before its runner picks it up.
+DEAD_TURN_S = 600
 # Optional source/concept decoration gets its own deadline; it never owns
 # the answer or the compose box. Late results are discarded after this.
 ENRICHMENT_MAX_S = 45
@@ -158,9 +163,11 @@ Cite concrete claims using the evidence_handle returned by a read, as
 read. Never invent a handle. Legacy [[path]] links are navigation only.
 Every 15-30 seconds of substantial work, give a brief useful progress update
 about evidence found or an unresolved gap. Publish a supported preliminary
-answer when ready and mark it provisional if checks remain. Aim to answer
-ordinary questions within three minutes; explain a remaining gap rather than
-silently extending research. Keep raw tool output out of the answer.
+answer when ready and mark it provisional if checks remain. There is no time
+limit on this conversation. When you cannot find the answer and need more
+information, use your judgment: keep looking, or ask {owner} with
+{tool_prefix}ask_owner and wait for the reply. Never stop just because time
+has passed. Keep raw tool output out of the answer.
 
 You can also perform actions the owner requests, using the configured session
 permissions. Ask with {tool_prefix}ask_owner when a necessary choice belongs
@@ -181,8 +188,11 @@ for a synthesis. Use enumeration for exact counts, and label incomplete ranks
 as qualitative. Distinguish event dates from modification dates and conflicting
 accounts from established facts. Cite [[evidence:ev_HASH|source label]] using
 returned handles. Share useful progress every 15-30 seconds and publish a
-supported preliminary answer promptly if research continues. Say what remains
-unknown; never invent a source. Do not file an unrequested artifact.
+supported preliminary answer promptly if research continues. There is no time
+limit: when you cannot find the answer and need more information, keep looking
+or ask {owner} a question and wait for the reply; never stop just because time
+has passed. Say what remains unknown; never invent a source. Do not file an
+unrequested artifact.
 
 {owner} says:
 {question}"""
@@ -374,7 +384,7 @@ def _open_session(job_id, question, *, route=None, prior_route=None, turns=(),
             effort=settings.raw().get("chat_effort") or None,
             runtime={"prompt_version": PROMPT_VERSION, "chat_id": chat_id, "evidence_scope": {"sources": sources or []},
                      "answer_mode": mode, "work_class": "foreground",
-                     "latency_budget": {"first_update_s": 15, "answer_s": 180, "hard_limit_s": TURN_MAX_S}},
+                     "latency_budget": {"first_update_s": 15}},
             provider=provider, meta={"kind": "chat"},
             subject=q[:140],
             about=f"A conversation with Vira, opened with: {q[:600]}")
@@ -647,9 +657,12 @@ def _find_turn(state, sid, key):
     return s, t
 
 
-def _follow(sid, idx, job_id, prior, sent_t=0.0, max_s=TURN_MAX_S,
-            poll_s=POLL_S, clock=time.time, sleep=time.sleep, turn_key=None):
+def _follow(sid, idx, job_id, prior, sent_t=0.0,
+            poll_s=POLL_S, sleep=time.sleep, turn_key=None):
     """Publish the answer at its boundary, before ANY optional enrichment.
+
+    There is no deadline: the turn waits for the session, however long it
+    works or waits on the owner (the rule is at DEAD_TURN_S).
 
     Source attribution uses the send time, not the runner's turn counter:
     the counter moves after dispatch and a turn may make no calls at all.
@@ -661,8 +674,6 @@ def _follow(sid, idx, job_id, prior, sent_t=0.0, max_s=TURN_MAX_S,
         if idx >= len(turns):
             return
         turn_key = _turn_key(turns[idx])
-    end = clock() + max_s
-    last_clock = clock()
     saw_working = False
     answer, failed, snap = "", "", {}
     while True:
@@ -681,14 +692,6 @@ def _follow(sid, idx, job_id, prior, sent_t=0.0, max_s=TURN_MAX_S,
                 return
             sleep(poll_s)
             continue
-        now = clock()
-        if _waiting_for_owner(snap):
-            end += max(0, now - last_clock)
-        last_clock = now
-        if now >= end and not _waiting_for_owner(snap):
-            failed = f"no answer after {int(max_s)}s"
-            _interrupt_timeout(job_id)
-            break
         if snap.get("status") == "running" and snap.get("awaiting") not in ("reply", "paused"):
             saw_working = True
         out = _answer_text(snap, sent_t)
@@ -724,7 +727,7 @@ def _finish_turn(sid, idx, answer, failed, looked, cites, concepts, followups,
             return
         t["answer"] = answer if answer else ("Vira could not answer: " + failed)
         t["status"] = "done" if answer else "failed"
-        t["outcome"] = "completed" if answer else ("timed_out" if "no answer after" in failed else "failed")
+        t["outcome"] = "completed" if answer else "failed"
         t["looked_at"] = looked
         t["citations"] = cites
         t["finished"] = _now()
@@ -743,17 +746,6 @@ def _finish_turn(sid, idx, answer, failed, looked, cites, concepts, followups,
     return bool(changed)
 
 
-def _interrupt_timeout(job_id):
-    if not job_id:
-        return
-    try:
-        from . import session
-        session.sessions.interrupt(job_id)
-    except Exception:
-        # The failure remains durable even if the provider is unreachable.
-        pass
-
-
 def _reconcile(s):
     """Recover a stranded answer from the durable session on normal reads.
 
@@ -765,7 +757,7 @@ def _reconcile(s):
     for idx, t in enumerate(turns):
         key = _turn_key(t)
         if (t.get("status") == "pending" and t.get("launching")
-                and time.time() - float(t.get("sent_t") or 0) >= TURN_MAX_S):
+                and time.time() - float(t.get("sent_t") or 0) >= DEAD_TURN_S):
             _finish_turn(s["id"], idx, "", "the conversation did not finish starting",
                          [], [], [], [], turn_key=key)
             continue
@@ -787,10 +779,13 @@ def _reconcile(s):
                 if _finish_turn(s["id"], idx, out, "", [], [], [], [],
                                 turn_key=key, enrich=True):
                     _start_enrichment(s["id"], key, snap)
-            elif (not _waiting_for_owner(snap)
-                  and time.time() - float(t.get("sent_t") or 0) - t.get("waited_s", 0) >= TURN_MAX_S):
-                _interrupt_timeout(t.get("job_id") or s.get("job_id"))
-                _finish_turn(s["id"], idx, "", f"no answer after {TURN_MAX_S}s",
+            elif ((snapshot is None or snap.get("status") not in ("running", None))
+                  and time.time() - float(t.get("sent_t") or 0) >= DEAD_TURN_S):
+                # Its follower was lost (a restart) and no session is working
+                # on it. A session still working, or waiting on the owner,
+                # stays pending: elapsed time alone never ends a turn.
+                _finish_turn(s["id"], idx, "", "the session is gone" if snapshot is None
+                             else snap.get("error") or f"the session ended ({snap.get('status')})",
                              [], [], [], [], turn_key=key)
         phase = t.get("enrichment") or {}
         if phase.get("status") not in ("pending", "running"):

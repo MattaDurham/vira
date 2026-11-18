@@ -648,6 +648,22 @@ class ResumeTests(unittest.TestCase):
             reg2.say(h2.id, "third turn")
         self.assertTrue(session.is_chat(self.calls[-1]["meta"]))
 
+    def test_a_resumed_chat_drops_an_old_hard_turn_limit(self):
+        # Chats saved before 2026-11-18 carry a ten-minute hard limit; chat
+        # turns have none now, so continuing one must not bring it back.
+        runtime = {"work_class": "background", "prompt_version": "vira-chat-v2",
+                   "latency_budget": {"first_update_s": 15, "answer_s": 180,
+                                      "hard_limit_s": 600}}
+        reg = self._reg(self._row(meta={"kind": "chat"}, runtime=runtime))
+        h = make_detached(reg, self.tmp.name, status="error")
+        with self.launch_patch, self.ledger_patch:
+            reg.say(h.id, "still there?")
+        carried = self.calls[0]["runtime"]
+        self.assertEqual(carried["work_class"], "foreground")
+        self.assertEqual(carried["prompt_version"], "vira-chat-v2")
+        self.assertEqual(carried["latency_budget"], {"first_update_s": 15, "answer_s": 180})
+        self.assertIn("hard_limit_s", runtime["latency_budget"])  # the saved row is untouched
+
     def test_a_live_session_is_steered_not_resumed(self):
         reg = self._reg(self._row())
         h = make_detached(reg, self.tmp.name, status="running")
