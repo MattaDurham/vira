@@ -284,6 +284,15 @@ class WhichSessions(Sandbox):
         self.events[ev["id"]] = dict(ev, end=H.iso(ts("2026-11-10", "12:00")))
         self.assertEqual(SR.run_pass()["written"], 1)
 
+    def test_a_full_model_queue_is_not_one_of_the_three_attempts(self):
+        from server import modeladmission
+        self.plain("busy")
+        self.answer = modeladmission.QueueTimeout("no slot")
+        for _ in range(SR.MAX_ATTEMPTS + 2):
+            self.assertEqual(SR.run_pass()["waiting for a free model slot"], 1)
+        self.answer = dict(GOOD)
+        self.assertEqual(SR.run_pass()["written"], 1)
+
     def test_a_reply_that_is_not_json_is_asked_for_once_more(self):
         self.plain("c1")
         replies = [ValueError("not json"), dict(GOOD)]

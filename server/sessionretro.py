@@ -900,6 +900,11 @@ def write_retro(s, events, model=None):
         if not isinstance(obj, dict):
             raise ValueError("the model did not return an object")
     except Exception as exc:  # noqa: BLE001 - one session never stops a pass
+        from . import modeladmission
+        if isinstance(exc, modeladmission.QueueTimeout):
+            # every model slot was taken by other work: nothing was tried,
+            # so it is not one of the session's three attempts
+            return "waiting for a free model slot"
         _mark(s, status="failed", error=f"{type(exc).__name__}: {exc}"[:300])
         return "failed"
     obj, dropped = check_claims(obj, d, fact_events)
