@@ -368,6 +368,8 @@ class AdoptTests(VaultCase):
         self.assertIn("# retro", (f / "2026-11-09 1037 proj (earlier).md").read_text(encoding="utf-8"))
         self.assertTrue((sv.day_dir("2026-11-09", self.over["root"]) / "2026-11-09 day proj.md").is_file())
         self.assertTrue((self.over["root"] / "weeks" / "2026-11-14 week.md").is_file())
+        conv = (f / "conversation.md").read_text(encoding="utf-8")
+        self.assertIn("Retro: [[2026-11-09 1037 proj]], [[2026-11-09 1037 proj (earlier)]]", conv)
         lone = self.folder("retro-only:2026-05-17 1009 oldsite")
         self.assertTrue((lone / "2026-05-17 1009 oldsite.md").is_file())
         self.assertIn("was not found", (lone / "conversation.md").read_text(encoding="utf-8"))

@@ -1370,6 +1370,8 @@ def adopt(src_dir, dry=False):
         moves.append((str(p), str(dest)))
         if not dry:
             _place(p, dest)
+            if kind == "retros into their session folder":
+                relink(dest)
     return {"counts": dict(counts), "moves": moves}
 
 
@@ -1401,6 +1403,42 @@ def _retro_only_folder(p, fm, root, dry):
                   origin="retro only", start=history.iso(ts), cwd=fm.get("cwd", ""),
                   project=project)
     return folder
+
+
+_RETRO_LINE = re.compile(r"^Retro: .*$", re.M)
+_WORK_LINE = "Every step's full input and output:"
+
+
+def relink(folder):
+    """Make a session page's "Retro:" line list the retros in its folder
+    now (a retro written or moved in after the page was made)."""
+    conv = Path(folder) / CONVERSATION
+    try:
+        text = conv.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if "tags: [session, retro-only]" in text[:400]:
+        return False
+    retros = sorted(p.stem for p in Path(folder).glob("*.md") if p.name != CONVERSATION)
+    line = "Retro: " + ", ".join(f"[[{r}]]" for r in retros) if retros else ""
+    if _RETRO_LINE.search(text):
+        new = _RETRO_LINE.sub(line, text, count=1) if line else _RETRO_LINE.sub("", text, count=1)
+    elif line and _WORK_LINE in text:
+        new = text.replace(_WORK_LINE, f"{line}\n\n{_WORK_LINE}", 1)
+    else:
+        return False
+    if new != text:
+        _write(conv, new)
+        return True
+    return False
+
+
+def relink_all(root=None):
+    root = root or vault_root()
+    n = 0
+    for conv in root.rglob(CONVERSATION) if root and root.is_dir() else []:
+        n += relink(conv.parent)
+    return {"pages relinked": n}
 
 
 def _title_of(p):
@@ -1642,6 +1680,8 @@ def main(argv=None):
         counts = import_cloud(Path(src).expanduser())
         print("unpacked: " + json.dumps(counts))
         return _done(sync(say=_say))
+    if cmd == "relink":
+        return _done(relink_all())
     if cmd == "check":
         print(json.dumps(check(), indent=1))
         return 0
