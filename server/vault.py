@@ -21,6 +21,8 @@ Everything else delegates to a lazily (re)built qocha.Vault.
 """
 
 from . import modulemodels
+import dataclasses
+import os
 import hashlib
 import base64
 import json
@@ -367,7 +369,23 @@ def scan_once():
                                 **result})
         for key in ("changed", "removed", "seen"):
             total[key] += int(result.get(key) or 0)
+        _warm_paths(spec)
     return total
+
+
+def _warm_paths(spec):
+    """Build the real-path map for the index just scanned, here in the
+    indexer's thread, so the next search finds it ready."""
+    try:
+        con = sqlite3.connect(Path(spec["db"]).resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+        try:
+            gen = dict(con.execute("SELECT k,v FROM meta")).get("gen")
+            paths = [r[0] for r in con.execute("SELECT path FROM notes")]
+        finally:
+            con.close()
+        _actual_map(spec, gen, paths, wait=True)
+    except (sqlite3.Error, OSError):
+        pass
 
 
 @runtimework.tracked("Vault vectors")
@@ -388,7 +406,89 @@ def _read_policy(for_model=False, policy=None):
         for_model=bool(for_model or _MODEL_ACCESS.get())).policy
 
 
-def _path_allowed(spec, rel, policy):
+# Resolving every note's real path on every search cost seconds on a
+# 60,000-note vault. A folder's real path is resolved once a minute at most;
+# each file is still checked for being a link on every search, so a link
+# added to a note is seen at once.
+_DIRS = {}
+_DIR_TTL_S = 60
+
+
+# {(vault root, index generation): {note: its path inside the vault after
+# following links, or None}}; built off the search path (see _actual_map).
+_ACTUAL = {}
+_ACTUAL_BUILDING = set()
+_ACTUAL_LOCK = threading.Lock()
+
+
+def _build_actual(root, key, paths):
+    try:
+        resolved = _resolved_root(root)
+        _ACTUAL[key] = {p: _actual_rel(resolved, p) for p in paths}
+        for old in [k for k in _ACTUAL if k[0] == key[0] and k != key]:
+            _ACTUAL.pop(old, None)
+    finally:
+        with _ACTUAL_LOCK:
+            _ACTUAL_BUILDING.discard(key)
+
+
+def _actual_map(spec, gen, notes, wait=False):
+    """The real-path map for this vault and index generation, or None while
+    it is being built (a thread builds it the first time it is asked for)."""
+    key = (str(spec["root"]), str(gen))
+    got = _ACTUAL.get(key)
+    if got is not None:
+        return got
+    with _ACTUAL_LOCK:
+        if key in _ACTUAL_BUILDING:
+            return None
+        _ACTUAL_BUILDING.add(key)
+    paths = list(notes)
+    if wait:
+        _build_actual(spec["root"], key, paths)
+        return _ACTUAL.get(key)
+    threading.Thread(target=_build_actual, args=(spec["root"], key, paths), daemon=True,
+                     name="vira-vault-paths").start()
+    return None
+
+
+def _resolved_dir(path):
+    key = str(path)
+    hit = _DIRS.get(key)
+    now = time.monotonic()
+    if hit and now - hit[1] < _DIR_TTL_S:
+        return hit[0]
+    resolved = os.path.realpath(key)
+    if len(_DIRS) > 200_000:
+        _DIRS.clear()
+    _DIRS[key] = (resolved, now)
+    return resolved
+
+
+def _resolved_root(root):
+    return Path(_resolved_dir(root))
+
+
+def _actual_rel(root, rel):
+    """The note's path inside the vault after following links, or None
+    when it leads outside the vault. Plain string work: path objects cost
+    seconds across a large vault."""
+    try:
+        base = str(root)
+        full = os.path.join(base, rel)
+        real = os.path.realpath(full) if os.path.islink(full) else \
+            os.path.join(_resolved_dir(os.path.dirname(full)), os.path.basename(full))
+        if not real.startswith(base + os.sep):
+            return None
+        return real[len(base) + 1:].replace(os.sep, "/")
+    except (ValueError, OSError):
+        return None
+
+
+def _path_allowed(spec, rel, policy, actual=False):
+    """Whether one note may be read under the policy. `actual` is the note's
+    real path inside the vault when already known (None: it leads outside);
+    False means work it out now."""
     if policy.corpus_ids is not None and "notes" not in policy.corpus_ids:
         return False
     if not spec.get("read_enabled", True):
@@ -401,10 +501,9 @@ def _path_allowed(spec, rel, policy):
     if policy.path_prefixes and not any(public == p or public.startswith(p.rstrip("/") + "/")
                                        for p in policy.path_prefixes):
         return False
-    root = spec["root"].resolve()
-    try:
-        actual = (root / rel).resolve().relative_to(root).as_posix()
-    except (ValueError, OSError):
+    if actual is False:
+        actual = _actual_rel(_resolved_root(spec["root"]), rel)
+    if actual is None:
         return False
     if policy.for_model:
         from .vaultwrite import _under
@@ -456,16 +555,22 @@ def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError("invalid cursor") from exc
     hits, coverage, generations = [], [], []
+    narrowed = False
     with retrieval.request_scope(request):
-        for row in _vault_rows():
-            if request.policy.corpus_ids is not None and "notes" not in request.policy.corpus_ids:
-                break
+        rows_ = [] if (request.policy.corpus_ids is not None and "notes" not in request.policy.corpus_ids) else [
+            r for r in _vault_rows()
+            if (request.policy.source_ids is None or r["spec"]["id"] in request.policy.source_ids)
+            and (not request.policy.for_model or r["spec"].get("model_exposure"))]
+        for n_row, row in enumerate(rows_):
             spec = row["spec"]
-            if request.policy.source_ids is not None and spec["id"] not in request.policy.source_ids:
-                continue
-            if request.policy.for_model and not spec.get("model_exposure"):
-                continue
             started = time.monotonic()
+            # Each vault gets a fair share of what is left, so one slow vault
+            # cannot use up the time of the vaults after it; time a vault does
+            # not use passes on to the next.
+            left = retrieval.remaining()
+            share = None if left is None else started + left / (len(rows_) - n_row)
+            token = retrieval._REQUEST.set(dataclasses.replace(request, deadline=share)) \
+                if share is not None else None
             state = {"source_id": spec["id"], "status": "complete", "mode": "fts",
                      "date_field": "modified"}
             con = None
@@ -495,17 +600,31 @@ def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
                     (" WHERE " + " AND ".join(where) if where else ""), params)}
                 # Restrict allowed paths before chunk ranking/limit. This also
                 # checks resolved paths so an excluded folder cannot be aliased.
+                # Each note's real path is worked out once per index
+                # generation, in the background, so a search never resolves
+                # 60,000 paths on disk; until that map is ready the check
+                # runs here as before.
+                actual = _actual_map(spec, meta.get("gen"), notes)
                 allowed = set()
                 for i, path in enumerate(notes):
-                    if i % 100 == 0:
+                    if actual is None and i % 100 == 0:
                         retrieval.check_deadline()
-                    if _path_allowed(spec, path, request.policy):
+                    if _path_allowed(spec, path, request.policy,
+                                     actual=actual.get(path, False) if actual is not None else False):
                         allowed.add(path)
-                con.execute("CREATE TEMP TABLE allowed_notes(path TEXT PRIMARY KEY)")
-                con.executemany("INSERT INTO allowed_notes VALUES(?)", ((p,) for p in allowed))
-                chunks = {r["id"]: dict(r) for r in con.execute(
-                    "SELECT c.id,c.path,c.seq,c.heading FROM chunks c JOIN allowed_notes a ON a.path=c.path")}
-                cand = set(chunks)
+                # When every note is allowed and there is no date window, the
+                # full-text match needs no candidate list (building one copied
+                # every chunk id of the vault on every search).
+                everything = not where and len(allowed) == len(notes)
+                if not (everything and q and not literal):
+                    con.execute("CREATE TEMP TABLE allowed_notes(path TEXT PRIMARY KEY)")
+                    con.executemany("INSERT INTO allowed_notes VALUES(?)", ((p,) for p in allowed))
+                if everything and q and not literal:
+                    chunks, cand = None, None
+                else:
+                    chunks = {r["id"]: dict(r) for r in con.execute(
+                        "SELECT c.id,c.path,c.seq,c.heading FROM chunks c JOIN allowed_notes a ON a.path=c.path")}
+                    cand = set(chunks)
                 if literal and q:
                     escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                     pattern = "%" + escaped + "%"
@@ -516,9 +635,24 @@ def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
                         (pattern, pattern, pattern))}
                     ordered = sorted(ids)
                 elif q:
-                    ids = retrieval.matching_fts(con, q, cand, table="chunks_fts", phrases=phrases)
-                    ordered = retrieval.rank_fts(con, q, ids, max(1, len(ids)),
-                                                table="chunks_fts", phrases=phrases)
+                    # A search stops widening once the stricter queries (the
+                    # quoted phrase, then all the words) give enough chunks;
+                    # any-word matches on common words can cover most of a
+                    # large vault. Counting and listing still match every way.
+                    enough = max(200, (requested_offset + limit) * 10) \
+                        if mode == "search" and order == "relevance" else None
+                    search = enough is not None
+                    ids, widened_fully = retrieval.matching_fts(
+                        con, q, cand, table="chunks_fts", phrases=phrases, enough=enough,
+                        report=True, drop_common=search)
+                    narrowed = narrowed or not widened_fully
+                    # With no candidate list the ranking runs the same queries
+                    # in the same order and stops at as many rows, so it ranks
+                    # exactly the matches; passing them back as candidates
+                    # only made SQLite check them one by one.
+                    ordered = retrieval.rank_fts(con, q, ids if cand is not None else None,
+                                                max(1, len(ids)), table="chunks_fts",
+                                                phrases=phrases, drop_common=search)
                 else:
                     ordered = sorted(cand)
                     ids = cand
@@ -541,6 +675,16 @@ def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
                     else:
                         state.update(status="partial", semantic_status="unavailable",
                                      error="semantic augmentation unavailable within deadline; lexical matches retained")
+                if chunks is None:
+                    # every note was allowed: fetch only the ranked chunks
+                    con.execute("CREATE TEMP TABLE ranked_chunks(id INTEGER PRIMARY KEY)")
+                    con.executemany("INSERT OR IGNORE INTO ranked_chunks VALUES(?)",
+                                    ((int(i),) for i in ordered))
+                    # IN, not a join: as a join SQLite scanned every chunk
+                    chunks = {r["id"]: dict(r) for r in con.execute(
+                        "SELECT c.id,c.path,c.seq,c.heading FROM chunks c "
+                        "WHERE c.id IN (SELECT id FROM ranked_chunks)")}
+                    ordered = [i for i in ordered if i in chunks]
                 seen = set()
                 for cid in ordered:
                     c = chunks[cid]
@@ -564,6 +708,8 @@ def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
             finally:
                 if con is not None:
                     con.close()
+                if token is not None:
+                    retrieval._REQUEST.reset(token)
             state["elapsed_ms"] = round((time.monotonic() - started) * 1000)
             coverage.append(state)
     if order in ("recent", "oldest") or not q:
@@ -600,7 +746,8 @@ def query_notes(query="", limit=20, cursor=None, mode="search", since=None,
     for hit in hits:
         hit.pop("_db", None)
     next_cursor = _query_cursor(signature, generation, offset + limit) if complete and mode != "count" and offset + limit < len(hits) else None
-    return {"rows": page, "hits": page, "total": len(hits), "total_exact": complete and not semantic,
+    return {"rows": page, "hits": page, "total": len(hits),
+            "total_exact": complete and not semantic and not narrowed,
             "next_cursor": next_cursor, "complete": complete, "coverage": coverage,
             "date_field": date_field, "match_mode": "literal" if literal else "lexical",
             "scope": "indexed notes", "mode": mode}
