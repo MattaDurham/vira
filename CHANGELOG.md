@@ -31,6 +31,12 @@ Since 2026-08-27 every branch lands through a [pull request](https://github.com/
   flat retro folder into place without overwriting anything, and `check`
   lists anything on disk not yet in the vault. The Find chat answers
   questions about past sessions from this vault.
+- Sessions vault imports take `--label "<text>"`, which puts the text in
+  each session's folder name, title and front matter, shows it at the top
+  of the page, and keeps the files beside the logs (a README saying what
+  they are) in `original/beside-the-logs/`; and `--other "<tool>=<folder>"`
+  for another tool's session logs (a VS Code chat, another agent), kept
+  whole and shown record by record.
 - Session retros: `python -m server.sessionretro tick` writes one Markdown
   retro for every agent session that has gone quiet for two hours, whatever
   ran it (the Claude app and terminal, Codex, a session Vira dispatched

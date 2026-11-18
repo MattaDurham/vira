@@ -1002,6 +1002,9 @@ def write_retro(s, events, model=None):
     dest, _private = _dest_dir(s["folder"])
     path = s.get("path") or _vault_path(s) or _new_path(s, dest)
     _write(path, render_session(s, d, obj, fact_events, dropped, left_out))
+    if _vault():
+        from . import sessionvault
+        sessionvault.relink(path.parent)   # the session page links its retro
     _mark(s)
     return "rewritten" if s.get("path") else "written"
 

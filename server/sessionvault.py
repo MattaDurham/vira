@@ -348,7 +348,7 @@ def cloud_root():
 
 
 def discover(origin="this Mac", claude=None, codex=None, jobs=True, app_root="default",
-             skip=None, cloud=None):
+             skip=None, cloud=None, label="", other=None):
     """Every session the given roots hold, as source records:
     {key, tool, sid, log, extras: [(path, name in original/)], app_record,
      codex_thread, jobs: [dir], origin}."""
@@ -366,7 +366,13 @@ def discover(origin="this Mac", claude=None, codex=None, jobs=True, app_root="de
                 sid = log.stem
                 rec = {"key": f"claude:{sid}", "tool": "claude", "sid": sid, "log": log,
                        "origin": origin, "extras": [], "jobs": linked.pop(sid, []),
-                       "app_record": app.get(sid), "codex_thread": None}
+                       "app_record": app.get(sid), "codex_thread": None, "label": label}
+                if label:
+                    # a labeled import keeps the notes that sit beside its logs
+                    # (a README saying what the logs are) with every session
+                    for beside in sorted(folder.iterdir()):
+                        if beside.is_file() and not beside.name.endswith(".jsonl"):
+                            rec["extras"].append((beside, "beside-the-logs"))
                 side = folder / sid
                 if side.is_dir():
                     rec["extras"].append((side, "session-folder"))
@@ -391,7 +397,7 @@ def discover(origin="this Mac", claude=None, codex=None, jobs=True, app_root="de
             sid = m[-1] if m else log.stem
             out.append({"key": f"codex:{sid}", "tool": "codex", "sid": sid, "log": log,
                         "origin": origin, "extras": [], "jobs": linked.pop(sid, []),
-                        "app_record": None, "codex_thread": threads.get(sid)})
+                        "app_record": None, "codex_thread": threads.get(sid), "label": label})
     # A Codex log can sit in both the live and the compressed form for a
     # moment: keep the one whose name has no .zst when both are present.
     seen = {}
@@ -410,6 +416,15 @@ def discover(origin="this Mac", claude=None, codex=None, jobs=True, app_root="de
             seen[f"codex:{parent}"]["extras"].append((rec["log"], "helpers"))
             del seen[rec["key"]]
     out = list(seen.values())
+    for tool_name, root in other or []:
+        # another tool's session logs (a VS Code chat, another agent): kept
+        # whole and shown record by record, since no reader knows their form
+        files = [Path(root)] if Path(root).is_file() else sorted(Path(root).glob("*.jsonl"))
+        for log in files:
+            slug = re.sub(r"[^a-z0-9]+", "-", tool_name.lower()).strip("-") or "other"
+            out.append({"key": f"{slug}:{log.stem}", "tool": tool_name, "sid": log.stem, "log": log,
+                        "origin": origin, "extras": [], "jobs": [], "app_record": None,
+                        "codex_thread": None, "label": label, "other": True})
     for root in cloud if cloud is not None else ([cloud_root()] if origin == "this Mac" else []):
         if not Path(root).is_dir():
             continue
@@ -455,6 +470,8 @@ def _project(cwd):
 
 def _started_by(entry, rec):
     """you / vira / a program, from how the session was opened."""
+    if rec.get("other"):
+        return "you"             # another tool's chat, opened by hand
     if entry in ("claude-desktop", "cli", "claude-vscode", "codex-app", "vscode", "cli-tui",
                  "bridge", "anthropic_cloud", "claude.ai"):
         return "you"
@@ -585,6 +602,13 @@ def facts(rec):
         f["title"] = str(th.get("name_shown") or th.get("name") or f["title"]
                          or _the_ask(th.get("title")))
         f["cwd"] = f["cwd"] or str(th.get("cwd") or "")
+    if rec.get("other") and rec["log"]:
+        for row in rows(rec["log"], f["problems"]):
+            v = row.get("v") if isinstance(row.get("v"), dict) else row
+            stamp(row.get("timestamp") or v.get("timestamp") or v.get("creationDate"))
+            f["cwd"] = f["cwd"] or str(row.get("cwd") or v.get("cwd") or "")
+        f["title"] = f["title"] or f"{rec['tool']} session"
+        f["entry"] = rec["tool"]
     for jdir in rec["jobs"]:
         job = jsonstore.read(Path(jdir) / "job.json", {}) or {}
         state = jsonstore.read(Path(jdir) / "state.json", {}) or {}
@@ -615,6 +639,9 @@ def facts(rec):
                                      cap=TITLE_IN_NAME) or "Untitled"
     f["project"] = _project(f["cwd"])
     f["started_by"] = _started_by(f["entry"], rec)
+    f["label"] = str(rec.get("label") or "")
+    if f["label"]:
+        f["title"] = f"{f['label']} - {f['title']}"
     return f
 
 
@@ -1049,6 +1076,7 @@ def front_matter(rec, f, folder, aliases):
         ("tokens_in", f["tokens_in"]),
         ("tokens_out", f["tokens_out"]),
         ("origin", _fm(rec["origin"])),
+        ("label", _fm(f.get("label", ""))),
         ("log", _fm(str(rec["log"] or ""))),
         ("generated_by", GENERATED_BY),
     ]
@@ -1066,7 +1094,12 @@ def render(rec, f, folder, aliases):
     conv, work = [], []
     odir = folder / ORIGINAL
     log_copy = odir / Path(rec["log"]).name if rec["log"] else None
-    if log_copy and log_copy.is_file():
+    if log_copy and log_copy.is_file() and rec.get("other"):
+        for row in rows(log_copy):
+            work.append(_fence(row.get("_unparsed") or json.dumps(row, ensure_ascii=False, indent=1)))
+        conv.append(f"_This is a {rec['tool']} session. No reader here knows its form, so "
+                    "every record is shown as it was written on the work page._")
+    elif log_copy and log_copy.is_file():
         if rec["tool"] == "codex":
             render_codex(log_copy, conv, work)
         else:
@@ -1106,6 +1139,10 @@ def render(rec, f, folder, aliases):
     head = front_matter(rec, f, folder, aliases)
     retro = [p for p in folder.glob("*.md") if p.name != CONVERSATION]
     lines = [head, "", f"# {f['title']}", ""]
+    if f.get("label"):
+        lines += [f"**{f['label']}.** This was brought in with that label; read it before "
+                  "trusting anything below. The files that sat beside it are in "
+                  "`original/beside-the-logs/`.", ""]
     lines.append(f"{f['project']} - {_when(f['start'])} to {_when(f['end'])} - "
                  f"{rec['tool']}, started by {f['started_by']}")
     if link:
@@ -1333,6 +1370,8 @@ def adopt(src_dir, dry=False):
         moves.append((str(p), str(dest)))
         if not dry:
             _place(p, dest)
+            if kind == "retros into their session folder":
+                relink(dest)
     return {"counts": dict(counts), "moves": moves}
 
 
@@ -1364,6 +1403,42 @@ def _retro_only_folder(p, fm, root, dry):
                   origin="retro only", start=history.iso(ts), cwd=fm.get("cwd", ""),
                   project=project)
     return folder
+
+
+_RETRO_LINE = re.compile(r"^Retro: .*$", re.M)
+_WORK_LINE = "Every step's full input and output:"
+
+
+def relink(folder):
+    """Make a session page's "Retro:" line list the retros in its folder
+    now (a retro written or moved in after the page was made)."""
+    conv = Path(folder) / CONVERSATION
+    try:
+        text = conv.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if "tags: [session, retro-only]" in text[:400]:
+        return False
+    retros = sorted(p.stem for p in Path(folder).glob("*.md") if p.name != CONVERSATION)
+    line = "Retro: " + ", ".join(f"[[{r}]]" for r in retros) if retros else ""
+    if _RETRO_LINE.search(text):
+        new = _RETRO_LINE.sub(line, text, count=1) if line else _RETRO_LINE.sub("", text, count=1)
+    elif line and _WORK_LINE in text:
+        new = text.replace(_WORK_LINE, f"{line}\n\n{_WORK_LINE}", 1)
+    else:
+        return False
+    if new != text:
+        _write(conv, new)
+        return True
+    return False
+
+
+def relink_all(root=None):
+    root = root or vault_root()
+    n = 0
+    for conv in root.rglob(CONVERSATION) if root and root.is_dir() else []:
+        n += relink(conv.parent)
+    return {"pages relinked": n}
 
 
 def _title_of(p):
@@ -1574,10 +1649,17 @@ def main(argv=None):
         # Another machine's or a cloud session's logs, shaped like this Mac's.
         origin = _opt(argv, "--origin", "imported")
         skip = re.compile(_opt(argv, "--skip")) if _opt(argv, "--skip") else None
+        label = _opt(argv, "--label", "")
+        other = []
+        for i, a in enumerate(argv):
+            if a == "--other" and i + 1 < len(argv) and "=" in argv[i + 1]:
+                name, path = argv[i + 1].split("=", 1)
+                other.append((name.strip(), Path(path.strip())))
         return _done(sync(origin=origin, say=_say, claude=_roots(_opt(argv, "--claude")),
                           codex=_roots(_opt(argv, "--codex")), jobs=False,
                           app_root=Path(_opt(argv, "--app")) if _opt(argv, "--app") else None,
-                          skip=(lambda p: bool(skip.search(str(p)))) if skip else None))
+                          skip=(lambda p: bool(skip.search(str(p)))) if skip else None,
+                          label=label, other=other))
     if cmd == "adopt":
         src = _opt(argv, "--from")
         if not src:
@@ -1598,6 +1680,8 @@ def main(argv=None):
         counts = import_cloud(Path(src).expanduser())
         print("unpacked: " + json.dumps(counts))
         return _done(sync(say=_say))
+    if cmd == "relink":
+        return _done(relink_all())
     if cmd == "check":
         print(json.dumps(check(), indent=1))
         return 0
