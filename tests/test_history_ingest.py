@@ -643,9 +643,12 @@ class Grid(unittest.TestCase):
         # passed: a run may come at :44 and still be on time.
         slot = next(c for c in prog["cells"]
                     if H.to_ts(c["start"]) <= self.sb.ago(1) < H.to_ts(c["end"]))
-        self.assertEqual(at(1), "missed" if H.to_ts(slot["start"]) + 4200 < time.time() else "none",
+        over = H.to_ts(slot["start"]) + 4200 < time.time()
+        self.assertEqual(at(1), "missed" if over else "none",
                          "the hour after the last run was missed too, once it was over")
-        self.assertGreaterEqual(prog["missed"], 2)
+        # 3 hours ago is always missed; the hour after the last run only once
+        # it is over, so the count depends on the minute the test runs at
+        self.assertGreaterEqual(prog["missed"], 2 if over else 1)
 
     def test_day_span_and_bad_span(self):
         g = V.grid(span="day")
