@@ -277,6 +277,8 @@
   "_lessons_state_dir": "results/<day>/*.json session digests plus lessons-proposed.jsonl and lessons-decided.jsonl. Empty = ~/.claude/sessions.",
   "lessons_retro_dirs": "",
   "_lessons_retro_dirs": "Retro directories the counter reads as the markdown fallback, ALL projects. Empty = the retro folder above (or its default) plus this checkout's retros/.",
+  "session_retro_private_roots": [],
+  "_session_retro_private_roots": "A session that ran inside one of these folders gets its retro in that folder's own retros/ and never in the session retro folder, so it is in no daily or weekly rollup. One absolute path per entry.",
   "lessons_script_path": "",
   "_lessons_script_path": "The corrections-ledger CLI the review queue shells out to; it owns every ledger write. Empty = ~/.claude/scripts/lessons.py.",
   "lesson_promote_at": 3,

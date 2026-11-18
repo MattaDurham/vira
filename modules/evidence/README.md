@@ -21,11 +21,12 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 - [Ledger](ledger/README.md) - Build provenance mined into case studies. (3 files)
 - [Change log](changelog/README.md) - Every shipped change, keyed by the day it actually happened. (3 files)
+- [Session retros](sessionretros/README.md) - A written retro for every agent session, rolled up by day and by week. (2 files)
 - [Walkthroughs](walkthroughs/README.md) - The films of how each feature was built, and the anonymizer that lets them be public. (27 files)
 
 ### Neighbours
 
-**Reads from:** [Work](../work/README.md), [Models](../models/README.md)
+**Reads from:** [Work](../work/README.md), [Models](../models/README.md), [Fleet](../fleet/README.md)
 
 **Feeds:** [Applications](../applications/README.md), [Maps](../maps/README.md), [Library](../library/README.md)
 
@@ -33,6 +34,6 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 
 Window: `evidence` (ids from `WINDOWS` in `static/app.js`).
 
-33 tracked files across 3 submodules. `python -m server.moduletree brief evidence` prints every submodule's page in one go.
+35 tracked files across 4 submodules. `python -m server.moduletree brief evidence` prints every submodule's page in one go.
 
 <!-- moduletree:end -->
