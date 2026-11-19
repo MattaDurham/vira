@@ -40,6 +40,7 @@ class AssistantFlowTests(AssistantFixture):
             # The appointment scan reads chat.db and the CRM; its own suite
             # (tests/test_appointments.py) covers it with synthetic sources.
             mock.patch("server.appointments.tick", return_value={}),
+            mock.patch("server.callloops.tick", return_value={}),
         ]
         for patcher in patches:
             patched = patcher.start()

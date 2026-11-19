@@ -12,12 +12,13 @@ Vira's own `proposed` ideas.
 So this is an AGGREGATOR, not a lessons panel. Each contributing store is a
 SOURCE registered here with one reader and (optionally) one actor; the queue
 knows nothing about any store's file format beyond what its reader returns.
-Adding a source is adding a `register(Source(...))` call. Ten today:
+Adding a source is adding a `register(Source(...))` call. Eleven today:
 lesson proposals, the self-record inbox, open adjudication flags, proposed
 ideas, un-staged journal instructions, contact-worthy unknown senders, a
 pending Morning Picker batch, childcare pickups nobody is covering, and
-family moments whose photos are waiting to be relayed, and scanned
-documents waiting to be filed or carrying a to-do.
+family moments whose photos are waiting to be relayed, scanned
+documents waiting to be filed or carrying a to-do, and calls that just
+ended with someone who has open loops.
 
 FOUR RULES THIS MODULE IS BENT AROUND:
 
@@ -934,6 +935,41 @@ register(Source(
     "coverage", "Childcare",
     "a pickup nobody is covering - say who is taking it",
     _coverage_read, _coverage_act, dynamic=True))
+
+
+# --------------------------------------------- source: call follow-ups
+
+def _calls_read():
+    """One card per call that just ended with someone who has open loops
+    (server/callloops.py). The loops ride along as `call` so the card can
+    offer each one as a tap-to-close item and a box for anything new; the
+    queue's own actions only finish the card."""
+    from . import callloops
+    rows = []
+    for ask in callloops.pending():
+        names = "; ".join(lp["what"] for lp in ask["loops"] if lp["status"] == "open")
+        row = item("calls", ask["id"], ask["question"], why=names,
+                   stamp=ask["created_at"], actions=list(callloops.FINISH),
+                   ref=ask["person_name"],
+                   labels={"done": "Done", "none": "None came up"})
+        row["call"] = {"id": ask["id"], "person_id": ask["person_id"],
+                       "person_name": ask["person_name"], "loops": ask["loops"],
+                       "more_loops": ask["more_loops"], "added": ask["added"]}
+        rows.append(row)
+    return rows
+
+
+def _calls_act(raw_id, action):
+    from . import callloops
+    return {"ok": True, "action": action, "id": raw_id,
+            "ask": callloops.finish(raw_id, action)}
+
+
+register(Source(
+    "calls", "After a call",
+    "a call just ended with someone you have open loops with - tap the "
+    "ones you covered",
+    _calls_read, _calls_act, actions=("done", "none")))
 
 
 # --------------------------------------------- source: family moments

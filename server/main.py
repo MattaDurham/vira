@@ -2229,6 +2229,56 @@ def api_coverage_answer(gap_id: str, req: CoverageAnswerReq):
         raise HTTPException(400, str(exc))
 
 
+@app.get("/api/calls")
+def api_calls():
+    """Call follow-ups: whether the call history reads, and the open and
+    recent after-call cards."""
+    from . import callloops
+    return callloops.status()
+
+
+@app.post("/api/calls/check")
+def api_calls_check():
+    """Run one after-call pass now instead of waiting for the next minute."""
+    from . import callloops
+    if not callloops.enabled():
+        raise HTTPException(409, "Turn on call follow-ups in Config > Assistant first.")
+    return dict(callloops.status(), result=callloops.tick())
+
+
+class CallLoopCloseReq(BaseModel):
+    index: int
+
+
+@app.post("/api/calls/asks/{ask_id}/close")
+def api_calls_close(ask_id: str, req: CallLoopCloseReq):
+    """A loop on an after-call card was covered: close it on the person."""
+    from . import callloops
+    try:
+        return callloops.close_loop(ask_id, req.index)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class CallLoopAddReq(BaseModel):
+    what: str
+    owed_by: str = "me"
+
+
+@app.post("/api/calls/asks/{ask_id}/add")
+def api_calls_add(ask_id: str, req: CallLoopAddReq):
+    """Something new was agreed on the call: add it as an open loop."""
+    from . import callloops
+    try:
+        return callloops.add_loop(ask_id, req.what, req.owed_by)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/moments")
 def api_moments(date: str | None = None):
     """The Moments window: the setup, and each recent day's family moments

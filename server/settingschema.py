@@ -126,6 +126,16 @@ SCHEMA = [
     S("coverage_lookahead_days", "assistant", "int", 14,
       "Days of school calendar to check for half days and closures",
       range=(1, 60)),
+    S("call_loops_enabled", "assistant", "bool", True,
+      "Ask about open loops after a call",
+      "When a phone or FaceTime call with someone who has open loops ends, "
+      "put one card in Attention (and text it once, outside quiet hours) "
+      "listing those loops to tap closed, with a box for anything new that "
+      "was agreed. Reads the Mac's call history, which the iPhone syncs "
+      "into. Needs the assistant running."),
+    S("call_loops_min_minutes", "assistant", "int", 3,
+      "Shortest call to ask about (minutes)",
+      "Calls shorter than this are never asked about.", range=(0, 120)),
     S("coverage_block_minutes", "assistant", "int", 30,
       "Pickup block length (minutes)",
       "A child's own block length in the routine overrides this.",
