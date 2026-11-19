@@ -47,6 +47,9 @@ class CalendarPlanningLoop(unittest.TestCase):
             # The appointment scan reads chat.db and the CRM; its own suite
             # (tests/test_appointments.py) covers it with synthetic sources.
             mock.patch("server.appointments.tick", return_value={}),
+            # The after-call pass reads the Mac's call history; its own suite
+            # (tests/test_callloops.py) covers it with a synthetic call log.
+            mock.patch("server.callloops.tick", return_value={}),
             mock.patch.object(calendarplan, "list_drafts", side_effect=lambda **kw: copy.deepcopy(self.drafts)),
             mock.patch.object(calendarplan, "destinations", create=True,
                               return_value={"selected": {"id": "synthetic", "name": "Synthetic calendar"}}),

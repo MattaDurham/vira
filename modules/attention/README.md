@@ -26,18 +26,19 @@ Pick the submodule below and open its README; each lists every file it owns, wha
 - [Review](review/README.md) - One queue for every decision waiting on the owner, and how often each standing rule breaks. (4 files)
 - [Assistant](assistant/README.md) - The standing executive: commitments, quiet reminders, desktop pins, calendar suggestions, appointments from reminders, event prep. (28 files)
 - [Childcare](childcare/README.md) - Childcare coverage: notice a pickup nobody is covering, block it, ask once. (2 files)
+- [After a call](calls/README.md) - After a phone or FaceTime call: ask which of that person's open loops it covered. (3 files)
 - [Moments](moments/README.md) - Family moments: a family event's best shots, relayed to the people who would want them. (2 files)
 
 ### Neighbours
 
 **Reads from:** [Work](../work/README.md), [Incoming](../incoming/README.md), [People](../people/README.md), [Applications](../applications/README.md), [Reader](../reader/README.md), [Models](../models/README.md), [Find](../find/README.md), [Core](../core/README.md)
 
-**Feeds:** [Core](../core/README.md), [Incoming](../incoming/README.md)
+**Feeds:** [Core](../core/README.md), [Incoming](../incoming/README.md), [People](../people/README.md)
 
 ### In the app
 
 Windows: `attention`, `journal`, `coverage`, `moments` (ids from `WINDOWS` in `static/app.js`).
 
-48 tracked files across 6 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
+51 tracked files across 7 submodules. `python -m server.moduletree brief attention` prints every submodule's page in one go.
 
 <!-- moduletree:end -->

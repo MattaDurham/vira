@@ -204,10 +204,11 @@ def cand(handle, name="", worthy="yes", business=False, evidence="",
 
 class RegistryTests(_Case):
 
-    def test_the_ten_sources_are_registered(self):
+    def test_the_eleven_sources_are_registered(self):
         self.assertEqual(set(reviewqueue.SOURCES),
                          {"lessons", "inbox", "flags", "ideas", "journal",
-                          "senders", "picker", "coverage", "moments", "scans"})
+                          "senders", "picker", "coverage", "moments", "scans",
+                      "calls"})
 
     def test_every_root_points_into_the_fixture(self):
         for name, path in reviewqueue.roots().items():
