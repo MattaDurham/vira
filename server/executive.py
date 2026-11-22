@@ -415,6 +415,12 @@ def tick(*, automatic=False):
             errors.append(f"Childcare coverage needs attention ({type(exc).__name__}).")
         try:
             if apply_shared:
+                from . import callloops
+                callloops.tick()
+        except Exception as exc:
+            errors.append(f"Call follow-ups need attention ({type(exc).__name__}).")
+        try:
+            if apply_shared:
                 from . import appointments
                 appointments.tick()
         except Exception as exc:

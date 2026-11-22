@@ -1,0 +1,25 @@
+{
+  "id": "attention/calls",
+  "name": "After a call",
+  "summary": "After a phone or FaceTime call: ask which of that person's open loops it covered.",
+  "owns": [
+    "server/callhistory.py",
+    "server/callloops.py",
+    "tests/test_callloops.py"
+  ],
+  "routes": [
+    "/api/calls"
+  ],
+  "stores": [
+    "data/call-loops.json"
+  ],
+  "reads": [
+    "core/settings",
+    "people/crm"
+  ],
+  "feeds": [
+    "attention/review",
+    "people/crm"
+  ],
+  "registry": []
+}

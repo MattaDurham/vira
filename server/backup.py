@@ -59,6 +59,9 @@ FILES = ("research-topics.json", "ideas.json", "config.json", "subscriptions.jso
          # Family moments: the owner's photo sources and relay list, and the
          # sends already made (so a person is never sent a moment twice).
          "moments.json",
+         # Call follow-ups: which calls were already asked about, so a call
+         # is never asked about twice after a restore.
+         "call-loops.json",
          "mail-accounts.json", "circuits.json", "evidence.json",
          # Duplicate decisions (Not the same) and the merge/fold log: owner
          # judgement that nothing can recompute.

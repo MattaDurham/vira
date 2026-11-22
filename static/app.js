@@ -12890,6 +12890,91 @@ function reviewCardArt(it) {
   return art;
 }
 
+// An after-call card (server/callloops.py): the person's open loops as
+// tap-to-close items, then a box for anything new that was agreed. Each tap
+// writes at once, so a half-answered card on the phone loses nothing; the
+// card's own Done / None came up buttons only finish it.
+function callLoopsBlock(it) {
+  const call = it.call;
+  const wrap = el("div", "call-loops");
+  const list = el("div", "call-loops-list");
+  const paint = (c) => {
+    list.innerHTML = "";
+    c.loops.forEach((lp, i) => {
+      const done = lp.status !== "open";
+      const btn = el("button", "call-loop" + (done ? " done" : ""));
+      btn.type = "button";
+      btn.setAttribute("aria-pressed", done ? "true" : "false");
+      btn.appendChild(el("span", "call-loop-box", done ? "\u2713" : ""));
+      btn.appendChild(el("span", "call-loop-what", lp.what));
+      if (lp.owed_by === "them") btn.appendChild(el("span", "call-loop-who", "they owe"));
+      btn.title = done ? (lp.status === "gone" ? "Already closed elsewhere" : "Closed")
+        : "Covered on the call: close this loop";
+      btn.disabled = done;
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        btn.disabled = true;
+        try {
+          const next = await post(`/api/calls/asks/${encodeURIComponent(call.id)}/close`, { index: i });
+          Object.assign(call, { loops: next.loops, added: next.added });
+          if (next.status !== "open") {
+            const row = wrap.closest(".review-card");
+            row?.classList.add("gone");
+            setTimeout(() => row?.remove(), 250);
+            toast("All covered");
+          } else paint(call);
+        } catch (err) {
+          btn.disabled = false;
+          toast("Close failed: " + errText(err));
+        }
+      });
+      list.appendChild(btn);
+    });
+    if (call.more_loops) list.appendChild(el("div", "call-loops-more",
+      `${call.more_loops} more open with ${call.person_name.split(" ")[0]}, in their profile`));
+    (c.added || []).forEach((a) => list.appendChild(el("div", "call-loop-added",
+      "Added: " + a.what + (a.owed_by === "them" ? " (they owe)" : ""))));
+  };
+  paint(call);
+  wrap.appendChild(list);
+  const form = el("form", "call-loops-new");
+  const box = document.createElement("textarea");
+  box.rows = 2;
+  box.placeholder = "Anything new you agreed?";
+  box.setAttribute("aria-label", "Anything new you agreed on the call");
+  const who = document.createElement("select");
+  who.setAttribute("aria-label", "Who owes it");
+  [["me", "I owe it"], ["them", "They owe it"]].forEach(([v, label]) => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    who.appendChild(o);
+  });
+  const add = el("button", "brief-act", "Add");
+  add.type = "submit";
+  form.append(box, who, add);
+  form.addEventListener("click", (e) => e.stopPropagation());
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const what = box.value.trim();
+    if (!what) { box.focus(); return; }
+    add.disabled = true;
+    try {
+      const next = await post(`/api/calls/asks/${encodeURIComponent(call.id)}/add`,
+        { what, owed_by: who.value });
+      Object.assign(call, { loops: next.loops, added: next.added });
+      box.value = "";
+      paint(call);
+      toast("Added as an open loop");
+    } catch (err) {
+      toast("Add failed: " + errText(err));
+    } finally {
+      add.disabled = false;
+    }
+  });
+  wrap.appendChild(form);
+  return wrap;
+}
+
 function reviewRow(sec, it, after, source) {
   const actions = [{
     label: "context",
@@ -12918,7 +13003,8 @@ function reviewRow(sec, it, after, source) {
     meta.appendChild(el("span", "review-card-age", briefDays(it.age_days)));
   body.appendChild(meta);
   body.appendChild(el("h3", "review-card-title", it.title || "Untitled decision"));
-  if (it.why) body.appendChild(el("p", "review-card-why", it.why));
+  if (it.call) body.appendChild(callLoopsBlock(it));
+  else if (it.why) body.appendChild(el("p", "review-card-why", it.why));
   if (it.ref) body.appendChild(el("div", "review-card-ref", it.ref));
   // A server-supplied pointer is the card's exact destination (Forge idea,
   // journal entry, sender triage, Morning Picker). Every other card opens
